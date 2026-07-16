@@ -1,0 +1,57 @@
+# Shared environment for build scripts. Source this; do not execute it.
+# Every tool referenced here comes from the pixi environment (conda-forge).
+set -euo pipefail
+
+ROOT="${PIXI_PROJECT_ROOT:?run scripts through 'pixi run <task>'}"
+R_VERSION="${R_VERSION:?set in pixi.toml [activation.env]}"
+
+BUILD_DIR="$ROOT/build"
+SRC_DIR="$BUILD_DIR/R-$R_VERSION"
+OBJ_DIR="$BUILD_DIR/obj-$R_VERSION"
+PREFIX="$ROOT/dist/R-$R_VERSION"
+TOOLCHAIN="$ROOT/toolchain"
+TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
+CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
+CHECKSUM_FILE="$ROOT/scripts/checksums/R-$R_VERSION.sha256"
+
+# Keep zig's compilation cache inside the workspace, not in $HOME.
+export ZIG_GLOBAL_CACHE_DIR="$BUILD_DIR/zig-cache/global"
+export ZIG_LOCAL_CACHE_DIR="$BUILD_DIR/zig-cache/local"
+
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+  Darwin) OS=macos ;;
+  Linux) OS=linux ;;
+  *) OS=unknown ;;
+esac
+
+# Hermetic PATH: only the pixi environment, plus /usr/bin:/bin as last
+# resort for kernel-level needs (#!/bin/sh shebangs inside generated
+# scripts resolve absolutely anyway). Keeps host tools like a user TeX
+# or ~/.local/bin out of configure's sight.
+if [ "$OS" != windows ] && [ -n "${CONDA_PREFIX:-}" ]; then
+  export PATH="$CONDA_PREFIX/bin:/usr/bin:/bin"
+fi
+
+njobs() {
+  nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4
+}
+
+# flang on linux-64/win-64, gfortran on osx-*/linux-aarch64 (see pixi.toml)
+fortran_compiler() {
+  if command -v flang >/dev/null 2>&1; then echo flang
+  elif command -v flang-new >/dev/null 2>&1; then echo flang-new
+  elif command -v gfortran >/dev/null 2>&1; then echo gfortran
+  else
+    echo "error: no Fortran compiler in the pixi environment" >&2
+    return 1
+  fi
+}
+
+require_not_windows() {
+  if [ "$OS" = windows ]; then
+    echo "R's autoconf build does not run on Windows yet; the gnuwin32 +" >&2
+    echo "zig toolchain path is milestone 2 — see PLAN.md and TODO.md." >&2
+    exit 1
+  fi
+}

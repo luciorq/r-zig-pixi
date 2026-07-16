@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# C++ compiler shim: zig c++ as a single-word $CXX for autoconf/make.
+# Same UBSan and SONAME handling as zig-cc; see that file for rationale.
+extra=()
+if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
+  prev=""
+  for a in "$@"; do
+    if [[ "$prev" == "-o" ]]; then
+      base="${a##*/}"
+      if [[ "$base" == lib*.so* ]]; then
+        extra+=("-Wl,-soname,$base")
+      fi
+      break
+    fi
+    prev="$a"
+  done
+fi
+exec zig c++ -fno-sanitize=undefined "${extra[@]}" "$@"

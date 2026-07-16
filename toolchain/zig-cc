@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# C compiler shim: zig cc as a single-word $CC for autoconf/make.
+#
+# -fno-sanitize=undefined: zig cc enables UBSan trap mode by default;
+# R's numeric code contains benign UB that would otherwise SIGILL at runtime.
+#
+# SONAME injection: GNU ld records a bare "libR.so" as DT_NEEDED when a
+# library has no SONAME; zig's lld records the literal path it resolved
+# (e.g. "../../lib/libR.so"), which breaks at runtime. When linking a
+# shared library named lib*.so with no explicit -soname, add one.
+extra=()
+if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
+  prev=""
+  for a in "$@"; do
+    if [[ "$prev" == "-o" ]]; then
+      base="${a##*/}"
+      if [[ "$base" == lib*.so* ]]; then
+        extra+=("-Wl,-soname,$base")
+      fi
+      break
+    fi
+    prev="$a"
+  done
+fi
+exec zig cc -fno-sanitize=undefined "${extra[@]}" "$@"

@@ -1,0 +1,8 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# build outputs (R sources, objects, zig cache, install prefix)
+build/
+dist/
+.zig-cache/
