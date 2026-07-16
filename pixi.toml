@@ -47,6 +47,7 @@ pcre2 = "*"
 libcurl = "*"
 icu = "*"
 tzdata = "*"
+libdeflate = "*"  # faster lazyload compression; was only transitive via libtiff
 # --- headless graphics: cairo + png only in slim ---
 cairo = "*"
 expat = "*"
