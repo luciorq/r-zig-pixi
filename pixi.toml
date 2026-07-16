@@ -10,6 +10,14 @@ version = "0.1.0"
 # C/C++ toolchain: zig (zig cc / zig c++ / zig ar / zig ranlib) on every platform.
 # Fortran: LLVM flang where conda-forge ships it (linux-64, win-64),
 #          explicit gfortran elsewhere (osx-64, osx-arm64, linux-aarch64).
+#
+# Two build variants, mapped to pixi environments:
+#   default -> "slim": headless. cairo+png graphics, ICU, pcre2, libcurl,
+#              compression, internal BLAS/LAPACK, R shlib. No X11/quartz/
+#              tcltk/readline/NLS/jpeg/tiff, no recommended packages.
+#   full    -> adds tcltk, readline, NLS, jpeg+tiff devices.
+# Capabilities are baked at compile time, so these are separate configure
+# runs (separate objdirs/prefixes), not just dependency toggles.
 
 [activation.env]
 R_VERSION = "4.6.1"
@@ -30,7 +38,7 @@ make = ">=4.4"
 pkg-config = "*"
 # --- portable userland (fetch/extract tools; coreutils are per-target below) ---
 curl = "*"
-# --- core libraries R links against ---
+# --- core libraries R links against (slim profile) ---
 zlib = "*"
 bzip2 = "*"
 xz = "*"
@@ -39,6 +47,19 @@ pcre2 = "*"
 libcurl = "*"
 icu = "*"
 tzdata = "*"
+# --- headless graphics: cairo + png only in slim ---
+cairo = "*"
+expat = "*"
+pango = "*"
+fontconfig = "*"
+freetype = "*"
+libpng = "*"
+glib = "*"
+
+# conda-forge's linux cairo is built with X11 backends; its pkg-config
+# metadata needs the xorg proto files even though R is built --with-x=no
+[target.linux.dependencies]
+xorg-xorgproto = "*"
 
 # Shell + GNU text tools for running autoconf configure (all from conda-forge)
 [target.unix.dependencies]
@@ -49,13 +70,11 @@ grep = "*"
 gawk = "*"
 tar = "*"
 gzip = "*"
-gettext = "*"
-readline = "*"
-ncurses = "*"
 unzip = "*"
 zip = "*"
 
-# Rust coreutils everywhere conda-forge ships them; GNU coreutils on linux-aarch64
+# Rust coreutils everywhere conda-forge ships them; GNU coreutils on linux-aarch64.
+# Fortran compiler per target: flang where available, gfortran otherwise.
 [target.linux-64.dependencies]
 flang = "*"
 flang-rt_linux-64 = "*"  # Fortran runtime lib is a separate package
@@ -83,28 +102,26 @@ uutils-coreutils = "*"
 gfortran = "*"
 coreutils = "*"
 
-# --- optional R capabilities as pixi features ---
-# One maximal build; features control which runtime libs are present.
-
-[feature.cairo.dependencies]
-cairo = "*"
-expat = "*"
-pango = "*"
-fontconfig = "*"
-freetype = "*"
-libpng = "*"
-libjpeg-turbo = "*"
-libtiff = "*"
-glib = "*"
-
-# conda-forge's linux cairo is built with X11 backends; its pkg-config
-# metadata needs the xorg proto files even though R is built --with-x=no
-[feature.cairo.target.linux.dependencies]
-xorg-xorgproto = "*"
+# --- optional capabilities (compile-time: only via the 'full' environment) ---
 
 [feature.tcltk.dependencies]
 tk = "*"
 
+[feature.img-formats.dependencies]
+libjpeg-turbo = "*"
+libtiff = "*"
+
+[feature.repl.target.unix.dependencies]
+readline = "*"
+ncurses = "*"
+
+[feature.nls.target.unix.dependencies]
+gettext = "*"
+
+# Selects the "full" configure profile in scripts/configure-r.sh
+[feature.full-build.activation.env]
+R_BUILD_VARIANT = "full"
+
 [environments]
-default = ["cairo", "tcltk"]
-minimal = []
+default = []
+full = ["tcltk", "img-formats", "repl", "nls", "full-build"]

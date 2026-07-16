@@ -5,10 +5,14 @@ set -euo pipefail
 ROOT="${PIXI_PROJECT_ROOT:?run scripts through 'pixi run <task>'}"
 R_VERSION="${R_VERSION:?set in pixi.toml [activation.env]}"
 
+# Build variant: "slim" (default env) or "full" (pixi run -e full ...).
+# Set through [feature.full-build.activation.env] in pixi.toml.
+VARIANT="${R_BUILD_VARIANT:-slim}"
+
 BUILD_DIR="$ROOT/build"
 SRC_DIR="$BUILD_DIR/R-$R_VERSION"
-OBJ_DIR="$BUILD_DIR/obj-$R_VERSION"
-PREFIX="$ROOT/dist/R-$R_VERSION"
+OBJ_DIR="$BUILD_DIR/obj-$R_VERSION-$VARIANT"
+PREFIX="$ROOT/dist/R-$R_VERSION-$VARIANT"
 TOOLCHAIN="$ROOT/toolchain"
 TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
 CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"

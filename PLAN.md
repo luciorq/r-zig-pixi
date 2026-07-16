@@ -48,11 +48,9 @@ The same `capabilities()` profile on all three OSes:
 
 - **X11: off everywhere** (`--with-x=no`). Windows and modern macOS have no X11;
   keeping it on Linux would break parity.
-- **Graphics: cairo everywhere** (`--with-cairo` + png/jpeg/tiff from
-  conda-forge). Cairo works headless on all platforms. Quartz is dropped on
-  macOS (`--without-aqua`), which also removes the Apple-SDK dependency.
-- **tcltk: conda-forge `tk` everywhere**, wired via `--with-tcl-config` /
-  `--with-tk-config` pointing into `$CONDA_PREFIX/lib`.
+- **Graphics: cairo everywhere** (`--with-cairo --with-libpng`). Cairo works
+  headless on all platforms. Quartz is dropped on macOS (`--without-aqua`),
+  which also removes the Apple-SDK dependency.
 - **BLAS/LAPACK: R's internal reference implementation** for v1 — zero external
   ABI risk. An `openblas` pixi feature is a later milestone.
 - **Timezones: `--with-internal-tzcode`** + conda-forge `tzdata`, identical
@@ -60,13 +58,29 @@ The same `capabilities()` profile on all three OSes:
 - `--enable-R-shlib` (libR.so), `--without-recommended-packages`,
   `--disable-java`.
 
-### 4. Optional capabilities as pixi features
+### 4. Two build variants: slim (default) and full — never more
 
-One *maximal* build; pixi features control which runtime libraries exist in the
-environment (`cairo`, `tcltk` features; `default` env enables all, `minimal`
-env none). This avoids 2^n build variants: R dlopens its optional modules, so a
-maximal binary degrades gracefully when a feature's libs are absent. True build
-variants are reserved for things that genuinely change the binary (BLAS choice).
+`capabilities()` is baked at compile time, so capability choices are build
+variants, not dependency toggles. To keep the variant matrix sane there are
+exactly two, mapped to pixi environments (separate objdirs and prefixes,
+`obj-<ver>-slim` / `obj-<ver>-full`):
+
+- **slim (default env)** — the headless profile: cairo+png graphics, ICU,
+  pcre2, libcurl, compression stack, internal BLAS, R shlib. No X11/quartz/
+  tcltk/readline/NLS/jpeg/tiff. This is where R runs in practice (servers,
+  CI, containers, IDE-server backends).
+- **full (`pixi run -e full …`)** — slim plus tcltk (conda-forge tk via
+  `--with-tcl-config`/`--with-tk-config`), readline+ncurses for the
+  interactive console, NLS/gettext translations, jpeg+tiff devices.
+
+What slim deliberately keeps: ICU, iconv, long double, libcurl, pcre2 —
+anything whose removal would silently *change results or break package
+installation* rather than just shrink the build. Slim must be smaller,
+never differently-numbered.
+
+Note: there is no configure-level way to trim R's legacy C API surface —
+that's compiled unconditionally and every CRAN package assumes it. API
+trimming is a milestone-5 (`build.zig`) ambition, not a configure flag.
 
 ### 5. Portable userland
 

@@ -17,8 +17,12 @@
       compression; capabilities: cairo/tcltk/png/jpeg/tiff/ICU/NLS TRUE,
       X11/aqua FALSE by design)
 - [x] `pixi run install` into dist/, installed R runs standalone
-- [ ] `pixi run check` (R's own regression suite) green
-- [ ] CI: GitHub Actions job for linux-64 starting from bare runner + pixi
+- [x] Two-variant design: slim (default env, headless: no tcltk/readline/
+      NLS/jpeg/tiff) and full (`-e full`); separate objdirs/prefixes;
+      smoke test asserts each variant's exact capability profile
+- [ ] `pixi run check` (R's own regression suite) green for both variants
+- [ ] CI: GitHub Actions jobs for linux-64 (slim + full) starting from
+      bare runner + pixi
 
 ## Milestone 2 — macOS (osx-64, osx-arm64)
 

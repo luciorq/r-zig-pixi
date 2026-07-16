@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Configure R against the pixi environment with the zig toolchain.
-# Design: one maximal build — X11 off everywhere (parity with Windows/macOS),
-# cairo graphics everywhere, tcltk from conda-forge tk, internal BLAS/LAPACK,
-# internal tzcode, no Java, no recommended packages (installed separately later).
+# Two profiles (see pixi.toml):
+#   slim (default): headless — cairo+png, ICU, pcre2, libcurl, compression,
+#                   internal BLAS/LAPACK, R shlib. No X11/quartz/tcltk/
+#                   readline/NLS/jpeg/tiff, no recommended packages.
+#   full:           slim plus tcltk, readline, NLS, jpeg+tiff devices.
+# X11/quartz are off in both — cairo is the graphics engine on all OSes.
 . "$(dirname "$0")/env.sh"
 require_not_windows
 
@@ -10,6 +13,7 @@ if [ -f "$OBJ_DIR/Makeconf" ]; then
   echo "Already configured at $OBJ_DIR (run 'pixi run clean' to reconfigure)"
   exit 0
 fi
+echo "Configuring R $R_VERSION, variant: $VARIANT"
 
 FC="$(fortran_compiler)"
 CONDA="${CONDA_PREFIX:?pixi should set CONDA_PREFIX}"
@@ -32,13 +36,38 @@ case "$FC" in
     ;;
 esac
 
-TCLTK_ARGS=()
-if [ -f "$CONDA/lib/tclConfig.sh" ] && [ -f "$CONDA/lib/tkConfig.sh" ]; then
-  TCLTK_ARGS+=("--with-tcl-config=$CONDA/lib/tclConfig.sh")
-  TCLTK_ARGS+=("--with-tk-config=$CONDA/lib/tkConfig.sh")
-else
-  TCLTK_ARGS+=("--without-tcltk")
-fi
+# Per-variant configure flags. Capabilities are compile-time, so slim
+# and full are distinct configure runs in distinct objdirs.
+VARIANT_ARGS=()
+case "$VARIANT" in
+  slim)
+    VARIANT_ARGS+=(
+      --without-tcltk
+      --without-readline
+      --disable-nls
+      --without-jpeglib
+      --without-libtiff
+    )
+    ;;
+  full)
+    if [ ! -f "$CONDA/lib/tclConfig.sh" ] || [ ! -f "$CONDA/lib/tkConfig.sh" ]; then
+      echo "error: full variant needs tk in the environment — run with 'pixi run -e full ...'" >&2
+      exit 1
+    fi
+    VARIANT_ARGS+=(
+      "--with-tcl-config=$CONDA/lib/tclConfig.sh"
+      "--with-tk-config=$CONDA/lib/tkConfig.sh"
+      --with-readline
+      --enable-nls
+      --with-jpeglib
+      --with-libtiff
+    )
+    ;;
+  *)
+    echo "error: unknown R_BUILD_VARIANT '$VARIANT' (expected slim or full)" >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "$OBJ_DIR"
 cd "$OBJ_DIR"
@@ -49,11 +78,11 @@ cd "$OBJ_DIR"
   --with-x=no \
   --without-aqua \
   --with-cairo \
-  --with-libpng --with-jpeglib --with-libtiff \
+  --with-libpng \
   --with-internal-tzcode \
   --without-recommended-packages \
   --disable-java \
-  "${TCLTK_ARGS[@]}" \
+  "${VARIANT_ARGS[@]}" \
   CC="$TOOLCHAIN/zig-cc" \
   CXX="$TOOLCHAIN/zig-cxx" \
   FC="$FC" \
