@@ -83,9 +83,12 @@
 - [ ] Parity caveats to resolve: jpeg/tiff/tcltk forced on (gnuwin32 has
       no off-switches → slim==full on Windows today); cairo device not
       built (wire USE_CAIRO to conda cairo); NLS on
-- [ ] Run `tests/` on Windows (make check-all equivalent) — numerics
-      smoke only so far; watch gfortran -O2 complex LAPACK (same class
-      as the arm64-darwin bug; gnuwin32 uses -O3 for C, -O3 Fortran!)
+- [x] **`make check` green on Windows** (2026-07-17): complex LAPACK
+      passes at gfortran -O3 on x86_64-MinGW — the arm64-darwin
+      miscompilation does NOT reproduce here. Two environmental fixes:
+      MY_TCLTK + TCL_LIBRARY exported for conda Tcl (env.sh), and
+      tests/Makefile.win's hardcoded eval-etc-2.R (needs recommended
+      pkg Matrix) patched out in check-r.sh
 - [ ] Report upstream to zig: MinGW -l search misses lib<n>.dll.a
 - [ ] `make distribution` / installer story; `pixi run install` on Windows
 
