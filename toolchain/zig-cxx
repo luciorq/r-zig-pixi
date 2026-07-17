@@ -57,4 +57,23 @@ if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
     prev="$a"
   done
 fi
-exec "$ZIG" c++ -fno-sanitize=undefined "${extra[@]}" "$@"
+# OpenMP: see zig-cc for rationale.
+omp=()
+if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*) inc="$CONDA_PREFIX/Library/include"; lib="$CONDA_PREFIX/Library/lib";;
+    *)            inc="$CONDA_PREFIX/include";         lib="$CONDA_PREFIX/lib";;
+  esac
+  omp+=(-I"$inc")
+  linking=true
+  for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) linking=false; break;; esac; done
+  if $linking; then
+    if [ -f "$lib/libomp.lib" ]; then
+      omp+=("$lib/libomp.lib")
+    else
+      omp+=(-L"$lib" -lomp)
+    fi
+  fi
+fi
+
+exec "$ZIG" c++ -fno-sanitize=undefined "${extra[@]}" "$@" "${omp[@]}"

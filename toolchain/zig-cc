@@ -74,4 +74,24 @@ if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
     prev="$a"
   done
 fi
-exec "$ZIG" cc -fno-sanitize=undefined "${extra[@]}" "$@"
+# OpenMP: zig cc performs -fopenmp codegen but bundles neither omp.h nor
+# libomp and won't auto-link it — wire in conda-forge's llvm-openmp.
+omp=()
+if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*) inc="$CONDA_PREFIX/Library/include"; lib="$CONDA_PREFIX/Library/lib";;
+    *)            inc="$CONDA_PREFIX/include";         lib="$CONDA_PREFIX/lib";;
+  esac
+  omp+=(-I"$inc")
+  linking=true
+  for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) linking=false; break;; esac; done
+  if $linking; then
+    if [ -f "$lib/libomp.lib" ]; then
+      omp+=("$lib/libomp.lib")   # zig's -l search misses this name on win
+    else
+      omp+=(-L"$lib" -lomp)
+    fi
+  fi
+fi
+
+exec "$ZIG" cc -fno-sanitize=undefined "${extra[@]}" "$@" "${omp[@]}"

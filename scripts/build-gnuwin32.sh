@@ -66,10 +66,10 @@ for mkc in "$GNUWIN/fixed/etc/Makeconf" "$SRC_DIR/etc/x64/Makeconf"; do
   if [ -f "$mkc" ]; then
     sed -i 's|^TCL_VERSION *=.*|TCL_VERSION = 86t|' "$mkc"
     sed -i "s|^TCL_HOME *=.*|TCL_HOME = $LOCAL_SOFT|" "$mkc"
-    # zig has no OpenMP runtime; unix configure detects this and leaves
-    # these empty — make Windows package builds consistent (data.table
-    # etc. fall back to single-threaded, same as linux/macOS slim)
-    sed -i -E 's|^(SHLIB_OPENMP_[A-Z]+FLAGS) *=.*|\1 =|' "$mkc"
+    # OpenMP is real now: the zig shims wire -fopenmp to conda's
+    # llvm-openmp. Restore the flags (idempotent, also repairs trees
+    # patched by the earlier blanking version of this script).
+    sed -i -E 's|^(SHLIB_OPENMP_[A-Z]+FLAGS) *=.*|\1 = -fopenmp|' "$mkc"
   fi
 done
 

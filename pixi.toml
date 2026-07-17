@@ -49,6 +49,7 @@ libcurl = "*"
 icu = "*"
 tzdata = "*"
 libdeflate = "*"  # faster lazyload compression; was only transitive via libtiff
+llvm-openmp = "*"  # zig cc does -fopenmp codegen but ships no libomp/omp.h
 # --- headless graphics: cairo + png only in slim ---
 cairo = "*"
 expat = "*"

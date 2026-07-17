@@ -97,6 +97,16 @@
 - [ ] Report upstream to zig: MinGW -l search misses lib<n>.dll.a
 - [ ] `make distribution` / installer story; `pixi run install` on Windows
 
+## OpenMP (completed 2026-07-17)
+
+- [x] **OpenMP working on all three OSes**: zig cc performs -fopenmp
+      codegen natively; the shims supply what it lacks (omp.h include
+      path + libomp link) from conda-forge `llvm-openmp`. Verified via
+      data.table getDTthreads: linux 8, windows 6, macOS 5 threads.
+      R core also built with OpenMP (SHLIB_OPENMP_CFLAGS=-fopenmp in
+      Makeconf on unix; gnuwin32 Makeconf restored to -fopenmp).
+      Contract test now asserts getDTthreads() > 1 on every platform.
+
 ## Milestone 4 — Distribution & ecosystem
 
 - [ ] `openblas` pixi feature (external BLAS/LAPACK instead of R-internal)

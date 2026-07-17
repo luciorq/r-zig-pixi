@@ -34,6 +34,8 @@ R_CONTRACT_LIB="$LIB" "$R_BIN" --vanilla -e '
   stopifnot(evalCpp("2 + 2") == 4)
   dt <- data.table(g = rep(1:3, 4), x = 1:12)
   stopifnot(identical(dt[, sum(x), by = g][[2]], c(22L, 26L, 30L)))
+  cat("data.table threads:", getDTthreads(), "\n")
+  stopifnot(getDTthreads() > 1)  # proves OpenMP is compiled in and live
   fit <- bobyqa(c(1, 1), function(x) sum((x - 3)^2))
   stopifnot(max(abs(fit$par - c(3, 3))) < 1e-4)
   cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
