@@ -20,9 +20,15 @@
 - [x] Two-variant design: slim (default env, headless: no tcltk/readline/
       NLS/jpeg/tiff) and full (`-e full`); separate objdirs/prefixes;
       smoke test asserts each variant's exact capability profile
-- [ ] `pixi run check` (R's own regression suite) green for both variants
-- [ ] CI: GitHub Actions jobs for linux-64 (slim + full) starting from
-      bare runner + pixi
+- [x] `pixi run check` (R's own regression suite) green for both variants
+      (2026-07-16: rc=0 for slim and full, reference-output comparisons OK)
+- [x] Compile real CRAN source packages against this R: Rcpp and data.table
+      build, load, and pass functional tests; Rcpp::evalCpp works, proving
+      the Makeconf zig-toolchain contract end-to-end (runtime C++ compile).
+      data.table is single-threaded for now (no OpenMP with zig cc — parked)
+- [x] CI: `.github/workflows/build.yml` — linux (slim+full: build/smoke/check),
+      macOS (experimental, non-gating), Windows (env solve only). Activates
+      on first push to GitHub
 
 ## Milestone 2 — macOS (osx-64, osx-arm64)
 

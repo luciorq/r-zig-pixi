@@ -1,0 +1,56 @@
+name: build-r
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Every job starts from a bare runner: the only bootstrap is pixi itself.
+# All compilers, shells, and libraries come from conda-forge via pixi.
+jobs:
+  build:
+    name: ${{ matrix.os }} / ${{ matrix.env }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        env: [default, full]
+        include:
+          # macOS is milestone 2: scripts are wired (gfortran instead of
+          # flang) but not yet validated — allowed to fail without gating.
+          - os: macos-latest
+            env: default
+            experimental: true
+          - os: macos-latest
+            env: full
+            experimental: true
+    continue-on-error: ${{ matrix.experimental || false }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: ${{ matrix.env }}
+          cache: true
+      - name: Build R
+        run: pixi run -e ${{ matrix.env }} build
+      - name: Smoke test
+        run: pixi run -e ${{ matrix.env }} smoke
+      - name: Regression suite
+        if: matrix.os == 'ubuntu-latest'
+        run: pixi run -e ${{ matrix.env }} check
+
+  # Windows is milestone 3: the build fails fast by design (gnuwin32 path
+  # not implemented). Until then, prove the win-64 environment solves and
+  # installs — toolchain availability is a real, cheap signal.
+  solve-windows:
+    name: windows-latest / solve only
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: default full
+          cache: true
