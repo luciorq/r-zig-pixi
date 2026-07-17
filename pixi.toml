@@ -30,6 +30,7 @@ smoke = "bash scripts/smoke-test.sh"
 check = "bash scripts/check-r.sh"
 contract = "bash scripts/contract-test.sh"
 install = "bash scripts/install-r.sh"
+package = { cmd = "bash scripts/package-standalone.sh", depends-on = ["install"] }
 clean = "bash scripts/clean.sh"
 
 [dependencies]
@@ -155,7 +156,15 @@ openblas = "*"
 [feature.openblas.activation.env]
 R_BLAS = "openblas"
 
+# conda packaging (rattler-build) lives in its own environment
+[feature.pkg.dependencies]
+rattler-build = "*"
+
+[feature.pkg.tasks]
+conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda"
+
 [environments]
+pkg = ["pkg"]
 default = []
 full = ["tcltk", "img-formats", "repl", "nls", "full-build"]
 openblas = ["openblas"]

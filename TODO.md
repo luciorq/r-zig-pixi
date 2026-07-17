@@ -117,21 +117,68 @@
       CI job added). Windows/gnuwin32 BLAS switch still TODO; macOS
       openblas variant unvalidated (expect it to just work)
 - [ ] Recommended packages (`--with-recommended-packages`) once base is stable
-- [x] Relocatable installs (2026-07-17, linux): `pixi run install` now
-      produces a self-contained dist/ tree via scripts/relocate.sh —
-      conda libs bundled into R_HOME/lib (ldd walk), $ORIGIN rpaths
-      (patchelf), launchers derive R_HOME from their own location,
-      Rscript CLI emulated via the R launcher (the binary hard-embeds
-      its build path and ignores env R_HOME), etc/ldpaths reduced,
-      zig shims bundled + Makeconf rewritten to $(R_HOME)-relative.
-      Verified: moved copy runs numerics + cairo png + R CMD SHLIB with
-      a scrubbed environment and the original tree deleted. TODO:
-      macOS (install_name_tool) and Windows equivalents; headers for
-      compiling against bundled libs are NOT shipped (packages needing
-      e.g. zlib headers still want an env)
-- [ ] Install recommended + test compiling a real CRAN package (Rcpp,
-      data.table) against this R — proves the Makeconf-as-toolchain-contract
-- [ ] Package the result as a conda package / pixi-installable artifact
+- [x] Relocatable + conda-packageable installs (2026-07-17, refactored
+      into scripts/stage.sh + scripts/package-standalone.sh, one prefix
+      layout serves both distribution modes — see PLAN.md §6):
+      - stage.sh (shared, both OSes/both packaging modes): dual $ORIGIN
+        rpaths (R_HOME/lib AND prefix/lib — conda env supplies the
+        latter, standalone bundle vendors into it), launchers derive
+        R_HOME from their own location, Rscript CLI emulated via the R
+        launcher (binary hard-embeds build path, ignores env R_HOME),
+        R's generated bin/R's SED=/R_SHARE_DIR=/R_INCLUDE_DIR=/R_DOC_DIR=
+        rederived (R_SHARE_DIR is load-bearing for R CMD SHLIB/INSTALL),
+        same fix generalized across bin/libtool + bin/javareconf (baked
+        sed/grep/nm/dd/realpath paths), Makeconf rewritten to
+        $(R_HOME)-relative shims, Windows Tcl→R_HOME/Tcl layout
+      - **base::Sys.which() fix**: configure bakes an absolute `which`
+        path as a literal string CONSTANT compiled into base.rdb — no
+        text file to sed. Root cause chain: utils's .onLoad ->
+        .osVersion() -> Sys.which("uname") fails on a moved tree ->
+        entire utils/stats load fails -> misleading "could not find
+        function rnorm" with nothing which-related in the error. Fixed
+        by patching R's actual source (system.unix.R) in
+        configure-r.sh to a dynamic R.home()-relative expression with
+        graceful fallback, + stage.sh unconditionally bundles `which`.
+      - package-standalone.sh (linux + windows): vendors conda-lib deps
+        via ELF-magic dependency walk (broadened from name-pattern
+        matching so newly-bundled tools' own deps get caught too),
+        fontconfig data, Tcl runtime (Windows), emits
+        R-<ver>-<flavor>-<platform>.{tar.gz,zip} + sha256
+      - Verified adversarially on BOTH platforms, multiple rounds:
+        extracted bundle run from a moved path with the original tree
+        deleted and a scrubbed env — numerics, cairo PNG, Rscript (all
+        calling forms), R CMD SHLIB compiling+linking+loading a fresh
+        package, library(utils)/stats, tcltk (Windows)
+      - Documented, deliberately unfixed: running the bundle needs
+        nothing; compiling NEW packages needs `zig` on PATH (the one
+        external tool contract — never vendor the compiler itself)
+      - TODO: macOS (install_name_tool + codesign — signing is mandatory
+        on arm64, not optional); headers for compiling against bundled
+        libs aren't shipped (packages needing e.g. zlib.h still want zig
+        + an env, or system headers)
+- [~] conda-forge-style package via rattler-build (recipe/recipe.yaml +
+      recipe/build.sh, linux-64 first): the recipe reuses the exact
+      same configure/build/install/stage scripts, pointed at rattler's
+      isolated prefix. Two real bugs found and fixed by testing (not
+      guessing) against rattler-build's isolated test env:
+      - `run:` deps must be the ACTUAL `ldd` closure of bin/exec/R +
+        libR.so, not a guess from pixi.toml's direct deps — a dev pixi
+        env masks missing run: deps (everything's already on
+        LD_LIBRARY_PATH); only the isolated test env catches it. Fixed:
+        added zstd, libiconv, libstdcxx, libgcc (transitively pulled at
+        build time, invisible until packaged+tested standalone).
+      - Same Sys.which()/base.rdb bug as above, independently confirmed
+        via this pathway (conda's own build_env/host_env split tears
+        down the build-time absolute paths before the test/install env
+        runs, so it surfaces here even faster than in a standalone
+        bundle test).
+      **Green as of 2026-07-17**: r-zig-slim-4.6.1-hb0f4dca_0.conda built
+      and passed its test (installed from declared run: deps only, no
+      vendoring — numerics + cairo/ICU/libcurl capabilities all work).
+- [ ] macOS conda recipe + standalone package (once macOS staging exists)
+- [ ] Windows conda recipe (gnuwin32 has no `make install`; recipe/build.sh
+      would need the same install-r.sh Windows branch)
+- [ ] Publish to a real channel (prefix.dev or anaconda.org) once verified
 - [ ] Reproducibility: SOURCE_DATE_EPOCH, compare two builds bit-for-bit
 
 ## Milestone 5 — build.zig end state

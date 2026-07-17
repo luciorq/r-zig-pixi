@@ -89,6 +89,21 @@ if [ "$BLAS" = openblas ]; then
   BLAS_ARGS+=("--with-blas=-lopenblas" "--with-lapack=-lopenblas")
 fi
 
+# base::Sys.which() bakes configure's absolute path to `which` as a
+# literal string constant, compiled into base's serialized R data
+# (base.rdb) — unlike shell scripts this can't be sed-patched after the
+# fact. It's load-bearing: utils's .onLoad -> .osVersion() -> Sys.which
+# ("uname") fails hard the moment the tree moves (breaks EVERY package
+# load, not just Sys.which callers). Patch the source to prefer a
+# bundled `which` (stage.sh bundles one into R_HOME/bin/toolchain),
+# falling back to whatever configure finds — idempotent.
+sw="$SRC_DIR/src/library/base/R/unix/system.unix.R"
+if [ -f "$sw" ] && ! grep -q 'bin/toolchain/which' "$sw"; then
+  sed -i \
+    's|which <- "@WHICH@"|which <- { w <- file.path(R.home(), "bin", "toolchain", "which"); if (file.exists(w)) w else "@WHICH@" }|' \
+    "$sw"
+fi
+
 mkdir -p "$OBJ_DIR"
 cd "$OBJ_DIR"
 

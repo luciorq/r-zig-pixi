@@ -5,6 +5,10 @@ set -euxo pipefail
 
 export PIXI_PROJECT_ROOT="$PWD"
 export R_VERSION="$PKG_VERSION"
+# internal tzcode needs zoneinfo; host tzdata provides it. TZ pinned for
+# reproducible doc builds regardless of the build machine's zone.
+export TZDIR="$PREFIX/share/zoneinfo"
+export TZ=UTC
 export R_INSTALL_PREFIX="$PREFIX"
 # scripts resolve headers/libs and the Fortran runtime via CONDA_PREFIX;
 # in a rattler build those live in the host prefix

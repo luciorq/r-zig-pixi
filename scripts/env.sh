@@ -24,7 +24,8 @@ FLAVOR="$VARIANT"
 BUILD_DIR="$ROOT/build"
 SRC_DIR="$BUILD_DIR/R-$R_VERSION"
 OBJ_DIR="$BUILD_DIR/obj-$R_VERSION-$FLAVOR"
-PREFIX="$ROOT/dist/R-$R_VERSION-$FLAVOR"
+# R_INSTALL_PREFIX override: the conda recipe installs into rattler's $PREFIX
+PREFIX="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR}"
 TOOLCHAIN="$ROOT/toolchain"
 TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
 CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
@@ -57,7 +58,9 @@ fi
 # scripts resolve absolutely anyway). Keeps host tools like a user TeX
 # or ~/.local/bin out of configure's sight.
 if [ "$OS" != windows ] && [ -n "${CONDA_PREFIX:-}" ]; then
-  export PATH="$CONDA_PREFIX/bin:/usr/bin:/bin"
+  # BUILD_PREFIX: in a rattler-build/conda-build run the compilers live
+  # in a separate build env — keep it on PATH there.
+  export PATH="$CONDA_PREFIX/bin${BUILD_PREFIX:+:$BUILD_PREFIX/bin}:/usr/bin:/bin"
 fi
 
 njobs() {

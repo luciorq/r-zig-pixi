@@ -35,6 +35,7 @@ requirements:
     - gawk
     - which
   host:
+    - flang-rt_linux-64  # Fortran runtime: linked into libR, must be in host
     - zlib
     - bzip2
     - xz
@@ -53,19 +54,49 @@ requirements:
     - libpng
     - glib
     - xorg-xorgproto
+    # discovered via `ldd` on the actual built bin/exec/R + libR.so — the
+    # full runtime closure, not just what pixi.toml lists as direct deps
+    - zstd
+    - libiconv
+    - libstdcxx
+    - libgcc
   run:
+    # R's own shared libraries (libR.so, base packages like stats/utils
+    # via pcre2/icu, cairo devices, ...) are runtime-loaded — every
+    # *runtime* lib from host: must be repeated here, or R fails to
+    # initialize in a freshly solved env (host: alone is build-time
+    # only). xorg-xorgproto and liblzma-devel are headers-only
+    # (pkg-config/build inputs), intentionally omitted here.
+    - zlib
+    - bzip2
+    - xz
+    - pcre2
+    - libcurl
+    - icu
+    - tzdata
+    - libdeflate
+    - llvm-openmp
+    - cairo
+    - expat
+    - pango
+    - fontconfig
+    - freetype
+    - libpng
+    - glib
+    - zstd
+    - libiconv
+    - libstdcxx
+    - libgcc
     # package compilation works out of the box: Makeconf records the
     # bundled zig shims; these provide the actual compilers
     - zig 0.16.*
     - flang
     - flang-rt_linux-64
-    - llvm-openmp
     - make >=4.4
 
 tests:
   - script:
-      - $PREFIX/bin/Rscript -e 'stopifnot(max(abs(solve(matrix(rnorm(64),8,8)) %*% NULL)) >= 0)' || true
-      - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); cat("conda R OK\n")'
+      - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["ICU"]], caps[["libcurl"]]); cat("conda R OK\n")'
 
 about:
   homepage: https://www.r-project.org
