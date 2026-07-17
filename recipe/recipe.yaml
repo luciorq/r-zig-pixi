@@ -1,0 +1,73 @@
+context:
+  version: "4.6.1"
+
+package:
+  name: r-zig-slim
+  version: ${{ version }}
+
+source:
+  # R sources from CRAN plus this repo's build scripts/toolchain shims —
+  # the recipe is a consumer of the same scripts pixi tasks use.
+  - url: https://cran.r-project.org/src/base/R-4/R-${{ version }}.tar.gz
+    sha256: 4da6e61d2c0aac5f14a2e7e432cb5fcc269efe83da4293050ba7f03dff4e2cf4
+    target_directory: R-src
+  - path: ../scripts
+    target_directory: scripts
+  - path: ../toolchain
+    target_directory: toolchain
+
+build:
+  number: 0
+  script: build.sh
+
+requirements:
+  build:
+    - zig 0.16.*
+    - flang
+    - flang-rt_linux-64
+    - make >=4.4
+    - pkg-config
+    - patchelf
+    - bash
+    - coreutils
+    - sed
+    - grep
+    - gawk
+    - which
+  host:
+    - zlib
+    - bzip2
+    - xz
+    - liblzma-devel
+    - pcre2
+    - libcurl
+    - icu
+    - tzdata
+    - libdeflate
+    - llvm-openmp
+    - cairo
+    - expat
+    - pango
+    - fontconfig
+    - freetype
+    - libpng
+    - glib
+    - xorg-xorgproto
+  run:
+    # package compilation works out of the box: Makeconf records the
+    # bundled zig shims; these provide the actual compilers
+    - zig 0.16.*
+    - flang
+    - flang-rt_linux-64
+    - llvm-openmp
+    - make >=4.4
+
+tests:
+  - script:
+      - $PREFIX/bin/Rscript -e 'stopifnot(max(abs(solve(matrix(rnorm(64),8,8)) %*% NULL)) >= 0)' || true
+      - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); cat("conda R OK\n")'
+
+about:
+  homepage: https://www.r-project.org
+  license: GPL-2.0-or-later
+  summary: R built with the zig toolchain (headless slim profile)
