@@ -37,20 +37,32 @@ jobs:
         run: pixi run -e ${{ matrix.env }} build
       - name: Smoke test
         run: pixi run -e ${{ matrix.env }} smoke
+      - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
+        run: pixi run -e ${{ matrix.env }} contract
       - name: Regression suite
         if: matrix.os == 'ubuntu-latest'
         run: pixi run -e ${{ matrix.env }} check
 
-  # Windows is milestone 3: the build fails fast by design (gnuwin32 path
-  # not implemented). Until then, prove the win-64 environment solves and
-  # installs — toolchain availability is a real, cheap signal.
-  solve-windows:
-    name: windows-latest / solve only
+  # Windows builds via src/gnuwin32 driven by scripts/build-gnuwin32.sh
+  # (zig cc MinGW target + conda-forge MinGW gfortran). Proven on real
+  # hardware; non-gating until it has a track record on GH runners —
+  # drop continue-on-error once consistently green.
+  # NB: slim==full on Windows (gnuwin32 has no slim switches), so only
+  # the default environment is built.
+  build-windows:
+    name: windows-latest / default
     runs-on: windows-latest
-    timeout-minutes: 30
+    continue-on-error: true
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v6
       - uses: prefix-dev/setup-pixi@v0.10.0
         with:
-          environments: default full
+          environments: default
           cache: true
+      - name: Build R (gnuwin32 + zig)
+        run: pixi run build
+      - name: Smoke test
+        run: pixi run smoke
+      - name: Package contract test (Rcpp, data.table, minqa)
+        run: pixi run contract
