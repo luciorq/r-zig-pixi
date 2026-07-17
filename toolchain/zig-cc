@@ -8,6 +8,9 @@
 # library has no SONAME; zig's lld records the literal path it resolved
 # (e.g. "../../lib/libR.so"), which breaks at runtime. When linking a
 # shared library named lib*.so with no explicit -soname, add one.
+#
+# On win-64 the conda-forge zig binary is named x86_64-w64-mingw32-zig.
+ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
 extra=()
 if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
   prev=""
@@ -22,4 +25,4 @@ if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
     prev="$a"
   done
 fi
-exec zig cc -fno-sanitize=undefined "${extra[@]}" "$@"
+exec "$ZIG" cc -fno-sanitize=undefined "${extra[@]}" "$@"

@@ -1,2 +1,3 @@
 #!/usr/bin/env bash
-exec zig ranlib "$@"
+ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
+exec "$ZIG" ranlib "$@"

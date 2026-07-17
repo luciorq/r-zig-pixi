@@ -7,7 +7,11 @@
 #   full:           slim plus tcltk, readline, NLS, jpeg+tiff devices.
 # X11/quartz are off in both — cairo is the graphics engine on all OSes.
 . "$(dirname "$0")/env.sh"
-require_not_windows
+
+if [ "$OS" = windows ]; then
+  echo "Windows: no autoconf step — gnuwin32 configures via MkRules.local (build-gnuwin32.sh)"
+  exit 0
+fi
 
 if [ -f "$OBJ_DIR/Makeconf" ]; then
   echo "Already configured at $OBJ_DIR (run 'pixi run clean' to reconfigure)"

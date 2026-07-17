@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # C++ compiler shim: zig c++ as a single-word $CXX for autoconf/make.
-# Same UBSan and SONAME handling as zig-cc; see that file for rationale.
+# Same UBSan, SONAME, and zig-name handling as zig-cc; see that file.
+ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
 extra=()
 if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
   prev=""
@@ -15,4 +16,4 @@ if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
     prev="$a"
   done
 fi
-exec zig c++ -fno-sanitize=undefined "${extra[@]}" "$@"
+exec "$ZIG" c++ -fno-sanitize=undefined "${extra[@]}" "$@"

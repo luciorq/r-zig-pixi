@@ -82,15 +82,23 @@ flang = "*"
 flang-rt_linux-64 = "*"  # Fortran runtime lib is a separate package
 uutils-coreutils = "*"
 
+# win-64 Fortran: conda-forge's MinGW-w64 gfortran (gcc_impl_win-64), NOT
+# flang — conda-forge's win flang targets the MSVC ABI, while R's gnuwin32
+# build and zig cc's -windows-gnu target are MinGW. One ABI everywhere.
 [target.win-64.dependencies]
-flang = "*"
+gfortran = "*"
 uutils-coreutils = "*"
 m2-bash = "*"
+m2-make = "*"
+m2-coreutils = "*"
+m2-which = "*"
 m2-tar = "*"
 m2-gzip = "*"
 m2-sed = "*"
 m2-grep = "*"
 m2-gawk = "*"
+m2-unzip = "*"
+m2-zip = "*"
 
 [target.osx-64.dependencies]
 gfortran = "*"

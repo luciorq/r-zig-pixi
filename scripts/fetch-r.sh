@@ -17,6 +17,9 @@ fi
 
 if command -v sha256sum >/dev/null 2>&1; then
   actual="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+  # msys sha256sum escape-prefixes the line with '\' when the path
+  # contains backslashes (Windows) — strip it before comparing.
+  actual="${actual#\\}"
   if [ -f "$CHECKSUM_FILE" ]; then
     expected="$(cut -d' ' -f1 <"$CHECKSUM_FILE")"
     if [ "$actual" != "$expected" ]; then
@@ -36,6 +39,11 @@ else
 fi
 
 echo "Extracting to $SRC_DIR"
-tar -xzf "$TARBALL" -C "$BUILD_DIR"
+tar -xzf "$TARBALL" -C "$BUILD_DIR" || {
+  # Windows: creating symlinks needs elevation/developer mode; the only
+  # symlink entries (Recommended/*.tgz, tests/Pkgs fixtures) aren't needed
+  # for the slim build. Accept extraction if the tree actually landed.
+  [ "$OS" = windows ] && [ -f "$SRC_DIR/configure" ]
+}
 test -f "$SRC_DIR/configure"
 echo "Done."

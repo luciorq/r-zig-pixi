@@ -5,6 +5,12 @@ set -euo pipefail
 ROOT="${PIXI_PROJECT_ROOT:?run scripts through 'pixi run <task>'}"
 R_VERSION="${R_VERSION:?set in pixi.toml [activation.env]}"
 
+# On Windows (msys bash) normalize C:\... to /c/... — GNU tar treats a
+# colon in a path as a remote-host spec, and mixed separators confuse make.
+if command -v cygpath >/dev/null 2>&1; then
+  ROOT="$(cygpath -u "$ROOT")"
+fi
+
 # Build variant: "slim" (default env) or "full" (pixi run -e full ...).
 # Set through [feature.full-build.activation.env] in pixi.toml.
 VARIANT="${R_BUILD_VARIANT:-slim}"
