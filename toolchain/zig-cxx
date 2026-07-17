@@ -1,7 +1,48 @@
 #!/usr/bin/env bash
 # C++ compiler shim: zig c++ as a single-word $CXX for autoconf/make.
-# Same UBSan, SONAME, and zig-name handling as zig-cc; see that file.
+# Same UBSan, SONAME, dll.a-search, and zig-name handling as zig-cc.
 ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
+
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*)
+    libdirs=()
+    for a in "$@"; do case "$a" in -L?*) libdirs+=("${a#-L}");; esac; done
+    extraL=()
+    if [[ " $* " == *"-lgfortran"* || " $* " == *"-lquadmath"* ]]; then
+      gl="$(dirname "$(gfortran -print-file-name=libgfortran.dll.a 2>/dev/null)" 2>/dev/null || true)"
+      if [ -n "$gl" ] && [ -d "$gl" ]; then
+        libdirs+=("$gl")
+        extraL=("-L$gl")
+      fi
+    fi
+    args=()
+    for a in "$@"; do
+      repl=""
+      case "$a" in
+        -l?*)
+          n="${a#-l}"
+          for d in "${libdirs[@]}"; do
+            # GNU ld order: shared import lib first, then zig's own names
+            if [ -f "$d/lib$n.dll.a" ]; then
+              repl="$d/lib$n.dll.a"; break
+            elif [ -f "$d/$n.dll" ] || [ -f "$d/$n.lib" ] || [ -f "$d/lib$n.a" ]; then
+              break  # zig will find it itself
+            elif [ -f "$d/lib$n.lib" ]; then
+              repl="$d/lib$n.lib"; break
+            fi
+          done
+          ;;
+      esac
+      args+=("${repl:-$a}")
+    done
+    if [[ " $* " == *" -mwindows "* ]]; then
+      args+=(-lgdi32 -lcomdlg32 -lwinspool -ladvapi32 -lshell32)
+    fi
+    args+=("${extraL[@]}")
+    set -- "${args[@]}"
+    ;;
+esac
+
 extra=()
 if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
   prev=""

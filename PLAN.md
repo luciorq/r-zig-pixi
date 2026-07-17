@@ -121,12 +121,15 @@ stays pristine and a reconfigure is just deleting the objdir.
 2. **macOS (osx-64/osx-arm64)**: same scripts, gfortran instead of flang; needs
    validation on real hardware — expect linker-flag deltas (ld64 vs lld
    semantics via `zig cc`) and possibly `-Wl,-rpath` syntax differences.
-3. **Windows (win-64)**: the hard one. R 4.x cannot be built via autoconf on
-   Windows; the supported path is the `src/gnuwin32` Makefile tree, which
-   assumes MinGW. Plan: drive gnuwin32 with `zig cc -target x86_64-windows-gnu`
-   as the MinGW-compatible compiler + conda-forge `flang`, `m2-*` msys2 tools
-   for the shell, `make` from conda-forge. Scripts currently fail fast on
-   Windows with a pointer here.
+3. **[DONE 2026-07-17] Windows (win-64)**: R builds and passes smoke on
+   Windows 11 via `src/gnuwin32` driven by `scripts/build-gnuwin32.sh`:
+   zig cc (MinGW target) for C/C++, conda-forge MinGW gfortran for
+   Fortran, m2-* msys userland, LOCAL_SOFT pointed at the conda Library
+   tree. The zig shims carry a GNU-ld emulation layer for Windows
+   (lib*.dll.a / lib*.lib search, -mwindows implied libs, gfortran
+   libdir). Remaining gaps tracked in TODO.md: capability parity
+   (jpeg/tiff/tcltk forced on, cairo device not wired), regression
+   suite, installer.
 4. **R regression suite** (`pixi run check`) green on all working platforms.
 5. **openblas pixi feature**, recommended packages, and a relocatable install
    story (Makeconf currently records absolute workspace paths).

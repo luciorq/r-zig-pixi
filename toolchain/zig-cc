@@ -11,6 +11,55 @@
 #
 # On win-64 the conda-forge zig binary is named x86_64-w64-mingw32-zig.
 ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
+
+# Windows: zig's MinGW -l search tries only <n>.dll, <n>.lib, lib<n>.a —
+# missing lib<n>.dll.a (MinGW import libs, what GNU ld searches first)
+# and lib<n>.lib (conda-forge MSVC naming, e.g. libbz2.lib, libcurl.lib).
+# Emulate: resolve -lX to an explicit path when only a missed name exists.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*)
+    libdirs=()
+    for a in "$@"; do case "$a" in -L?*) libdirs+=("${a#-L}");; esac; done
+    # gfortran runtime libs live in GCC's private libdir, which the real
+    # gcc driver searches implicitly but zig cannot know about.
+    extraL=()
+    if [[ " $* " == *"-lgfortran"* || " $* " == *"-lquadmath"* ]]; then
+      gl="$(dirname "$(gfortran -print-file-name=libgfortran.dll.a 2>/dev/null)" 2>/dev/null || true)"
+      if [ -n "$gl" ] && [ -d "$gl" ]; then
+        libdirs+=("$gl")
+        extraL=("-L$gl")
+      fi
+    fi
+    args=()
+    for a in "$@"; do
+      repl=""
+      case "$a" in
+        -l?*)
+          n="${a#-l}"
+          for d in "${libdirs[@]}"; do
+            # GNU ld order: shared import lib first, then zig's own names
+            if [ -f "$d/lib$n.dll.a" ]; then
+              repl="$d/lib$n.dll.a"; break
+            elif [ -f "$d/$n.dll" ] || [ -f "$d/$n.lib" ] || [ -f "$d/lib$n.a" ]; then
+              break  # zig will find it itself
+            elif [ -f "$d/lib$n.lib" ]; then
+              repl="$d/lib$n.lib"; break
+            fi
+          done
+          ;;
+      esac
+      args+=("${repl:-$a}")
+    done
+    # GNU gcc's -mwindows implies the GDI/shell link set; zig only sets
+    # the subsystem, so add what gnuwin32 relies on implicitly.
+    if [[ " $* " == *" -mwindows "* ]]; then
+      args+=(-lgdi32 -lcomdlg32 -lwinspool -ladvapi32 -lshell32)
+    fi
+    args+=("${extraL[@]}")
+    set -- "${args[@]}"
+    ;;
+esac
+
 extra=()
 if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
   prev=""

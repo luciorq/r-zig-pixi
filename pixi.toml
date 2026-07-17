@@ -88,9 +88,19 @@ uutils-coreutils = "*"
 [target.win-64.dependencies]
 gfortran = "*"
 uutils-coreutils = "*"
+# gnuwin32 has no slim switches: Windows R unconditionally builds the
+# bitmap devices (jpeg/tiff) and the tcltk package, so slim-on-Windows
+# carries these (parity caveat, tracked in TODO.md)
+libjpeg-turbo = "*"
+libtiff = "*"
+tk = "*"
+gettext = "*"
 m2-bash = "*"
 m2-make = "*"
 m2-coreutils = "*"
+m2-diffutils = "*"
+m2-findutils = "*"
+m2-texinfo = "*"  # gnuwin32 'make all' builds R-FAQ.html unconditionally
 m2-which = "*"
 m2-tar = "*"
 m2-gzip = "*"

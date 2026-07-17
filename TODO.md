@@ -64,20 +64,30 @@
 
 ## Milestone 3 — Windows (win-64)
 
-- [x] Both pixi environments solve and install on real Windows 11 (kappa,
-      bare machine + pixi); zig and flang binaries run from the env
-- [ ] ABI decision forced: conda-forge's win-64 flang targets
-      **x86_64-pc-windows-msvc**, not MinGW — either drive it with
-      `--target=x86_64-pc-windows-gnu` (runtime libs are MSVC-built, may
-      not work) or accept an MSVC-ABI R (breaks MinGW assumption below)
-- [ ] R's autoconf build does not run on Windows; drive `src/gnuwin32`
-      Makefiles instead with:
-      - `zig cc -target x86_64-windows-gnu` as the MinGW-compatible CC
-      - conda-forge `flang` for Fortran
-      - `m2-bash`/`m2-*` for the shell layer, conda-forge `make`
-- [ ] Decide UCRT vs MSVCRT explicitly (UCRT; matches modern R ≥ 4.2 design)
-- [ ] Untangle Rtools assumptions hardcoded in `src/gnuwin32/MkRules.*`
-- [ ] Wire the same pixi tasks (`configure`/`build` dispatch per-OS in scripts)
+- [x] **R 4.6.1 builds and passes smoke test on Windows 11** (kappa,
+      2026-07-17): gnuwin32 driven by zig cc (MinGW target) for C/C++ and
+      conda-forge MinGW gfortran for Fortran; numerics green;
+      png/jpeg/tiff/tcltk/NLS/ICU/libcurl TRUE
+- [x] ABI decision: dropped flang on win-64 (conda-forge's targets MSVC);
+      conda-forge now ships MinGW gfortran (`gcc_impl_win-64`) — one
+      GNU/MinGW ABI across the whole Windows toolchain, validated by a
+      mixed zig+gfortran ABI test before wiring the build
+- [x] gnuwin32 driven via `scripts/build-gnuwin32.sh`: msys make
+      (m2-make), gcc/g++ shim names for zig, prefixed binutils exposed
+      unprefixed, windres wrapped with a native preprocessor,
+      LOCAL_SOFT → conda Library tree, TCL_VERSION=86t patch
+- [x] zig shims grew a GNU-ld emulation layer for Windows links:
+      lib<n>.dll.a and lib<n>.lib search (zig misses both — report
+      upstream), -mwindows implied GDI libs, gfortran private libdir
+- [x] Same pixi tasks work on Windows (fetch/build/smoke; configure no-ops)
+- [ ] Parity caveats to resolve: jpeg/tiff/tcltk forced on (gnuwin32 has
+      no off-switches → slim==full on Windows today); cairo device not
+      built (wire USE_CAIRO to conda cairo); NLS on
+- [ ] Run `tests/` on Windows (make check-all equivalent) — numerics
+      smoke only so far; watch gfortran -O2 complex LAPACK (same class
+      as the arm64-darwin bug; gnuwin32 uses -O3 for C, -O3 Fortran!)
+- [ ] Report upstream to zig: MinGW -l search misses lib<n>.dll.a
+- [ ] `make distribution` / installer story; `pixi run install` on Windows
 
 ## Milestone 4 — Distribution & ecosystem
 
