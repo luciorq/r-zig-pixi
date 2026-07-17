@@ -34,8 +34,12 @@ R_CONTRACT_LIB="$LIB" "$R_BIN" --vanilla -e '
   stopifnot(evalCpp("2 + 2") == 4)
   dt <- data.table(g = rep(1:3, 4), x = 1:12)
   stopifnot(identical(dt[, sum(x), by = g][[2]], c(22L, 26L, 30L)))
-  cat("data.table threads:", getDTthreads(), "\n")
-  stopifnot(getDTthreads() > 1)  # proves OpenMP is compiled in and live
+  # OpenMP proof, machine-independent: data.table prints "OpenMP version"
+  # only when compiled with OpenMP. (Do NOT assert getDTthreads() > 1 —
+  # its default is 50% of cores, which is 1 on small CI runners.)
+  th_info <- capture.output(getDTthreads(verbose = TRUE))
+  cat(th_info, sep = "\n")
+  stopifnot(any(grepl("OpenMP version", th_info)))
   fit <- bobyqa(c(1, 1), function(x) sum((x - 3)^2))
   stopifnot(max(abs(fit$par - c(3, 3))) < 1e-4)
   cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
