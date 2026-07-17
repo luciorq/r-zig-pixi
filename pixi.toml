@@ -82,6 +82,7 @@ zip = "*"
 flang = "*"
 flang-rt_linux-64 = "*"  # Fortran runtime lib is a separate package
 uutils-coreutils = "*"
+patchelf = "*"  # rpath rewriting for relocatable installs
 
 # win-64 Fortran: conda-forge's MinGW-w64 gfortran (gcc_impl_win-64), NOT
 # flang — conda-forge's win flang targets the MSVC ABI, while R's gnuwin32
@@ -122,6 +123,7 @@ uutils-coreutils = "*"
 [target.linux-aarch64.dependencies]
 gfortran = "*"
 coreutils = "*"
+patchelf = "*"
 
 # --- optional capabilities (compile-time: only via the 'full' environment) ---
 

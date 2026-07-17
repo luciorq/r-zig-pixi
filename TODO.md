@@ -117,8 +117,18 @@
       CI job added). Windows/gnuwin32 BLAS switch still TODO; macOS
       openblas variant unvalidated (expect it to just work)
 - [ ] Recommended packages (`--with-recommended-packages`) once base is stable
-- [ ] Relocatable installs: Makeconf currently records absolute workspace
-      paths to the zig shims; replace with `$(R_HOME)`-relative discovery
+- [x] Relocatable installs (2026-07-17, linux): `pixi run install` now
+      produces a self-contained dist/ tree via scripts/relocate.sh —
+      conda libs bundled into R_HOME/lib (ldd walk), $ORIGIN rpaths
+      (patchelf), launchers derive R_HOME from their own location,
+      Rscript CLI emulated via the R launcher (the binary hard-embeds
+      its build path and ignores env R_HOME), etc/ldpaths reduced,
+      zig shims bundled + Makeconf rewritten to $(R_HOME)-relative.
+      Verified: moved copy runs numerics + cairo png + R CMD SHLIB with
+      a scrubbed environment and the original tree deleted. TODO:
+      macOS (install_name_tool) and Windows equivalents; headers for
+      compiling against bundled libs are NOT shipped (packages needing
+      e.g. zlib headers still want an env)
 - [ ] Install recommended + test compiling a real CRAN package (Rcpp,
       data.table) against this R — proves the Makeconf-as-toolchain-contract
 - [ ] Package the result as a conda package / pixi-installable artifact
