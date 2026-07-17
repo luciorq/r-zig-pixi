@@ -39,6 +39,13 @@ esac
 # libR at once (~300+) and fails with ProcessFdQuotaExceeded without this.
 ulimit -n 4096 2>/dev/null || true
 
+# Windows R's tcltk .onLoad expects CRAN's bundled R_HOME/Tcl unless
+# MY_TCLTK is set — point it at conda-forge's Tcl instead.
+if [ "$OS" = windows ] && [ -n "${CONDA_PREFIX:-}" ]; then
+  export MY_TCLTK=yes
+  export TCL_LIBRARY="$CONDA_PREFIX/Library/lib/tcl8.6"
+fi
+
 # Hermetic PATH: only the pixi environment, plus /usr/bin:/bin as last
 # resort for kernel-level needs (#!/bin/sh shebangs inside generated
 # scripts resolve absolutely anyway). Keeps host tools like a user TeX
