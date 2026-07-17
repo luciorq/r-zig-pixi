@@ -56,7 +56,7 @@ TCL_VERSION = 86t
 # at runtime, so the link set is just cairo itself)
 USE_CAIRO = YES
 CAIRO_CPPFLAGS = -I$LOCAL_SOFT/include/cairo -I$LOCAL_SOFT/include/freetype2
-CAIRO_LIBS = -lcairo
+CAIRO_LIBS = -lcairo -lfontconfig
 EOF
 
 # TCL_* are baked into etc/x64/Makeconf from the fixed/ template, not
