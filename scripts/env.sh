@@ -29,6 +29,10 @@ case "$(uname -s)" in
   *) OS=unknown ;;
 esac
 
+# macOS defaults to 256 open files; zig's linker opens every object of
+# libR at once (~300+) and fails with ProcessFdQuotaExceeded without this.
+ulimit -n 4096 2>/dev/null || true
+
 # Hermetic PATH: only the pixi environment, plus /usr/bin:/bin as last
 # resort for kernel-level needs (#!/bin/sh shebangs inside generated
 # scripts resolve absolutely anyway). Keeps host tools like a user TeX
