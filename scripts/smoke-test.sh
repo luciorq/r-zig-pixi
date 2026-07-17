@@ -23,7 +23,7 @@ if [ "$OS" = windows ]; then
     cat("numerics OK\n")
     caps <- capabilities()
     print(caps)
-    stopifnot(caps[["png"]], caps[["iconv"]], caps[["libcurl"]])
+    stopifnot(caps[["png"]], caps[["iconv"]], caps[["libcurl"]], caps[["cairo"]])
   '
   echo "Smoke test passed (windows/$VARIANT)."
   exit 0

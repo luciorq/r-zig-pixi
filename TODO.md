@@ -80,9 +80,14 @@
       lib<n>.dll.a and lib<n>.lib search (zig misses both — report
       upstream), -mwindows implied GDI libs, gfortran private libdir
 - [x] Same pixi tasks work on Windows (fetch/build/smoke; configure no-ops)
+- [x] cairo device wired (USE_CAIRO + conda cairo/fontconfig; values must
+      be quoted in MkRules.local — gnuwin32 passes them unquoted to a
+      sub-make); capabilities("cairo") TRUE on Windows
+- [x] Contract test passes on Windows: Rcpp evalCpp, data.table, minqa
+      (Rcpp dep + package Fortran). Makeconf's hardcoded SHLIB_OPENMP
+      flags blanked (zig has no OpenMP runtime; matches unix behavior)
 - [ ] Parity caveats to resolve: jpeg/tiff/tcltk forced on (gnuwin32 has
-      no off-switches → slim==full on Windows today); cairo device not
-      built (wire USE_CAIRO to conda cairo); NLS on
+      no off-switches → slim==full on Windows today); NLS on
 - [x] **`make check` green on Windows** (2026-07-17): complex LAPACK
       passes at gfortran -O3 on x86_64-MinGW — the arm64-darwin
       miscompilation does NOT reproduce here. Two environmental fixes:

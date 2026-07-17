@@ -54,9 +54,10 @@ TCL_HOME = $LOCAL_SOFT
 TCL_VERSION = 86t
 # cairo graphics from conda-forge's cairo DLL (transitive deps resolve
 # at runtime, so the link set is just cairo itself)
+# NB: quoted — gnuwin32 passes these unquoted on a sub-make command line
 USE_CAIRO = YES
-CAIRO_CPPFLAGS = -I$LOCAL_SOFT/include/cairo -I$LOCAL_SOFT/include/freetype2
-CAIRO_LIBS = -lcairo -lfontconfig
+CAIRO_CPPFLAGS = "-I$LOCAL_SOFT/include/cairo -I$LOCAL_SOFT/include/freetype2"
+CAIRO_LIBS = "-lcairo -lfontconfig"
 EOF
 
 # TCL_* are baked into etc/x64/Makeconf from the fixed/ template, not
