@@ -85,7 +85,13 @@ if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
   omp+=(-I"$inc")
   linking=true
   for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) linking=false; break;; esac; done
-  if $linking; then
+  # Some packages (e.g. data.table) autoprobe OpenMP themselves and bake
+  # an explicit -lomp into PKG_LIBS on top of R's SHLIB_OPENMP_CFLAGS.
+  # Adding our own on top double-links libomp.dylib, which newer macOS
+  # dyld hard-rejects at load time as a "duplicate linked dylib" error.
+  already_linked=false
+  for a in "$@"; do case "$a" in -lomp|*/libomp.lib) already_linked=true; break;; esac; done
+  if $linking && ! $already_linked; then
     if [ -f "$lib/libomp.lib" ]; then
       omp+=("$lib/libomp.lib")   # zig's -l search misses this name on win
     else

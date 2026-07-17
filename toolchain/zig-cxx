@@ -67,7 +67,11 @@ if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
   omp+=(-I"$inc")
   linking=true
   for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) linking=false; break;; esac; done
-  if $linking; then
+  # See zig-cc: skip if the caller already linked libomp itself (avoids
+  # a double LC_LOAD_DYLIB that newer macOS dyld rejects at load time).
+  already_linked=false
+  for a in "$@"; do case "$a" in -lomp|*/libomp.lib) already_linked=true; break;; esac; done
+  if $linking && ! $already_linked; then
     if [ -f "$lib/libomp.lib" ]; then
       omp+=("$lib/libomp.lib")
     else
