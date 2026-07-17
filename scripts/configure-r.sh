@@ -82,11 +82,19 @@ case "$VARIANT" in
     ;;
 esac
 
+# BLAS/LAPACK: internal reference implementation by default; conda-forge
+# openblas (which bundles LAPACK) when the openblas feature is active.
+BLAS_ARGS=()
+if [ "$BLAS" = openblas ]; then
+  BLAS_ARGS+=("--with-blas=-lopenblas" "--with-lapack=-lopenblas")
+fi
+
 mkdir -p "$OBJ_DIR"
 cd "$OBJ_DIR"
 
 "$SRC_DIR/configure" \
   --prefix="$PREFIX" \
+  "${BLAS_ARGS[@]}" \
   --enable-R-shlib \
   --with-x=no \
   --without-aqua \

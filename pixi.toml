@@ -143,6 +143,18 @@ gettext = "*"
 [feature.full-build.activation.env]
 R_BUILD_VARIANT = "full"
 
+# External optimized BLAS/LAPACK instead of R's internal reference
+# implementation (unix configure path only so far; gnuwin32 is TODO).
+# Numerical results may differ in last-bit rounding from the reference
+# BLAS — that is inherent to optimized BLAS, not a build defect.
+[feature.openblas.dependencies]
+openblas = "*"
+
+[feature.openblas.activation.env]
+R_BLAS = "openblas"
+
 [environments]
 default = []
 full = ["tcltk", "img-formats", "repl", "nls", "full-build"]
+openblas = ["openblas"]
+full-openblas = ["tcltk", "img-formats", "repl", "nls", "full-build", "openblas"]

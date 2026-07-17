@@ -32,11 +32,11 @@ fi
 R_BIN="$OBJ_DIR/bin/R"
 test -x "$R_BIN" || { echo "error: $R_BIN not built yet — run 'pixi run build'" >&2; exit 1; }
 
-echo "Smoke-testing variant: $VARIANT"
+echo "Smoke-testing variant: $VARIANT (BLAS: $BLAS)"
 "$R_BIN" --version | head -3
 echo
 
-R_SMOKE_VARIANT="$VARIANT" "$R_BIN" --vanilla --quiet -e '
+R_SMOKE_VARIANT="$VARIANT" R_SMOKE_BLAS="$BLAS" "$R_BIN" --vanilla --quiet -e '
   # Fortran-backed numerics: LAPACK solve/qr, BLAS matmul, fft
   set.seed(1)
   m <- matrix(rnorm(64), 8, 8)
@@ -71,5 +71,10 @@ R_SMOKE_VARIANT="$VARIANT" "$R_BIN" --vanilla --quiet -e '
 
   cat("\nsessionInfo BLAS/LAPACK:\n")
   si <- sessionInfo(); cat(si$BLAS, "\n", si$LAPACK, "\n")
+  if (Sys.getenv("R_SMOKE_BLAS") == "openblas") {
+    stopifnot(grepl("openblas", si$BLAS, ignore.case = TRUE))
+  } else {
+    stopifnot(grepl("libRblas", si$BLAS))
+  }
 '
 echo "Smoke test passed ($VARIANT)."

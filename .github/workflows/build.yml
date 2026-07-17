@@ -17,6 +17,9 @@ jobs:
         os: [ubuntu-latest]
         env: [default, full]
         include:
+          # external optimized BLAS/LAPACK variant
+          - os: ubuntu-latest
+            env: openblas
           # macOS is milestone 2: scripts are wired (gfortran instead of
           # flang) but not yet validated — allowed to fail without gating.
           - os: macos-latest

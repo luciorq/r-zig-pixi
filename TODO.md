@@ -109,7 +109,13 @@
 
 ## Milestone 4 — Distribution & ecosystem
 
-- [ ] `openblas` pixi feature (external BLAS/LAPACK instead of R-internal)
+- [x] `openblas` pixi feature (2026-07-17): `openblas`/`full-openblas`
+      environments; R_BLAS activation var → configure --with-blas/-lapack
+      -lopenblas; separate objdirs per BLAS flavor; smoke asserts the
+      linked BLAS both ways (openblas variant → libopenblas, default →
+      libRblas); validated on linux-64 (build/smoke/contract green,
+      CI job added). Windows/gnuwin32 BLAS switch still TODO; macOS
+      openblas variant unvalidated (expect it to just work)
 - [ ] Recommended packages (`--with-recommended-packages`) once base is stable
 - [ ] Relocatable installs: Makeconf currently records absolute workspace
       paths to the zig shims; replace with `$(R_HOME)`-relative discovery
