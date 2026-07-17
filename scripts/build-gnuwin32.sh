@@ -52,6 +52,11 @@ LOCAL_SOFT = $LOCAL_SOFT
 # conda-forge tcl/tk on Windows uses the threaded '86t' library suffix
 TCL_HOME = $LOCAL_SOFT
 TCL_VERSION = 86t
+# cairo graphics from conda-forge's cairo DLL (transitive deps resolve
+# at runtime, so the link set is just cairo itself)
+USE_CAIRO = YES
+CAIRO_CPPFLAGS = -I$LOCAL_SOFT/include/cairo -I$LOCAL_SOFT/include/freetype2
+CAIRO_LIBS = -lcairo
 EOF
 
 # TCL_* are baked into etc/x64/Makeconf from the fixed/ template, not
@@ -71,5 +76,9 @@ LOG="$BUILD_DIR/gnuwin32-make.log"
 echo "== gnuwin32 make all (experimental) — full log: $LOG"
 rc=0
 "$MSYS_MAKE" all > "$LOG" 2>&1 || rc=$?
+# cairo devices are not part of 'all' even with USE_CAIRO=YES
+if [ $rc -eq 0 ]; then
+  "$MSYS_MAKE" cairodevices >> "$LOG" 2>&1 || rc=$?
+fi
 tail -30 "$LOG"
 exit $rc
