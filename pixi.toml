@@ -28,6 +28,7 @@ configure = { cmd = "bash scripts/configure-r.sh", depends-on = ["fetch"] }
 build = { cmd = "bash scripts/build-r.sh", depends-on = ["configure"] }
 smoke = "bash scripts/smoke-test.sh"
 check = "bash scripts/check-r.sh"
+contract = "bash scripts/contract-test.sh"
 install = "bash scripts/install-r.sh"
 clean = "bash scripts/clean.sh"
 

@@ -18,6 +18,15 @@ echo "Configuring R $R_VERSION, variant: $VARIANT"
 FC="$(fortran_compiler)"
 CONDA="${CONDA_PREFIX:?pixi should set CONDA_PREFIX}"
 
+# gfortran 15.2 miscompiles R's complex LAPACK (cmplx.f/zgesdd) at -O2 on
+# arm64 macOS: SVD returns wrong U/V with info=0 (silent!). Verified on
+# real hardware 2026-07-17; results are correct at -O1. Cap Fortran
+# optimization with gfortran on Darwin until narrowed to a specific flag.
+FOPT="-O2"
+if [ "$OS" = macos ] && [ "$FC" = gfortran ]; then
+  FOPT="-O1"
+fi
+
 # autoconf's AC_FC_LIBRARY_LDFLAGS mangles flang's verbose link output
 # (emits a bogus '-lflang_rt.runtime:' with a trailing colon), so give
 # configure the Fortran runtime libs explicitly when FC is flang.
@@ -90,8 +99,8 @@ cd "$OBJ_DIR"
   RANLIB="$TOOLCHAIN/zig-ranlib" \
   CFLAGS="-O2" \
   CXXFLAGS="-O2" \
-  FFLAGS="-O2" \
-  FCFLAGS="-O2" \
+  FFLAGS="$FOPT" \
+  FCFLAGS="$FOPT" \
   CPPFLAGS="-I$CONDA/include" \
   LDFLAGS="-L$CONDA/lib -Wl,-rpath,$CONDA/lib" \
   "${FLIBS_ARGS[@]}"

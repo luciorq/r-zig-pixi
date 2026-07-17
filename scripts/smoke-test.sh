@@ -20,16 +20,22 @@ R_SMOKE_VARIANT="$VARIANT" "$R_BIN" --vanilla --quiet -e '
   stopifnot(abs(det(qr.R(qr(m)))) > 0)
   stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9)
   # regex (pcre2), iconv, compression paths
-  stopifnot(grepl("\\d+", "R 4"), identical(memDecompress(memCompress("x")), charToRaw("x")))
+  # NB: no backslash escapes here — R'\''s sh wrapper passes -e through echo,
+  # and macOS /bin/sh has xpg_echo, which eats one backslash level.
+  stopifnot(grepl("[0-9]+", "R 4", perl = TRUE),
+            identical(memDecompress(memCompress("x")), charToRaw("x")))
   cat("numerics OK\n")
 
   caps <- capabilities()
   print(caps)
 
-  # Both variants: headless cairo graphics, no X11/quartz, full i18n plumbing
+  # Both variants: headless cairo graphics, no X11/quartz, full i18n plumbing.
+  # long.double is intentionally not asserted: on arm64 macOS long double
+  # IS double (hardware fact; CRAN arm64 builds report FALSE too).
   stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]],
-            caps[["libcurl"]], caps[["long.double"]],
+            caps[["libcurl"]],
             !caps[["X11"]], !caps[["aqua"]])
+  cat("long.double:", caps[["long.double"]], "(informational)\n")
 
   variant <- Sys.getenv("R_SMOKE_VARIANT")
   if (variant == "slim") {

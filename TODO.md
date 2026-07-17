@@ -32,18 +32,44 @@
 
 ## Milestone 2 — macOS (osx-64, osx-arm64)
 
-- [ ] Validate scripts on real macOS hardware (nothing here is macOS-tested yet)
-- [ ] Confirm `zig cc` links Mach-O with `-Wl,-rpath` as written, or add
-      per-OS LDFLAGS branch in `scripts/configure-r.sh`
-- [ ] Confirm gfortran (explicit conda-forge pkg) FLIBS detection under
-      configure; watch for `-lgfortran` resolving into the pixi env, not
-      a host toolchain
+- [x] Environment installs from the same lockfile on real hardware
+      (omicron, macOS 26.4 arm64, bare machine + pixi)
+- [x] configure + full C/Fortran compile pass with zig cc + gfortran;
+      FLIBS resolved into the pixi env (lib/gcc/arm64-apple-darwin)
+- [x] Fix: raise `ulimit -n` in env.sh — macOS's 256-fd default breaks
+      zig's linker on libR.dylib (ProcessFdQuotaExceeded, ~300 objects)
+- [x] Slim build completes and smoke test passes on omicron (osx-arm64,
+      zig cc Mach-O linking + gfortran numerics all green)
+- [x] Portability fixes from omicron: no backslash escapes in `R -e`
+      smoke code (Apple /bin/sh xpg_echo eats one level); long.double
+      not asserted (arm64 macOS: long double == double, matches CRAN)
+- [x] Full-variant build + smoke on omicron
+- [x] Contract test (Rcpp evalCpp + data.table) passes on omicron
+- [x] **gfortran 15.2 miscompiles complex LAPACK at -O2 on arm64-darwin**:
+      zgesdd returns wrong U/V with info=0 (silent wrong numbers; caught by
+      `make check` lapack.R). Isolated with a pure-Fortran driver — not a
+      zig/ABI issue. Workaround: FFLAGS/FCFLAGS capped at -O1 for
+      gfortran-on-Darwin in configure-r.sh.
+- [x] **Milestone 2 complete** (2026-07-17): clean-slate re-validation on
+      omicron green across the board — slim and full: build, smoke,
+      `make check`, and contract test all rc=0 on osx-arm64.
+- [ ] Narrow the gfortran bug to a specific -O2 optimization (try
+      -O2 -fno-tree-vectorize etc.), report upstream to GCC/conda-forge
+- [ ] Check whether linux-aarch64 (also gfortran) has the same problem —
+      run `make check` there before trusting it
+- [ ] Confirm `-single_module` configure warning is benign with zig's linker
 - [ ] Confirm cairo-only graphics (quartz intentionally dropped) and tk
       from conda-forge work headless
 - [ ] Swap gfortran → flang when conda-forge ships flang for osx-*
 
 ## Milestone 3 — Windows (win-64)
 
+- [x] Both pixi environments solve and install on real Windows 11 (kappa,
+      bare machine + pixi); zig and flang binaries run from the env
+- [ ] ABI decision forced: conda-forge's win-64 flang targets
+      **x86_64-pc-windows-msvc**, not MinGW — either drive it with
+      `--target=x86_64-pc-windows-gnu` (runtime libs are MSVC-built, may
+      not work) or accept an MSVC-ABI R (breaks MinGW assumption below)
 - [ ] R's autoconf build does not run on Windows; drive `src/gnuwin32`
       Makefiles instead with:
       - `zig cc -target x86_64-windows-gnu` as the MinGW-compatible CC
