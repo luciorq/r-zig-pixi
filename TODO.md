@@ -105,7 +105,25 @@
       data.table getDTthreads: linux 8, windows 6, macOS 5 threads.
       R core also built with OpenMP (SHLIB_OPENMP_CFLAGS=-fopenmp in
       Makeconf on unix; gnuwin32 Makeconf restored to -fopenmp).
-      Contract test now asserts getDTthreads() > 1 on every platform.
+      Contract test asserts `"OpenMP version"` appears in
+      `getDTthreads(verbose=TRUE)` output, machine-independent (NOT
+      `getDTthreads() > 1` — that broke CI on small runners, since
+      data.table defaults to 50% of cores = 1 on a 2-core box).
+- [x] **Fix (2026-07-17): macOS "duplicate linked dylib" on data.table
+      install.** `data.table`'s own `configure` autoprobes OpenMP and
+      bakes a literal `-lomp` into its `PKG_LIBS` on macOS, on top of
+      R's `-fopenmp` in `SHLIB_OPENMP_CFLAGS` — `zig-cc`/`zig-cxx` were
+      unconditionally adding *their own* `-lomp` whenever `-fopenmp`
+      appeared, so `libomp.dylib` got two `LC_LOAD_DYLIB` entries and
+      newer macOS `dyld` refused to `dlopen` it (CI failure: `unable to
+      load shared object ... duplicate linked dylib '@rpath/libomp.dylib'`,
+      only after Rcpp/minqa had already installed fine). Fixed by having
+      both shims skip their OpenMP-link injection when `-lomp` (or
+      `libomp.lib` on Windows) is already present in the caller's args —
+      `$CONDA/lib` is already on the link line via Makeconf's LDFLAGS, so
+      the caller's own `-lomp` still resolves. Verified end-to-end on
+      omicron (osx-arm64): Rcpp + data.table + minqa contract test green,
+      `data.table is using 5 threads`. See PLAN.md's Known risks.
 
 ## Milestone 4 — Distribution & ecosystem
 
@@ -152,10 +170,41 @@
       - Documented, deliberately unfixed: running the bundle needs
         nothing; compiling NEW packages needs `zig` on PATH (the one
         external tool contract — never vendor the compiler itself)
-      - TODO: macOS (install_name_tool + codesign — signing is mandatory
-        on arm64, not optional); headers for compiling against bundled
-        libs aren't shipped (packages needing e.g. zlib.h still want zig
-        + an env, or system headers)
+      - TODO: headers for compiling against bundled libs aren't shipped
+        (packages needing e.g. zlib.h still want zig + an env, or system
+        headers)
+- [x] **macOS staging (2026-07-18)**: `install_name_tool` +
+      mandatory ad-hoc codesigning, verified end-to-end on omicron
+      (osx-arm64) at the same adversarial standard as linux/windows —
+      moved tree, original deleted, `PATH=/usr/bin:/bin` only. Mach-O
+      detection via 64-bit-LE magic `cffaedfe` (parallel to the ELF-magic
+      scan). Three real bugs, all macOS-specific:
+      - `stage.sh`'s `etc/ldpaths` rewrite only ever wrote
+        `LD_LIBRARY_PATH`, which dyld ignores completely — silently broke
+        every macOS launch. `bin/exec/R`'s dep on libR.dylib/libRblas.dylib
+        is a bare name (R never sets `-install_name` on them), resolved
+        only via `DYLD_FALLBACK_LIBRARY_PATH` (what R's own stock ldpaths
+        uses on Darwin); conda-forge's own dylibs use `@rpath/<name>` IDs
+        instead and need real `LC_RPATH` entries. Fixed: `ldpaths` now
+        branches by OS, and `install_name_tool -add_rpath
+        @loader_path/<rel>` adds the dual R_HOME/lib + prefix/lib entries
+        (mirroring Linux's dual $ORIGIN) on every Mach-O file.
+      - `install_name_tool` invalidates the code signature; arm64 macOS
+        won't execute an unsigned binary. Fixed: `codesign --force --sign
+        -` (ad hoc) after every `install_name_tool` call, both in
+        stage.sh and package-standalone.sh's vendored copies.
+      - `readlink -f` doesn't exist on BSD/macOS — switched every
+        launcher to a portable symlink-following loop. That surfaced a
+        second bug: macOS's system bash (3.2.57, frozen pre-GPLv3)
+        misparses a `case` with an empty first branch when forced onto
+        one line inside `$(...)` (exactly the shape of the `R_HOME_DIR=`
+        sed replacement) — fixed with the POSIX-optional leading `(` on
+        each case pattern (`(/*)` not `/*)`). Only reproduced by running
+        the actual staged launcher as a file on real hardware; a trivial
+        `bash -c` repro needed the exact same nested-`$()` shape.
+      - Also hit (not macOS-specific, but found here): an objdir whose
+        Sys.which source patch had silently gone stale — see PLAN.md's
+        Known risks for the `configure-r.sh`/`fetch-r.sh` staleness gap.
 - [~] conda-forge-style package via rattler-build (recipe/recipe.yaml +
       recipe/build.sh, linux-64 first): the recipe reuses the exact
       same configure/build/install/stage scripts, pointed at rattler's
@@ -175,7 +224,7 @@
       **Green as of 2026-07-17**: r-zig-slim-4.6.1-hb0f4dca_0.conda built
       and passed its test (installed from declared run: deps only, no
       vendoring — numerics + cairo/ICU/libcurl capabilities all work).
-- [ ] macOS conda recipe + standalone package (once macOS staging exists)
+- [ ] macOS conda recipe (standalone package now done — see above)
 - [ ] Windows conda recipe (gnuwin32 has no `make install`; recipe/build.sh
       would need the same install-r.sh Windows branch)
 - [ ] Publish to a real channel (prefix.dev or anaconda.org) once verified

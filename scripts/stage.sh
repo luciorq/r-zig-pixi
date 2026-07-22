@@ -4,13 +4,14 @@
 # from the enclosing env's $PREFIX/lib) and as a standalone bundle
 # (deps vendored into <bundle>/lib by package-standalone.sh).
 #
-#   1. dual-entry $ORIGIN rpaths: R_HOME/lib AND <prefix>/lib
+#   1. dual-entry rpaths: R_HOME/lib AND <prefix>/lib ($ORIGIN on linux,
+#      @loader_path on macOS, plus mandatory ad-hoc re-codesigning there)
 #   2. launchers derive R_HOME from their own location (bin/R trampoline,
 #      Rscript CLI emulated — its binary hard-embeds the build path)
 #   3. etc/ldpaths reduced to R_HOME/lib
 #   4. zig shims bundled; Makeconf rewritten to $(R_HOME)-relative
 #
-# Linux implemented; macOS staging is TODO (install_name_tool + codesign).
+# Linux and macOS implemented (patchelf / install_name_tool+codesign).
 . "$(dirname "$0")/env.sh"
 
 R_HOME_DIR="$PREFIX/lib/R"
@@ -35,9 +36,21 @@ if [ "$OS" = windows ]; then
 fi
 
 # --- launchers (all unix) -------------------------------------------------
+# Resolve $0 to its real directory without `readlink -f`: BSD/macOS
+# readlink has no -f flag, only GNU's does (and we can't assume a
+# relocated bundle has GNU coreutils on PATH). This loop-based idiom
+# (follow one -h/symlink hop at a time via plain `readlink`, POSIX on
+# both GNU and BSD) works identically everywhere. The case patterns
+# below use the POSIX-optional leading "(" (e.g. "(/*)" not "/*)") —
+# macOS's system bash (3.2.57, frozen pre-GPLv3) misparses a `case`
+# with an empty first branch when the whole thing is forced onto one
+# line inside a $(...) substitution (exactly what this sed replacement
+# does); found by running the staged launcher on real hardware outside
+# the pixi env, not by inspection. The parenthesized form sidesteps it
+# and is valid on every POSIX shell, so it's harmless everywhere else.
 for launcher in "$R_HOME_DIR/bin/R"; do
   [ -f "$launcher" ] || continue
-  sed -i 's|^R_HOME_DIR=.*|R_HOME_DIR=$(cd "$(dirname "$(readlink -f "$0")")/.." \&\& pwd)  # patched: relocatable|' "$launcher"
+  sed -i 's|^R_HOME_DIR=.*|R_HOME_DIR=$(_s="$0"; while [ -h "$_s" ]; do _d=$(cd -P "$(dirname "$_s")" \&\& pwd); _s=$(readlink "$_s"); case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac; done; cd -P "$(dirname "$_s")/.." \&\& pwd)  # patched: relocatable|' "$launcher"
   # configure also bakes R_SHARE_DIR/R_INCLUDE_DIR/R_DOC_DIR as literal
   # absolute paths (NOT derived from R_HOME_DIR above) — these feed
   # `R CMD SHLIB`/INSTALL's search for share/make/*.mk, so a stale value
@@ -50,7 +63,13 @@ for launcher in "$R_HOME_DIR/bin/R"; do
 done
 cat > "$PREFIX/bin/R" << 'EOF'
 #!/bin/sh
-here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+_s="$0"
+while [ -h "$_s" ]; do
+  _d="$(cd -P "$(dirname "$_s")" && pwd)"
+  _s="$(readlink "$_s")"
+  case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac
+done
+here="$(cd -P "$(dirname "$_s")" && pwd)"
 # standalone bundles carry fontconfig config; harmless if absent
 if [ -d "$here/../etc/fonts" ]; then
   FONTCONFIG_PATH="$here/../etc/fonts"; export FONTCONFIG_PATH
@@ -62,7 +81,13 @@ chmod +x "$PREFIX/bin/R"
 for rs in "$PREFIX/bin/Rscript" "$R_HOME_DIR/bin/Rscript"; do
   cat > "$rs" << 'EOF'
 #!/bin/bash
-here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+_s="$0"
+while [ -h "$_s" ]; do
+  _d="$(cd -P "$(dirname "$_s")" && pwd)"
+  _s="$(readlink "$_s")"
+  case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac
+done
+here="$(cd -P "$(dirname "$_s")" && pwd)"
 case "$here" in
   */lib/R/bin) R_HOME="${here%/bin}" ;;
   *)           R_HOME="$(cd "$here/../lib/R" && pwd)" ;;
@@ -92,11 +117,28 @@ done
 echo "   launchers made location-independent"
 
 # --- ldpaths, shims, Makeconf ---------------------------------------------
-cat > "$R_HOME_DIR/etc/ldpaths" << 'EOF'
+# dyld ignores LD_LIBRARY_PATH entirely — macOS needs
+# DYLD_FALLBACK_LIBRARY_PATH (what R's own stock ldpaths uses on Darwin;
+# found by running the staged bundle for real: bin/exec/R's bare
+# "libR.dylib" dependency resolves through this fallback-path mechanism,
+# so writing only LD_LIBRARY_PATH here silently broke every macOS launch).
+if [ "$OS" = macos ]; then
+  cat > "$R_HOME_DIR/etc/ldpaths" << 'EOF'
+: "${R_LD_LIBRARY_PATH=${R_HOME}/lib}"
+if [ -z "${DYLD_FALLBACK_LIBRARY_PATH}" ]; then
+  DYLD_FALLBACK_LIBRARY_PATH="${R_LD_LIBRARY_PATH}"
+else
+  DYLD_FALLBACK_LIBRARY_PATH="${R_LD_LIBRARY_PATH}:${DYLD_FALLBACK_LIBRARY_PATH}"
+fi
+export DYLD_FALLBACK_LIBRARY_PATH
+EOF
+else
+  cat > "$R_HOME_DIR/etc/ldpaths" << 'EOF'
 : "${R_LD_LIBRARY_PATH=${R_HOME}/lib}"
 LD_LIBRARY_PATH="${R_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH}"
 export LD_LIBRARY_PATH
 EOF
+fi
 mkdir -p "$R_HOME_DIR/bin/toolchain"
 cp "$TOOLCHAIN"/zig-* "$R_HOME_DIR/bin/toolchain/"
 
@@ -140,7 +182,7 @@ mkc="$R_HOME_DIR/etc/Makeconf"
 sed -i "s|$TOOLCHAIN/|\$(R_HOME)/bin/toolchain/|g" "$mkc"
 echo "   Makeconf uses \$(R_HOME)-relative shims"
 
-# --- rpaths (linux) -------------------------------------------------------
+# --- rpaths (linux / macos) ------------------------------------------------
 if [ "$OS" = linux ]; then
   find "$R_HOME_DIR" "$PREFIX/bin" -type f | while read -r f; do
     head -c4 "$f" 2>/dev/null | grep -q $'\x7fELF' || continue
@@ -150,8 +192,31 @@ if [ "$OS" = linux ]; then
     patchelf --set-rpath "\$ORIGIN/$rel_rlib:\$ORIGIN/$rel_plib" "$f" 2>/dev/null || true
   done
   echo "   dual \$ORIGIN rpaths set (R_HOME/lib + prefix/lib)"
+elif [ "$OS" = macos ]; then
+  # conda-forge's macOS dylibs record their deps as @rpath/<name> (never
+  # an absolute path), so — unlike libR.dylib/libRblas.dylib, which are
+  # bare names resolved through etc/ldpaths' DYLD_FALLBACK_LIBRARY_PATH —
+  # they need an actual LC_RPATH to resolve. Add @loader_path-relative
+  # entries mirroring Linux's dual $ORIGIN scheme (R_HOME/lib for the
+  # conda-package case, prefix/lib for package-standalone.sh's vendored
+  # copies), on every Mach-O file (dyld's rpath search is cumulative up
+  # the load chain, but staying uniform matches the ELF loop above and
+  # doesn't rely on that subtlety). install_name_tool invalidates any
+  # existing code signature — arm64 macOS refuses to exec an unsigned
+  # binary, so re-sign ad-hoc (`-`) after patching, matching the level of
+  # signing conda-forge's own unsigned/ad-hoc-signed dylibs already carry.
+  find "$R_HOME_DIR" "$PREFIX/bin" -type f | while read -r f; do
+    head -c4 "$f" 2>/dev/null | grep -q $'\xcf\xfa\xed\xfe' || continue
+    d="$(dirname "$f")"
+    rel_rlib="$(realpath --relative-to="$d" "$R_HOME_DIR/lib")"
+    rel_plib="$(realpath --relative-to="$d" "$PREFIX/lib")"
+    install_name_tool -add_rpath "@loader_path/$rel_rlib" "$f" 2>/dev/null || true
+    install_name_tool -add_rpath "@loader_path/$rel_plib" "$f" 2>/dev/null || true
+    codesign --force --sign - "$f" 2>/dev/null || true
+  done
+  echo "   dual @loader_path rpaths set + ad-hoc codesigned (R_HOME/lib + prefix/lib)"
 else
-  echo "   rpath staging not implemented for $OS yet (TODO: install_name_tool)"
+  echo "   rpath staging not implemented for $OS"
 fi
 
 echo "== staging complete"

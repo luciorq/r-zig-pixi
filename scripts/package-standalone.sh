@@ -6,7 +6,7 @@
 #     env the solver provides these, standalone we copy them)
 #   - vendor runtime data the libs need (fontconfig config)
 #   - emit dist/R-<ver>-<flavor>-<platform>.tar.gz + sha256
-# Linux implemented; Windows/macOS branches are TODO.
+# Linux, macOS, and Windows all implemented.
 . "$(dirname "$0")/env.sh"
 
 R_HOME_DIR="$PREFIX/lib/R"
@@ -66,38 +66,74 @@ if [ "$OS" = windows ]; then
   exit 0
 fi
 
-if [ "$OS" != linux ]; then
-  echo "package-standalone: only implemented for Linux and Windows so far" >&2
+if [ "$OS" != linux ] && [ "$OS" != macos ]; then
+  echo "package-standalone: only implemented for Linux, macOS and Windows so far" >&2
   exit 1
 fi
 
 echo "== bundling dependencies into $PREFIX/lib"
-# ELF-magic scan (not name patterns): must also catch the tools bundled
-# into bin/toolchain by stage.sh (nm/dd/realpath/grep — needed by
-# libtool/javareconf), whose own conda-lib deps (libzstd, libpcre2-8,
-# libgcc_s, ...) need vendoring exactly like R's own binaries.
-elfs=()
-while read -r f; do
-  head -c4 "$f" 2>/dev/null | grep -q $'\x7fELF' && elfs+=("$f")
-done < <(find "$R_HOME_DIR" -type f)
-n_copied=0
-changed=1
-while [ "$changed" = 1 ]; do
-  changed=0
-  for f in "${elfs[@]}"; do
-    while read -r dep; do
-      base="$(basename "$dep")"
-      if [ ! -f "$PREFIX/lib/$base" ]; then
-        cp -L "$dep" "$PREFIX/lib/$base"
-        patchelf --set-rpath '$ORIGIN' "$PREFIX/lib/$base" 2>/dev/null || true
-        n_copied=$((n_copied + 1))
-        elfs+=("$PREFIX/lib/$base")
-        changed=1
-      fi
-    done < <(LD_LIBRARY_PATH="$CONDA/lib" ldd "$f" 2>/dev/null | awk -v p="$CONDA" '$3 ~ "^"p {print $3}')
+if [ "$OS" = linux ]; then
+  # ELF-magic scan (not name patterns): must also catch the tools bundled
+  # into bin/toolchain by stage.sh (nm/dd/realpath/grep — needed by
+  # libtool/javareconf), whose own conda-lib deps (libzstd, libpcre2-8,
+  # libgcc_s, ...) need vendoring exactly like R's own binaries.
+  elfs=()
+  while read -r f; do
+    head -c4 "$f" 2>/dev/null | grep -q $'\x7fELF' && elfs+=("$f")
+  done < <(find "$R_HOME_DIR" -type f)
+  n_copied=0
+  changed=1
+  while [ "$changed" = 1 ]; do
+    changed=0
+    for f in "${elfs[@]}"; do
+      while read -r dep; do
+        base="$(basename "$dep")"
+        if [ ! -f "$PREFIX/lib/$base" ]; then
+          cp -L "$dep" "$PREFIX/lib/$base"
+          patchelf --set-rpath '$ORIGIN' "$PREFIX/lib/$base" 2>/dev/null || true
+          n_copied=$((n_copied + 1))
+          elfs+=("$PREFIX/lib/$base")
+          changed=1
+        fi
+      done < <(LD_LIBRARY_PATH="$CONDA/lib" ldd "$f" 2>/dev/null | awk -v p="$CONDA" '$3 ~ "^"p {print $3}')
+    done
   done
-done
-echo "   vendored $n_copied conda libraries"
+  echo "   vendored $n_copied conda libraries"
+else
+  # macOS: conda-forge dylibs record deps as bare "@rpath/<name>" — no
+  # absolute path to match against like ldd gives us, so resolve each
+  # @rpath/<name> against $CONDA/lib ourselves (that's the only place
+  # these came from; R's own libR.dylib/libRblas.dylib are bare names,
+  # already present in R_HOME/lib, and never need vendoring). Same
+  # Mach-O-magic scan + fixed-point loop shape as the Linux ELF walk,
+  # so newly-vendored tools' own deps (bin/toolchain/nm etc.) get caught.
+  machos=()
+  while read -r f; do
+    head -c4 "$f" 2>/dev/null | grep -q $'\xcf\xfa\xed\xfe' && machos+=("$f")
+  done < <(find "$R_HOME_DIR" -type f)
+  n_copied=0
+  changed=1
+  while [ "$changed" = 1 ]; do
+    changed=0
+    for f in "${machos[@]}"; do
+      while read -r dep; do
+        base="${dep#@rpath/}"
+        [ -f "$CONDA/lib/$base" ] || continue
+        if [ ! -f "$PREFIX/lib/$base" ]; then
+          cp -L "$CONDA/lib/$base" "$PREFIX/lib/$base"
+          # @loader_path (no traversal — the file lives in $PREFIX/lib
+          # itself) lets it resolve its own @rpath/ peers once vendored.
+          install_name_tool -add_rpath "@loader_path" "$PREFIX/lib/$base" 2>/dev/null || true
+          codesign --force --sign - "$PREFIX/lib/$base" 2>/dev/null || true
+          n_copied=$((n_copied + 1))
+          machos+=("$PREFIX/lib/$base")
+          changed=1
+        fi
+      done < <(otool -L "$f" 2>/dev/null | awk '/@rpath\// {print $1}')
+    done
+  done
+  echo "   vendored $n_copied conda libraries"
+fi
 
 if [ -d "$CONDA/etc/fonts" ] && [ ! -d "$PREFIX/etc/fonts" ]; then
   mkdir -p "$PREFIX/etc"
@@ -112,6 +148,20 @@ sed -i \
   -e "s|-L$CONDA/lib||g" \
   -e "s|-Wl,-rpath,$CONDA/lib||g" \
   "$R_HOME_DIR/etc/Makeconf"
+
+if [ "$OS" = macos ]; then
+  case "$(uname -m)" in
+    arm64) plat=osx-arm64 ;;
+    x86_64) plat=osx-64 ;;
+    *) plat="osx-$(uname -m)" ;;
+  esac
+  artifact="$ROOT/dist/R-$R_VERSION-$FLAVOR-$plat.tar.gz"
+  echo "== creating $artifact"
+  tar -czf "$artifact" -C "$ROOT/dist" "R-$R_VERSION-$FLAVOR"
+  sha256sum "$artifact" | sed "s|$ROOT/dist/||" > "$artifact.sha256"
+  echo "== done: $(du -h "$artifact" | cut -f1) $(cat "$artifact.sha256")"
+  exit 0
+fi
 
 case "$(uname -m)" in
   x86_64) plat=linux-64 ;;

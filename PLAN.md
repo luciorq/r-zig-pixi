@@ -166,6 +166,66 @@ test inside the same pixi env you built in):
    "impossible" via sed, check whether it's actually compiled in and
    patch the source instead.
 
+**macOS staging (`install_name_tool` + mandatory ad-hoc codesigning),
+2026-07-18**: `stage.sh`/`package-standalone.sh` now implement the same
+dual-provider relocation scheme for osx-arm64 as Linux, and it passed the
+identical adversarial test (move the built tree, delete the original,
+scrub `PATH` to `/usr/bin:/bin`, exercise numerics/cairo/`Rscript`/
+`R CMD SHLIB`) on real hardware (omicron). Mach-O detection uses the
+64-bit-LE magic `cffaedfe` (mirroring the ELF-magic scan already used for
+Linux) instead of name patterns. Three macOS-specific bugs, none of them
+present on Linux:
+
+1. **dyld ignores `LD_LIBRARY_PATH` entirely.** `stage.sh`'s `etc/ldpaths`
+   rewrite only ever wrote `LD_LIBRARY_PATH` (the Linux/generic-Unix
+   variable) — silently breaking every macOS launch, since `bin/exec/R`'s
+   dependency on `libR.dylib`/`libRblas.dylib` is a *bare* name (no
+   `@rpath/` prefix, because R's own build never sets `-install_name` on
+   them) and bare names resolve only through
+   `DYLD_FALLBACK_LIBRARY_PATH` — R's own stock `ldpaths` sets exactly
+   that on Darwin. `stage.sh` now branches by OS and writes the correct
+   variable. conda-forge's *own* dylibs, by contrast, all use
+   `@rpath/<name>` IDs (confirmed via `otool -D`/`-L` on `libgfortran`,
+   `libomp`, `libicuuc`), so *they* need real `LC_RPATH` entries — added
+   via `install_name_tool -add_rpath @loader_path/<rel>` mirroring
+   Linux's dual `$ORIGIN` scheme, on every Mach-O file found under
+   `R_HOME` and `<prefix>/bin`.
+2. **`install_name_tool` invalidates the code signature, and arm64 macOS
+   refuses to execute an unsigned binary.** Every file `stage.sh` or
+   `package-standalone.sh` touches with `install_name_tool` is re-signed
+   ad hoc (`codesign --force --sign -`) immediately after — this is the
+   "mandatory arm64 codesigning" TODO from earlier milestones, now done.
+   No Developer ID/notarization involved (not needed for a self-built,
+   non-App-Store CLI tool) — ad hoc is the same level conda-forge's own
+   unsigned dylibs already carry.
+3. **`readlink -f` doesn't exist on BSD/macOS** (only GNU's `readlink`
+   has `-f`), so every relocatable launcher (`bin/R` trampoline, both
+   `Rscript` wrappers, R's own patched `bin/R`) switched to a portable
+   POSIX symlink-resolution loop (`readlink` one hop at a time + `cd -P`).
+   This surfaced a second, gnarlier bug on top: macOS's *system* `bash`
+   (3.2.57, frozen since ~2007 to avoid GPLv3) misparses a `case`
+   statement with an empty first branch when the whole construct is
+   forced onto one line inside a `$(...)` command substitution — exactly
+   what the `R_HOME_DIR=` sed replacement does. Fix: use the
+   POSIX-optional leading `(` on each case pattern (`(/*)` not `/*)`),
+   which sidesteps the parser bug and is valid everywhere. Only found by
+   executing the *staged launcher itself* as a file on real hardware —
+   trivial standalone repros of the same case statement via `bash -c`
+   with a short string did not reproduce it (had to match the exact
+   forced-one-line/nested-`$()` shape to trigger).
+
+Also hit, orthogonal to macOS specifically: an objdir whose
+`Sys.which()` source patch (see bug 2 below) was never actually applied —
+`fetch-r.sh` had at some point re-extracted a clean source tree over an
+already-patched checkout, and `configure-r.sh`'s
+`[ -f "$OBJ_DIR/Makeconf" ]` early-return means a re-run skips reapplying
+source patches even when the source reverted underneath it. `print(Sys.which)`
+on the built R showed the raw build-time absolute path baked in — the
+tell. Not fixed generally (would need patch-application to be tracked
+independent of the configure-already-ran guard); noted as a known risk
+below since it can silently ship a broken build after any operation that
+touches the source tree post-configure.
+
 ### 7. Source provenance
 
 R source comes from CRAN as a release tarball, pinned by version in
@@ -210,13 +270,14 @@ stays pristine and a reconfigure is just deleting the objdir.
 4. **[DONE]** R regression suite (`pixi run check`) green on all three
    platforms; OpenMP working everywhere via conda-forge `llvm-openmp`;
    `openblas` pixi feature for external BLAS/LAPACK (linux validated).
-5. **[DONE, linux+windows] Distribution**: relocatable standalone
-   bundles (`pixi run package`) and a conda-forge-style package (see
-   §6 above) sharing one staged prefix layout — `r-zig-slim` built and
-   passed rattler-build's isolated test env on linux-64 (2026-07-17).
-   macOS staging (`install_name_tool` + mandatory arm64 codesigning),
-   and both distribution modes on macOS/Windows conda packaging, still
-   open.
+5. **[DONE, standalone bundles on all 3 OSes] Distribution**: relocatable
+   standalone bundles (`pixi run package`) share one staged prefix layout
+   across Linux/macOS/Windows (see §6 above) — macOS staging landed
+   2026-07-18 (`install_name_tool` + mandatory ad-hoc codesigning),
+   adversarially verified on real arm64 hardware to the same standard as
+   Linux/Windows. Conda packaging (rattler-build) done for linux-64 only
+   (`r-zig-slim`, passed its isolated test env, 2026-07-17); macOS/Windows
+   conda recipes still open.
 6. **Long term**: replace autoconf/gnuwin32 with a single `build.zig`, turning
    configure flags into `zig build` options — the true "one build system" end
    state. The dependency/flag inventory produced by milestones 1–3 is the spec.
@@ -238,10 +299,38 @@ stays pristine and a reconfigure is just deleting the objdir.
   default, compiled into `base.rdb` where no text editor can reach it). Any
   future R version bump should re-run the full moved-tree adversarial test
   (extract bundle to a new path, delete the original, scrub the environment,
-  run numerics + `R CMD SHLIB` + `library(utils)`) rather than assuming the
-  existing `stage.sh` patches still cover everything.
+  run numerics + `R CMD SHLIB` + `library(utils)`) — now verified on all
+  three OSes (2026-07-18 for macOS) — rather than assuming the existing
+  `stage.sh` patches still cover everything.
+- **A `configure-r.sh` source patch (Sys.which) can go stale silently.**
+  Found while testing macOS staging: an objdir's compiled `Sys.which` still
+  had the raw build-time absolute path baked in, even though
+  `configure-r.sh`'s patch to `system.unix.R` was present and correct in
+  the repo — the *source checkout* had reverted to unpatched (most likely
+  `fetch-r.sh` re-extracted a clean tarball over it at some point), and
+  `configure-r.sh`'s `[ -f "$OBJ_DIR/Makeconf" ]` early-return means a
+  later `pixi run configure` silently skips reapplying source patches
+  once an objdir exists, regardless of the source tree's actual state.
+  `print(Sys.which)` on the built R is the tell (shows the literal path
+  instead of the dynamic `R.home()`-relative expression). Not fixed
+  generally — patch application isn't tracked independently of "did
+  configure already run" — so if `Sys.which`/`utils`/`stats` loading ever
+  breaks mysteriously on an existing objdir, check this before assuming
+  it's a new bug.
 - Conda recipe `run:` dependencies must be derived from the actual `ldd`
   closure of the built binaries, never guessed from `pixi.toml`. A dev pixi
   env masks missing `run:` deps completely (everything's already on
   `LD_LIBRARY_PATH`); only rattler-build's isolated test env — which
   installs *just* the declared `run:` set — exposes the gap.
+- [FIXED 2026-07-17] CRAN packages can autoprobe OpenMP themselves (not just
+  read R's `SHLIB_OPENMP_CFLAGS`). `data.table`'s own `configure` bakes a
+  literal `-lomp` into its `PKG_LIBS` on macOS, and the `zig-cc`/`zig-cxx`
+  shims used to unconditionally add their own `-lomp` whenever `-fopenmp`
+  appeared — the resulting double `LC_LOAD_DYLIB` for `libomp.dylib` makes
+  newer macOS `dyld` refuse to `dlopen` ("duplicate linked dylib"), breaking
+  package installs even though the object files link without error. Shims
+  now scan for an existing `-lomp`/`libomp.lib` before injecting their own;
+  verified on omicron (osx-arm64) contract test. General lesson: any
+  toolchain shim that reacts to a flag (`-fopenmp`) rather than to "did the
+  caller already handle this" can double up when the caller is smarter than
+  expected — same class of bug as the `Sys.which`/`base.rdb` one above.
