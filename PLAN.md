@@ -127,7 +127,14 @@ libraries*.
   `configure-r.sh`/`build-r.sh`/`install-r.sh`/`stage.sh` scripts the
   pixi tasks use, with `R_INSTALL_PREFIX`/`CONDA_PREFIX` pointed at
   rattler's isolated prefix — the recipe is a consumer of the build
-  scripts, never a fork of the build logic.
+  scripts, never a fork of the build logic. **One `recipe.yaml` covers
+  linux-64 and osx-arm64** via rattler-build's recipe-v1 `if: linux` /
+  `if: osx` / `if: linux64` selectors on individual dependency list
+  entries (flang vs. gfortran, patchelf vs. n/a, etc.) — `build.sh` needs
+  no OS branching since it only calls already-OS-aware scripts.
+  `rattler-build build --render-only --target-platform <plat>` renders
+  and validates the selector logic without touching hardware, worth
+  running before every real build on a new platform.
 - **Deliberately not vendored in either mode**: the `zig` compiler
   itself. Running the built R needs nothing; *compiling new packages*
   needs `zig` on PATH. That is the one external-tool contract, chosen to
@@ -270,14 +277,17 @@ stays pristine and a reconfigure is just deleting the objdir.
 4. **[DONE]** R regression suite (`pixi run check`) green on all three
    platforms; OpenMP working everywhere via conda-forge `llvm-openmp`;
    `openblas` pixi feature for external BLAS/LAPACK (linux validated).
-5. **[DONE, standalone bundles on all 3 OSes] Distribution**: relocatable
-   standalone bundles (`pixi run package`) share one staged prefix layout
-   across Linux/macOS/Windows (see §6 above) — macOS staging landed
-   2026-07-18 (`install_name_tool` + mandatory ad-hoc codesigning),
-   adversarially verified on real arm64 hardware to the same standard as
-   Linux/Windows. Conda packaging (rattler-build) done for linux-64 only
-   (`r-zig-slim`, passed its isolated test env, 2026-07-17); macOS/Windows
-   conda recipes still open.
+5. **[DONE, standalone bundles on all 3 OSes; conda packages on
+   linux-64+osx-arm64] Distribution**: relocatable standalone bundles
+   (`pixi run package`) share one staged prefix layout across
+   Linux/macOS/Windows (see §6 above) — macOS staging landed 2026-07-18
+   (`install_name_tool` + mandatory ad-hoc codesigning), adversarially
+   verified on real arm64 hardware to the same standard as
+   Linux/Windows. Conda packaging (rattler-build) via a single
+   selector-conditioned `recipe.yaml` (no per-OS fork): linux-64
+   (`r-zig-slim`, 2026-07-17) and osx-arm64 (2026-07-22) both built and
+   passed their isolated test envs. Windows conda recipe still open
+   (gnuwin32 has no `make install`).
 6. **Long term**: replace autoconf/gnuwin32 with a single `build.zig`, turning
    configure flags into `zig build` options — the true "one build system" end
    state. The dependency/flag inventory produced by milestones 1–3 is the spec.

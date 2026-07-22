@@ -224,7 +224,28 @@
       **Green as of 2026-07-17**: r-zig-slim-4.6.1-hb0f4dca_0.conda built
       and passed its test (installed from declared run: deps only, no
       vendoring — numerics + cairo/ICU/libcurl capabilities all work).
-- [ ] macOS conda recipe (standalone package now done — see above)
+- [x] **macOS conda recipe (2026-07-22)**: `recipe/recipe.yaml` extended
+      with `if: linux`/`if: osx`/`if: linux64` selectors (rattler-build
+      recipe v1 conditional syntax) rather than a second recipe file —
+      `recipe/build.sh` needed zero changes, it already just calls the
+      OS-aware pixi scripts. Platform split: flang/flang-rt_linux-64 +
+      patchelf + xorg-xorgproto + zstd/libiconv/libstdcxx/libgcc on
+      linux; gfortran (build+host+run, provides the Fortran runtime) +
+      libiconv on osx. Rendered locally for both `linux-64` and
+      `osx-arm64` via `rattler-build build --render-only` before ever
+      touching hardware, to catch selector-syntax mistakes for free.
+      Built for real on omicron: `r-zig-slim-4.6.1-h60d57d3_0.conda`
+      (27.67 MiB). rattler-build's post-build overlinking lint flagged
+      several dylibs (libquadmath, libgfortran, libharfbuzz, libintl,
+      libgraphite2, libffi, libpixman, libfribidi, libzstd) as linked but
+      not explicitly in `run:` — unlike the linux `run:` gap (genuinely
+      missing deps, only caught by testing), here `rattler-build test`
+      against the isolated test env (only the declared run: set
+      installed) printed `conda R OK` and passed cleanly: the `gfortran`/
+      `cairo`/`pango`/`fontconfig`/`glib` run deps already transitively
+      pull in every flagged library via their own metapackage chains.
+      Verified empirically rather than added defensively — no explicit
+      deps added for warnings that don't manifest as real failures.
 - [ ] Windows conda recipe (gnuwin32 has no `make install`; recipe/build.sh
       would need the same install-r.sh Windows branch)
 - [ ] Publish to a real channel (prefix.dev or anaconda.org) once verified

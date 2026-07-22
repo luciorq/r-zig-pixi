@@ -23,11 +23,20 @@ build:
 requirements:
   build:
     - zig 0.16.*
-    - flang
-    - flang-rt_linux-64
+    # Fortran: flang where conda-forge ships a matching-ABI build
+    # (linux-64), explicit gfortran elsewhere — same split as pixi.toml.
+    - if: linux64
+      then:
+        - flang
+        - flang-rt_linux-64
+    - if: osx
+      then:
+        - gfortran
     - make >=4.4
     - pkg-config
-    - patchelf
+    - if: linux
+      then:
+        - patchelf
     - bash
     - coreutils
     - sed
@@ -35,7 +44,13 @@ requirements:
     - gawk
     - which
   host:
-    - flang-rt_linux-64  # Fortran runtime: linked into libR, must be in host
+    # Fortran runtime: linked into libR, must be in host too
+    - if: linux64
+      then:
+        - flang-rt_linux-64
+    - if: osx
+      then:
+        - gfortran
     - zlib
     - bzip2
     - xz
@@ -53,20 +68,29 @@ requirements:
     - freetype
     - libpng
     - glib
-    - xorg-xorgproto
-    # discovered via `ldd` on the actual built bin/exec/R + libR.so — the
-    # full runtime closure, not just what pixi.toml lists as direct deps
-    - zstd
-    - libiconv
-    - libstdcxx
-    - libgcc
+    # conda-forge's linux cairo needs xorg proto headers even though R
+    # builds --with-x=no (pkg-config chain, not an actual X11 dep)
+    - if: linux
+      then:
+        - xorg-xorgproto
+    # discovered via `ldd`/`otool -L` on the actual built bin/exec/R +
+    # libR — the full runtime closure, not just pixi.toml's direct deps
+    - if: linux
+      then:
+        - zstd
+        - libiconv
+        - libstdcxx
+        - libgcc
+    - if: osx
+      then:
+        - libiconv
   run:
-    # R's own shared libraries (libR.so, base packages like stats/utils
-    # via pcre2/icu, cairo devices, ...) are runtime-loaded — every
-    # *runtime* lib from host: must be repeated here, or R fails to
-    # initialize in a freshly solved env (host: alone is build-time
-    # only). xorg-xorgproto and liblzma-devel are headers-only
-    # (pkg-config/build inputs), intentionally omitted here.
+    # R's own shared libraries (libR, base packages like stats/utils via
+    # pcre2/icu, cairo devices, ...) are runtime-loaded — every *runtime*
+    # lib from host: must be repeated here, or R fails to initialize in a
+    # freshly solved env (host: alone is build-time only). xorg-xorgproto
+    # and liblzma-devel are headers-only (pkg-config/build inputs),
+    # intentionally omitted here.
     - zlib
     - bzip2
     - xz
@@ -83,15 +107,25 @@ requirements:
     - freetype
     - libpng
     - glib
-    - zstd
-    - libiconv
-    - libstdcxx
-    - libgcc
+    - if: linux
+      then:
+        - zstd
+        - libiconv
+        - libstdcxx
+        - libgcc
+    - if: osx
+      then:
+        - libiconv
     # package compilation works out of the box: Makeconf records the
     # bundled zig shims; these provide the actual compilers
     - zig 0.16.*
-    - flang
-    - flang-rt_linux-64
+    - if: linux64
+      then:
+        - flang
+        - flang-rt_linux-64
+    - if: osx
+      then:
+        - gfortran
     - make >=4.4
 
 tests:
