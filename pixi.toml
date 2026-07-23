@@ -159,7 +159,7 @@ R_BLAS = "openblas"
 
 # conda packaging (rattler-build) lives in its own environment
 [feature.pkg.dependencies]
-rattler-build = "*"
+rattler-build = ">=0.70"
 
 [feature.pkg.tasks]
 conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda"
