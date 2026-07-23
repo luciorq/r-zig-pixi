@@ -51,7 +51,7 @@ cat("bundle OK\n")
 '
 
 if [ "$OS" = windows ]; then
-  R_BIN="$BUNDLE_DIR/lib/R/bin/x64/Rscript.exe"
+  R_BIN="$BUNDLE_DIR/Library/lib/R/bin/x64/Rscript.exe"
   test -x "$R_BIN" || { echo "error: $R_BIN missing from extracted bundle" >&2; exit 1; }
   "$R_BIN" --vanilla -e "$CHECK_R"
 else

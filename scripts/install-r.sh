@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Install the built R into the workspace dist/ prefix (conda-style
-# layout: <prefix>/lib/R is R_HOME on every OS).
+# layout: <prefix>/lib/R is R_HOME on unix; <prefix>/Library/lib/R on
+# Windows, to avoid colliding with a conda env's own Lib/ — see env.sh).
 . "$(dirname "$0")/env.sh"
 
 if [ "$OS" = windows ]; then
   # gnuwin32 has no `make install`; the built source tree IS the R home.
-  # Copy the runtime subtrees into the prefix layout.
-  R_HOME_DIR="$PREFIX/lib/R"
+  # Copy the runtime subtrees into the prefix layout ($R_HOME_DIR from
+  # env.sh — Library/lib/R, not lib/R; see the comment there).
   mkdir -p "$R_HOME_DIR"
   for d in bin etc include library modules share doc; do
     [ -d "$SRC_DIR/$d" ] && cp -a "$SRC_DIR/$d" "$R_HOME_DIR/"
@@ -15,7 +16,7 @@ if [ "$OS" = windows ]; then
   bash "$ROOT/scripts/stage.sh"
   echo
   echo "Installed and staged at $PREFIX"
-  echo "Run it with: $PREFIX/lib/R/bin/x64/R.exe"
+  echo "Run it with: R / Rscript (after activating this env) or directly: $R_HOME_DIR/bin/x64/R.exe"
   exit 0
 fi
 

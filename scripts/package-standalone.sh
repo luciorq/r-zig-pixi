@@ -9,7 +9,6 @@
 # Linux, macOS, and Windows all implemented.
 . "$(dirname "$0")/env.sh"
 
-R_HOME_DIR="$PREFIX/lib/R"
 test -d "$R_HOME_DIR" || { echo "error: run 'pixi run install' first" >&2; exit 1; }
 CONDA="${CONDA_PREFIX:?}"
 
@@ -23,10 +22,10 @@ if [ "$OS" = windows ]; then
     mkdir -p "$R_HOME_DIR/Tcl/bin" "$R_HOME_DIR/Tcl/lib"
     cp "$CLIB"/tcl86t.dll "$CLIB"/tk86t.dll "$R_HOME_DIR/Tcl/bin/"
     cp -a "$CONDA/Library/lib/tcl8.6" "$CONDA/Library/lib/tk8.6" "$R_HOME_DIR/Tcl/lib/"
-    echo "   vendored Tcl runtime into lib/R/Tcl"
+    echo "   vendored Tcl runtime into $R_HOME_DIR/Tcl"
   fi
 
-  echo "== bundling DLLs into lib/R/bin/x64"
+  echo "== bundling DLLs into $R_HOME_DIR/bin/x64"
   mapfile -t pes < <(find "$R_HOME_DIR" -type f \( -name '*.dll' -o -name '*.exe' \))
   n_copied=0
   changed=1

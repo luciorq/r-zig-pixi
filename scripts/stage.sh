@@ -14,7 +14,6 @@
 # Linux and macOS implemented (patchelf / install_name_tool+codesign).
 . "$(dirname "$0")/env.sh"
 
-R_HOME_DIR="$PREFIX/lib/R"
 test -d "$R_HOME_DIR" || { echo "error: $R_HOME_DIR missing — run 'pixi run install' first" >&2; exit 1; }
 CONDA="${CONDA_PREFIX:?}"
 
@@ -22,7 +21,13 @@ echo "== staging $PREFIX"
 
 if [ "$OS" = windows ]; then
   # Windows binaries derive R_HOME from their own location natively —
-  # no launcher or rpath work. Stage the Makeconf + shims only.
+  # no rpath work needed. Stage the Makeconf + shims, then expose R on
+  # PATH: a conda/pixi env's activation only ever adds <env>,
+  # <env>\Library\{bin,mingw-w64\bin,usr\bin}, <env>\Scripts, <env>\bin —
+  # never <env>\Library\lib\R\bin\x64 — so without a shim here, `R`/
+  # `Rscript` are simply not found after installing this package into a
+  # real env, even though the binaries exist (found via a real `pixi
+  # add`-installed env, not this project's own dist/ test runs).
   mkdir -p "$R_HOME_DIR/bin/toolchain"
   cp "$TOOLCHAIN"/zig-* "$R_HOME_DIR/bin/toolchain/"
   mkc="$R_HOME_DIR/etc/x64/Makeconf"
@@ -31,6 +36,14 @@ if [ "$OS" = windows ]; then
     # falls back gracefully when running inside the pixi env
     sed -i "s|^TCL_HOME *=.*|TCL_HOME = \$(R_HOME)/Tcl|" "$mkc"
   fi
+  mkdir -p "$PREFIX/Library/bin"
+  for exe in R Rscript; do
+    cat > "$PREFIX/Library/bin/$exe.bat" << EOF
+@echo off
+"%~dp0..\\lib\\R\\bin\\x64\\$exe.exe" %*
+EOF
+  done
+  echo "   R/Rscript shims added to Library/bin (PATH-visible after activation)"
   echo "== staging complete (windows)"
   exit 0
 fi

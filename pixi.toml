@@ -164,6 +164,27 @@ rattler-build = ">=0.70"
 [feature.pkg.tasks]
 conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda"
 
+# Interim publish path: upload from an already-authenticated dev machine
+# (`rattler-build auth login prefix.dev`). Not chained onto conda-package
+# via depends-on — publishing an already-built artifact shouldn't force a
+# full R rebuild. See PLAN.md for the CI/trusted-publishing end goal.
+# Scoped per-platform (rather than one task globbing dist/conda/*/*.conda)
+# so it can never pick up another platform's artifact or anything left in
+# rattler-build's own dist/conda/broken/ (its convention for a package
+# that failed its test phase) — each dev machine only ever builds its own
+# platform, so this is exact, not just defensive.
+[feature.pkg.target.linux-64.tasks]
+conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/linux-64/*.conda"
+
+[feature.pkg.target.osx-64.tasks]
+conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/osx-64/*.conda"
+
+[feature.pkg.target.osx-arm64.tasks]
+conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/osx-arm64/*.conda"
+
+[feature.pkg.target.win-64.tasks]
+conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/win-64/*.conda"
+
 [environments]
 pkg = ["pkg"]
 default = []

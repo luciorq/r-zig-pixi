@@ -182,7 +182,16 @@ tests:
   - script:
       - if: win
         then:
-          - $PREFIX/lib/R/bin/x64/Rscript.exe -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["png"]], caps[["iconv"]], caps[["libcurl"]], caps[["cairo"]]); cat("conda R OK\n")'
+          # Bare `Rscript` (not the absolute path) deliberately — this is
+          # the one check that actually exercises PATH-based invocation,
+          # which is what real installs use. Found the hard way: R used
+          # to install under $PREFIX/lib/R, which NTFS's case-insensitive
+          # lookup silently folds into a real env's existing Lib/
+          # (Python's), and nothing was ever on PATH regardless — the
+          # absolute-path version of this test couldn't have caught
+          # either bug. See env.sh's R_HOME_DIR / stage.sh's Windows
+          # shims (Library/bin/R.bat, Rscript.bat).
+          - Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["png"]], caps[["iconv"]], caps[["libcurl"]], caps[["cairo"]]); cat("conda R OK\n")'
         else:
           - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
 

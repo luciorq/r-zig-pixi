@@ -42,6 +42,22 @@ case "$(uname -s)" in
   *) OS=unknown ;;
 esac
 
+# R_HOME is <prefix>/lib/R on unix. On Windows this MUST NOT be "lib/R":
+# NTFS is case-insensitive, and a real conda/pixi env already has a
+# top-level "Lib" (capital L, Python's stdlib) by the time R installs —
+# "mkdir -p $PREFIX/lib/R" silently resolves into that SAME directory,
+# dumping R's entire tree inside Python's site-packages and leaving it
+# nowhere PATH-visible (found via a real `pixi add`-installed env; never
+# reproduced by this project's own dist/ test runs, which have no
+# pre-existing Python Lib to collide with). "Library/" is the standard
+# conda-forge convention for non-Python Windows packages and doesn't
+# collide with anything.
+if [ "$OS" = windows ]; then
+  R_HOME_DIR="$PREFIX/Library/lib/R"
+else
+  R_HOME_DIR="$PREFIX/lib/R"
+fi
+
 # macOS defaults to 256 open files; zig's linker opens every object of
 # libR at once (~300+) and fails with ProcessFdQuotaExceeded without this.
 ulimit -n 4096 2>/dev/null || true
