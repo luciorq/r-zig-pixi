@@ -58,6 +58,11 @@ TCL_VERSION = 86t
 USE_CAIRO = YES
 CAIRO_CPPFLAGS = "-I$LOCAL_SOFT/include/cairo -I$LOCAL_SOFT/include/freetype2"
 CAIRO_LIBS = "-lcairo -lfontconfig"
+# gnuwin32 defaults USE_ICU to YES (src/gnuwin32/MkRules) but never sets
+# ICU_PATH itself; src/extra/tzone/Makefile.win needs it for
+# -I"\$(ICU_PATH)"/include to find unicode/ucal.h (conda-forge's icu
+# package installs headers under Library/include/unicode on Windows).
+ICU_PATH = $LOCAL_SOFT
 EOF
 
 # TCL_* are baked into etc/x64/Makeconf from the fixed/ template, not

@@ -29,7 +29,7 @@ requirements:
       then:
         - flang
         - flang-rt_linux-64
-    - if: osx
+    - if: osx or win
       then:
         - gfortran
     - make >=4.4
@@ -37,18 +37,43 @@ requirements:
     - if: linux
       then:
         - patchelf
-    - bash
-    - coreutils
-    - sed
-    - grep
-    - gawk
-    - which
+    - if: unix
+      then:
+        - bash
+        - coreutils
+        - sed
+        - grep
+        - gawk
+        - which
+    # gnuwin32 has no `configure`/autoconf step, so none of the unix
+    # GNU-text-tool deps above apply — instead it needs the msys
+    # userland to run at all (native make can't spawn the extensionless
+    # zig shim scripts) plus uutils for the coreutils build.sh itself
+    # uses. m2-bash is also what runs *this* build.sh in the first place
+    # (rattler-build has no bld.bat here, same as conda-build convention).
+    - if: win
+      then:
+        - uutils-coreutils
+        - m2-bash
+        - m2-make
+        - m2-coreutils
+        - m2-diffutils
+        - m2-findutils
+        - m2-texinfo
+        - m2-which
+        - m2-tar
+        - m2-gzip
+        - m2-sed
+        - m2-grep
+        - m2-gawk
+        - m2-unzip
+        - m2-zip
   host:
     # Fortran runtime: linked into libR, must be in host too
     - if: linux64
       then:
         - flang-rt_linux-64
-    - if: osx
+    - if: osx or win
       then:
         - gfortran
     - zlib
@@ -84,6 +109,16 @@ requirements:
     - if: osx
       then:
         - libiconv
+    # gnuwin32 has no capability off-switches (unlike unix's
+    # --without-jpeglib etc.), so Windows R unconditionally links the
+    # jpeg/tiff bitmap devices, the tcltk package, and NLS — these are
+    # genuinely linked-at-runtime deps here, not just build inputs
+    - if: win
+      then:
+        - libjpeg-turbo
+        - libtiff
+        - tk
+        - gettext
   run:
     # R's own shared libraries (libR, base packages like stats/utils via
     # pcre2/icu, cairo devices, ...) are runtime-loaded — every *runtime*
@@ -116,6 +151,12 @@ requirements:
     - if: osx
       then:
         - libiconv
+    - if: win
+      then:
+        - libjpeg-turbo
+        - libtiff
+        - tk
+        - gettext
     # package compilation works out of the box: Makeconf records the
     # bundled zig shims; these provide the actual compilers
     - zig 0.16.*
@@ -123,14 +164,18 @@ requirements:
       then:
         - flang
         - flang-rt_linux-64
-    - if: osx
+    - if: osx or win
       then:
         - gfortran
     - make >=4.4
 
 tests:
   - script:
-      - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["ICU"]], caps[["libcurl"]]); cat("conda R OK\n")'
+      - if: win
+        then:
+          - $PREFIX/lib/R/bin/x64/Rscript.exe -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["ICU"]], caps[["libcurl"]]); cat("conda R OK\n")'
+        else:
+          - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["ICU"]], caps[["libcurl"]]); cat("conda R OK\n")'
 
 about:
   homepage: https://www.r-project.org
