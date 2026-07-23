@@ -14,21 +14,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
         env: [default, full]
         include:
-          # external optimized BLAS/LAPACK variant
+          # external optimized BLAS/LAPACK variant (linux only for now)
           - os: ubuntu-latest
             env: openblas
-          # macOS is milestone 2: scripts are wired (gfortran instead of
-          # flang) but not yet validated — allowed to fail without gating.
-          - os: macos-latest
-            env: default
-            experimental: true
-          - os: macos-latest
-            env: full
-            experimental: true
-    continue-on-error: ${{ matrix.experimental || false }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
@@ -43,19 +34,17 @@ jobs:
       - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
         run: pixi run -e ${{ matrix.env }} contract
       - name: Regression suite
-        if: matrix.os == 'ubuntu-latest'
         run: pixi run -e ${{ matrix.env }} check
 
   # Windows builds via src/gnuwin32 driven by scripts/build-gnuwin32.sh
   # (zig cc MinGW target + conda-forge MinGW gfortran). Proven on real
-  # hardware; non-gating until it has a track record on GH runners —
-  # drop continue-on-error once consistently green.
+  # hardware (kappa) across build/smoke/contract/check — gating like the
+  # other two platforms.
   # NB: slim==full on Windows (gnuwin32 has no slim switches), so only
   # the default environment is built.
   build-windows:
     name: windows-latest / default
     runs-on: windows-latest
-    continue-on-error: true
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v6
@@ -69,3 +58,5 @@ jobs:
         run: pixi run smoke
       - name: Package contract test (Rcpp, data.table, minqa)
         run: pixi run contract
+      - name: Regression suite
+        run: pixi run check
