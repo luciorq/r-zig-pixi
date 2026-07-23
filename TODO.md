@@ -317,6 +317,26 @@
       exercises `pixi run package` (standalone bundles) or the conda
       recipes on any platform — all of that validation happened manually
       on omicron/kappa/locally, not in CI.
+- [x] **CI packaging validation (2026-07-23)**: closed the gap flagged
+      above. New `scripts/verify-bundle.sh` + `verify-package` pixi task
+      (depends on `package`) extract the standalone bundle to a fresh
+      temp dir and run it — unix with `env -i PATH=/usr/bin:/bin` (the
+      same scrubbed-env check done manually all along this session),
+      Windows unscrubbed since gnuwin32 binaries derive R_HOME natively
+      and don't need the PATH trick. Verified for real on all three
+      platforms (local linux-64, omicron osx-arm64, kappa win-64) before
+      wiring into CI. `.github/workflows/build.yml`:
+      - `build`/`build-windows` jobs gained a `verify-package` step
+        (reuses the job's already-built objdir — cheap). Gated to
+        `matrix.env == 'default'` only: full/openblas bundle relocation
+        still isn't exercised in CI, same as before.
+      - New `conda-package` job builds+tests the conda recipe on all
+        three OSes (`pixi run -e pkg conda-package`, which builds AND
+        tests in one rattler-build invocation). This is a genuine
+        from-scratch build in an isolated sandbox — can't reuse the
+        `build`/`build-windows` objdirs — so it roughly doubles total
+        Windows CI time. Accepted tradeoff: this is the only way CI
+        would have caught the `ICU_PATH` bug before a real release.
 - [ ] Publish to a real channel (prefix.dev or anaconda.org) once verified
 - [ ] Reproducibility: SOURCE_DATE_EPOCH, compare two builds bit-for-bit
 

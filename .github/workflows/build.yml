@@ -35,6 +35,12 @@ jobs:
         run: pixi run -e ${{ matrix.env }} contract
       - name: Regression suite
         run: pixi run -e ${{ matrix.env }} check
+      # Standalone bundle: reuses this job's already-built objdir (cheap).
+      # Only the default (slim) variant is packaged in CI for now — full/
+      # openblas relocation is exercised manually, not automated yet.
+      - name: Package + verify standalone bundle
+        if: matrix.env == 'default'
+        run: pixi run -e ${{ matrix.env }} verify-package
 
   # Windows builds via src/gnuwin32 driven by scripts/build-gnuwin32.sh
   # (zig cc MinGW target + conda-forge MinGW gfortran). Proven on real
@@ -60,3 +66,29 @@ jobs:
         run: pixi run contract
       - name: Regression suite
         run: pixi run check
+      - name: Package + verify standalone bundle
+        run: pixi run verify-package
+
+  # conda-forge-style package (rattler-build) — always the slim variant
+  # regardless of matrix.env above, since recipe/build.sh never sets
+  # R_BUILD_VARIANT. A from-scratch build in its own isolated sandbox, so
+  # it can't reuse the `build`/`build-windows` jobs' objdirs; this roughly
+  # doubles total Windows CI time, which is the tradeoff for catching a
+  # recipe regression (e.g. the ICU_PATH bug) before a real release
+  # instead of relying on a manual omicron/kappa run.
+  conda-package:
+    name: conda-package / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: pkg
+          cache: true
+      - name: Build + test conda package
+        run: pixi run -e pkg conda-package

@@ -31,6 +31,7 @@ check = "bash scripts/check-r.sh"
 contract = "bash scripts/contract-test.sh"
 install = "bash scripts/install-r.sh"
 package = { cmd = "bash scripts/package-standalone.sh", depends-on = ["install"] }
+verify-package = { cmd = "bash scripts/verify-bundle.sh", depends-on = ["package"] }
 clean = "bash scripts/clean.sh"
 
 [dependencies]

@@ -288,9 +288,11 @@ stays pristine and a reconfigure is just deleting the objdir.
    CI (`.github/workflows/build.yml`) gates on all three OSes and runs
    `check` on all three as of 2026-07-23 — previously macOS was
    `continue-on-error` with a stale "not yet validated" comment and
-   Windows skipped the regression suite entirely. CI still does not
-   exercise `pixi run package` or the conda recipes on any platform —
-   that verification currently only happens manually.
+   Windows skipped the regression suite entirely. As of the same date CI
+   also builds+verifies the standalone bundle (new `scripts/verify-
+   bundle.sh` / `verify-package` task, default variant only) and the
+   conda recipe on all three OSes (`conda-package` job) — the packaging
+   paths that were previously only validated manually on omicron/kappa.
 5. **[DONE on all 3 OSes] Distribution**: relocatable standalone bundles
    (`pixi run package`) share one staged prefix layout across
    Linux/macOS/Windows (see §6 above) — macOS staging landed 2026-07-18
