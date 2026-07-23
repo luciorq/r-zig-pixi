@@ -170,12 +170,21 @@ requirements:
     - make >=4.4
 
 tests:
+  # Mirrors scripts/smoke-test.sh's actual assertions (numerics: LAPACK
+  # solve/qr, BLAS matmul, fft round-trip; pcre2 regex; zlib compression;
+  # the slim capability profile) rather than a stripped-down subset — a
+  # conda package is a distribution artifact, and this is the one check
+  # that runs in a truly isolated env (no dev pixi env masking a gap).
+  # Windows keeps smoke-test.sh's own relaxed set: gnuwin32 has no slim/
+  # full off-switches, so tcltk/jpeg/tiff/NLS are TRUE despite this being
+  # r-zig-slim — asserting them FALSE here would be a false expectation,
+  # not a real regression check.
   - script:
       - if: win
         then:
-          - $PREFIX/lib/R/bin/x64/Rscript.exe -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["ICU"]], caps[["libcurl"]]); cat("conda R OK\n")'
+          - $PREFIX/lib/R/bin/x64/Rscript.exe -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["png"]], caps[["iconv"]], caps[["libcurl"]], caps[["cairo"]]); cat("conda R OK\n")'
         else:
-          - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["ICU"]], caps[["libcurl"]]); cat("conda R OK\n")'
+          - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
 
 about:
   homepage: https://www.r-project.org
