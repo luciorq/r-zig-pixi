@@ -288,6 +288,35 @@
       were all built and tested against this phantom before the byte
       dump revealed it wasn't real; all reverted once the actual bug
       (`ICU_PATH`) was found and fixed. See PLAN.md's Known risks.
+- [x] **Recipe test coverage upgrade (2026-07-23)**: the conda recipe's
+      `tests:` script was a stripped-down subset of `scripts/smoke-
+      test.sh` (only `solve()` + 3 capability flags) — caught when asked
+      directly whether the *full* smoke test had been run against the
+      Windows conda package (it hadn't). Upgraded to mirror
+      smoke-test.sh's actual assertions (`qr()`/`fft()` round-trips,
+      pcre2 regex, zlib compression round-trip, full slim capability
+      profile including the FALSE assertions for tcltk/jpeg/tiff/NLS)
+      via the same `if: win/else` selector already used for the test
+      script — Windows keeps smoke-test.sh's own relaxed windows-only
+      assertion set (no slim-specific FALSE checks), matching its
+      documented lack of capability off-switches. Rebuilt and re-tested
+      for real on all three platforms (not just rendered): linux-64
+      locally, osx-arm64 on omicron, win-64 on kappa — all pass.
+      `rattler-build test` runs whatever test was baked into the
+      artifact at *build* time, not the current recipe.yaml, so
+      validating a test-script change always requires a full rebuild,
+      not just a re-test of an existing artifact.
+- [x] **CI parity fix (2026-07-23)**: `.github/workflows/build.yml` had
+      macOS marked `experimental: true`/`continue-on-error: true` with a
+      comment claiming it was "not yet validated" — stale since Milestone
+      2 completed 2026-07-17. Neither macOS nor Windows ran `pixi run
+      check` (regression suite) at all. Fixed: macOS folded into the main
+      matrix (gates the build like linux now), Windows's
+      `continue-on-error` removed, `check` added to both. Deliberately
+      NOT added in this pass (flagged, not forgotten): CI still never
+      exercises `pixi run package` (standalone bundles) or the conda
+      recipes on any platform — all of that validation happened manually
+      on omicron/kappa/locally, not in CI.
 - [ ] Publish to a real channel (prefix.dev or anaconda.org) once verified
 - [ ] Reproducibility: SOURCE_DATE_EPOCH, compare two builds bit-for-bit
 

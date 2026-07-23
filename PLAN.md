@@ -128,13 +128,21 @@ libraries*.
   pixi tasks use, with `R_INSTALL_PREFIX`/`CONDA_PREFIX` pointed at
   rattler's isolated prefix — the recipe is a consumer of the build
   scripts, never a fork of the build logic. **One `recipe.yaml` covers
-  linux-64 and osx-arm64** via rattler-build's recipe-v1 `if: linux` /
-  `if: osx` / `if: linux64` selectors on individual dependency list
-  entries (flang vs. gfortran, patchelf vs. n/a, etc.) — `build.sh` needs
-  no OS branching since it only calls already-OS-aware scripts.
-  `rattler-build build --render-only --target-platform <plat>` renders
-  and validates the selector logic without touching hardware, worth
-  running before every real build on a new platform.
+  all three OSes** (linux-64, osx-arm64, win-64) via rattler-build's
+  recipe-v1 `if: linux` / `if: osx` / `if: win` / `if: linux64`
+  selectors on individual dependency list entries (flang vs. gfortran,
+  patchelf vs. n/a, etc.) — `build.sh` needs no OS branching at all
+  since it only calls already-OS-aware scripts, including on Windows
+  (`install-r.sh`'s existing manual-copy branch, since gnuwin32 has no
+  `make install`). `rattler-build build --render-only --target-platform
+  <plat>` renders and validates the selector logic without touching
+  hardware, worth running before every real build on a new platform.
+  The `tests:` script mirrors `scripts/smoke-test.sh`'s actual
+  assertions (not a stripped-down subset) per OS. **Gotcha**:
+  `rattler-build test --package-file <artifact>` runs whatever test was
+  baked into that artifact *at build time*, not whatever is currently in
+  recipe.yaml — validating a test-script change always needs a fresh
+  build, never just a re-test of an old artifact.
 - **Deliberately not vendored in either mode**: the `zig` compiler
   itself. Running the built R needs nothing; *compiling new packages*
   needs `zig` on PATH. That is the one external-tool contract, chosen to
@@ -277,6 +285,12 @@ stays pristine and a reconfigure is just deleting the objdir.
 4. **[DONE]** R regression suite (`pixi run check`) green on all three
    platforms; OpenMP working everywhere via conda-forge `llvm-openmp`;
    `openblas` pixi feature for external BLAS/LAPACK (linux validated).
+   CI (`.github/workflows/build.yml`) gates on all three OSes and runs
+   `check` on all three as of 2026-07-23 — previously macOS was
+   `continue-on-error` with a stale "not yet validated" comment and
+   Windows skipped the regression suite entirely. CI still does not
+   exercise `pixi run package` or the conda recipes on any platform —
+   that verification currently only happens manually.
 5. **[DONE on all 3 OSes] Distribution**: relocatable standalone bundles
    (`pixi run package`) share one staged prefix layout across
    Linux/macOS/Windows (see §6 above) — macOS staging landed 2026-07-18
