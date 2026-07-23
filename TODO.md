@@ -246,8 +246,48 @@
       pull in every flagged library via their own metapackage chains.
       Verified empirically rather than added defensively — no explicit
       deps added for warnings that don't manifest as real failures.
-- [ ] Windows conda recipe (gnuwin32 has no `make install`; recipe/build.sh
-      would need the same install-r.sh Windows branch)
+- [x] **Windows conda recipe (2026-07-23)**: same `recipe/recipe.yaml`
+      extended with `if: win`/`if: unix` selectors (gfortran instead of
+      flang/patchelf; m2-* + uutils-coreutils build-only tooling;
+      libjpeg-turbo/libtiff/tk/gettext in host+run since gnuwin32 has no
+      capability off-switches, same as pixi.toml's win-64 target).
+      `install-r.sh`'s existing Windows branch (copies bin/etc/include/
+      library/modules/share/doc into the prefix layout, since gnuwin32
+      has no `make install`) meant `recipe/build.sh` needed zero changes
+      here either. Built for real on kappa:
+      `r-zig-slim-4.6.1-h9490d1a_0.conda` (29.99 MiB), `rattler-build
+      test` passed ("conda R OK").
+      **Real bug found and fixed**: `unicode/ucal.h` not found compiling
+      `src/extra/tzone/registryTZ.c`. Root cause: gnuwin32's
+      `src/gnuwin32/MkRules` defaults `USE_ICU ?= YES`, and
+      `tzone/Makefile.win` only adds `-I"$(ICU_PATH)"/include` when
+      `USE_ICU` is defined — but `scripts/build-gnuwin32.sh`'s generated
+      `MkRules.local` never set `ICU_PATH`, so the flag was always
+      empty/missing even though conda-forge's `icu` package genuinely
+      installs `unicode/ucal.h` under `Library/include/unicode/`. Fixed
+      by adding `ICU_PATH = $LOCAL_SOFT` to `MkRules.local` (same pattern
+      as the existing `CAIRO_CPPFLAGS`/`TCL_HOME` entries). This bug
+      predates this session but was masked on kappa's long-lived,
+      incrementally-cached build dir (registryTZ.o compiled once,
+      correctly or not, ages ago, and never needed recompiling since) —
+      rattler-build's always-fresh isolated work dir forced a genuine
+      from-scratch compile and exposed it immediately. **Lesson**: an
+      incrementally-built dev objdir is not a substitute for a clean
+      build when validating a build script's correctness — the two can
+      silently diverge for a long time.
+      **False lead, for the record**: `set -x` traces initially looked
+      like `$PREFIX` was corrupted to the literal string `%PREFIX%`
+      inside `build.sh` on Windows, while every manual replay of the
+      exact same generated `.bat` file showed a correct value — this was
+      rattler-build's own **log redaction** (it cosmetically replaces
+      the real prefix path with `%PREFIX%` in captured log text for
+      readability) with the value ITSELF always fine underneath; a raw
+      `od -c` byte-dump of `$PREFIX` proved this conclusively. Several
+      workaround attempts (a custom `bld.bat`, explicit prefix
+      passthrough, a `CONDA_DEFAULT_ENV`-based fallback in `build.sh`)
+      were all built and tested against this phantom before the byte
+      dump revealed it wasn't real; all reverted once the actual bug
+      (`ICU_PATH`) was found and fixed. See PLAN.md's Known risks.
 - [ ] Publish to a real channel (prefix.dev or anaconda.org) once verified
 - [ ] Reproducibility: SOURCE_DATE_EPOCH, compare two builds bit-for-bit
 

@@ -277,17 +277,17 @@ stays pristine and a reconfigure is just deleting the objdir.
 4. **[DONE]** R regression suite (`pixi run check`) green on all three
    platforms; OpenMP working everywhere via conda-forge `llvm-openmp`;
    `openblas` pixi feature for external BLAS/LAPACK (linux validated).
-5. **[DONE, standalone bundles on all 3 OSes; conda packages on
-   linux-64+osx-arm64] Distribution**: relocatable standalone bundles
+5. **[DONE on all 3 OSes] Distribution**: relocatable standalone bundles
    (`pixi run package`) share one staged prefix layout across
    Linux/macOS/Windows (see §6 above) — macOS staging landed 2026-07-18
    (`install_name_tool` + mandatory ad-hoc codesigning), adversarially
    verified on real arm64 hardware to the same standard as
    Linux/Windows. Conda packaging (rattler-build) via a single
    selector-conditioned `recipe.yaml` (no per-OS fork): linux-64
-   (`r-zig-slim`, 2026-07-17) and osx-arm64 (2026-07-22) both built and
-   passed their isolated test envs. Windows conda recipe still open
-   (gnuwin32 has no `make install`).
+   (`r-zig-slim`, 2026-07-17), osx-arm64 (2026-07-22), and win-64
+   (2026-07-23) all built and passed their isolated test envs — the
+   win-64 pass uncovered a real, previously-masked `ICU_PATH` bug in
+   `build-gnuwin32.sh` (see TODO.md and Known risks).
 6. **Long term**: replace autoconf/gnuwin32 with a single `build.zig`, turning
    configure flags into `zig build` options — the true "one build system" end
    state. The dependency/flag inventory produced by milestones 1–3 is the spec.
@@ -344,3 +344,29 @@ stays pristine and a reconfigure is just deleting the objdir.
   toolchain shim that reacts to a flag (`-fopenmp`) rather than to "did the
   caller already handle this" can double up when the caller is smarter than
   expected — same class of bug as the `Sys.which`/`base.rdb` one above.
+- [FIXED 2026-07-23] `USE_ICU ?= YES` is gnuwin32's own default
+  (`src/gnuwin32/MkRules`), and `src/extra/tzone/Makefile.win` only adds
+  `-I"$(ICU_PATH)"/include` to find `unicode/ucal.h` when `ICU_PATH` is
+  set — `scripts/build-gnuwin32.sh` never set it, even though
+  conda-forge's `icu` package genuinely ships that header under
+  `Library/include/unicode/`. Fixed by adding `ICU_PATH = $LOCAL_SOFT` to
+  the generated `MkRules.local`, same pattern as the existing
+  `CAIRO_CPPFLAGS`/`TCL_HOME` entries. This is a general lesson, not
+  Windows-specific: **a long-lived, incrementally-built dev objdir can
+  silently diverge from a clean build's correctness** — kappa's regular
+  pixi build dir had presumably compiled `registryTZ.o` successfully (or
+  at least once) long enough ago that later `make` runs never needed to
+  recompile it, masking this bug through every previous "make check
+  green on Windows" milestone; only rattler-build's always-fresh isolated
+  work dir forced a true from-scratch compile and exposed it immediately.
+  Any script whose correctness was last verified against a persistent
+  build directory should be re-verified against a clean one before being
+  trusted.
+- **rattler-build cosmetically redacts the real prefix path in captured
+  build logs**, replacing it with the literal string `%PREFIX%` for
+  readability — this looks *exactly* like a real corrupted/unexpanded
+  environment variable in a `set -x` trace and cost significant
+  diagnostic time on the Windows conda recipe (2026-07-23) before a raw
+  `od -c` byte-dump of `$PREFIX` proved the underlying value was correct
+  the entire time. When a traced variable looks wrong, check its actual
+  bytes before trusting the log text, especially under rattler-build.
