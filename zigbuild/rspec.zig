@@ -166,6 +166,10 @@ pub const utils_c = [_][]const u8{
     "init.c", "io.c", "size.c", "sock.c", "stubs.c", "utils.c", "hashtab.c",
 };
 
+/// full variant only (src/library/tcltk/src/Makefile.in SOURCES_C, unix
+/// build — excludes tcltk_win.c).
+pub const tcltk_c = [_][]const u8{ "init.c", "tcltk.c", "tcltk_unix.c" };
+
 /// Public API headers installed to R_HOME/include (src/include/Makefile.in
 /// SRC_HEADERS; OBJ_HEADERS Rconfig.h/Rmath.h/Rversion.h are generated).
 pub const public_headers = [_][]const u8{

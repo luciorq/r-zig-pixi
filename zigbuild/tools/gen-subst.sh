@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Regenerate zigbuild/config/<plat>/subst.txt from a real config.status.
+# Regenerate zigbuild/config/<plat>-<variant>/subst.txt from a real
+# config.status.
 #
 # build.zig replays configure's whole substitution table instead of hand-
 # maintaining a variable list (see FINALIZATION.md F2.5). This script is
@@ -13,9 +14,12 @@
 # *current* env (CONDA_PREFIX, source tree, prefix, toolchain, project
 # root), not the one config.status happened to run in.
 #
-# Usage: pixi run bash zigbuild/tools/gen-subst.sh [slim|full|...]
-# Requires a real configure run first: `pixi run configure` (writes
-# build/obj-<ver>-<flavor>/config.status).
+# Usage: pixi run bash zigbuild/tools/gen-subst.sh
+#        pixi run -e full bash zigbuild/tools/gen-subst.sh
+# Requires a real configure run first for the same variant/env
+# (`pixi run configure` / `pixi run -e full configure`), which writes
+# build/obj-<ver>-<flavor>/config.status — env.sh's VARIANT/OBJ_DIR
+# already reflect which pixi environment this runs under.
 . "$(dirname "$0")/../../scripts/env.sh"
 
 CONFIG_STATUS="$OBJ_DIR/config.status"
@@ -34,7 +38,7 @@ case "$OS" in
   macos) PLAT="osx-$ARCH" ;;
   *) echo "error: unsupported OS '$OS' for subst.txt generation" >&2; exit 1 ;;
 esac
-OUT_DIR="$ROOT/zigbuild/config/$PLAT"
+OUT_DIR="$ROOT/zigbuild/config/$PLAT-$VARIANT"
 mkdir -p "$OUT_DIR"
 
 # 1. Extract S["VAR"]="value" entries, joining continuation lines. A
