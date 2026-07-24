@@ -20,4 +20,4 @@ if [ -f "$sw" ] && ! grep -q 'bin/toolchain/which' "$sw"; then
     "$sw"
 fi
 
-exec zig build --prefix "$PREFIX_ZIG" "$@"
+exec zig build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"

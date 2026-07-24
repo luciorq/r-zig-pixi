@@ -198,9 +198,68 @@ a carried-forward gotcha catalog.
       contract test is exactly the flow that would need it and doesn't
 - [x] **F2.5** `zigbuild/tools/gen-subst.sh` committed (2026-07-24) —
       found and fixed a real join bug while writing it (see below)
-- [ ] **F3.1** full variant: vendor full config, `-Dvariant=full`, tcltk/
-      readline/NLS/jpeg/tiff; smoke+check+contract green for full
-- [ ] **F3.2** openblas flavor `-Dblas=openblas`
+- [x] **F3.1** full variant (2026-07-24): `-Dvariant=full` is a genuine
+      second configure profile — `zigbuild/config/linux-x86_64-{slim,full}/`
+      (moved slim's vendored config into its own `-slim` dir to make room;
+      `gen-subst.sh` now writes `$PLAT-$VARIANT`). Captured full's config
+      via a real `pixi run -e full configure` (216 config.h lines differ
+      from slim, matching the ~108-line estimate in FINALIZATION.md).
+      Every capability turned out to need less new linking than expected,
+      because build.zig already compiles the same source files
+      unconditionally and the *vendored, per-variant* config.h's
+      `#ifdef`s are what actually change behavior — the real work was
+      almost entirely finding the right link flags, not new compile logic:
+      - **tcltk**: real `src/library/tcltk/src/{init,tcltk,tcltk_unix}.c`
+        (new `pkg_libs` entry, `-Dvariant=full`-gated) linked against
+        `TCLTK_LIBS`/`LIBM` from the vendored S-table (`-ltcl8.6 -ltk8.6
+        -lX11 -lm`); R-code side needed a `concatRSourcesEx` (new
+        `exclude` param on `concatRSources`) to pull real `R/*.R` +
+        `R/unix/zzz.R` while skipping `zzzstub.R` — both live in the same
+        directory and sort adjacently, so the generic glob-and-concat
+        helper would have silently concatenated both (zzz.R's real
+        `.onLoad` then getting clobbered by zzzstub's `stop()` one,
+        since zzzstub.R sorts after zzz.R alphabetically). Verified with
+        `library(tcltk); tclvalue(tclVar("hello"))` actually working
+        end-to-end (Tk itself degrades gracefully without a DISPLAY, as
+        expected headless).
+      - **readline**: zero new compile-time logic — `src/unix/sys-std.c`
+        etc. already had `#ifdef HAVE_LIBREADLINE` branches compiled from
+        the same source; only needed `-lreadline` added to `libR`'s link
+        when full (`linkCoreLibs`).
+      - **NLS**: zero new linking at all — `LIBINTL`/`INTLLIBS` are empty
+        in the vendored S-table (glibc provides `gettext()` natively on
+        Linux, no separate libintl), and the `.mo` catalogs are
+        pre-compiled and shipped in the tarball under
+        `src/library/translations/inst/` (no `msgfmt` step needed),
+        already staged unconditionally by `installStaticTree` for every
+        variant. `ENABLE_NLS` in config.h is the entire mechanism.
+      - **jpeg/tiff**: `rbitmap.c` (already compiled into `cairo_mod` for
+        every variant) has direct `#ifdef HAVE_JPEG`/`HAVE_TIFF` calls
+        into `jpeglib.h`/`tiffio.h` — needed `BITMAP_LIBS` (`-ltiff
+        -ljpeg -lpng16`) applied to `cairo_mod`'s link line only for full
+        (slim's `BITMAP_LIBS` is just `-lpng16`, already covered via
+        `CAIRO_LIBS`, so applying it unconditionally would just be a
+        harmless redundant `-lpng16`, but full's needs the real flags).
+      Acceptance, all verified: `pixi run -e full zig-build` → smoke
+      asserts the full profile (tcltk/jpeg/tiff/NLS **TRUE**, matching the
+      capabilities() output exactly) → `pixi run -e full contract` → `pixi
+      run -e full zig-check`, all green, zero regressions on slim
+      (re-verified after every change).
+- [x] **F3.2** openblas flavor (2026-07-24): `-Dblas=openblas` build
+      option, orthogonal to `-Dvariant` — a pure link-time swap, not a
+      separate vendored config (R's C code calls BLAS/LAPACK through a
+      fixed Fortran-callable ABI regardless of implementation, so no
+      config.h difference is needed). `ctx.rblas`/`ctx.rlapack` are now
+      `?*std.Build.Step.Compile` (null for openblas); new `Ctx.linkBlas`/
+      `Ctx.linkLapack` helpers pick internal-libRblas/libRlapack vs
+      `-lopenblas` at every call site (libR, bin/exec/R, modules/lapack.so,
+      library/stats). openblas skips compiling the reference BLAS/LAPACK
+      Fortran entirely (noticeably faster build) and installs no
+      libRblas.so/libRlapack.so. Verified `pixi run -e openblas zig-build`
+      → smoke (`sessionInfo()$BLAS` correctly resolves the real
+      `libopenblasp-r0.3.34.so`, not a hardcoded string) → contract →
+      zig-check, all green on the first real attempt; re-verified slim
+      (internal BLAS) has zero regressions after the refactor.
 - [ ] **F4.1** stage.sh/package/verify-bundle green on zig prefix
       (adversarial moved-tree test)
 - [ ] **F4.2** CI `zig-build` leg (linux-64)

@@ -145,7 +145,10 @@ build.zig                  # the whole build graph, root of the repo
 zigbuild/
   rspec.zig                # source inventory (from the make-vars dump)
   tools/gen-subst.sh       # regenerates subst.txt from a real config.status
-  config/linux-x86_64/
+  config/linux-x86_64-slim/
+  config/linux-x86_64-full/     # F3.1: capabilities are compile-time, so
+                                 # full is its own vendored config, not a
+                                 # flag toggle
     config.h               # vendored configure feature detection
     Rconfig.h              # vendored (distilled from config.h by GETCONFIG)
     subst.txt              # vendored config.status S-table, parameterized
@@ -154,43 +157,56 @@ zigbuild/
 
 `pixi run zig-build` (scripts/zig-build.sh) wraps `zig build` so the pixi
 env (flang, libs, tzdata…) is always present, applies the Sys.which source
-patch, and sets the prefix to dist/R-<ver>-<flavor>-zig; zig cache stays
-in `build/zig-cache`.
+patch, passes `-Dvariant=$VARIANT` (env.sh's `VARIANT`, itself
+`R_BUILD_VARIANT` from the active pixi environment), and sets the prefix to
+dist/R-<ver>-<flavor>-zig; zig cache stays in `build/zig-cache`.
 
-## Regenerating the vendored config (per platform × R version)
+## Regenerating the vendored config (per platform × variant × R version)
 
-The vendored `config.h`/`Rconfig.h`/`subst.txt` in `zigbuild/config/<plat>/`
-are a pure function of (platform, pixi.lock, R version) — nothing in
-build.zig re-derives them at build time. `GENERATED_FROM` records the R
-version they were captured from; `build.zig`'s `checkConfigFreshness`
-compares it against `r_version` on every `zig build` and errors with this
-same procedure if they've drifted (an R version bump is the main trigger,
-but a pixi.lock update that changes a detected library version, e.g. a
-cairo/pango bump that changes `CAIRO_CPPFLAGS`, also warrants regenerating
-even though `GENERATED_FROM` won't catch that case — rerun after any
-`pixi.lock` change that touches a build dependency).
+The vendored `config.h`/`Rconfig.h`/`subst.txt` in
+`zigbuild/config/<plat>-<variant>/` are a pure function of (platform,
+variant, pixi.lock, R version) — nothing in build.zig re-derives them at
+build time. `GENERATED_FROM` records the R version they were captured
+from; `build.zig`'s `checkConfigFreshness` compares it against `r_version`
+on every `zig build` and errors with this same procedure if they've
+drifted (an R version bump is the main trigger, but a pixi.lock update
+that changes a detected library version, e.g. a cairo/pango bump that
+changes `CAIRO_CPPFLAGS`, also warrants regenerating even though
+`GENERATED_FROM` won't catch that case — rerun after any `pixi.lock`
+change that touches a build dependency).
 
-1. `pixi run configure` — runs the real autoconf `configure` against the
-   pixi env, writing `build/obj-<ver>-slim/config.status`. (Requires
-   `build/obj-<ver>-slim` not already configured; `pixi run clean` first if
-   it is stale.)
+1. `pixi run configure` (slim) or `pixi run -e full configure` (full) —
+   runs the real autoconf `configure` against the pixi env, writing
+   `build/obj-<ver>-<variant>/config.status`. (Requires that objdir not
+   already configured; `pixi run clean` first if it is stale.)
 2. Copy the two headers:
-   `cp build/obj-<ver>-slim/src/include/{config.h,Rconfig.h} zigbuild/config/<plat>/`
+   `cp build/obj-<ver>-<variant>/src/include/config.h zigbuild/config/<plat>-<variant>/`
+   — `Rconfig.h` isn't written by `configure` itself (it's a `make` rule
+   that shells out to `tools/GETCONFIG`); generate it directly instead of
+   running `make`: `bash tools/GETCONFIG > zigbuild/config/<plat>-<variant>/Rconfig.h`
+   (run from inside the objdir's `src/include`, or point `GETCONFIG`'s
+   invocation at that `config.h` — it just reads `config.h` in the cwd).
 3. Regenerate the substitution table:
-   `pixi run bash zigbuild/tools/gen-subst.sh` — reads the same objdir's
-   `config.status`, joins its awk-style backslash-newline continuation
-   lines (a naive `grep '^S\['` truncates multi-line values — verified this
-   the hard way: it silently produced a corrupt `-l"m` mid-token the first
-   time the join logic had an off-by-one in how it stitched line halves
-   back together), and rewrites the six machine-specific absolute paths
-   (`$CONDA_PREFIX`, `$OBJ_DIR`, `$SRC_DIR`, `$PREFIX`, `$TOOLCHAIN`,
-   `$ROOT`, longest/most-specific first since they nest under `$ROOT`) to
-   `@ZR_*@` placeholders, which `build.zig`'s `loadSubstTable` resolves
-   back from the *current* env at `zig build` time.
-4. Bump `zigbuild/config/<plat>/GENERATED_FROM` to the new version string.
-5. Rebuild (`pixi run zig-build`) and re-run the full trust bar: smoke,
-   `pixi run contract`, `pixi run zig-check` — a version/library bump can
-   change feature flags in ways that only show up in one of the three.
+   `pixi run bash zigbuild/tools/gen-subst.sh` (slim) or
+   `pixi run -e full bash zigbuild/tools/gen-subst.sh` (full) — reads the
+   matching-environment objdir's `config.status` (env.sh's `VARIANT`/
+   `OBJ_DIR` already track which pixi env this runs under), joins its
+   awk-style backslash-newline continuation lines (a naive `grep '^S\['`
+   truncates multi-line values — verified this the hard way: it silently
+   produced a corrupt `-l"m` mid-token the first time the join logic had
+   an off-by-one in how it stitched line halves back together), and
+   rewrites the six machine-specific absolute paths (`$CONDA_PREFIX`,
+   `$OBJ_DIR`, `$SRC_DIR`, `$PREFIX`, `$TOOLCHAIN`, `$ROOT`,
+   longest/most-specific first since they nest under `$ROOT`) to `@ZR_*@`
+   placeholders, which `build.zig`'s `loadSubstTable` resolves back from
+   the *current* env at `zig build` time. Writes to
+   `zigbuild/config/<plat>-<variant>/subst.txt` automatically.
+4. Bump `zigbuild/config/<plat>-<variant>/GENERATED_FROM` to the new
+   version string.
+5. Rebuild (`pixi run zig-build` / `pixi run -e full zig-build`) and
+   re-run the full trust bar for that variant: smoke, `pixi run contract`,
+   `pixi run zig-check` — a version/library bump can change feature flags
+   in ways that only show up in one of the three.
 
 ## Risks / open questions
 

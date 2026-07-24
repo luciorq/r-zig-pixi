@@ -25,9 +25,24 @@ const rspec = @import("zigbuild/rspec.zig");
 const r_version = "4.6.1";
 const platform = "linux-x86_64";
 
+/// Capabilities (tcltk/readline/NLS/jpeg/tiff) are compile-time in R, so
+/// slim vs full is a genuine second configure profile — its own vendored
+/// config.h/Rconfig.h/subst.txt under zigbuild/config/<plat>-<variant>/,
+/// not a flag toggle (see FINALIZATION.md F3.1).
+const Variant = enum { slim, full };
+
+/// F3.2: orthogonal to Variant — a pure link-time swap, not a separate
+/// configure profile. R's own C code calls BLAS/LAPACK through a fixed
+/// Fortran-callable ABI regardless of which implementation provides it,
+/// so no vendored-config difference is needed; openblas just replaces the
+/// internal reference libRblas.so/libRlapack.so wherever they'd be linked.
+const Blas = enum { internal, openblas };
+
 const Ctx = struct {
     b: *std.Build,
     target: std.Build.ResolvedTarget,
+    variant: Variant,
+    blas: Blas,
     conda: []const u8,
     src_abs: []const u8, // absolute path of R source tree
     src: std.Build.LazyPath,
@@ -37,8 +52,26 @@ const Ctx = struct {
     subst: std.StringHashMap([]const u8),
     geninc: std.Build.LazyPath, // generated headers dir (config.h, Rconfig.h, ...)
     libR: *std.Build.Step.Compile,
-    rblas: *std.Build.Step.Compile,
-    rlapack: *std.Build.Step.Compile,
+    rblas: ?*std.Build.Step.Compile, // null when blas == .openblas
+    rlapack: ?*std.Build.Step.Compile, // null when blas == .openblas
+
+    /// Link the BLAS provider: internal libRblas.so or system openblas.
+    fn linkBlas(ctx: *const Ctx, mod: *std.Build.Module) void {
+        if (ctx.blas == .openblas) {
+            mod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
+        } else {
+            mod.linkLibrary(ctx.rblas.?);
+        }
+    }
+    /// Link the LAPACK provider: internal libRlapack.so or system openblas
+    /// (conda-forge's openblas package bundles LAPACK too).
+    fn linkLapack(ctx: *const Ctx, mod: *std.Build.Module) void {
+        if (ctx.blas == .openblas) {
+            mod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
+        } else {
+            mod.linkLibrary(ctx.rlapack.?);
+        }
+    }
 
     fn path(ctx: *const Ctx, sub: []const u8) std.Build.LazyPath {
         return ctx.src.path(ctx.b, sub);
@@ -64,9 +97,15 @@ pub fn build(b: *std.Build) !void {
         return error.MissingRSource;
     };
 
+    const variant = b.option(Variant, "variant", "R build variant: slim (default) or full") orelse .slim;
+    const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
+    const config_dir = b.fmt("zigbuild/config/{s}-{s}", .{ platform, @tagName(variant) });
+
     var ctx = Ctx{
         .b = b,
         .target = b.resolveTargetQuery(.{}),
+        .variant = variant,
+        .blas = blas,
         .conda = conda,
         .src_abs = src_abs,
         .src = b.path(src_rel),
@@ -80,15 +119,15 @@ pub fn build(b: *std.Build) !void {
         .rlapack = undefined,
     };
 
-    try checkConfigFreshness(b, io);
-    try loadSubstTable(&ctx, io);
+    try checkConfigFreshness(b, io, config_dir);
+    try loadSubstTable(&ctx, io, config_dir);
 
     // ------------------------------------------------------------------
     // Generated headers (what config.status + src/include/Makefile make)
     // ------------------------------------------------------------------
     const geninc = b.addWriteFiles();
-    _ = geninc.addCopyFile(b.path("zigbuild/config/" ++ platform ++ "/config.h"), "config.h");
-    _ = geninc.addCopyFile(b.path("zigbuild/config/" ++ platform ++ "/Rconfig.h"), "Rconfig.h");
+    _ = geninc.addCopyFile(b.path(b.fmt("{s}/config.h", .{config_dir})), "config.h");
+    _ = geninc.addCopyFile(b.path(b.fmt("{s}/Rconfig.h", .{config_dir})), "Rconfig.h");
     _ = geninc.add("Rversion.h", try genRversionH(&ctx, io));
     _ = geninc.add("Rmath.h", try substFile(&ctx, io, "src/include/Rmath.h0.in"));
     ctx.geninc = geninc.getDirectory();
@@ -98,41 +137,48 @@ pub fn build(b: *std.Build) !void {
     // ------------------------------------------------------------------
     const appl_f = flangGroup(&ctx, "src/appl", &rspec.appl_f, &.{});
     const xxxpr = flangGroup(&ctx, "src/main", &.{"xxxpr.f"}, &.{});
-    const blas_fixed = flangGroup(&ctx, "src/extra/blas", &rspec.blas_f, &.{});
-    const blas_free = flangGroup(&ctx, "src/extra/blas", &rspec.blas_f90, &.{});
     const stats_f = flangGroup(&ctx, "src/library/stats/src", &rspec.stats_f, &.{});
 
-    // libRlapack's f90 files have real module dependencies: la_constants
-    // then la_xisnan must be compiled before their users (-I their .mod dirs).
-    var lapack_objs = std.ArrayList(std.Build.LazyPath).empty;
-    var lapack_mods = std.ArrayList(std.Build.LazyPath).empty;
-    for (rspec.rlapack_f90_ordered) |f| {
-        const r = flangOne(&ctx, "src/modules/lapack", f, lapack_mods.items);
-        try lapack_objs.append(arena, r.obj);
-        try lapack_mods.append(arena, r.mods);
-    }
-    for (rspec.rlapack_f) |f| {
-        const r = flangOne(&ctx, "src/modules/lapack", f, lapack_mods.items);
-        try lapack_objs.append(arena, r.obj);
-    }
+    // ------------------------------------------------------------------
+    // libRblas.so / libRlapack.so — internal reference implementation
+    // only; openblas (F3.2) skips compiling these entirely and every
+    // linkBlas()/linkLapack() call below links -lopenblas instead. Same
+    // Fortran-callable ABI either way, so no source-level branching
+    // anywhere else in the compile graph needs to know which flavor this is.
+    // ------------------------------------------------------------------
+    ctx.rblas = null;
+    ctx.rlapack = null;
+    if (ctx.blas == .internal) {
+        const blas_fixed = flangGroup(&ctx, "src/extra/blas", &rspec.blas_f, &.{});
+        const blas_free = flangGroup(&ctx, "src/extra/blas", &rspec.blas_f90, &.{});
 
-    // ------------------------------------------------------------------
-    // libRblas.so
-    // ------------------------------------------------------------------
-    const rblas_mod = newCMod(&ctx);
-    for (blas_fixed) |o| rblas_mod.addObjectFile(o);
-    for (blas_free) |o| rblas_mod.addObjectFile(o);
-    linkFlangRt(&ctx, rblas_mod);
-    ctx.rblas = b.addLibrary(.{ .linkage = .dynamic, .name = "Rblas", .root_module = rblas_mod });
+        // libRlapack's f90 files have real module dependencies:
+        // la_constants then la_xisnan must be compiled before their users
+        // (-I their .mod dirs).
+        var lapack_objs = std.ArrayList(std.Build.LazyPath).empty;
+        var lapack_mods = std.ArrayList(std.Build.LazyPath).empty;
+        for (rspec.rlapack_f90_ordered) |f| {
+            const r = flangOne(&ctx, "src/modules/lapack", f, lapack_mods.items);
+            try lapack_objs.append(arena, r.obj);
+            try lapack_mods.append(arena, r.mods);
+        }
+        for (rspec.rlapack_f) |f| {
+            const r = flangOne(&ctx, "src/modules/lapack", f, lapack_mods.items);
+            try lapack_objs.append(arena, r.obj);
+        }
 
-    // ------------------------------------------------------------------
-    // libRlapack.so
-    // ------------------------------------------------------------------
-    const rlapack_mod = newCMod(&ctx);
-    for (lapack_objs.items) |o| rlapack_mod.addObjectFile(o);
-    rlapack_mod.linkLibrary(ctx.rblas);
-    linkFlangRt(&ctx, rlapack_mod);
-    ctx.rlapack = b.addLibrary(.{ .linkage = .dynamic, .name = "Rlapack", .root_module = rlapack_mod });
+        const rblas_mod = newCMod(&ctx);
+        for (blas_fixed) |o| rblas_mod.addObjectFile(o);
+        for (blas_free) |o| rblas_mod.addObjectFile(o);
+        linkFlangRt(&ctx, rblas_mod);
+        ctx.rblas = b.addLibrary(.{ .linkage = .dynamic, .name = "Rblas", .root_module = rblas_mod });
+
+        const rlapack_mod = newCMod(&ctx);
+        for (lapack_objs.items) |o| rlapack_mod.addObjectFile(o);
+        rlapack_mod.linkLibrary(ctx.rblas.?);
+        linkFlangRt(&ctx, rlapack_mod);
+        ctx.rlapack = b.addLibrary(.{ .linkage = .dynamic, .name = "Rlapack", .root_module = rlapack_mod });
+    }
 
     // ------------------------------------------------------------------
     // libR.so — src/main + appl/nmath/tre/tzone/xdr/unix, all one link
@@ -162,7 +208,7 @@ pub fn build(b: *std.Build) !void {
     addCGroup(&ctx, libR_mod, "src/unix", &rspec.unix_c, .{ .openmp = true });
     for (appl_f) |o| libR_mod.addObjectFile(o);
     for (xxxpr) |o| libR_mod.addObjectFile(o);
-    libR_mod.linkLibrary(ctx.rblas);
+    ctx.linkBlas(libR_mod);
     linkFlangRt(&ctx, libR_mod);
     linkCoreLibs(&ctx, libR_mod);
     ctx.libR = b.addLibrary(.{ .linkage = .dynamic, .name = "R", .root_module = libR_mod });
@@ -175,7 +221,7 @@ pub fn build(b: *std.Build) !void {
     rbin_mod.addIncludePath(ctx.path("src/include"));
     addCGroup(&ctx, rbin_mod, "src/main", &.{"Rmain.c"}, .{ .openmp = true });
     rbin_mod.linkLibrary(ctx.libR);
-    rbin_mod.linkLibrary(ctx.rblas);
+    ctx.linkBlas(rbin_mod);
     linkOmp(&ctx, rbin_mod);
     const rbin = b.addExecutable(.{ .name = "R.bin", .root_module = rbin_mod });
     rbin.rdynamic = true; // MAIN_LDFLAGS = -Wl,--export-dynamic
@@ -197,8 +243,12 @@ pub fn build(b: *std.Build) !void {
     lapmod.addIncludePath(ctx.path("src/include"));
     addCGroup(&ctx, lapmod, "src/modules/lapack", &.{"Lapack.c"}, .{ .openmp = true });
     addCGroup(&ctx, lapmod, "src/main", &.{"flexiblas.c"}, .{ .openmp = true });
-    lapmod.linkLibrary(ctx.rlapack);
-    lapmod.linkLibrary(ctx.rblas);
+    if (ctx.blas == .openblas) {
+        lapmod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
+    } else {
+        lapmod.linkLibrary(ctx.rlapack.?);
+        lapmod.linkLibrary(ctx.rblas.?);
+    }
     lapmod.linkLibrary(ctx.libR);
     linkFlangRt(&ctx, lapmod);
     linkOmp(&ctx, lapmod);
@@ -224,8 +274,12 @@ pub fn build(b: *std.Build) !void {
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
         for (stats_f) |o| m.addObjectFile(o);
-        m.linkLibrary(ctx.rlapack);
-        m.linkLibrary(ctx.rblas);
+        if (ctx.blas == .openblas) {
+            m.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
+        } else {
+            m.linkLibrary(ctx.rlapack.?);
+            m.linkLibrary(ctx.rblas.?);
+        }
         linkFlangRt(&ctx, m);
         linkOmp(&ctx, m);
         try pkg_libs.append(arena, .{ .pkg = "stats", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_stats", .root_module = m }) });
@@ -275,6 +329,27 @@ pub fn build(b: *std.Build) !void {
         });
         try pkg_libs.append(arena, .{ .pkg = "utils", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_utils", .root_module = m }) });
     }
+    if (ctx.variant == .full) {
+        // tcltk (library/tcltk/libs/tcltk.so): real Tk bindings, only
+        // built for full — slim ships a stub .onLoad that errors out and
+        // no compiled code at all (see the R-code side in
+        // installStaticTree). PKG_CPPFLAGS/PKG_LIBS from
+        // src/library/tcltk/src/Makefile.in: `-I../../../include
+        // -I$(top_srcdir)/src/include -DHAVE_CONFIG_H @TCLTK_CPPFLAGS@`
+        // and `@TCLTK_LIBS@ @LIBM@` — geninc/src/include are the zig
+        // equivalent of the first two -I's.
+        const m = newCMod(&ctx);
+        m.addIncludePath(ctx.geninc);
+        m.addIncludePath(ctx.path("src/include"));
+        var extra = std.ArrayList([]const u8).empty;
+        try extra.append(arena, "-DHAVE_CONFIG_H");
+        var it = std.mem.tokenizeScalar(u8, ctx.subst.get("TCLTK_CPPFLAGS").?, ' ');
+        while (it.next()) |tok| try extra.append(arena, tok);
+        addCGroup(&ctx, m, "src/library/tcltk/src", &rspec.tcltk_c, .{ .extra = extra.items });
+        applyLinkFlags(&ctx, m, ctx.subst.get("TCLTK_LIBS").?);
+        applyLinkFlags(&ctx, m, ctx.subst.get("LIBM").?);
+        try pkg_libs.append(arena, .{ .pkg = "tcltk", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_tcltk", .root_module = m }) });
+    }
 
     // grDevices cairo module (library/grDevices/libs/cairo.so): cairoBM.c +
     // rbitmap.o from src/modules/X11 (built there even with --with-x=no).
@@ -303,6 +378,12 @@ pub fn build(b: *std.Build) !void {
     }
     cairo_mod.linkLibrary(ctx.libR);
     applyLinkFlags(&ctx, cairo_mod, ctx.subst.get("CAIRO_LIBS").?);
+    // full only: rbitmap.c's HAVE_JPEG/HAVE_TIFF branches (from the
+    // per-variant config.h) need libjpeg/libtiff — CAIRO_LIBS doesn't
+    // carry them (only -lpng16), BITMAP_LIBS does (slim's BITMAP_LIBS is
+    // just -lpng16 too, already covered via CAIRO_LIBS, so apply it only
+    // for full to avoid a harmless but pointless double -lpng16 on slim).
+    if (ctx.variant == .full) applyLinkFlags(&ctx, cairo_mod, ctx.subst.get("BITMAP_LIBS").?);
     linkOmp(&ctx, cairo_mod);
     const mod_cairo = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_cairo", .root_module = cairo_mod });
 
@@ -312,8 +393,8 @@ pub fn build(b: *std.Build) !void {
     const lib_dir: std.Build.InstallDir = .{ .custom = "lib/R/lib" };
     const modules_dir: std.Build.InstallDir = .{ .custom = "lib/R/modules" };
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, ctx.libR.getEmittedBin(), "libR.so"), lib_dir, "libR.so").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, ctx.rblas.getEmittedBin(), "libRblas.so"), lib_dir, "libRblas.so").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, ctx.rlapack.getEmittedBin(), "libRlapack.so"), lib_dir, "libRlapack.so").step);
+    if (ctx.rblas) |rblas| b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rblas.getEmittedBin(), "libRblas.so"), lib_dir, "libRblas.so").step);
+    if (ctx.rlapack) |rlapack| b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rlapack.getEmittedBin(), "libRlapack.so"), lib_dir, "libRlapack.so").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, mod_lapack.getEmittedBin(), "lapack.so"), modules_dir, "lapack.so").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, mod_internet.getEmittedBin(), "internet.so"), modules_dir, "internet.so").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rbin.getEmittedBin(), "R.bin"), .{ .custom = "lib/R/bin/exec" }, "R").step);
@@ -484,6 +565,10 @@ fn linkCoreLibs(ctx: *const Ctx, mod: *std.Build.Module) void {
     mod.addRPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
     const libs = [_][]const u8{ "pcre2-8", "deflate", "zstd", "lzma", "bz2", "z", "rt", "dl", "m", "iconv", "icuuc", "icui18n" };
     for (libs) |l| mod.linkSystemLibrary(l, .{ .use_pkg_config = .no });
+    // full only: src/unix/sys-std.c + sys-unix.c + src/main/platform.c
+    // already compile their HAVE_LIBREADLINE branch correctly (it comes
+    // from the per-variant vendored config.h); just needs -lreadline.
+    if (ctx.variant == .full) mod.linkSystemLibrary("readline", .{ .use_pkg_config = .no });
     linkOmp(ctx, mod);
 }
 
@@ -574,8 +659,8 @@ fn flangGroup(ctx: *const Ctx, dir: []const u8, files: []const []const u8, mod_d
 /// version bump would silently build with stale feature flags if nothing
 /// checked this, so GENERATED_FROM records the version they were captured
 /// from and every build compares it against r_version.
-fn checkConfigFreshness(b: *std.Build, io: std.Io) !void {
-    const path = b.pathFromRoot("zigbuild/config/" ++ platform ++ "/GENERATED_FROM");
+fn checkConfigFreshness(b: *std.Build, io: std.Io, config_dir: []const u8) !void {
+    const path = b.pathFromRoot(b.fmt("{s}/GENERATED_FROM", .{config_dir}));
     const raw = std.Io.Dir.cwd().readFileAlloc(io, path, b.allocator, .limited(256)) catch {
         std.debug.print("error: {s} not found — the vendored config dir is missing its GENERATED_FROM marker\n", .{path});
         return error.MissingGeneratedFromMarker;
@@ -583,23 +668,26 @@ fn checkConfigFreshness(b: *std.Build, io: std.Io) !void {
     const generated_from = std.mem.trim(u8, raw, " \n\r\t");
     if (!std.mem.eql(u8, generated_from, r_version)) {
         std.debug.print(
-            \\error: zigbuild/config/{s} was generated from R {s}, but build.zig
+            \\error: {s} was generated from R {s}, but build.zig
             \\targets R {s}. The vendored config.h/Rconfig.h/subst.txt are a pure
-            \\function of (platform, pixi.lock, R version) and must be regenerated:
-            \\  1. pixi run configure   (writes build/obj-{s}-slim/config.status)
-            \\  2. cp build/obj-{s}-slim/src/include/{{config.h,Rconfig.h}} zigbuild/config/{s}/
-            \\  3. pixi run bash zigbuild/tools/gen-subst.sh   (regenerates subst.txt)
-            \\  4. update zigbuild/config/{s}/GENERATED_FROM to "{s}"
+            \\function of (platform, variant, pixi.lock, R version) and must be
+            \\regenerated:
+            \\  1. pixi run configure   (writes build/obj-{s}-<variant>/config.status;
+            \\     use `pixi run -e full configure` for the full variant)
+            \\  2. cp build/obj-{s}-<variant>/src/include/{{config.h,Rconfig.h}} {s}/
+            \\  3. pixi run bash zigbuild/tools/gen-subst.sh   (regenerates subst.txt;
+            \\     `pixi run -e full bash zigbuild/tools/gen-subst.sh` for full)
+            \\  4. update {s}/GENERATED_FROM to "{s}"
             \\See PLAN.md's "Regenerating the vendored config" section.
             \\
-        , .{ platform, generated_from, r_version, r_version, r_version, platform, platform, r_version });
+        , .{ config_dir, generated_from, r_version, r_version, r_version, config_dir, config_dir, r_version });
         return error.StaleVendoredConfig;
     }
 }
 
-fn loadSubstTable(ctx: *Ctx, io: std.Io) !void {
+fn loadSubstTable(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
     const b = ctx.b;
-    const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot("zigbuild/config/" ++ platform ++ "/subst.txt"), b.allocator, .limited(4 * 1024 * 1024));
+    const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/subst.txt", .{config_dir})), b.allocator, .limited(4 * 1024 * 1024));
     var lines = std.mem.splitScalar(u8, raw, '\n');
     while (lines.next()) |line| {
         // format: S["KEY"]="VALUE"
@@ -851,9 +939,13 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
         // R code concatenation (basepkg.mk mkR1/mkR2/mkRbase)
         if (std.mem.eql(u8, pkg, "datasets")) {
             // no R code, data only
-        } else if (std.mem.eql(u8, pkg, "tcltk")) {
-            // slim: use_tcltk=no → stub only
+        } else if (std.mem.eql(u8, pkg, "tcltk") and ctx.variant == .slim) {
+            // slim: use_tcltk=no → stub only, none of the top-level R/*.R
             _ = libstage.addCopyFile(ctx.path(b.fmt("{s}/R/unix/zzzstub.R", .{pkg_src})), b.fmt("{s}/R/{s}", .{ pkg, pkg }));
+        } else if (std.mem.eql(u8, pkg, "tcltk")) {
+            // full: real R/*.R + R/unix/zzz.R (not zzzstub.R)
+            const all_r = try concatRSourcesEx(ctx, io, b.fmt("{s}/R", .{pkg_src}), true, null, &.{"zzzstub.R"});
+            _ = libstage.add(b.fmt("{s}/R/{s}", .{ pkg, pkg }), all_r);
         } else {
             const s4 = std.mem.eql(u8, pkg, "methods") or std.mem.eql(u8, pkg, "stats4");
             const with_unix = std.mem.eql(u8, pkg, "base") or std.mem.eql(u8, pkg, "utils") or
@@ -988,6 +1080,13 @@ fn makeWreTxt(ctx: *const Ctx, io: std.Io) ![]u8 {
 /// LC_COLLATE=C sorted R/*.R (+ R/unix/*.R), S4 packages prefixed with
 /// `.packageName <- "pkg"`.
 fn concatRSources(ctx: *const Ctx, io: std.Io, rdir_rel: []const u8, with_unix: bool, s4_pkgname: ?[]const u8) ![]u8 {
+    return concatRSourcesEx(ctx, io, rdir_rel, with_unix, s4_pkgname, &.{});
+}
+
+/// Like concatRSources, but skips any filename in `exclude` — tcltk's
+/// R/unix/ has both zzz.R (real, full only) and zzzstub.R (slim's
+/// no-op .onLoad); alphabetical sort would concatenate both.
+fn concatRSourcesEx(ctx: *const Ctx, io: std.Io, rdir_rel: []const u8, with_unix: bool, s4_pkgname: ?[]const u8, exclude: []const []const u8) ![]u8 {
     const b = ctx.b;
     var out = std.ArrayList(u8).empty;
     if (s4_pkgname) |p| try out.appendSlice(b.allocator, b.fmt(".packageName <- \"{s}\"\n", .{p}));
@@ -1006,6 +1105,14 @@ fn concatRSources(ctx: *const Ctx, io: std.Io, rdir_rel: []const u8, with_unix: 
         while (try it.next(io)) |ent| {
             if (ent.kind != .file) continue;
             if (!std.mem.endsWith(u8, ent.name, ".R")) continue;
+            var skip = false;
+            for (exclude) |e| {
+                if (std.mem.eql(u8, ent.name, e)) {
+                    skip = true;
+                    break;
+                }
+            }
+            if (skip) continue;
             try names.append(b.allocator, try b.allocator.dupe(u8, ent.name));
         }
         std.mem.sort([]const u8, names.items, {}, strLessThan);
@@ -1221,7 +1328,7 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
                 "tools:::.install_package_demos('{s}/tcltk', '{s}/tcltk')",
                 .{ srclib, lib },
             ));
-            continue; // slim: no lazycomp for the stub
+            if (ctx.variant == .slim) continue; // stub: no real R code to lazycomp
         }
         if (std.mem.eql(u8, pkg, "datasets")) {
             _ = boot.r("datasets data db", "tools:::data2LazyLoadDB(\"datasets\", compress=3)");
