@@ -29,7 +29,9 @@ if [ "$OS" = windows ]; then
   exit 0
 fi
 
-R_BIN="$OBJ_DIR/bin/R"
+# R_TEST_R_BIN: test a different build's R (e.g. the zig-build prefix's
+# bin/R) instead of the autoconf objdir default.
+R_BIN="${R_TEST_R_BIN:-$OBJ_DIR/bin/R}"
 test -x "$R_BIN" || { echo "error: $R_BIN not built yet — run 'pixi run build'" >&2; exit 1; }
 
 echo "Smoke-testing variant: $VARIANT (BLAS: $BLAS)"

@@ -1,1 +1,1 @@
-.github/devdocs/feat-prefix-publish/PLAN.md
+.github/devdocs/feat-zig-build/PLAN.md

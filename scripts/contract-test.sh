@@ -15,7 +15,9 @@ if [ "$OS" = windows ]; then
   # names must be on PATH, as during the gnuwin32 build
   export PATH="$BUILD_DIR/win-toolchain:$PATH"
 else
-  R_BIN="$OBJ_DIR/bin/Rscript"
+  # R_TEST_R_BIN: test a different build's Rscript (e.g. the zig-build
+  # prefix's) instead of the autoconf objdir default. See FINALIZATION.md F1.2.
+  R_BIN="${R_TEST_R_BIN:-$OBJ_DIR/bin/Rscript}"
 fi
 test -x "$R_BIN" || { echo "error: $R_BIN not built yet — run 'pixi run build'" >&2; exit 1; }
 
