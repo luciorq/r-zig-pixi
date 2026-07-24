@@ -17,7 +17,11 @@ source:
     target_directory: toolchain
 
 build:
-  number: 0
+  # 0 -> 1 (2026-07-23): forces a republish of the win-64 R_HOME/PATH fix
+  # over the previous build-0 package on the channel (--skip-existing
+  # would otherwise skip the same version+build slot). Global field, so it
+  # also rebrands linux-64/osx-arm64 as _1 even though only win-64 changed.
+  number: 1
   script: build.sh
 
 requirements:
@@ -182,17 +186,14 @@ tests:
   - script:
       - if: win
         then:
-          # Bare `Rscript` (not the absolute path) deliberately — this is
-          # the one check that actually exercises PATH-based invocation,
-          # which is what real installs use. Found the hard way: R used
-          # to install under $PREFIX/lib/R, which NTFS's case-insensitive
-          # lookup silently folds into a real env's existing Lib/
-          # (Python's), and nothing was ever on PATH regardless — the
-          # absolute-path version of this test couldn't have caught
-          # either bug. See env.sh's R_HOME_DIR / stage.sh's Windows
-          # shims (Library/bin/R.bat, Rscript.bat).
-          - echo PATHDEBUG=%PATH%
-          - Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["png"]], caps[["iconv"]], caps[["libcurl"]], caps[["cairo"]]); cat("conda R OK\n")'
+          # Absolute path, not bare `Rscript`: rattler-build's Windows
+          # test phase runs with an unexpanded literal "%PREFIX%" on PATH
+          # (verified with an `echo %PATH%` probe), so PATH-based
+          # invocation of the Library/bin/{R,Rscript}.bat shims can't be
+          # exercised here at all. The shims (the actual win-64 fix, see
+          # env.sh + stage.sh) are covered by the fresh-env install check
+          # instead — see feat-prefix-publish devdocs.
+          - $PREFIX/Library/lib/R/bin/x64/Rscript.exe -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["png"]], caps[["iconv"]], caps[["libcurl"]], caps[["cairo"]]); cat("conda R OK\n")'
         else:
           - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
 
