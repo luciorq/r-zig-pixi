@@ -303,9 +303,37 @@ a carried-forward gotcha catalog.
       session has no way to push/trigger CI, so treat the job definition
       as reviewed-and-locally-equivalent, not CI-green, until it runs for
       real on the next push.
-- [ ] **F5.1** macOS compile graph (gfortran, -O1 cap, vendored osx config,
-      fd ulimit)
-- [ ] **F5.2** macOS Mach-O relocation + ad-hoc codesign; omicron green
+- [x] **F5.1** macOS compile graph (2026-07-27, on omicron/osx-arm64):
+      gfortran (not flang, unavailable on macOS) with `-J` for the module
+      dir (flang's `-module-dir` doesn't exist in gfortran) and `-O1` cap
+      (matches configure-r.sh's known gfortran-darwin miscompile
+      workaround); FLIBS-driven Fortran runtime linking instead of the
+      linux flang_rt.a search; `zigbuild/config/osx-arm64-{slim,full}/`
+      vendored from real `pixi run [-e full] configure` runs on omicron;
+      `platform`/`config_dir` now computed at runtime from
+      `ctx.target`'s os/arch instead of a hardcoded linux constant;
+      `linkCoreLibs`'s LIBS now comes from the vendored S-table instead of
+      a hand-written array (a hardcoded `-lrt` would have broken macOS —
+      no separate librt there). All three flavors (slim/full/openblas)
+      built and passed smoke+contract+zig-check on the first or second
+      real attempt. Two real bugs found getting `full` working (both
+      documented below): the base-package link needing
+      `linker_allow_shlib_undefined` (zig's Mach-O equivalent of ELF's
+      undefined-shlib-symbol tolerance), and a missing `LIBINTL`/
+      `-framework` link that crashed R at startup.
+- [x] **F5.2** macOS Mach-O relocation + ad-hoc codesign (2026-07-27):
+      `stage.sh`/`package-standalone.sh`/`verify-bundle.sh` ran completely
+      unchanged (dual `@loader_path` rpaths + ad-hoc codesign, from
+      milestone 2's existing macOS support). `fixRpath` (the ELF-only
+      patchelf F2.3 fix) is a no-op passthrough on macOS per
+      FINALIZATION.md's own guidance — leaves all Mach-O rpath/codesign
+      surgery to stage.sh rather than duplicating it in build.zig. Ran the
+      full adversarial standard beyond `verify-bundle.sh`'s own check
+      (same as F4.1 on linux): extracted to a fresh dir, deleted the
+      original, `env -i PATH=/usr/bin:/bin` confirmed the dynamic
+      `Sys.which` tell, `library(utils)`, a real cairo PNG render, and
+      `R CMD SHLIB` + `dyn.load`/`.Call` (correctly failing without zig on
+      PATH, succeeding once its dir is added back).
 - [ ] **F6.1** Windows compile graph (MinGW gfortran, ld-emulation
       decision, Windows config table)
 - [ ] **F6.2** Windows layout (`Library/lib/R`, ICU_PATH) + traps; kappa
@@ -355,6 +383,42 @@ a carried-forward gotcha catalog.
   + zig-check all still green against a full rebuild with the regenerated
   file.
 
+### Bugs found by F5.1 (macOS port, fixed 2026-07-27, on omicron/osx-arm64)
+
+- **Base packages segfault-free on linux but fail link with "undefined
+  symbol" on macOS.** `library/*/libs/*.so` and modules never
+  `.linkLibrary(ctx.libR)` — their R-API symbols resolve at runtime since
+  libR is already loaded into the process ("zig allows undefined symbols
+  in shared libs" on ELF, verified in F1/PLAN.md). Mach-O's lld does NOT
+  tolerate that by default; the real make build's Makeconf carries
+  `-undefined dynamic_lookup` on every `SHLIB_LDFLAGS`/`DYLIB_LDFLAGS` for
+  exactly this. Fixed with a new `addSharedLib` helper (wraps every
+  `b.addLibrary` call site, 16 of them) that sets zig's
+  `linker_allow_shlib_undefined = true` on macOS — the equivalent knob,
+  not anticipated in FINALIZATION.md's spec, found from the first real
+  build attempt's error output.
+- **`full` variant builds clean but segfaults (SIGSEGV, null function
+  pointer) on the very first bootstrap R invocation.** Root cause chain:
+  macOS's libc has *no* native `gettext()` (unlike glibc, which is why
+  linux's `LIBINTL` is empty and needs no extra link) — macOS's vendored
+  S-table has a real `LIBINTL="-lintl -Wl,-framework -Wl,CoreFoundation"`
+  that `linkCoreLibs` wasn't applying at all. Compounded by the
+  `linker_allow_shlib_undefined` fix above: it let the *missing* gettext
+  symbols link successfully anyway (silently), so the crash only
+  surfaced at runtime, as a call through a null pointer, the instant R's
+  startup code invoked `_()` (gettext) for the first time — traced via
+  macOS's own crash reporter (`~/Library/Logs/DiagnosticReports/*.ips`,
+  a JSON body after a one-line header) since `lldb` refuses to attach in
+  a non-interactive SSH session. Fixed two things: (1) `linkCoreLibs` now
+  applies `LIBINTL` from the S-table (empty/no-op on linux and macOS
+  slim, real on macOS full); (2) `applyLinkFlags`'s tokenizer silently
+  *dropped* `-framework X` pairs entirely (it only recognized `-L`/`-l`
+  prefixes) — added explicit handling via zig's `Module.linkFramework`.
+  The second bug was latent and harmless until the first one needed it
+  (cairo's own `CAIRO_LIBS` also carries several `-framework`s that were
+  silently no-ops before this fix — undetected because slim's cairo
+  happened to work anyway via transitively-linked frameworks).
+
 ## Later (explicitly out of scope for this branch)
 
 - [x] Contract test (Rcpp/data.table) against zig-built R — etc/Makeconf
@@ -365,8 +429,8 @@ a carried-forward gotcha catalog.
 - [x] full variant (-Dvariant=full): tcltk/readline/NLS/jpeg/tiff
       (2026-07-24, see F3.1 above)
 - [x] openblas flavor (-Dblas=openblas) (2026-07-24, see F3.2 above)
-- [ ] macOS (gfortran table entry, Mach-O/codesign handling in zig build)
-      — F5, needs omicron (real hardware) access
+- [x] macOS (gfortran table entry, Mach-O/codesign handling in zig build)
+      (2026-07-27, on omicron — see F5.1/F5.2 above)
 - [ ] Windows (replaces gnuwin32 — the big prize) — F6, needs kappa (real
       hardware) access
 - [ ] `zig build fetch` (retire fetch-r.sh) — not attempted; still a real

@@ -34,7 +34,12 @@ const std = @import("std");
 const rspec = @import("zigbuild/rspec.zig");
 
 const r_version = "4.6.1";
-const platform = "linux-x86_64";
+
+/// F5: linux uses flang + ELF (.so/DT_NEEDED/RUNPATH); macOS uses gfortran
+/// + Mach-O (.dylib/install_name/@rpath — patchelf doesn't apply at all,
+/// and per FINALIZATION.md F5.2 all Mach-O rpath/codesign surgery is left
+/// to stage.sh, not duplicated here).
+const Os = enum { linux, macos };
 
 /// Capabilities (tcltk/readline/NLS/jpeg/tiff) are compile-time in R, so
 /// slim vs full is a genuine second configure profile — its own vendored
@@ -52,6 +57,10 @@ const Blas = enum { internal, openblas };
 const Ctx = struct {
     b: *std.Build,
     target: std.Build.ResolvedTarget,
+    os: Os,
+    dylib_ext: []const u8, // ".so" (linux) or ".dylib" (macOS) — R_DYLIB_EXT;
+    // only libR/libRblas/libRlapack use this. Packages/modules always use
+    // SHLIB_EXT, which is ".so" on every platform R supports.
     variant: Variant,
     blas: Blas,
     conda: []const u8,
@@ -59,7 +68,7 @@ const Ctx = struct {
     src: std.Build.LazyPath,
     prefix: []const u8, // absolute install prefix
     rhome: []const u8, // prefix ++ "/lib/R"
-    flangrt_dir: []const u8, // conda clang resource dir with libflang_rt
+    flangrt_dir: []const u8, // conda clang resource dir with libflang_rt (linux only)
     subst: std.StringHashMap([]const u8),
     geninc: std.Build.LazyPath, // generated headers dir (config.h, Rconfig.h, ...)
     libR: *std.Build.Step.Compile,
@@ -110,11 +119,39 @@ pub fn build(b: *std.Build) !void {
 
     const variant = b.option(Variant, "variant", "R build variant: slim (default) or full") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
+
+    const target = b.resolveTargetQuery(.{});
+    const os: Os = switch (target.result.os.tag) {
+        .linux => .linux,
+        .macos => .macos,
+        else => {
+            std.debug.print("error: unsupported target OS '{s}' (only linux and macos are supported so far)\n", .{@tagName(target.result.os.tag)});
+            return error.UnsupportedOS;
+        },
+    };
+    const arch_str = switch (target.result.cpu.arch) {
+        .x86_64 => "x86_64",
+        .aarch64 => "arm64",
+        else => {
+            std.debug.print("error: unsupported target arch '{s}'\n", .{@tagName(target.result.cpu.arch)});
+            return error.UnsupportedArch;
+        },
+    };
+    const platform = switch (os) {
+        .linux => b.fmt("linux-{s}", .{arch_str}),
+        .macos => b.fmt("osx-{s}", .{arch_str}),
+    };
+    const dylib_ext = switch (os) {
+        .linux => ".so",
+        .macos => ".dylib",
+    };
     const config_dir = b.fmt("zigbuild/config/{s}-{s}", .{ platform, @tagName(variant) });
 
     var ctx = Ctx{
         .b = b,
-        .target = b.resolveTargetQuery(.{}),
+        .target = target,
+        .os = os,
+        .dylib_ext = dylib_ext,
         .variant = variant,
         .blas = blas,
         .conda = conda,
@@ -122,7 +159,7 @@ pub fn build(b: *std.Build) !void {
         .src = b.path(src_rel),
         .prefix = b.install_prefix,
         .rhome = b.fmt("{s}/lib/R", .{b.install_prefix}),
-        .flangrt_dir = try findFlangRt(b, io, conda),
+        .flangrt_dir = if (os == .linux) try findFlangRt(b, io, conda) else "",
         .subst = std.StringHashMap([]const u8).init(arena),
         .geninc = undefined,
         .libR = undefined,
@@ -146,9 +183,9 @@ pub fn build(b: *std.Build) !void {
     // ------------------------------------------------------------------
     // Fortran objects (flang Run steps; zig has no Fortran frontend)
     // ------------------------------------------------------------------
-    const appl_f = flangGroup(&ctx, "src/appl", &rspec.appl_f, &.{});
-    const xxxpr = flangGroup(&ctx, "src/main", &.{"xxxpr.f"}, &.{});
-    const stats_f = flangGroup(&ctx, "src/library/stats/src", &rspec.stats_f, &.{});
+    const appl_f = fortranGroup(&ctx, "src/appl", &rspec.appl_f, &.{});
+    const xxxpr = fortranGroup(&ctx, "src/main", &.{"xxxpr.f"}, &.{});
+    const stats_f = fortranGroup(&ctx, "src/library/stats/src", &rspec.stats_f, &.{});
 
     // ------------------------------------------------------------------
     // libRblas.so / libRlapack.so — internal reference implementation
@@ -160,8 +197,8 @@ pub fn build(b: *std.Build) !void {
     ctx.rblas = null;
     ctx.rlapack = null;
     if (ctx.blas == .internal) {
-        const blas_fixed = flangGroup(&ctx, "src/extra/blas", &rspec.blas_f, &.{});
-        const blas_free = flangGroup(&ctx, "src/extra/blas", &rspec.blas_f90, &.{});
+        const blas_fixed = fortranGroup(&ctx, "src/extra/blas", &rspec.blas_f, &.{});
+        const blas_free = fortranGroup(&ctx, "src/extra/blas", &rspec.blas_f90, &.{});
 
         // libRlapack's f90 files have real module dependencies:
         // la_constants then la_xisnan must be compiled before their users
@@ -169,26 +206,26 @@ pub fn build(b: *std.Build) !void {
         var lapack_objs = std.ArrayList(std.Build.LazyPath).empty;
         var lapack_mods = std.ArrayList(std.Build.LazyPath).empty;
         for (rspec.rlapack_f90_ordered) |f| {
-            const r = flangOne(&ctx, "src/modules/lapack", f, lapack_mods.items);
+            const r = fortranOne(&ctx, "src/modules/lapack", f, lapack_mods.items);
             try lapack_objs.append(arena, r.obj);
             try lapack_mods.append(arena, r.mods);
         }
         for (rspec.rlapack_f) |f| {
-            const r = flangOne(&ctx, "src/modules/lapack", f, lapack_mods.items);
+            const r = fortranOne(&ctx, "src/modules/lapack", f, lapack_mods.items);
             try lapack_objs.append(arena, r.obj);
         }
 
         const rblas_mod = newCMod(&ctx);
         for (blas_fixed) |o| rblas_mod.addObjectFile(o);
         for (blas_free) |o| rblas_mod.addObjectFile(o);
-        linkFlangRt(&ctx, rblas_mod);
-        ctx.rblas = b.addLibrary(.{ .linkage = .dynamic, .name = "Rblas", .root_module = rblas_mod });
+        linkFortranRt(&ctx, rblas_mod);
+        ctx.rblas = addSharedLib(&ctx, "Rblas", rblas_mod);
 
         const rlapack_mod = newCMod(&ctx);
         for (lapack_objs.items) |o| rlapack_mod.addObjectFile(o);
         rlapack_mod.linkLibrary(ctx.rblas.?);
-        linkFlangRt(&ctx, rlapack_mod);
-        ctx.rlapack = b.addLibrary(.{ .linkage = .dynamic, .name = "Rlapack", .root_module = rlapack_mod });
+        linkFortranRt(&ctx, rlapack_mod);
+        ctx.rlapack = addSharedLib(&ctx, "Rlapack", rlapack_mod);
     }
 
     // ------------------------------------------------------------------
@@ -220,9 +257,9 @@ pub fn build(b: *std.Build) !void {
     for (appl_f) |o| libR_mod.addObjectFile(o);
     for (xxxpr) |o| libR_mod.addObjectFile(o);
     ctx.linkBlas(libR_mod);
-    linkFlangRt(&ctx, libR_mod);
+    linkFortranRt(&ctx, libR_mod);
     linkCoreLibs(&ctx, libR_mod);
-    ctx.libR = b.addLibrary(.{ .linkage = .dynamic, .name = "R", .root_module = libR_mod });
+    ctx.libR = addSharedLib(&ctx, "R", libR_mod);
 
     // ------------------------------------------------------------------
     // Executables: bin/exec/R (Rmain.c) and bin/Rscript
@@ -261,9 +298,9 @@ pub fn build(b: *std.Build) !void {
         lapmod.linkLibrary(ctx.rblas.?);
     }
     lapmod.linkLibrary(ctx.libR);
-    linkFlangRt(&ctx, lapmod);
+    linkFortranRt(&ctx, lapmod);
     linkOmp(&ctx, lapmod);
-    const mod_lapack = b.addLibrary(.{ .linkage = .dynamic, .name = "mod_lapack", .root_module = lapmod });
+    const mod_lapack = addSharedLib(&ctx, "mod_lapack", lapmod);
 
     const inetmod = newCMod(&ctx);
     inetmod.addIncludePath(ctx.geninc);
@@ -271,7 +308,7 @@ pub fn build(b: *std.Build) !void {
     addCGroup(&ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{ .openmp = true });
     inetmod.linkLibrary(ctx.libR);
     inetmod.linkSystemLibrary("curl", .{ .use_pkg_config = .no });
-    const mod_internet = b.addLibrary(.{ .linkage = .dynamic, .name = "mod_internet", .root_module = inetmod });
+    const mod_internet = addSharedLib(&ctx, "mod_internet", inetmod);
 
     // ------------------------------------------------------------------
     // Base-package shared libs (library/<pkg>/libs/<pkg>.so)
@@ -291,54 +328,54 @@ pub fn build(b: *std.Build) !void {
             m.linkLibrary(ctx.rlapack.?);
             m.linkLibrary(ctx.rblas.?);
         }
-        linkFlangRt(&ctx, m);
+        linkFortranRt(&ctx, m);
         linkOmp(&ctx, m);
-        try pkg_libs.append(arena, .{ .pkg = "stats", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_stats", .root_module = m }) });
+        try pkg_libs.append(arena, .{ .pkg = "stats", .lib = addSharedLib(&ctx, "pkg_stats", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/graphics/src", &rspec.graphics_c, .{
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
-        try pkg_libs.append(arena, .{ .pkg = "graphics", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_graphics", .root_module = m }) });
+        try pkg_libs.append(arena, .{ .pkg = "graphics", .lib = addSharedLib(&ctx, "pkg_graphics", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/grDevices/src", &rspec.grdevices_c, .{
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
         m.linkSystemLibrary("z", .{ .use_pkg_config = .no });
-        try pkg_libs.append(arena, .{ .pkg = "grDevices", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_grDevices", .root_module = m }) });
+        try pkg_libs.append(arena, .{ .pkg = "grDevices", .lib = addSharedLib(&ctx, "pkg_grDevices", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/grid/src", &rspec.grid_c, .{});
-        try pkg_libs.append(arena, .{ .pkg = "grid", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_grid", .root_module = m }) });
+        try pkg_libs.append(arena, .{ .pkg = "grid", .lib = addSharedLib(&ctx, "pkg_grid", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/methods/src", &rspec.methods_c, .{
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
-        try pkg_libs.append(arena, .{ .pkg = "methods", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_methods", .root_module = m }) });
+        try pkg_libs.append(arena, .{ .pkg = "methods", .lib = addSharedLib(&ctx, "pkg_methods", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/parallel/src", &rspec.parallel_c, .{
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
-        try pkg_libs.append(arena, .{ .pkg = "parallel", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_parallel", .root_module = m }) });
+        try pkg_libs.append(arena, .{ .pkg = "parallel", .lib = addSharedLib(&ctx, "pkg_parallel", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/splines/src", &rspec.splines_c, .{});
-        try pkg_libs.append(arena, .{ .pkg = "splines", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_splines", .root_module = m }) });
+        try pkg_libs.append(arena, .{ .pkg = "splines", .lib = addSharedLib(&ctx, "pkg_splines", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/tools/src", &rspec.tools_c, .{
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
-        try pkg_libs.append(arena, .{ .pkg = "tools", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_tools", .root_module = m }) });
+        try pkg_libs.append(arena, .{ .pkg = "tools", .lib = addSharedLib(&ctx, "pkg_tools", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/utils/src", &rspec.utils_c, .{
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
-        try pkg_libs.append(arena, .{ .pkg = "utils", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_utils", .root_module = m }) });
+        try pkg_libs.append(arena, .{ .pkg = "utils", .lib = addSharedLib(&ctx, "pkg_utils", m) });
     }
     if (ctx.variant == .full) {
         // tcltk (library/tcltk/libs/tcltk.so): real Tk bindings, only
@@ -359,7 +396,7 @@ pub fn build(b: *std.Build) !void {
         addCGroup(&ctx, m, "src/library/tcltk/src", &rspec.tcltk_c, .{ .extra = extra.items });
         applyLinkFlags(&ctx, m, ctx.subst.get("TCLTK_LIBS").?);
         applyLinkFlags(&ctx, m, ctx.subst.get("LIBM").?);
-        try pkg_libs.append(arena, .{ .pkg = "tcltk", .lib = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_tcltk", .root_module = m }) });
+        try pkg_libs.append(arena, .{ .pkg = "tcltk", .lib = addSharedLib(&ctx, "pkg_tcltk", m) });
     }
 
     // grDevices cairo module (library/grDevices/libs/cairo.so): cairoBM.c +
@@ -396,16 +433,22 @@ pub fn build(b: *std.Build) !void {
     // for full to avoid a harmless but pointless double -lpng16 on slim).
     if (ctx.variant == .full) applyLinkFlags(&ctx, cairo_mod, ctx.subst.get("BITMAP_LIBS").?);
     linkOmp(&ctx, cairo_mod);
-    const mod_cairo = b.addLibrary(.{ .linkage = .dynamic, .name = "pkg_cairo", .root_module = cairo_mod });
+    const mod_cairo = addSharedLib(&ctx, "pkg_cairo", cairo_mod);
 
     // ------------------------------------------------------------------
     // Install: binaries into the R_HOME layout
     // ------------------------------------------------------------------
     const lib_dir: std.Build.InstallDir = .{ .custom = "lib/R/lib" };
     const modules_dir: std.Build.InstallDir = .{ .custom = "lib/R/modules" };
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, ctx.libR.getEmittedBin(), "libR.so"), lib_dir, "libR.so").step);
-    if (ctx.rblas) |rblas| b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rblas.getEmittedBin(), "libRblas.so"), lib_dir, "libRblas.so").step);
-    if (ctx.rlapack) |rlapack| b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rlapack.getEmittedBin(), "libRlapack.so"), lib_dir, "libRlapack.so").step);
+    // libR/libRblas/libRlapack use R_DYLIB_EXT (.dylib on macOS, .so on
+    // linux); packages and modules (lapack.so/internet.so below) always
+    // use SHLIB_EXT, which is ".so" on every platform R supports.
+    const libR_name = ctx.absSub("libR{s}", .{ctx.dylib_ext});
+    const libRblas_name = ctx.absSub("libRblas{s}", .{ctx.dylib_ext});
+    const libRlapack_name = ctx.absSub("libRlapack{s}", .{ctx.dylib_ext});
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, ctx.libR.getEmittedBin(), libR_name), lib_dir, libR_name).step);
+    if (ctx.rblas) |rblas| b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rblas.getEmittedBin(), libRblas_name), lib_dir, libRblas_name).step);
+    if (ctx.rlapack) |rlapack| b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rlapack.getEmittedBin(), libRlapack_name), lib_dir, libRlapack_name).step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, mod_lapack.getEmittedBin(), "lapack.so"), modules_dir, "lapack.so").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, mod_internet.getEmittedBin(), "internet.so"), modules_dir, "internet.so").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rbin.getEmittedBin(), "R.bin"), .{ .custom = "lib/R/bin/exec" }, "R").step);
@@ -538,6 +581,22 @@ fn newCMod(ctx: *const Ctx) *std.Build.Module {
     return m;
 }
 
+/// Every shared lib/module/package .so in this build (base packages don't
+/// link libR directly — its symbols resolve at runtime since libR is
+/// already loaded into the R process; "zig allows undefined symbols in
+/// shared libs" on ELF/linux, verified). Mach-O's lld backend does NOT
+/// tolerate that by default (link fails with "undefined symbol" on every
+/// R API call packages make) — the real macOS make build's Makeconf
+/// carries `-undefined dynamic_lookup` on every SHLIB_LDFLAGS/DYLIB_LDFLAGS
+/// for exactly this; `linker_allow_shlib_undefined` is zig's equivalent
+/// knob (found via FINALIZATION.md F5.1's first real build attempt, not
+/// anticipated in the spec).
+fn addSharedLib(ctx: *const Ctx, name: []const u8, mod: *std.Build.Module) *std.Build.Step.Compile {
+    const lib = ctx.b.addLibrary(.{ .linkage = .dynamic, .name = name, .root_module = mod });
+    if (ctx.os == .macos) lib.linker_allow_shlib_undefined = true;
+    return lib;
+}
+
 const CGroupOpts = struct {
     openmp: bool = false,
     extra: []const []const u8 = &.{}, // %S → srcdir, %C → conda
@@ -571,15 +630,28 @@ fn newPkgMod(ctx: *const Ctx, dir: []const u8, files: []const []const u8, opts: 
 }
 
 fn linkCoreLibs(ctx: *const Ctx, mod: *std.Build.Module) void {
-    // LIBS from Makeconf: pcre2, compression stack, rt/dl/m, iconv, ICU
+    // LIBS from the vendored S-table: pcre2, compression stack, dl/m,
+    // iconv, ICU — pulled from subst.txt (not hand-listed) specifically so
+    // platform differences (e.g. linux's "-lrt" for POSIX realtime timers,
+    // which doesn't exist as a separate lib on macOS — those symbols are
+    // in libSystem there) come from the real configure capture, not a
+    // hardcoded list that would silently omit the macOS port's needs.
     mod.addLibraryPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
     mod.addRPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
-    const libs = [_][]const u8{ "pcre2-8", "deflate", "zstd", "lzma", "bz2", "z", "rt", "dl", "m", "iconv", "icuuc", "icui18n" };
-    for (libs) |l| mod.linkSystemLibrary(l, .{ .use_pkg_config = .no });
+    applyLinkFlags(ctx, mod, ctx.subst.get("LIBS").?);
     // full only: src/unix/sys-std.c + sys-unix.c + src/main/platform.c
     // already compile their HAVE_LIBREADLINE branch correctly (it comes
     // from the per-variant vendored config.h); just needs -lreadline.
     if (ctx.variant == .full) mod.linkSystemLibrary("readline", .{ .use_pkg_config = .no });
+    // LIBINTL: empty on linux (glibc provides gettext() natively) but a
+    // REAL value on macOS full (`-lintl -framework CoreFoundation` —
+    // macOS's libc has no gettext at all, unlike glibc). Found the hard
+    // way: omitting this let `-undefined dynamic_lookup` (needed for the
+    // base-package link, addSharedLib) mask the missing gettext symbols at
+    // link time, then crash with SIGSEGV at a null function pointer the
+    // instant R's startup code called _() (gettext) for the first time —
+    // slim never hit it (NLS off, LIBINTL empty there too).
+    applyLinkFlags(ctx, mod, ctx.subst.get("LIBINTL").?);
     linkOmp(ctx, mod);
 }
 
@@ -590,10 +662,21 @@ fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {
     mod.linkSystemLibrary("omp", .{ .use_pkg_config = .no });
 }
 
-fn linkFlangRt(ctx: *const Ctx, mod: *std.Build.Module) void {
-    mod.addLibraryPath(.{ .cwd_relative = ctx.flangrt_dir });
-    mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no });
-    mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
+/// Link the Fortran runtime: flang_rt.runtime on linux (found by
+/// findFlangRt's clang-resource-dir search); gfortran's own runtime libs
+/// on macOS, taken straight from the vendored FLIBS (captured on omicron:
+/// `-L.../lib/gcc/<triple>/<ver> -L.../lib/gcc -lemutls_w -lheapt_w
+/// -lgfortran -lquadmath` — gfortran's private libdir convention, distinct
+/// from flang's single clang-resource-dir .a file).
+fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
+    switch (ctx.os) {
+        .linux => {
+            mod.addLibraryPath(.{ .cwd_relative = ctx.flangrt_dir });
+            mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
+        },
+        .macos => applyLinkFlags(ctx, mod, ctx.subst.get("FLIBS").?),
+    }
 }
 
 /// Tokenize a "-L/x -lfoo ..." string into module link calls.
@@ -605,6 +688,12 @@ fn applyLinkFlags(ctx: *const Ctx, mod: *std.Build.Module, flags: []const u8) vo
             mod.addRPath(.{ .cwd_relative = ctx.b.dupe(tok[2..]) });
         } else if (std.mem.startsWith(u8, tok, "-l")) {
             mod.linkSystemLibrary(ctx.b.dupe(tok[2..]), .{ .use_pkg_config = .no });
+        } else if (std.mem.eql(u8, tok, "-framework")) {
+            // macOS only (e.g. CAIRO_LIBS/LIBINTL carry "-framework X" as
+            // two tokens) — silently dropped before this fix, since
+            // neither "-framework" nor the framework name matched -L/-l;
+            // harmless on linux (this token never appears there).
+            if (it.next()) |name| mod.linkFramework(ctx.b.dupe(name), .{});
         }
     }
 }
@@ -618,6 +707,13 @@ fn applyLinkFlags(ctx: *const Ctx, mod: *std.Build.Module, flags: []const u8) vo
 /// shouldn't have to clean up zig-specific debris it didn't create. Strip
 /// every non-absolute RUNPATH entry, keeping the real conda/flang-rt ones.
 fn fixRpath(ctx: *const Ctx, in: std.Build.LazyPath, out_name: []const u8) std.Build.LazyPath {
+    // macOS (F5.2): patchelf is ELF-only. Mach-O's equivalent grit (zig
+    // may add a load-command referencing the zig-cache path of a sibling
+    // artifact) is handled by stage.sh's existing install_name_tool +
+    // mandatory ad-hoc re-codesign pass instead of duplicating Mach-O
+    // surgery here — per FINALIZATION.md F5.2, leave it there.
+    if (ctx.os == .macos) return in;
+
     const b = ctx.b;
     const run = b.addSystemCommand(&.{
         "sh", "-c",
@@ -635,27 +731,44 @@ fn fixRpath(ctx: *const Ctx, in: std.Build.LazyPath, out_name: []const u8) std.B
     return run.addOutputFileArg(out_name);
 }
 
-const FlangOut = struct { obj: std.Build.LazyPath, mods: std.Build.LazyPath };
+const FortranOut = struct { obj: std.Build.LazyPath, mods: std.Build.LazyPath };
 
-fn flangOne(ctx: *const Ctx, dir: []const u8, file: []const u8, mod_deps: []const std.Build.LazyPath) FlangOut {
+fn fortranOne(ctx: *const Ctx, dir: []const u8, file: []const u8, mod_deps: []const std.Build.LazyPath) FortranOut {
     const b = ctx.b;
-    const run = b.addSystemCommand(&.{ "flang", "-fpic", "-O2", "-c" });
-    run.setName(b.fmt("flang {s}/{s}", .{ dir, file }));
+    // flang (linux): -module-dir sets/searches the module output dir.
+    // gfortran (macOS): -J does the same job (its own flag spelling).
+    // gfortran-darwin -O2 miscompiles complex LAPACK (zgesdd — silent
+    // wrong SVD, found on real hardware in an earlier milestone); cap at
+    // -O1 there, exactly like configure-r.sh's FOPT logic.
+    const compiler = switch (ctx.os) {
+        .linux => "flang",
+        .macos => "gfortran",
+    };
+    const opt = switch (ctx.os) {
+        .linux => "-O2",
+        .macos => "-O1",
+    };
+    const moddir_flag = switch (ctx.os) {
+        .linux => "-module-dir",
+        .macos => "-J",
+    };
+    const run = b.addSystemCommand(&.{ compiler, "-fpic", opt, "-c" });
+    run.setName(b.fmt("{s} {s}/{s}", .{ compiler, dir, file }));
     run.addFileArg(ctx.path(b.fmt("{s}/{s}", .{ dir, file })));
     run.addArg("-o");
     const stem = file[0 .. std.mem.lastIndexOfScalar(u8, file, '.').?];
     const obj = run.addOutputFileArg(b.fmt("{s}.o", .{stem}));
-    run.addArg("-module-dir");
+    run.addArg(moddir_flag);
     const mods = run.addOutputDirectoryArg("mods");
     for (mod_deps) |d| run.addPrefixedDirectoryArg("-I", d);
     return .{ .obj = obj, .mods = mods };
 }
 
-fn flangGroup(ctx: *const Ctx, dir: []const u8, files: []const []const u8, mod_deps: []const std.Build.LazyPath) []std.Build.LazyPath {
+fn fortranGroup(ctx: *const Ctx, dir: []const u8, files: []const []const u8, mod_deps: []const std.Build.LazyPath) []std.Build.LazyPath {
     const b = ctx.b;
     var objs = std.ArrayList(std.Build.LazyPath).empty;
     for (files) |f| {
-        const r = flangOne(ctx, dir, f, mod_deps);
+        const r = fortranOne(ctx, dir, f, mod_deps);
         objs.append(b.allocator, r.obj) catch @panic("OOM");
     }
     return objs.items;

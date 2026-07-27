@@ -4,10 +4,12 @@
 # prefix matches the layout the make-driven pipeline used.
 . "$(dirname "$0")/env.sh"
 
-if [ "$OS" != linux ]; then
-  echo "zig build path is linux-64 only so far (milestone 5, in progress)" >&2
+if [ "$OS" != linux ] && [ "$OS" != macos ]; then
+  echo "zig build path covers linux-64 and macOS so far (Windows is F6, in progress)" >&2
   exit 1
 fi
+# (macOS fd ulimit for zig's linker opening ~300 libR objects at once is
+# already raised unconditionally by env.sh, sourced above.)
 
 PREFIX_ZIG="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
 

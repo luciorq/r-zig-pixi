@@ -4,8 +4,8 @@
 # to know $FLAVOR to find it.
 . "$(dirname "$0")/env.sh"
 
-if [ "$OS" != linux ]; then
-  echo "zig build path is linux-64 only so far (milestone 5, in progress)" >&2
+if [ "$OS" != linux ] && [ "$OS" != macos ]; then
+  echo "zig build path covers linux-64 and macOS so far (Windows is F6, in progress)" >&2
   exit 1
 fi
 
