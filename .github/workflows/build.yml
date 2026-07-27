@@ -43,17 +43,23 @@ jobs:
         run: pixi run -e ${{ matrix.env }} verify-package
 
   # Milestone 5: R built entirely by `zig build` — no autoconf, no make.
-  # See .github/devdocs/feat-zig-build/. Linux-64 only so far (F5/F6 port
-  # this to macOS/Windows); kept as its own job beside `build` above, not
-  # replacing it — the autoconf/gnuwin32 paths retire only once all of
-  # F1-F6 are green on every platform (FINALIZATION.md).
+  # See .github/devdocs/feat-zig-build/. linux-64 and macOS now (F5, proven
+  # on omicron/osx-arm64); Windows is F6. Kept as its own job beside
+  # `build` above, not replacing it — the autoconf/gnuwin32 paths retire
+  # only once all of F1-F6 are green on every platform (FINALIZATION.md).
   build-zig:
-    name: zig-build / ${{ matrix.env }}
-    runs-on: ubuntu-latest
+    name: zig-build / ${{ matrix.os }} / ${{ matrix.env }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        env: [default, full, openblas]
+        os: [ubuntu-latest, macos-latest]
+        env: [default, full]
+        include:
+          # external optimized BLAS/LAPACK variant (linux only for now,
+          # matches the autoconf `build` job's own matrix above)
+          - os: ubuntu-latest
+            env: openblas
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
