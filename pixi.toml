@@ -37,6 +37,10 @@ verify-package = { cmd = "bash scripts/verify-bundle.sh", depends-on = ["package
 zig-build = { cmd = "bash scripts/zig-build.sh", depends-on = ["fetch"] }
 # F1.1: R's regression suite (Examples/Specific/Reg) against the zig build.
 zig-check = { cmd = "bash scripts/zig-build.sh check", depends-on = ["fetch"] }
+# F4.2: smoke/contract against the zig prefix, without CI needing to know
+# $FLAVOR to find it (mirrors zig-build.sh's own prefix derivation).
+zig-smoke = "bash scripts/zig-smoke.sh"
+zig-contract = "bash scripts/zig-contract.sh"
 clean = "bash scripts/clean.sh"
 
 [dependencies]
