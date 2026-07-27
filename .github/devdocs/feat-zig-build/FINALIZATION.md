@@ -6,41 +6,75 @@ This document is the pick-up point for finishing `build.zig`. It assumes a
 concrete — exact files, commands, and acceptance criteria — so a future
 session can execute without re-deriving the design.
 
+**Status (2026-07-24): F1–F4 are all green on linux-64** (trust bar,
+hardening, full+openblas variants, distribution/CI integration — see the
+per-phase status lines below and `TODO.md`'s finalization checklist for
+exact detail, including the two subst-table bugs, the join-logic bug, and
+the reproducibility leaks found and fixed along the way). **F5 (macOS) and
+F6 (Windows) are the only phases left** — both need real remote test
+hardware (omicron/kappa, see `[[test-servers]]` in memory), not just local
+work, which is why they're picked up in a separate session/pass.
+
 ## Where things stand
 
 - Branch: `worktree-feat-zig-build` (git worktree at
   `.claude/worktrees/feat-zig-build`). Changes are uncommitted by project
   policy ([[no-git-commits]] — the user commits).
-- **Proven**: `pixi run zig-build` produces a complete slim R 4.6.1 on
-  linux-64 with no autoconf and no make; `scripts/smoke-test.sh` passes
-  against it. File layout is within one deliberate file (`bin/libtool`) of
-  the make-installed tree.
+- **Proven on linux-64, all three flavors**: `pixi run zig-build` (slim),
+  `pixi run -e full zig-build`, and `pixi run -e openblas zig-build` each
+  produce a complete R 4.6.1 with no autoconf and no make. Each passes
+  smoke + `pixi run contract`/`zig-contract` + `pixi run zig-check` +
+  `stage.sh`/`package-standalone.sh`/`verify-bundle.sh` (F4.1's adversarial
+  moved-tree test). File layout is within one deliberate file
+  (`bin/libtool`) of the make-installed tree. A `build-zig` CI job matrixes
+  all three flavors in `.github/workflows/build.yml`, beside the existing
+  autoconf `build` job (not yet observed on a real Actions run — no push
+  access from the session that added it; confirm on the next push).
 - Entry points: `build.zig` (root), `zigbuild/rspec.zig` (source
-  inventory), `zigbuild/config/linux-x86_64/` (vendored `config.h`,
-  `Rconfig.h`, `subst.txt`), `scripts/zig-build.sh` (pixi wrapper).
+  inventory), `zigbuild/tools/gen-subst.sh` (subst.txt regeneration),
+  `zigbuild/config/linux-x86_64-{slim,full}/` (vendored `config.h`,
+  `Rconfig.h`, `subst.txt`, `GENERATED_FROM` — one dir per variant, since
+  capabilities are compile-time), `scripts/zig-build.sh` (pixi wrapper,
+  takes `-Dvariant`/`-Dblas` from `env.sh`'s `$VARIANT`/`$BLAS`),
+  `scripts/zig-smoke.sh`/`zig-contract.sh` (test-script wrappers that
+  resolve the zig prefix path so CI doesn't need to compute `$FLAVOR`
+  itself).
 
 ### How to build / test what exists
 
 ```sh
 pixi run zig-build                      # → dist/R-4.6.1-slim-zig
-R_TEST_R_BIN=$PWD/dist/R-4.6.1-slim-zig/lib/R/bin/R \
-  pixi run bash scripts/smoke-test.sh   # green today
+pixi run -e full zig-build              # → dist/R-4.6.1-full-zig
+pixi run -e openblas zig-build          # → dist/R-4.6.1-slim-openblas-zig
+pixi run zig-smoke                      # smoke test, resolves the prefix itself
+pixi run zig-contract                   # Rcpp/data.table/minqa via Makeconf
+pixi run zig-check                      # make-check-equivalent (Examples/Specific/Reg)
 ```
+(swap `-e full`/`-e openblas` in front of `zig-smoke`/`zig-contract`/
+`zig-check` too, to test those flavors.)
 
 ## What "finalized" means
 
 Milestone 5 is **done** when the zig build can replace the autoconf/make +
 gnuwin32 pipeline as the project's build system without regressing any
 guarantee milestones 1–5 established. Concretely, all six phases below are
-green. The gating one is **F1** — until R's own regression suite passes on
-a zig-built R, the build is not trustworthy no matter how clean it looks.
+green. The gating one was **F1** — until R's own regression suite passes on
+a zig-built R, the build is not trustworthy no matter how clean it looks
+(now proven, see above).
 
 Phases are ordered by dependency and value. F1–F4 are all on the
-already-proven linux-64 platform; F5/F6 are the ports. Do them in order.
+already-proven linux-64 platform (**done**); F5/F6 are the ports (do them
+in order — F5 before F6).
 
 ---
 
 ## Phase F1 — Correctness on linux-64 slim (the trust bar)
+
+**✅ DONE (2026-07-24).** `pixi run zig-check` (F1.1) and `pixi run
+contract` (F1.2) both pass. Two real bugs found and fixed getting here —
+see TODO.md's "Bugs found by F1.2" for the `AC_SUBST_FILE`/quote-unescaping
+details. Kept below verbatim as the reference spec (still accurate to how
+it was actually built).
 
 The smoke test proves R *starts and computes*; it does not prove R is
 *correct* or that it can *build packages*. Those are F1.
@@ -119,6 +153,14 @@ zig-shim C/C++ path AND the flang Fortran path through R's package builder.
 ---
 
 ## Phase F2 — Production-hardening on linux-64
+
+**✅ DONE (2026-07-24), all 5 subtasks.** Order actually used: F2.5 → F2.1
+→ F2.4 → F2.3 → F2.2 (F2.5 first since F2.1's regen procedure needed it to
+exist for real). Found and fixed real bugs in F2.2 (gzip timestamps +
+`.install_package_description`'s `Sys.time()`) and F2.5 (a join-logic bug
+producing corrupt mid-token quotes) — see TODO.md for both. F2.3's
+`fixRpath` and F2.1's `checkConfigFreshness` are load-bearing parts of
+`build.zig` now, not just one-off fixes.
 
 Small, mostly-mechanical items that make the build releasable. None gate
 F1 but all should land before declaring the milestone done.
@@ -204,6 +246,15 @@ load-bearing part — a naive `grep '^S\['` drops multi-line values.)
 
 ## Phase F3 — Variants on linux-64
 
+**✅ DONE (2026-07-24), both subtasks, first real build attempt each.**
+Every full-variant capability (tcltk/readline/NLS/jpeg/tiff) needed far
+less new code than this spec anticipated, because the same source files
+were already being compiled unconditionally and the *vendored, per-variant
+config.h* is what actually switches behavior — see TODO.md for the actual
+per-capability breakdown (tcltk needed real new compile+link code and a
+`concatRSources` exclude param; readline/NLS/jpeg-tiff needed only link
+flags or nothing at all).
+
 Once slim is trusted (F1) and clean (F2), extend to the other compile-time
 profiles on the *same proven platform* before porting.
 
@@ -261,6 +312,13 @@ green. Lower priority than F3.1.
 ---
 
 ## Phase F4 — Distribution integration + CI (linux-64)
+
+**✅ DONE (2026-07-24), both subtasks.** stage.sh/package-standalone.sh/
+verify-bundle.sh ran completely unchanged against the zig prefix (one
+naming-convention gotcha found, not a bug — see TODO.md). The CI job
+(`build-zig` in `.github/workflows/build.yml`) is written and locally
+verified but **not yet observed on a real GitHub Actions run** — confirm
+on the next push before fully trusting it.
 
 Make the zig build feed the existing distribution machinery and gate it in
 CI. Do this after F1–F3 so CI gates a trustworthy build.
@@ -392,22 +450,28 @@ truly is "one build system" and gnuwin32 + autoconf can both retire.
 
 ## Task checklist (transcribe into TODO.md when starting)
 
-- [ ] **F1.1** `zig build check` step + `pixi run zig-check`; regression
+F1-F4 done 2026-07-24 — see TODO.md's finalization checklist for the full
+detail (bugs found, exact verification commands, gotchas). This list is
+kept for the phase-ordering overview; don't re-derive from here, it's a
+summary of TODO.md, not the other way around.
+
+- [x] **F1.1** `zig build check` step + `pixi run zig-check`; regression
       suite reference-output-clean on zig-built slim linux-64
-- [ ] **F1.2** contract test (Rcpp/data.table/minqa) green via
+- [x] **F1.2** contract test (Rcpp/data.table/minqa) green via
       `R_TEST_R_BIN` override against the zig prefix
-- [ ] **F2.1** config.h staleness guard + regeneration procedure in PLAN.md
-- [ ] **F2.2** SOURCE_DATE_EPOCH → reproducible; two-build diff clean
-- [ ] **F2.3** RUNPATH normalized (patchelf post-link or documented via
+- [x] **F2.1** config.h staleness guard + regeneration procedure in PLAN.md
+- [x] **F2.2** SOURCE_DATE_EPOCH → reproducible; two-build diff clean
+- [x] **F2.3** RUNPATH normalized (patchelf post-link or documented via
       stage.sh)
-- [ ] **F2.4** bin/libtool: generate or document-as-dropped (per F1.2)
-- [ ] **F2.5** `zigbuild/tools/gen-subst.sh` committed (subst.txt repro)
-- [ ] **F3.1** full variant: vendor full config, `-Dvariant=full`, tcltk/
+- [x] **F2.4** bin/libtool: generate or document-as-dropped (per F1.2)
+- [x] **F2.5** `zigbuild/tools/gen-subst.sh` committed (subst.txt repro)
+- [x] **F3.1** full variant: vendor full config, `-Dvariant=full`, tcltk/
       readline/NLS/jpeg/tiff; smoke+check+contract green for full
-- [ ] **F3.2** openblas flavor `-Dblas=openblas`
-- [ ] **F4.1** stage.sh/package/verify-bundle green on zig prefix
+- [x] **F3.2** openblas flavor `-Dblas=openblas`
+- [x] **F4.1** stage.sh/package/verify-bundle green on zig prefix
       (adversarial moved-tree test)
-- [ ] **F4.2** CI `zig-build` leg (linux-64)
+- [x] **F4.2** CI `zig-build` leg (linux-64) — written + locally verified;
+      not yet observed on a real Actions run
 - [ ] **F5.1** macOS compile graph (gfortran, -O1 cap, vendored osx config,
       fd ulimit)
 - [ ] **F5.2** macOS Mach-O relocation + ad-hoc codesign; omicron green
@@ -431,3 +495,10 @@ truly is "one build system" and gnuwin32 + autoconf can both retire.
 | "duplicate linked dylib libomp" | double `-lomp` (package + shim) | shim skips `-lomp` if caller already has it |
 | tools loadNamespace "different internals" | `Meta/features.rds` missing (only `package.rds`) | run `.install_package_description` for tools (bootstrap already does) |
 | macOS linker `ProcessFdQuotaExceeded` | 256 fd default, ~300 objects | `ulimit -n 4096` |
+| make dies "missing separator" the moment a package compiles | `AC_SUBST_FILE` vars (`r_cc_rules_frag` etc.) are file-content substitutions, not `S["VAR"]` entries — silently vendored empty | hardcode the fixed heredoc content in `loadSubstTable` (F1.2) |
+| package build: `'R.h' file not found` (quoting broken, not the path) | awk `\"` never unescaped when loading subst.txt | unescape `\"` → `"` too, not just `\$` → `$` (F1.2) |
+| `subst.txt` regen produces a corrupt mid-token quote (e.g. `-l"m`) | continuation-line join kept the boundary quote instead of removing it | `sub(/"\\$/, "", full)`, not `"\""` (F2.5, `gen-subst.sh`) |
+| two builds differ in `.afm.gz` files even with `SOURCE_DATE_EPOCH` set | `gzip -9f` embeds a wall-clock timestamp in the header regardless | add `-n` (F2.2) |
+| two builds differ in every package's DESCRIPTION/Meta despite `SOURCE_DATE_EPOCH` | `tools:::.install_package_description()` calls `Sys.time()` unless given an explicit `builtStamp` arg | pass `utcNow()` through as the 3rd arg (F2.2) |
+| RUNPATH has a bogus relative `build/zig-cache/local/o/<hash>` entry | zig adds an rpath for every sibling artifact it links against | `patchelf --set-rpath` post-link, keep only absolute entries (F2.3, `fixRpath`) |
+| `package-standalone.sh`'s final `tar` step: "Cannot stat: No such file or directory" | it hardcodes the dist dir *basename* to `R-$R_VERSION-$FLAVOR`, doesn't go through `$PREFIX` — breaks if the prefix has zig-build's `-zig` coexistence suffix | point `R_INSTALL_PREFIX` at the unsuffixed name for verification; a non-issue once autoconf retires (F4.1) |

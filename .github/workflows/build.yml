@@ -42,6 +42,34 @@ jobs:
         if: matrix.env == 'default'
         run: pixi run -e ${{ matrix.env }} verify-package
 
+  # Milestone 5: R built entirely by `zig build` — no autoconf, no make.
+  # See .github/devdocs/feat-zig-build/. Linux-64 only so far (F5/F6 port
+  # this to macOS/Windows); kept as its own job beside `build` above, not
+  # replacing it — the autoconf/gnuwin32 paths retire only once all of
+  # F1-F6 are green on every platform (FINALIZATION.md).
+  build-zig:
+    name: zig-build / ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [default, full, openblas]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: ${{ matrix.env }}
+          cache: true
+      - name: Build R (zig build alone, no autoconf/make)
+        run: pixi run -e ${{ matrix.env }} zig-build
+      - name: Smoke test
+        run: pixi run -e ${{ matrix.env }} zig-smoke
+      - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
+        run: pixi run -e ${{ matrix.env }} zig-contract
+      - name: Regression suite (Examples/Specific/Reg)
+        run: pixi run -e ${{ matrix.env }} zig-check
+
   # Windows builds via src/gnuwin32 driven by scripts/build-gnuwin32.sh
   # (zig cc MinGW target + conda-forge MinGW gfortran). Proven on real
   # hardware (kappa) across build/smoke/contract/check — gating like the

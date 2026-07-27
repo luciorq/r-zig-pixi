@@ -1,19 +1,28 @@
 # feat-zig-build — Milestone 5: R built by `zig build` alone
 
-**Status (2026-07-23): stop line reached.** `pixi run zig-build` builds a
-complete slim R on linux-64 with no autoconf and no make — 152 zig build
-steps, smoke test green against the produced prefix
-(dist/R-4.6.1-slim-zig), file layout within 1 deliberate file of the
-make-installed tree (bin/libtool). See TODO.md for what's done, the known
-deltas, and what's out of scope for this branch.
+**Status (2026-07-24): finalization phases F1–F4 all green on linux-64.**
+`pixi run zig-build` (slim), `-e full`, and `-e openblas` each build a
+complete R with no autoconf and no make; each passes make-check-equivalent
+regression tests, the Rcpp/data.table/minqa contract test, and the
+existing stage.sh/package-standalone.sh/verify-bundle.sh distribution
+pipeline unchanged, and a CI job matrixes all three. File layout is within
+1 deliberate file of the make-installed tree (bin/libtool). See
+FINALIZATION.md for the phase-by-phase spec and status, and TODO.md for
+exact bugs found/fixed and verification detail. F5 (macOS) and F6
+(Windows) — the remaining phases — need real remote test hardware
+(omicron/kappa) and are picked up separately.
 
 ## Goal
 
 Replace autoconf + make (and eventually gnuwin32) with a single `build.zig`
-so the R build graph is owned by one tool. Scope for this feature branch:
-**a full working slim-variant R on linux-64, built end-to-end by
-`zig build`, passing the existing smoke test** — no `configure`, no `make`.
-Ports to macOS/Windows and the full variant come after this proves out.
+so the R build graph is owned by one tool. Original scope for this
+feature branch: **a full working slim-variant R on linux-64, built
+end-to-end by `zig build`, passing the existing smoke test** — no
+`configure`, no `make`. That stop line was reached 2026-07-23; the branch
+then continued through finalization (see FINALIZATION.md) and now also
+covers the full variant, the openblas flavor, and CI/distribution
+integration, all on linux-64. Ports to macOS/Windows are the remaining
+work (F5/F6).
 
 Dependencies still come from conda-forge through pixi (that is the point of
 the project, not a compromise): third-party libs (cairo, pcre2, icu, …),

@@ -260,9 +260,49 @@ a carried-forward gotcha catalog.
       `libopenblasp-r0.3.34.so`, not a hardcoded string) → contract →
       zig-check, all green on the first real attempt; re-verified slim
       (internal BLAS) has zero regressions after the refactor.
-- [ ] **F4.1** stage.sh/package/verify-bundle green on zig prefix
-      (adversarial moved-tree test)
-- [ ] **F4.2** CI `zig-build` leg (linux-64)
+- [x] **F4.1** stage.sh/package/verify-bundle green on zig prefix
+      (2026-07-24): all three scripts ran completely unchanged against the
+      zig-built prefix via the existing `R_INSTALL_PREFIX` override
+      (`scripts/env.sh` already derives `PREFIX`/`R_HOME_DIR` from it —
+      the same mechanism `R_TEST_R_BIN` uses for smoke/contract). One real
+      gotcha, not a build.zig bug: `zig-build.sh`'s default prefix is
+      `dist/R-<ver>-<flavor>-zig` (the `-zig` suffix that lets it coexist
+      with an autoconf build of the same flavor), but
+      `package-standalone.sh`'s final `tar -C "$ROOT/dist" "R-$R_VERSION-
+      $FLAVOR"` hardcodes the *directory's basename* to match — it doesn't
+      go through `$PREFIX`, so a `-zig`-suffixed prefix produces "tar:
+      R-4.6.1-slim: Cannot stat: No such file or directory". Not a bug to
+      fix now (the suffix is exactly the transitional coexistence
+      mechanism these scripts don't need to know about); worked around by
+      pointing `R_INSTALL_PREFIX` at the unsuffixed name for this
+      verification pass. Once the zig path retires autoconf (the "Final"
+      item below), dropping the suffix makes this a non-issue permanently.
+      Ran the full adversarial standard beyond `verify-bundle.sh`'s own
+      (solve + capabilities) check: extracted the packaged tarball to a
+      fresh `/tmp` dir, **deleted the original** staged tree, then with
+      `env -i PATH=/usr/bin:/bin` (no conda env, no pixi) verified `print
+      (base::Sys.which)` shows the dynamic `R.home()`-relative expression
+      (the canonical tell), `library(utils)` loads, and a real cairo PNG
+      renders. `R CMD SHLIB` on a fresh `.c` file correctly fails with
+      `zig` off PATH (documented, deliberate: package compilation needs
+      zig, the one external-tool contract — never vendored) and
+      succeeds — compiling, `dyn.load`, and `.Call` all correct — once
+      zig's directory alone is added back to the otherwise-scrubbed PATH.
+- [x] **F4.2** CI `zig-build` leg (2026-07-24): new `build-zig` job in
+      `.github/workflows/build.yml`, matrixed over `default`/`full`/
+      `openblas` on ubuntu-latest, beside (not replacing) the autoconf
+      `build` job. Runs `zig-build` → `zig-smoke` → `zig-contract` →
+      `zig-check`. Two new tiny pixi tasks/scripts (`zig-smoke`,
+      `zig-contract`, mirroring `scripts/zig-build.sh`'s own prefix
+      derivation via `env.sh`'s `$FLAVOR`) so the workflow doesn't need to
+      compute the `dist/R-<ver>-<flavor>-zig` path itself — same pattern
+      `zig-build`/`zig-check` already established. Verified all three new
+      tasks work locally (`pixi run zig-smoke`, `pixi run zig-contract`);
+      the workflow YAML itself validated (`yaml.safe_load`) but **not
+      observed running on an actual GitHub Actions runner** — this
+      session has no way to push/trigger CI, so treat the job definition
+      as reviewed-and-locally-equivalent, not CI-green, until it runs for
+      real on the next push.
 - [ ] **F5.1** macOS compile graph (gfortran, -O1 cap, vendored osx config,
       fd ulimit)
 - [ ] **F5.2** macOS Mach-O relocation + ad-hoc codesign; omicron green
@@ -322,11 +362,19 @@ a carried-forward gotcha catalog.
 - [x] `make check` (R regression suite) parity vs the autoconf build
       (2026-07-24, see F1.1 above — Phase F1, the finalization trust bar,
       is now fully green)
-- [ ] full variant (-Dvariant=full): tcltk/readline/NLS/jpeg/tiff
-- [ ] openblas flavor (-Dblas=openblas)
+- [x] full variant (-Dvariant=full): tcltk/readline/NLS/jpeg/tiff
+      (2026-07-24, see F3.1 above)
+- [x] openblas flavor (-Dblas=openblas) (2026-07-24, see F3.2 above)
 - [ ] macOS (gfortran table entry, Mach-O/codesign handling in zig build)
-- [ ] Windows (replaces gnuwin32 — the big prize)
-- [ ] `zig build fetch` (retire fetch-r.sh)
-- [ ] config.h regeneration procedure doc + version-mismatch guard
-- [ ] Wire `pixi run zig-build` into CI next to the autoconf path;
-      autoconf path retires only after check parity on all platforms
+      — F5, needs omicron (real hardware) access
+- [ ] Windows (replaces gnuwin32 — the big prize) — F6, needs kappa (real
+      hardware) access
+- [ ] `zig build fetch` (retire fetch-r.sh) — not attempted; still a real
+      gap, low priority (fetch-r.sh is a one-line curl+checksum, no
+      correctness risk in leaving it as-is)
+- [x] config.h regeneration procedure doc + version-mismatch guard
+      (2026-07-24, see F2.1 above)
+- [x] Wire `pixi run zig-build` into CI next to the autoconf path
+      (2026-07-24, see F4.2 above — `build-zig` job in build.yml; not yet
+      confirmed on a real Actions run). Autoconf/gnuwin32 still retire only
+      after F1-F6 are green on all platforms (F5/F6 remain).

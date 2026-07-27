@@ -1,23 +1,34 @@
 //! Build R with `zig build` — no autoconf, no make (Milestone 5).
 //!
 //! The build graph replicates what R 4.6.1's configure+make pipeline does on
-//! linux-64 with the slim profile (see .github/devdocs/feat-zig-build/):
-//!   1. configure results are replayed from a vendored per-platform config
-//!      (zigbuild/config/<plat>/: config.h, Rconfig.h, subst.txt — the
-//!      S-table dumped from a known-good config.status run),
+//! linux-64 (see .github/devdocs/feat-zig-build/, FINALIZATION.md for phase
+//! status — F1-F4 done, F5/F6 macOS/Windows ports remain):
+//!   1. configure results are replayed from a vendored per-(platform,variant)
+//!      config (zigbuild/config/<plat>-<variant>/: config.h, Rconfig.h,
+//!      subst.txt — the S-table dumped from a known-good config.status run;
+//!      slim and full are separate dirs since capabilities are compile-time),
 //!   2. C compiles natively through zig's Compile steps (zig cc semantics:
 //!      -fno-sanitize=undefined, -std=gnu23), Fortran through flang Run
 //!      steps (zig has no Fortran frontend),
 //!   3. the R-level base-package bootstrap (share/make/basepkg.mk logic)
 //!      runs as a sequenced chain of Run steps invoking the freshly built R.
 //!
-//! Prerequisites: run inside the pixi env (`pixi run zig-build`) with the R
+//! Two independent build options select the profile:
+//!   -Dvariant=slim|full  (default slim) — tcltk/readline/NLS/jpeg/tiff;
+//!      a real second configure profile (own vendored config dir), not a
+//!      flag toggle, since these are compile-time capabilities in R.
+//!   -Dblas=internal|openblas  (default internal) — orthogonal to variant;
+//!      a pure link-time swap (R calls BLAS/LAPACK through a fixed
+//!      Fortran ABI either way), so no separate vendored config needed.
+//!
+//! Prerequisites: run inside the pixi env (`pixi run zig-build`, or
+//! `pixi run -e full`/`-e openblas` for the other profiles) with the R
 //! source tree fetched at build/R-<version> (`pixi run fetch`).
 //!
 //! Everything installs directly into the final prefix (zig build --prefix):
 //! <prefix>/lib/R is R_HOME, <prefix>/bin holds the launchers — the same
 //! layout make install produces, so stage.sh/package-standalone.sh work
-//! downstream unchanged.
+//! downstream unchanged (verified F4.1).
 
 const std = @import("std");
 const rspec = @import("zigbuild/rspec.zig");
