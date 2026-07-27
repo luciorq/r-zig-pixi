@@ -9,7 +9,9 @@
 . "$(dirname "$0")/env.sh"
 
 if [ "$OS" = windows ]; then
-  R_BIN="$SRC_DIR/bin/x64/Rscript.exe"
+  # R_TEST_R_BIN: test a different build's Rscript.exe (e.g. the zig-build
+  # prefix's) instead of the in-tree gnuwin32 default.
+  R_BIN="${R_TEST_R_BIN:-$SRC_DIR/bin/x64/Rscript.exe}"
   test -x "$R_BIN" || R_BIN="$SRC_DIR/bin/Rscript.exe"
   # package builds read CC=gcc etc from etc/x64/Makeconf — the zig shim
   # names must be on PATH, as during the gnuwin32 build

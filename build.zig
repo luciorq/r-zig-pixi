@@ -39,11 +39,15 @@ const rspec = @import("zigbuild/rspec.zig");
 
 const r_version = "4.6.1";
 
-/// F5: linux uses flang + ELF (.so/DT_NEEDED/RUNPATH); macOS uses gfortran
-/// + Mach-O (.dylib/install_name/@rpath — patchelf doesn't apply at all,
-/// and per FINALIZATION.md F5.2 all Mach-O rpath/codesign surgery is left
-/// to stage.sh, not duplicated here).
-const Os = enum { linux, macos };
+/// F5/F6: linux uses flang + ELF (.so/DT_NEEDED/RUNPATH); macOS uses
+/// gfortran + Mach-O (.dylib/install_name/@rpath — patchelf doesn't apply
+/// at all, and per FINALIZATION.md F5.2 all Mach-O rpath/codesign surgery
+/// is left to stage.sh, not duplicated here); windows uses MinGW gfortran
+/// + PE/COFF (.dll, no "lib" prefix on R's own core libs — see
+/// FINALIZATION.md F6.0/F6.1a for the CLI-only scoping decision: no
+/// Rgui.exe/Rterm.exe/R.exe/Rcmd.exe, just R.dll+Rblas.dll+Rlapack.dll+
+/// Rgraphapp.dll+Riconv.dll+Rscript.exe).
+const Os = enum { linux, macos, windows };
 
 /// Capabilities (tcltk/readline/NLS/jpeg/tiff) are compile-time in R, so
 /// slim vs full is a genuine second configure profile — its own vendored
@@ -73,6 +77,7 @@ const Ctx = struct {
     prefix: []const u8, // absolute install prefix
     rhome: []const u8, // prefix ++ "/lib/R"
     flangrt_dir: []const u8, // conda clang resource dir with libflang_rt (linux only)
+    gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran/libquadmath (windows only)
     subst: std.StringHashMap([]const u8),
     geninc: std.Build.LazyPath, // generated headers dir (config.h, Rconfig.h, ...)
     libR: *std.Build.Step.Compile,
@@ -121,18 +126,30 @@ pub fn build(b: *std.Build) !void {
         return error.MissingRSource;
     };
 
-    const variant = b.option(Variant, "variant", "R build variant: slim (default) or full") orelse .slim;
+    var variant = b.option(Variant, "variant", "R build variant: slim (default) or full") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
 
-    const target = b.resolveTargetQuery(.{});
-    const os: Os = switch (target.result.os.tag) {
+    const native = b.resolveTargetQuery(.{});
+    const os: Os = switch (native.result.os.tag) {
         .linux => .linux,
         .macos => .macos,
+        .windows => .windows,
         else => {
-            std.debug.print("error: unsupported target OS '{s}' (only linux and macos are supported so far)\n", .{@tagName(target.result.os.tag)});
+            std.debug.print("error: unsupported target OS '{s}' (only linux, macos, and windows are supported so far)\n", .{@tagName(native.result.os.tag)});
             return error.UnsupportedOS;
         },
     };
+    // On real Windows hardware, native target resolution defaults to the
+    // MSVC ABI — this whole toolchain (conda-forge MinGW gfortran,
+    // x86_64-w64-mingw32-* binutils, .dll.a import libraries) is built on
+    // the GNU/MinGW ABI instead (matches the existing toolchain/zig-cc
+    // shim's own `-target x86_64-windows-gnu`), so re-resolve explicitly.
+    const target = if (os == .windows) b.resolveTargetQuery(.{ .abi = .gnu }) else native;
+    // gnuwin32 has no slim/full switch at all (jpeg/tiff/tcltk are always
+    // on — "slim==full on Windows", a pre-existing project convention);
+    // -Dvariant is meaningless there, force .full regardless of what was
+    // passed rather than silently building something that doesn't exist.
+    if (os == .windows) variant = .full;
     const arch_str = switch (target.result.cpu.arch) {
         .x86_64 => "x86_64",
         .aarch64 => "arm64",
@@ -144,12 +161,24 @@ pub fn build(b: *std.Build) !void {
     const platform = switch (os) {
         .linux => b.fmt("linux-{s}", .{arch_str}),
         .macos => b.fmt("osx-{s}", .{arch_str}),
+        .windows => b.fmt("win-{s}", .{arch_str}),
     };
     const dylib_ext = switch (os) {
         .linux => ".so",
         .macos => ".dylib",
+        .windows => ".dll",
     };
     const config_dir = b.fmt("zigbuild/config/{s}-{s}", .{ platform, @tagName(variant) });
+
+    // R_HOME: <prefix>/lib/R on unix. On Windows this MUST NOT be "lib/R"
+    // — NTFS case-folds it into a conda/pixi env's own "Lib" (Python's
+    // stdlib), silently dumping R's tree inside site-packages and off
+    // PATH entirely (same bug class scripts/env.sh already works around
+    // for the autoconf/gnuwin32 path — see FINALIZATION.md F6.2).
+    const rhome = switch (os) {
+        .windows => b.fmt("{s}/Library/lib/R", .{b.install_prefix}),
+        else => b.fmt("{s}/lib/R", .{b.install_prefix}),
+    };
 
     var ctx = Ctx{
         .b = b,
@@ -162,8 +191,9 @@ pub fn build(b: *std.Build) !void {
         .src_abs = src_abs,
         .src = b.path(src_rel),
         .prefix = b.install_prefix,
-        .rhome = b.fmt("{s}/lib/R", .{b.install_prefix}),
+        .rhome = rhome,
         .flangrt_dir = if (os == .linux) try findFlangRt(b, io, conda) else "",
+        .gfortran_lib_dir = if (os == .windows) try findGfortranLibDir(b, io, conda) else "",
         .subst = std.StringHashMap([]const u8).init(arena),
         .geninc = undefined,
         .libR = undefined,
@@ -172,6 +202,17 @@ pub fn build(b: *std.Build) !void {
     };
 
     try checkConfigFreshness(b, io, config_dir);
+
+    // Windows (F6): gnuwin32's build is structurally different enough
+    // (no config.status, no shell launchers, mutual-DLL linking) that
+    // threading it through the unix/macOS pipeline below would risk the
+    // two already-proven platforms. Branch early into a fully separate
+    // implementation instead — see FINALIZATION.md F6 for the ground-
+    // truth extraction and F6.0 for the CLI-only scoping decision this
+    // implements (R.dll+Rblas.dll+Rlapack.dll+Rgraphapp.dll+Riconv.dll+
+    // Rscript.exe only, no Rgui.exe/Rterm.exe/R.exe/Rcmd.exe).
+    if (os == .windows) return buildWindows(&ctx, io);
+
     try loadSubstTable(&ctx, io, config_dir);
 
     // ------------------------------------------------------------------
@@ -482,6 +523,328 @@ pub fn build(b: *std.Build) !void {
 }
 
 // ----------------------------------------------------------------------
+// Windows (F6): R.dll + Rblas.dll + Rlapack.dll + Rgraphapp.dll +
+// Riconv.dll + Rscript.exe only — see FINALIZATION.md F6.0 (scoping
+// decision) and F6.1a (ground-truth file lists, extracted from kappa's
+// own already-built gnuwin32 objdir, not guessed from Makefiles).
+// ----------------------------------------------------------------------
+
+fn buildWindows(ctx: *Ctx, io: std.Io) !void {
+    const b = ctx.b;
+    const arena = b.allocator;
+
+    // No config.status on Windows — gnuwin32 ships static, ready-made
+    // config.h/Rconfig.h (not autoconf templates). Only a handful of
+    // @VAR@ tokens exist at all (found by grepping the vendored file
+    // directly, not assumed): CC_VER/FC_VER/VERSION in config.h,
+    // PACKAGE_VERSION/RMATH_HAVE_WORKING_LOG1P in Rmath.h0.in.
+    try ctx.subst.put("VERSION", r_version);
+    try ctx.subst.put("PACKAGE_VERSION", r_version);
+    try ctx.subst.put("CC_VER", "zig cc (LLVM/clang, MinGW target)");
+    try ctx.subst.put("FC_VER", "gfortran (conda-forge, MinGW target)");
+    try ctx.subst.put("RMATH_HAVE_WORKING_LOG1P", "# define HAVE_WORKING_LOG1P 1");
+
+    const geninc = b.addWriteFiles();
+    {
+        const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot("zigbuild/config/win-x86_64-full/config.h"), b.allocator, .limited(4 * 1024 * 1024));
+        _ = geninc.add("config.h", try substitute(ctx, raw));
+    }
+    _ = geninc.addCopyFile(b.path("zigbuild/config/win-x86_64-full/Rconfig.h"), "Rconfig.h");
+    _ = geninc.add("Rversion.h", try genRversionH(ctx, io));
+    _ = geninc.add("Rmath.h", try substFile(ctx, io, "src/include/Rmath.h0.in"));
+    ctx.geninc = geninc.getDirectory();
+
+    // ------------------------------------------------------------------
+    // Fortran: BLAS (internal only — no ATLAS/OpenBLAS on Windows yet)
+    // and LAPACK (dlapack.f is one aggregated file, unlike unix's
+    // per-routine split; the la_constants->la_xisnan module chain is the
+    // one place Windows' LAPACK layout still matches unix's shape).
+    // ------------------------------------------------------------------
+    const blas_f = fortranGroup(ctx, "src/extra/blas", &rspec.win_blas_f, &.{});
+    const blas_f90 = fortranGroup(ctx, "src/extra/blas", &rspec.win_blas_f90, &.{});
+
+    var lapack_mods = std.ArrayList(std.Build.LazyPath).empty;
+    var lapack_objs = std.ArrayList(std.Build.LazyPath).empty;
+    for (rspec.win_lapack_f90_ordered) |f| {
+        const r = fortranOne(ctx, "src/modules/lapack", f, lapack_mods.items);
+        try lapack_objs.append(arena, r.obj);
+        try lapack_mods.append(arena, r.mods);
+    }
+    for (rspec.win_lapack_f) |f| {
+        const r = fortranOne(ctx, "src/modules/lapack", f, lapack_mods.items);
+        try lapack_objs.append(arena, r.obj);
+    }
+    const r_appl_f = fortranGroup(ctx, "src/appl", &rspec.appl_f, &.{});
+    const r_xxxpr_f = fortranGroup(ctx, "src/main", &.{"xxxpr.f"}, &.{});
+
+    // ------------------------------------------------------------------
+    // R.dll's core object set: reused unix groups (main/appl/nmath/xdr/
+    // tzone/tre — identical sources, just compiled for the MinGW target)
+    // plus the Windows-only groups (F6.0: required, not prunable —
+    // gnuwin32 built R.dll as one monolithic library with the console/
+    // GUI plumbing and NLS baked in as required compile units).
+    // ------------------------------------------------------------------
+    const r_core_mod = newCMod(ctx);
+    r_core_mod.addIncludePath(ctx.geninc);
+    r_core_mod.addIncludePath(ctx.path("src/include"));
+    const dll_build = "-DR_DLL_BUILD";
+    addCGroup(ctx, r_core_mod, "src/main", &rspec.main_c, .{
+        .extra = &.{ "-I%S/src/extra", "-I%S/src/extra/xdr", "-I%S/src/nmath", dll_build },
+    });
+    addCGroup(ctx, r_core_mod, "src/appl", &rspec.appl_c, .{ .extra = &.{dll_build} });
+    addCGroup(ctx, r_core_mod, "src/nmath", &rspec.nmath_c, .{ .extra = &.{dll_build} });
+    addCGroup(ctx, r_core_mod, "src/extra/tre", &rspec.tre_c, .{
+        .extra = &.{ "-I%S/src/extra", dll_build },
+    });
+    addCGroup(ctx, r_core_mod, "src/extra/tzone", &rspec.tzone_c, .{
+        .extra = &.{ "-I%S/src/extra/tzone", "-I%S/src/main", dll_build },
+    });
+    addCGroup(ctx, r_core_mod, "src/extra/xdr", &rspec.xdr_c, .{
+        .extra = &.{ "-I%S/src/extra/xdr", dll_build },
+    });
+    addCGroup(ctx, r_core_mod, "src/gnuwin32", &rspec.win_gnuwin32_c, .{
+        .extra = &.{ "-I%S/src/gnuwin32", "-I%S/src/extra", dll_build },
+    });
+    addCGroup(ctx, r_core_mod, "src/extra/intl", &rspec.win_intl_c, .{
+        .extra = &.{ "-DIN_LIBINTL", "-DLOCALEDIR=\"\"" },
+    });
+    addCGroup(ctx, r_core_mod, "src/extra/trio", &rspec.win_trio_c, .{
+        .extra = &.{ "-I%S/src/main", "-DTRIO_FEATURE_WIDECHAR=1" },
+    });
+    for (r_appl_f) |o| r_core_mod.addObjectFile(o);
+    for (r_xxxpr_f) |o| r_core_mod.addObjectFile(o);
+
+    // Break the R.dll<->Rblas.dll/Rgraphapp.dll mutual dependency the way
+    // gnuwin32's own make build does — a `.dll.a` import stub generated
+    // *before* R.dll itself is linked. Unlike gnuwin32 (which derives the
+    // stub from R.dll's real, fully-compiled objects), ours is a small,
+    // hand-written, independent stub: zig's COFF backend can't merge many
+    // objects into one the way `nm $(LIBOBJECTS)` needs (`error: coff
+    // does not support linking multiple objects into one`, found from a
+    // real build attempt), so compiling R's actual ~150 source files just
+    // to extract a symbol list isn't viable. Instead: the exact symbol
+    // set was read directly off kappa's own working reference DLLs via
+    // `objdump -p` (not guessed) — Rblas.dll imports only `fprintf`/
+    // `vfprintf`/`xerbla_` from R.dll; Rgraphapp.dll imports
+    // R_ContinueUnwind/R_MakeUnwindCont/R_NilValue/R_ShowMessage/
+    // R_UnwindProtect/Rf_mbrtowc/Rf_protect/Rf_strchr/Rf_unprotect/
+    // Rf_utf8towcs/libintl_dgettext/libintl_gettext/localeCP. The stub's
+    // bodies are never actually executed: Windows' loader binds against
+    // whatever DLL genuinely exports each name at load time (the real
+    // R.dll, built last, below) — this stub only needs to exist long
+    // enough to satisfy the *linker* when Rblas.dll/Rgraphapp.dll are
+    // built, matching name-for-name, not by real implementation.
+    const r_stub_mod = newCMod(ctx);
+    const stub_wf = b.addWriteFiles();
+    const stub_c = stub_wf.add("r_stub.c",
+        \\typedef struct SEXPREC *SEXP;
+        \\int fprintf(void *stream, const char *fmt, ...) { return 0; }
+        \\int vfprintf(void *stream, const char *fmt, void *ap) { return 0; }
+        \\void xerbla_(const char *srname, int *info) {}
+        \\void *R_ContinueUnwind(void *cont) { return 0; }
+        \\void *R_MakeUnwindCont(void) { return 0; }
+        \\SEXP R_NilValue;
+        \\void R_ShowMessage(const char *s) {}
+        \\void *R_UnwindProtect(void *fun, void *data, void *cleanfun, void *cleandata, void *cont) { return 0; }
+        \\unsigned long Rf_mbrtowc(void *wc, const char *s, unsigned long n, void *ps) { return 0; }
+        \\SEXP Rf_protect(SEXP x) { return x; }
+        \\char *Rf_strchr(const char *s, int c) { return 0; }
+        \\void Rf_unprotect(int n) {}
+        \\unsigned long Rf_utf8towcs(void *wc, const char *s, unsigned long n) { return 0; }
+        \\char *libintl_dgettext(const char *domainname, const char *msgid) { return (char *)msgid; }
+        \\char *libintl_gettext(const char *msgid) { return (char *)msgid; }
+        \\unsigned int localeCP(void) { return 0; }
+        \\
+    );
+    r_stub_mod.addCSourceFile(.{ .file = stub_c, .flags = &.{"-std=gnu23"} });
+    const r_stub_obj = b.addObject(.{ .name = "R_stub", .root_module = r_stub_mod });
+    const r_stub = winMakeImportStub(ctx, r_stub_obj.getEmittedBin(), "R.dll", "R_stub_lib");
+
+    // ------------------------------------------------------------------
+    // Rblas.dll — links against the R.dll stub for `xerbla_`/fprintf/
+    // vfprintf. unix/macOS never need this because ELF/Mach-O tolerate
+    // the symbol staying unresolved until runtime, when libR is already
+    // loaded; PE/COFF does not.
+    // ------------------------------------------------------------------
+    const rblas_mod = newCMod(ctx);
+    for (blas_f) |o| rblas_mod.addObjectFile(o);
+    for (blas_f90) |o| rblas_mod.addObjectFile(o);
+    rblas_mod.addObjectFile(r_stub);
+    linkFortranRt(ctx, rblas_mod);
+    const rblas = addSharedLib(ctx, "Rblas", rblas_mod);
+
+    // ------------------------------------------------------------------
+    // Rlapack.dll — one-directional (needs R.dll + Rblas.dll, but R.dll
+    // does not link Rlapack back), so it also needs the stub (for the
+    // same fprintf/vfprintf/xerbla_ trio, transitively via R.dll's ABI).
+    // ------------------------------------------------------------------
+    const rlapack_mod = newCMod(ctx);
+    for (lapack_objs.items) |o| rlapack_mod.addObjectFile(o);
+    rlapack_mod.addObjectFile(r_stub);
+    rlapack_mod.linkLibrary(rblas);
+    linkFortranRt(ctx, rlapack_mod);
+    const rlapack = addSharedLib(ctx, "Rlapack", rlapack_mod);
+
+    // modules/lapack.dll (the loadable module, unix's mod_lapack
+    // equivalent) — just Lapack.c; "flexiblas not supported on Windows"
+    // per Makefile.win, so no flexiblas.c counterpart here.
+    const lapmod = newCMod(ctx);
+    lapmod.addIncludePath(ctx.geninc);
+    lapmod.addIncludePath(ctx.path("src/include"));
+    addCGroup(ctx, lapmod, "src/modules/lapack", &rspec.win_lapack_module_c, .{});
+    lapmod.linkLibrary(rlapack);
+    lapmod.linkLibrary(rblas);
+    lapmod.addObjectFile(r_stub);
+    linkFortranRt(ctx, lapmod);
+    const mod_lapack = addSharedLib(ctx, "mod_lapack", lapmod);
+
+    // ------------------------------------------------------------------
+    // Rgraphapp.dll — full Win32 GUI-widget toolkit, required link-time
+    // dependency of R.dll (F6.0), not exercised at runtime by Rscript.exe.
+    // Also needs the R.dll stub (mutual dependency, same as Rblas.dll).
+    // ------------------------------------------------------------------
+    const graphapp_mod = newCMod(ctx);
+    // graphapp's own internal.h must resolve before R's src/include/
+    // internal.h (a same-named but unrelated file). Module-level
+    // addIncludePath entries precede per-source-file "extra" cflags in the
+    // actual compile invocation, so reordering only within addCGroup's
+    // `extra` list (tried first) had no effect — graphapp's own dir has to
+    // be added as a module include path here, before src/include, to
+    // actually win the search order. Found via a real build error: gif.c's
+    // `#include <internal.h>` was silently resolving to the wrong file.
+    graphapp_mod.addIncludePath(ctx.path("src/extra/graphapp"));
+    graphapp_mod.addIncludePath(ctx.geninc);
+    graphapp_mod.addIncludePath(ctx.path("src/include"));
+    addCGroup(ctx, graphapp_mod, "src/extra/graphapp", &rspec.win_graphapp_c, .{
+        .extra = &.{ "-I%S/src/gnuwin32", "-DGA_DLL_BUILD", "-DENABLE_NLS=1" },
+    });
+    graphapp_mod.addObjectFile(r_stub);
+    // gnuwin32's own Makefile.win link line is just
+    // `-lR -lole32 -luuid -lcomctl32 -limm32 -lmsimg32` — it never mentions
+    // gdi32/user32/comdlg32 because gcc's `-mwindows` implicitly pulls those
+    // in via its default MinGW subsystem spec. zig cc/lld does not replicate
+    // that implicit linking, so they must be listed explicitly here (found
+    // via real link errors: gdi32 for CreateBitmap/SelectObject/etc.,
+    // comdlg32 for the common-dialog APIs in dialogs.c/printer.c/init.c
+    // — GetOpenFileNameA, PrintDlgA, FindTextA, GetFileTitleA, ...).
+    for ([_][]const u8{ "gdi32", "user32", "comdlg32", "ole32", "uuid", "comctl32", "imm32", "msimg32" }) |lib|
+        graphapp_mod.linkSystemLibrary(lib, .{ .use_pkg_config = .no });
+    const rgraphapp = addSharedLib(ctx, "Rgraphapp", graphapp_mod);
+
+    // ------------------------------------------------------------------
+    // Riconv.dll — R's own bundled iconv (independent, no R.dll
+    // dependency at all).
+    // ------------------------------------------------------------------
+    const iconv_mod = newCMod(ctx);
+    // win_iconv.c does `#define BUILDING_LIBICONV` then `#include <iconv.h>`,
+    // expecting R's OWN bundled fixed/h/iconv.h (which declares the matching
+    // prototypes for BUILDING_LIBICONV) — not conda-forge's libiconv header,
+    // which conflicts (`#if 0 && BUILDING_LIBICONV` parse error, clashing
+    // `iconv`/`libiconv` macro). Same include-shadowing class of bug as
+    // graphapp's internal.h: R's own dir must win, so list it before the
+    // conda include path (found via a real compile error).
+    iconv_mod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
+    iconv_mod.addIncludePath(ctx.geninc);
+    iconv_mod.addIncludePath(ctx.path("src/include"));
+    addCGroup(ctx, iconv_mod, "src/extra/win_iconv", &rspec.win_iconv_c, .{});
+    const riconv = addSharedLib(ctx, "Riconv", iconv_mod);
+
+    // ------------------------------------------------------------------
+    // The real R.dll: r_core_mod's sources, linked for real against
+    // Rblas.dll/Rgraphapp.dll/Riconv.dll (R-DLLLIBS from
+    // src/gnuwin32/Makefile) — no stub involved here, this is the DLL
+    // that actually gets loaded at runtime and genuinely exports every
+    // symbol the stub only pretended to.
+    // ------------------------------------------------------------------
+    const r_final_mod = r_core_mod;
+    r_final_mod.linkLibrary(rblas);
+    r_final_mod.linkLibrary(rgraphapp);
+    r_final_mod.linkLibrary(riconv);
+    // gdi32/user32 not in gnuwin32's own R-DLLLIBS either, for the same
+    // implicit-gcc-`-mwindows`-linking reason as Rgraphapp.dll above — R.dll's
+    // own gnuwin32 sources (console.c, rui.c, run.c, ...) call Win32 GUI APIs
+    // directly and need them listed explicitly under zig cc/lld.
+    // "libbz2" not "bz2": conda-forge's Windows import lib is named
+    // libbz2.lib (matching its unix lib*.a convention) rather than bz2.lib,
+    // so zig's dynamic-lookup naming (which tries {name}.lib, not
+    // lib{name}.lib) misses it under the plain "bz2" name — found via a real
+    // link error.
+    for ([_][]const u8{ "gdi32", "user32", "comctl32", "ole32", "uuid", "winmm", "version", "deflate", "pcre2-8", "z", "libbz2", "lzma", "zstd" }) |lib|
+        r_final_mod.linkSystemLibrary(lib, .{ .use_pkg_config = .no });
+    linkFortranRt(ctx, r_final_mod);
+    // No Windows compile group currently sets `.openmp = true` (appl_c/
+    // nmath_c above omit it, unlike the unix pipeline), so nothing emits
+    // -fopenmp or references libomp/libgomp symbols yet — linking it here
+    // was speculative copy-paste from linkOmp's unix use and just breaks the
+    // link (conda-forge ships no LLVM libomp on Windows, only GCC's
+    // libgomp, which isn't ABI-compatible with clang's default OpenMP
+    // codegen anyway). Revisit if/when Windows OpenMP support is added.
+    const libR = addSharedLib(ctx, "R", r_final_mod);
+    ctx.libR = libR;
+    ctx.rblas = rblas;
+    ctx.rlapack = rlapack;
+
+    // ------------------------------------------------------------------
+    // Rscript.exe — the ONLY front-end built (F6.0): same unix/Rscript.c
+    // linux/macOS already use, linked against R.dll/Rgraphapp.dll/shlwapi.
+    // ------------------------------------------------------------------
+    const rscript_mod = newCMod(ctx);
+    rscript_mod.addIncludePath(ctx.geninc);
+    rscript_mod.addIncludePath(ctx.path("src/include"));
+    addCGroup(ctx, rscript_mod, "src/unix", &.{"Rscript.c"}, .{
+        .extra = &.{ctx.absSub("-DR_HOME=\"{s}\"", .{ctx.rhome})},
+    });
+    rscript_mod.linkLibrary(libR);
+    rscript_mod.linkLibrary(rgraphapp);
+    rscript_mod.linkSystemLibrary("shlwapi", .{ .use_pkg_config = .no });
+    const rscript = b.addExecutable(.{ .name = "Rscript", .root_module = rscript_mod });
+
+    // ------------------------------------------------------------------
+    // Install: bin/x64/ is gnuwin32's own arch-specific binary dir
+    // convention (matches smoke-test.sh's existing lookup path).
+    // ------------------------------------------------------------------
+    const bin_dir: std.Build.InstallDir = .{ .custom = "lib/R/bin/x64" };
+    const modules_dir: std.Build.InstallDir = .{ .custom = "lib/R/modules" };
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(libR.getEmittedBin(), bin_dir, "R.dll").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rblas.getEmittedBin(), bin_dir, "Rblas.dll").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rlapack.getEmittedBin(), bin_dir, "Rlapack.dll").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rgraphapp.getEmittedBin(), bin_dir, "Rgraphapp.dll").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(riconv.getEmittedBin(), bin_dir, "Riconv.dll").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_lapack.getEmittedBin(), modules_dir, "lapack.dll").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript.getEmittedBin(), bin_dir, "Rscript.exe").step);
+
+    const top = b.step("r", "Build R.dll+Rblas+Rlapack+Rgraphapp+Riconv+Rscript.exe (Windows, CLI-only — F6.0)");
+    top.dependOn(b.getInstallStep());
+    b.default_step = top;
+}
+
+/// PE/COFF (unlike ELF/Mach-O) refuses to link a DLL with unresolved
+/// symbols, so R.dll's mutual dependency with Rblas.dll/Rgraphapp.dll
+/// needs breaking the same way gnuwin32's own make build does: derive an
+/// import library from the *object file's* exported symbols before the
+/// real DLL exists, exactly mirroring gnuwin32's own Rlapack.def/R.exp
+/// generation (`nm | sed -n <SYMPAT> | sort -u`, then `dlltool`).
+fn winMakeImportStub(ctx: *const Ctx, obj: std.Build.LazyPath, dllname: []const u8, out_stem: []const u8) std.Build.LazyPath {
+    const b = ctx.b;
+    const run = b.addSystemCommand(&.{
+        "sh", "-c",
+        \\set -e
+        \\echo EXPORTS > "$2"
+        \\x86_64-w64-mingw32-nm "$1" | sed -n 's/^[0-9a-fA-F]* [BCDRT] //p' | sort -u >> "$2"
+        \\x86_64-w64-mingw32-dlltool --dllname "$4" --input-def "$2" --output-lib "$3"
+        ,
+        "make-implib",
+    });
+    run.setName(b.fmt("win import stub for {s}", .{dllname}));
+    run.addFileArg(obj);
+    const def = run.addOutputFileArg(b.fmt("{s}.def", .{out_stem}));
+    _ = def;
+    const implib = run.addOutputFileArg(b.fmt("{s}.dll.a", .{out_stem}));
+    run.addArg(dllname);
+    return implib;
+}
+
+// ----------------------------------------------------------------------
 // `zig build check`: R's own regression suite (make check), replayed
 // against the zig-built R the same way `make check` runs it against an
 // autoconf objdir — see FINALIZATION.md phase F1.1.
@@ -571,6 +934,28 @@ fn findFlangRt(b: *std.Build, io: std.Io, conda: []const u8) ![]const u8 {
     return error.FlangRtNotFound;
 }
 
+/// libgfortran.dll.a/libquadmath.dll.a live under $CONDA/Library/lib/gcc/
+/// x86_64-w64-mingw32/<gcc-version>/ (not directly under Library/lib, unlike
+/// most other conda-forge Windows libs) — found via a real link error
+/// ("unable to find dynamic system library 'gfortran'"). Scan for the single
+/// installed gcc version rather than hardcoding it, since it tracks whatever
+/// gcc_impl_win-64/gfortran_win-64 build conda-forge currently ships.
+fn findGfortranLibDir(b: *std.Build, io: std.Io, conda: []const u8) ![]const u8 {
+    const gcc_root = b.fmt("{s}/Library/lib/gcc/x86_64-w64-mingw32", .{conda});
+    var dir = std.Io.Dir.cwd().openDir(io, gcc_root, .{ .iterate = true }) catch {
+        return error.GfortranLibNotFound;
+    };
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (try it.next(io)) |ent| {
+        if (ent.kind != .directory) continue;
+        const cand = b.fmt("{s}/{s}", .{ gcc_root, ent.name });
+        std.Io.Dir.cwd().access(io, b.fmt("{s}/libgfortran.dll.a", .{cand}), .{}) catch continue;
+        return cand;
+    }
+    return error.GfortranLibNotFound;
+}
+
 fn newCMod(ctx: *const Ctx) *std.Build.Module {
     const m = ctx.b.createModule(.{
         .target = ctx.target,
@@ -579,9 +964,20 @@ fn newCMod(ctx: *const Ctx) *std.Build.Module {
         .pic = true,
         .sanitize_c = .off,
     });
-    // LDFLAGS from Makeconf: -L$CONDA/lib -Wl,-rpath,$CONDA/lib on every link
-    m.addLibraryPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
-    m.addRPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
+    // LDFLAGS from Makeconf: -L$CONDA/lib -Wl,-rpath,$CONDA/lib on every
+    // link. On Windows conda-forge libs live under Library/lib (the
+    // conda-forge convention for non-Python Windows content), and rpath
+    // is an ELF/Mach-O concept that doesn't exist for PE — DLL search
+    // there is PATH/same-directory based instead, so skip addRPath.
+    switch (ctx.os) {
+        .windows => {
+            m.addLibraryPath(.{ .cwd_relative = ctx.b.fmt("{s}/Library/lib", .{ctx.conda}) });
+        },
+        else => {
+            m.addLibraryPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
+            m.addRPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
+        },
+    }
     return m;
 }
 
@@ -616,7 +1012,8 @@ fn addCGroup(ctx: *const Ctx, mod: *std.Build.Module, dir: []const u8, files: []
         const f2 = std.mem.replaceOwned(u8, b.allocator, f1, "%C", ctx.conda) catch @panic("OOM");
         flags.append(b.allocator, f2) catch @panic("OOM");
     }
-    flags.append(b.allocator, b.fmt("-I{s}/include", .{ctx.conda})) catch @panic("OOM");
+    const conda_inc = if (ctx.os == .windows) b.fmt("{s}/Library/include", .{ctx.conda}) else b.fmt("{s}/include", .{ctx.conda});
+    flags.append(b.allocator, b.fmt("-I{s}", .{conda_inc})) catch @panic("OOM");
     mod.addCSourceFiles(.{ .root = ctx.path(dir), .files = files, .flags = flags.items });
 }
 
@@ -661,8 +1058,13 @@ fn linkCoreLibs(ctx: *const Ctx, mod: *std.Build.Module) void {
 
 fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {
     // zig cc does -fopenmp codegen but ships no libomp — conda-forge's.
-    mod.addLibraryPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
-    mod.addRPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
+    switch (ctx.os) {
+        .windows => mod.addLibraryPath(.{ .cwd_relative = ctx.b.fmt("{s}/Library/lib", .{ctx.conda}) }),
+        else => {
+            mod.addLibraryPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
+            mod.addRPath(.{ .cwd_relative = ctx.b.fmt("{s}/lib", .{ctx.conda}) });
+        },
+    }
     mod.linkSystemLibrary("omp", .{ .use_pkg_config = .no });
 }
 
@@ -680,6 +1082,21 @@ fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
             mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
         },
         .macos => applyLinkFlags(ctx, mod, ctx.subst.get("FLIBS").?),
+        // No real `configure` capture on Windows (F6) to pull FLIBS from
+        // — conda-forge's MinGW gfortran runtime libs, standard names,
+        // found on the default library search path already set up by
+        // newCMod (Library/lib); unverified against a real config.status,
+        // revisit if link errors surface a different need.
+        .windows => {
+            // libgfortran.dll.a/libquadmath.dll.a (dynamic import stubs for
+            // the real libgfortran-5.dll/libquadmath-0.dll runtime, both
+            // present in Library/bin) live in a gcc-version-specific
+            // subdirectory, not directly on the default Library/lib search
+            // path — add it explicitly (found via a real link error).
+            mod.addLibraryPath(.{ .cwd_relative = ctx.gfortran_lib_dir });
+            mod.linkSystemLibrary("gfortran", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("quadmath", .{ .use_pkg_config = .no });
+        },
     }
 }
 
@@ -746,15 +1163,19 @@ fn fortranOne(ctx: *const Ctx, dir: []const u8, file: []const u8, mod_deps: []co
     // -O1 there, exactly like configure-r.sh's FOPT logic.
     const compiler = switch (ctx.os) {
         .linux => "flang",
-        .macos => "gfortran",
+        .macos, .windows => "gfortran",
     };
+    // Windows' own Makeconf.win default is -O3, but the complex-LAPACK
+    // miscompile risk found on gfortran-darwin is unverified either way
+    // on MinGW gfortran — cautious -O2 for a first working build; revisit
+    // via `make check` (F1.1-equivalent) before trusting -O3 there.
     const opt = switch (ctx.os) {
-        .linux => "-O2",
+        .linux, .windows => "-O2",
         .macos => "-O1",
     };
     const moddir_flag = switch (ctx.os) {
         .linux => "-module-dir",
-        .macos => "-J",
+        .macos, .windows => "-J",
     };
     const run = b.addSystemCommand(&.{ compiler, "-fpic", opt, "-c" });
     run.setName(b.fmt("{s} {s}/{s}", .{ compiler, dir, file }));

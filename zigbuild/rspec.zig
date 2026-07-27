@@ -193,3 +193,86 @@ pub const pkgs_base = [_][]const u8{
     "base", "tools", "utils", "grDevices", "graphics", "stats", "datasets",
     "methods", "grid", "splines", "stats4", "tcltk", "compiler", "parallel",
 };
+
+// ----------------------------------------------------------------------
+// Windows (F6): gnuwin32 has no config.status, so these lists come from
+// a ground-truth extraction off kappa's own already-built gnuwin32
+// objdir (see FINALIZATION.md F6.1a) — Makefile.win SOURCES/OBJECTS
+// variables read directly, not guessed. Per F6.0's CLI-only scoping
+// decision, only what R.dll/Rblas.dll/Rlapack.dll/Rgraphapp.dll/
+// Riconv.dll/Rscript.exe need — no Rgui.exe/Rterm.exe/Rcmd.exe/etc.
+// main_c/appl_c/nmath_c/tre_c/tzone_c/xdr_c above are reused as-is —
+// R.dll links the exact same objects unix does for those groups.
+// ----------------------------------------------------------------------
+
+/// src/gnuwin32/*.c — R.dll's own required core (console/GUI plumbing
+/// baked in architecturally, gnuwin32 has no seam to drop it — F6.0).
+pub const win_gnuwin32_c = [_][]const u8{
+    "console.c", "dos_wglob.c", "dynload.c",   "editor.c",
+    "embeddedR.c", "extra.c",   "opt.c",       "pager.c",
+    "preferences.c", "psignal.c", "rhome.c",   "rt_complete.c",
+    "rui.c",     "run.c",       "shext.c",     "sys-win32.c",
+    "system.c",
+};
+
+/// src/extra/graphapp/*.c — Rgraphapp.dll, R.dll's required link-time
+/// dependency (not prunable — F6.0). All files, gnuwin32 has no partial
+/// build (Makefile.win uses `$(wildcard *.c)`).
+pub const win_graphapp_c = [_][]const u8{
+    "arith.c", "array.c", "bitmaps.c", "buttons.c", "clipboard.c",
+    "context.c", "controls.c", "cursors.c", "dialogs.c", "drawing.c",
+    "drawtext.c", "events.c", "fonts.c", "gbuttons.c", "gdraw.c",
+    "gif.c", "gimage.c", "gmenus.c", "image.c", "init.c",
+    "menus.c", "metafile.c", "objects.c", "printer.c", "rgb.c",
+    "status.c", "stdimg.c", "strings.c", "tooltips.c", "windows.c",
+};
+
+/// src/extra/intl/*.c — Windows' own bundled gettext (a third distinct
+/// NLS story: linux gets it free from glibc, macOS needs -lintl +
+/// CoreFoundation, Windows needs this compiled). Exact Makefile.win
+/// SOURCES list — several more .c files exist in the directory
+/// (intl-compat.c, printf-args.c, vasnprintf.c, etc.) but are NOT in
+/// SOURCES and are not compiled (likely #included by printf.c/gettext.c,
+/// matching trio's compat.o/trio.o #include pattern below).
+pub const win_intl_c = [_][]const u8{
+    "bindtextdom.c", "dcgettext.c", "dgettext.c",  "gettext.c",
+    "finddomain.c",  "loadmsgcat.c", "textdomain.c", "l10nflist.c",
+    "explodename.c", "dcigettext.c", "dcngettext.c", "dngettext.c",
+    "ngettext.c",    "plural.c",    "plural-exp.c", "langprefs.c",
+    "localcharset.c", "localename.c", "printf.c",    "osdep.c",
+    "hash-string.c",
+};
+
+/// src/extra/trio/*.c — printf-family replacement MinGW needs. Only 2
+/// files actually compiled; trionan.c/triostr.c are #included by trio.c.
+pub const win_trio_c = [_][]const u8{ "compat.c", "trio.c" };
+
+/// src/extra/win_iconv/*.c — Riconv.dll (R's own bundled iconv; built
+/// from source rather than risking an ABI/symbol mismatch substituting
+/// conda's libiconv, since R.dll calls this specific `Riconv`-prefixed
+/// API — see F6.0).
+pub const win_iconv_c = [_][]const u8{"win_iconv.c"};
+
+/// src/extra/blas/*.{f,f90} — Rblas.dll, internal (non-ATLAS/OpenBLAS)
+/// path only. Far more aggregated than unix's per-routine split.
+pub const win_blas_f = [_][]const u8{ "blas.f", "cmplxblas.f" };
+pub const win_blas_f90 = [_][]const u8{ "blas2.f90", "cmplxblas2.f90" };
+
+/// src/modules/lapack/*.f90 — same la_constants -> la_xisnan module-
+/// dependency chain as unix's rlapack_f90_ordered (this is the one place
+/// Windows' LAPACK layout still matches unix's shape), in compile order.
+pub const win_lapack_f90_ordered = [_][]const u8{
+    "la_constants.f90", "la_xisnan.f90",
+    "dlartg.f90", "dlassq.f90", "zlartg.f90", "zlassq.f90",
+};
+/// src/modules/lapack/*.f — dlapack.f is a single file aggregating what
+/// unix splits across ~15 files; dlamch.f needs -ffloat-store (Makefile.win:
+/// `dlamch-FFLAGS = -ffloat-store`, non-LLVM only) and cmplx.f is the
+/// complex-routines file (same family as the gfortran-darwin miscompile
+/// found on macOS — flag this as unverified-on-Windows, check `make check`
+/// there before trusting complex LAPACK).
+pub const win_lapack_f = [_][]const u8{ "dlamch.f", "dlapack.f", "cmplx.f" };
+/// modules/lapack.dll (the loadable module, unix's mod_lapack equivalent)
+/// is just Lapack.c — "flexiblas not supported on Windows" per
+/// Makefile.win, so no flexiblas.c counterpart here.
+pub const win_lapack_module_c = [_][]const u8{"Lapack.c"};

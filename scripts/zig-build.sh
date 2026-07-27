@@ -4,12 +4,15 @@
 # prefix matches the layout the make-driven pipeline used.
 . "$(dirname "$0")/env.sh"
 
-if [ "$OS" != linux ] && [ "$OS" != macos ]; then
-  echo "zig build path covers linux-64 and macOS so far (Windows is F6, in progress)" >&2
-  exit 1
-fi
 # (macOS fd ulimit for zig's linker opening ~300 libR objects at once is
 # already raised unconditionally by env.sh, sourced above.)
+
+# On Windows, conda-forge's own `zig` is only ever installed as
+# Library/bin/zig.cmd|.bat — native cmd.exe/PowerShell resolve those via
+# PATHEXT automatically, but MSYS bash (what this script runs under) does
+# not, so a bare `zig` fails with "command not found" even though it's on
+# PATH. Same fallback toolchain/zig-cc already uses for the same reason.
+ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
 
 PREFIX_ZIG="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
 
@@ -22,4 +25,4 @@ if [ -f "$sw" ] && ! grep -q 'bin/toolchain/which' "$sw"; then
     "$sw"
 fi
 
-exec zig build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"
+exec "$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"

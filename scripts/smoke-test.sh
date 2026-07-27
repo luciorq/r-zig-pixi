@@ -8,7 +8,9 @@ if [ "$OS" = windows ]; then
   # gnuwin32 builds in-tree; capability profile differs from unix slim
   # (jpeg/tiff/tcltk forced on, no cairo device yet — see TODO.md), so
   # assert numerics + core libs only.
-  R_BIN="$SRC_DIR/bin/x64/Rscript.exe"
+  # R_TEST_R_BIN: test a different build's Rscript.exe (e.g. the zig-build
+  # prefix's) instead of the in-tree gnuwin32 default.
+  R_BIN="${R_TEST_R_BIN:-$SRC_DIR/bin/x64/Rscript.exe}"
   test -x "$R_BIN" || R_BIN="$SRC_DIR/bin/Rscript.exe"
   test -x "$R_BIN" || { echo "error: no built Rscript.exe — run 'pixi run build'" >&2; exit 1; }
   "$R_BIN" --version
