@@ -334,8 +334,22 @@ a carried-forward gotcha catalog.
       `Sys.which` tell, `library(utils)`, a real cairo PNG render, and
       `R CMD SHLIB` + `dyn.load`/`.Call` (correctly failing without zig on
       PATH, succeeding once its dir is added back).
+- [x] **F6.0** scoping decision (2026-07-27): CLI/headless only — build
+      `R.dll`/`Rblas.dll`/`Rlapack.dll`/`Rgraphapp.dll`/`Riconv.dll`/
+      `Rscript.exe`, skip `Rgui.exe`/`Rterm.exe`/`R.exe`/`Rcmd.exe`/
+      `RSetReg.exe`/`open.exe` entirely. Verified (not assumed) against
+      kappa's real gnuwin32 checkout: smoke/contract only ever invoke
+      `Rscript.exe`; package builds go through R-level
+      `tools:::.install_packages()`, not a compiled `Rcmd.exe`.
+      `Rgraphapp.dll` turned out to be a genuine required *link-time* dep
+      of `R.dll` itself (`R-DLLLIBS` in `src/gnuwin32/Makefile`), not
+      prunable GUI-only plumbing — see FINALIZATION.md F6.0 for the full
+      trace (R.dll's own `CSOURCES` bakes in console.c/rui.c/etc as
+      required compile units; only the separate front-end *executables*
+      are droppable, not R.dll's dependency graph).
 - [ ] **F6.1** Windows compile graph (MinGW gfortran, ld-emulation
-      decision, Windows config table)
+      decision — resolved, see FINALIZATION.md F6.1 — Windows config
+      table)
 - [ ] **F6.2** Windows layout (`Library/lib/R`, ICU_PATH) + traps; kappa
       green
 - [ ] **Final**: retire autoconf/gnuwin32 from the default path once all

@@ -430,22 +430,164 @@ F1–F5 are solid, because it's the one place the make build uses a
 `config.status` S-table to vendor — the substitution values must come from
 gnuwin32's `MkRules`/`MkRules.local` instead.
 
+### F6.0 — Scoping decision: CLI/headless only, no GUI front-ends (2026-07-27)
+
+**Decision: build `R.dll` + `Rblas.dll`/`Rlapack.dll` + `Rgraphapp.dll` +
+`Riconv.dll` + `Rscript.exe` only. Do NOT build `Rgui.exe`, `Rterm.exe`,
+the `R.exe`/`Rcmd.exe` dispatchers, `RSetReg.exe`, or `open.exe`.** This
+matches the project's existing `slim` philosophy on linux/macOS (headless,
+CLI-focused, drop interactive-only surface) and was reachable without
+guessing, by checking what the project's own test scripts actually invoke
+on kappa's existing gnuwin32 checkout (not assumed):
+
+- `scripts/smoke-test.sh` and `scripts/contract-test.sh` both hardcode
+  `bin/x64/Rscript.exe` (with a `bin/Rscript.exe` fallback) as `$R_BIN` —
+  neither ever touches `R.exe`, `Rterm.exe`, `Rgui.exe`, or `Rcmd.exe`.
+- Package compilation (what `contract-test.sh` actually exercises —
+  Rcpp/data.table/minqa) is driven by `install.packages()` /
+  `tools:::.install_packages()`, R-level code that calls the configured
+  compiler via `system()` directly. `Rcmd.exe` is a convenience shell
+  substitute for typing `R CMD ...` at a raw `cmd.exe` prompt — package
+  builds never depend on it existing as a binary.
+- The regression suite (`zig-check`) is *our own* harness (F1.1's
+  `addCheckStep`), not gnuwin32's `tests/Makefile.win` — we already choose
+  what "R" means for it (can point at `Rscript.exe --vanilla` directly, no
+  need for a separate `R.exe`).
+
+**What can't be dropped, verified by reading `src/gnuwin32/Makefile`'s
+own `CSOURCES`/`R-DLLLIBS`, not assumed:** `R.dll`'s required source list
+is `console.c dynload.c editor.c embeddedR.c extra.c opt.c pager.c
+preferences.c psignal.c rhome.c rt_complete.c rui.c run.c shext.c
+sys-win32.c system.c dos_wglob.c` — this **includes** `console.c`/
+`editor.c`/`pager.c`/`preferences.c`/`rui.c`/`run.c`, the same files that
+look Rgui-exclusive at a glance. Unlike linux/macOS (where readline/tcltk
+are separable link-time additions to an otherwise self-contained
+`sys-unix.c`), gnuwin32 built `R.dll` as one monolithic library that
+architecturally bakes in the console/GUI plumbing as required compile
+units — there is no source-level slim/full split available *inside*
+`R.dll` itself (matches the pre-existing "slim==full on Windows,
+gnuwin32 has no off-switches" note below, just deeper than previously
+documented). `R.dll`'s own `R-DLLLIBS` also links `-lRgraphapp`
+unconditionally — so `Rgraphapp.dll` (`src/extra/graphapp/`, a `$(wildcard
+*.c)` full Win32 GUI-widget toolkit — buttons/menus/dialogs/tooltips/
+windows, ~30 files, no internal slim switch either) is a genuine, required
+*link-time* dependency of `R.dll`, not optional GUI plumbing we can skip
+building. It is however **not exercised at runtime** by `Rscript.exe`'s
+actual execution path (R.dll's console/window-creation code is simply
+never invoked when driven via `Rscript.exe` with `R_Interactive=FALSE` —
+this is exactly how stock R already behaves: `Rscript.exe` never pops up a
+window today either, on any R distribution).
+
+**Net effect of the decision**: the real simplification is dropping the
+*executables* (`Rgui.exe`/`Rterm.exe`/`R.exe`/`Rcmd.exe`/`RSetReg.exe`/
+`open.exe` and their private objects — `graphappmain.o`, `rgui.o`,
+`rterm.o`, `rcmd.o`, `rcmdfn.o`, icon/manifest resources), not the
+`R.dll`/`Rgraphapp.dll` dependency graph, which must be built in full
+either way. Still a meaningful win: fewer link targets, no resource-file/
+manifest compilation, no `-mwindows` GDI implicit-library handling to
+replicate (that's `Rgui.exe`/`Rterm.exe`-only), smaller final distribution.
+One more small required library found while tracing `R.dll`'s link line:
+`Riconv.dll` (`src/extra/win_iconv/`, R's own bundled iconv — gnuwin32
+predates a good native Windows iconv option; build from source rather than
+risk an ABI/symbol-name mismatch substituting conda's `libiconv`, since
+`R.dll` calls `Riconv`-prefixed symbols matching this specific API, not
+`iconv_open`/`iconv`).
+
+### F6.1a — Ground-truth spec extraction (2026-07-27, from kappa's existing gnuwin32 build)
+
+Before writing new build.zig code, extracted the actual object/source
+list the same rigorous way Milestone 5's original Phase 0 did for linux
+(from a real, already-built objdir — `~/r-zig-pixi/build/R-4.6.1` on
+kappa, a working gnuwin32+zig-cc-shim build from milestone 3, NOT the
+`~/r-zig-pixi-zig-build` dir used for the new zig-native work) — rather
+than hand-parsing gnuwin32's recursive Makefile system (conditionals +
+wildcards make that error-prone without a ground truth to check against).
+
+Per F6.0, only the subset needed for `R.dll` + `Rblas.dll`/`Rlapack.dll` +
+`Rgraphapp.dll` + `Riconv.dll` + `Rscript.exe` matters (skip everything
+private to `Rgui.exe`/`Rterm.exe`/`Rcmd.exe`/`RSetReg.exe`/`open.exe`):
+
+- **`R.dll` core (18 files, gnuwin32-only, no unix equivalent)**:
+  `console.c dynload.c editor.c embeddedR.c extra.c opt.c pager.c
+  preferences.c psignal.c rhome.c rt_complete.c rui.c run.c shext.c
+  sys-win32.c system.c dos_wglob.c` + `dllversion.o` (a compiled Windows
+  resource, not proper C). Confirms F6.0's finding that these are
+  unavoidable, required `R.dll` compile units.
+- **`R.dll` also statically links**: `src/main` (`libmain.a`), `src/appl`
+  (`libappl.a`), `src/nmath` (`libnmath.a`) — **the same source files
+  already in `rspec.main_c`/`appl_c`/`nmath_c`**, just compiled for the
+  MinGW target. Also `src/extra/xdr`, `src/extra/tzone`, `src/extra/tre` —
+  **also already in `rspec.xdr_c`/`tzone_c`/`tre_c`**, reusable as-is.
+  Genuinely new-to-Windows: `src/extra/intl` (21 files — real
+  bundled-gettext implementation; recall F5.1 found macOS needs
+  `-lintl`+CoreFoundation instead, and linux needs neither — Windows is
+  a *third* distinct NLS story, its own compiled library) and
+  `src/extra/trio` (2 files — a `printf`-family replacement library,
+  needed because MinGW's own printf has historically had
+  format/rounding quirks R depends on not matching glibc's).
+- **`Rgraphapp.dll`**: 31 object files, `src/extra/graphapp/*.c`
+  (`$(wildcard)`, no partial-build option — matches F6.0's finding that
+  it can't be selectively pruned).
+- **`Riconv.dll`**: exactly 1 file, `src/extra/win_iconv/win_iconv.o` —
+  small, low-risk to build from source as planned in F6.0.
+- **BLAS/LAPACK: a genuinely different source layout from linux/macOS,
+  not the same `rspec.blas_f`/`rlapack_f90_ordered` lists.** BLAS is just
+  5 files (`blas.f`, `blas2.f90`, `cmplxblas.f`, `cmplxblas2.f90`,
+  `blas00.c`) — far fewer than unix's per-routine split, gnuwin32
+  aggregates BLAS into a handful of bundled files. LAPACK is even more
+  aggregated: **a single `dlapack.f`** (vs. unix's ~15 separate
+  `rlapack_f90_ordered`/`rlapack_f` files) plus `Lapack.c` and
+  `accelerateLapack.c` producing `modules/lapack.dll` (a loadable module,
+  matching unix's `modules/lapack.so` pattern) — `Rblas.dll`/`Rlapack.dll`
+  themselves are separate from this module, need their own link recipe
+  (not yet fully traced — next step for whoever picks this up).
+
+**Net assessment**: this is comparable in size to the *original* Milestone
+5 Phase 0–4 effort (the whole autoconf/make replication that happened
+*before* F1's finalization work started), not a quick follow-on the way
+F5's macOS port was — macOS reused the exact same `unix/*` source set and
+front-end (`Rmain.c`/`Rscript.c`) as linux, needing only link-flag and
+Fortran-compiler changes. Windows needs a materially new, second compile
+graph (the 18-file `R.dll` core, 31-file `Rgraphapp.dll`, its own intl/
+trio libraries, and a differently-shaped BLAS/LAPACK) layered on top of
+the *reused* `main`/`appl`/`nmath`/`xdr`/`tzone`/`tre` groups. Picking
+this up: don't restart the ground-truth extraction above — it's already
+done and captured here; go straight to writing the build.zig code against
+these confirmed source lists, verifying against kappa's existing working
+build (`~/r-zig-pixi/build/R-4.6.1`, its actual DLL exports/imports via
+`objdump`/`dumpbin`) at each step, the same iterate-on-real-errors
+discipline that worked for F5.
+
 ### F6.1 — Windows compile graph
 
 - **Fortran = MinGW gfortran** (conda-forge `gcc_impl_win-64`); one
   GNU/MinGW ABI across the whole toolchain (zig targets `-windows-gnu`).
-- The zig-cc **GNU-ld emulation layer** (in `toolchain/zig-cc`) is needed
-  for Windows links: `lib<n>.dll.a`/`lib<n>.lib` search, `-mwindows`
-  implied GDI libs, gfortran private libdir. Since `build.zig` compiles C
-  natively (not through the shim), that emulation must be **reimplemented
-  as explicit link flags in build.zig** for Windows, OR the Windows target
-  keeps routing links through the shim. Decide early — this is the crux of
-  the Windows port.
+- **Resolved**: the zig-cc **GNU-ld emulation layer** (in `toolchain/
+  zig-cc`) cannot be "routed through" for the native compile graph — it's
+  a wrapper around invoking `zig cc` as a *subprocess*, but `build.zig`'s C
+  compile graph uses zig's in-process Module/Compile API, a fundamentally
+  different code path that never shells out to a `zig cc` process at all.
+  So Windows linking needs the **lib<n>.dll.a/lib<n>.lib search** and
+  **`-mwindows` implied GDI libs** logic reimplemented as explicit
+  build.zig link-flag handling, same pattern as F5.1's macOS
+  `linker_allow_shlib_undefined`/`LIBINTL` fixes (find the missing
+  resolution from a real build attempt's error output, fix in build.zig,
+  not in a shell shim). gfortran's private libdir (already solved
+  generically by F5.1's `linkFortranRt`/FLIBS-from-subst-table pattern)
+  needs the Windows FLIBS captured the same way.
 - No `config.status` on Windows: the make build's Windows config comes from
   gnuwin32's `MkRules` defaults + the generated `MkRules.local`
   (`scripts/build-gnuwin32.sh`). Build a Windows `subst`-equivalent table
-  by hand from those, plus a vendored Windows `config.h` (gnuwin32 ships
-  `src/include/config.h.win`, not an autoconf-generated one — start there).
+  by hand from those (`LOCAL_SOFT`, `ICU_PATH`, `CAIRO_CPPFLAGS`/
+  `CAIRO_LIBS`, `TCL_HOME`/`TCL_VERSION` — all derived directly from
+  `$CONDA_PREFIX`, no configure step involved), plus a vendored Windows
+  `config.h`. Simpler than expected: gnuwin32 ships a **static, ready-to-
+  use** `src/gnuwin32/fixed/h/config.h` (NOT autoconf-generated, and not a
+  template needing ~500 substitutions like `config.h.in`) — it has exactly
+  **3** `@VAR@` placeholders (`@CC_VER@`, `@FC_VER@`, `@VERSION@`, all
+  informational version strings), verified by grepping the file directly
+  rather than assuming. Vendor it close to as-is; `Rconfig.h` still comes
+  from running `tools/GETCONFIG` against it (that script is OS-agnostic).
 
 ### F6.2 — Windows layout + known traps
 
@@ -457,14 +599,27 @@ gnuwin32's `MkRules`/`MkRules.local` instead.
   objdir, exposed only by a clean build; the zig build is always clean, so
   this WILL surface — set it from day one).
 - jpeg/tiff/tcltk are forced on (gnuwin32 has no off-switches → slim==full
-  on Windows). Keep that parity caveat.
+  on Windows). Keep that parity caveat. Independent of, and not resolved
+  by, F6.0's GUI-executable scoping decision — that's about which
+  *binaries* get built, not grDevices' own capability set.
 - gnuwin32 builds in-tree with no `make install`; the zig build installs
   into the prefix layout directly, which is actually *simpler* than the
   gnuwin32 manual-copy path.
+- Per F6.0: no `Rgui.exe`/`Rterm.exe`/`R.exe`/`Rcmd.exe` — skip
+  `graphappmain.o`, `rgui.o`, `rterm.o`, `rcmd.o`, `rcmdfn.o`, and the
+  per-exe icon/manifest resource compiles entirely. `R.dll`'s own
+  `CSOURCES` and `Rgraphapp.dll` are still built in full (see F6.0 for
+  why they can't be pruned); only `Rscript.exe` needs building as a
+  front-end (from the same `unix/Rscript.c` linux/macOS already use, plus
+  a trivial compiled icon resource).
 
 **Acceptance**: build + smoke + `zig-check` + contract + bundle on kappa
-(Windows 11) — see [[test-servers]]. This is the point where `build.zig`
-truly is "one build system" and gnuwin32 + autoconf can both retire.
+(Windows 11) — see [[test-servers]]. `smoke`/`contract`/`zig-check` all
+already only require `Rscript.exe` (verified per F6.0), so this is
+unaffected by the narrower binary scope. This is the point where
+`build.zig` truly is "one build system" and gnuwin32 + autoconf can both
+retire (for the CLI/headless surface this project targets — not a
+byte-for-byte replacement of every gnuwin32 executable).
 
 ---
 
