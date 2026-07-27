@@ -1,16 +1,19 @@
 # feat-zig-build — Milestone 5: R built by `zig build` alone
 
-**Status (2026-07-24): finalization phases F1–F4 all green on linux-64.**
-`pixi run zig-build` (slim), `-e full`, and `-e openblas` each build a
-complete R with no autoconf and no make; each passes make-check-equivalent
-regression tests, the Rcpp/data.table/minqa contract test, and the
-existing stage.sh/package-standalone.sh/verify-bundle.sh distribution
-pipeline unchanged, and a CI job matrixes all three. File layout is within
-1 deliberate file of the make-installed tree (bin/libtool). See
-FINALIZATION.md for the phase-by-phase spec and status, and TODO.md for
-exact bugs found/fixed and verification detail. F5 (macOS) and F6
-(Windows) — the remaining phases — need real remote test hardware
-(omicron/kappa) and are picked up separately.
+**Status (2026-07-27): finalization phases F1–F5 all green, on linux-64
+AND macOS (osx-arm64, on omicron).** `pixi run zig-build` (slim), `-e
+full`, and `-e openblas` each build a complete R with no autoconf and no
+make on both platforms; each passes make-check-equivalent regression
+tests, the Rcpp/data.table/minqa contract test, and the existing
+stage.sh/package-standalone.sh/verify-bundle.sh distribution pipeline
+unchanged, and a CI job matrixes linux+macOS. File layout on linux is
+within 1 deliberate file of the make-installed tree (bin/libtool).
+build.zig itself is now cross-platform (`Os` enum, runtime-computed
+platform/dylib-extension, gfortran-vs-flang Fortran dispatch) rather than
+hardcoded to linux. See FINALIZATION.md for the phase-by-phase spec and
+status, and TODO.md for exact bugs found/fixed and verification detail.
+**F6 (Windows) is the only remaining phase** — needs real remote test
+hardware (kappa) and is picked up separately.
 
 ## Goal
 

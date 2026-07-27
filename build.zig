@@ -1,17 +1,21 @@
 //! Build R with `zig build` — no autoconf, no make (Milestone 5).
 //!
-//! The build graph replicates what R 4.6.1's configure+make pipeline does on
-//! linux-64 (see .github/devdocs/feat-zig-build/, FINALIZATION.md for phase
-//! status — F1-F4 done, F5/F6 macOS/Windows ports remain):
+//! The build graph replicates what R 4.6.1's configure+make pipeline does,
+//! on linux-64 and macOS so far (see .github/devdocs/feat-zig-build/,
+//! FINALIZATION.md for phase status — F1-F5 done, F6 Windows remains):
 //!   1. configure results are replayed from a vendored per-(platform,variant)
 //!      config (zigbuild/config/<plat>-<variant>/: config.h, Rconfig.h,
 //!      subst.txt — the S-table dumped from a known-good config.status run;
 //!      slim and full are separate dirs since capabilities are compile-time),
 //!   2. C compiles natively through zig's Compile steps (zig cc semantics:
-//!      -fno-sanitize=undefined, -std=gnu23), Fortran through flang Run
-//!      steps (zig has no Fortran frontend),
+//!      -fno-sanitize=undefined, -std=gnu23), Fortran through per-platform
+//!      Run steps (flang on linux, gfortran on macOS — zig has no Fortran
+//!      frontend of its own on either),
 //!   3. the R-level base-package bootstrap (share/make/basepkg.mk logic)
 //!      runs as a sequenced chain of Run steps invoking the freshly built R.
+//!
+//! `platform`/`os`/`dylib_ext` are resolved at build-script-execution time
+//! from the target (see `Os` below) — nothing here is hardcoded to linux.
 //!
 //! Two independent build options select the profile:
 //!   -Dvariant=slim|full  (default slim) — tcltk/readline/NLS/jpeg/tiff;

@@ -6,36 +6,44 @@ This document is the pick-up point for finishing `build.zig`. It assumes a
 concrete — exact files, commands, and acceptance criteria — so a future
 session can execute without re-deriving the design.
 
-**Status (2026-07-24): F1–F4 are all green on linux-64** (trust bar,
-hardening, full+openblas variants, distribution/CI integration — see the
-per-phase status lines below and `TODO.md`'s finalization checklist for
-exact detail, including the two subst-table bugs, the join-logic bug, and
-the reproducibility leaks found and fixed along the way). **F5 (macOS) and
-F6 (Windows) are the only phases left** — both need real remote test
-hardware (omicron/kappa, see `[[test-servers]]` in memory), not just local
-work, which is why they're picked up in a separate session/pass.
+**Status (2026-07-27): F1–F5 are all green, on linux-64 AND macOS
+(osx-arm64)** (trust bar, hardening, full+openblas variants,
+distribution/CI integration, and now the macOS port — see the per-phase
+status lines below and `TODO.md`'s finalization checklist for exact
+detail, including the two subst-table bugs, the join-logic bug, the
+reproducibility leaks, and the two macOS-only linking bugs found and fixed
+along the way). **F6 (Windows) is the only phase left** — needs real
+remote test hardware (kappa, see `[[test-servers]]` in memory), picked up
+in a separate session/pass.
 
 ## Where things stand
 
 - Branch: `worktree-feat-zig-build` (git worktree at
   `.claude/worktrees/feat-zig-build`). Changes are uncommitted by project
   policy ([[no-git-commits]] — the user commits).
-- **Proven on linux-64, all three flavors**: `pixi run zig-build` (slim),
-  `pixi run -e full zig-build`, and `pixi run -e openblas zig-build` each
-  produce a complete R 4.6.1 with no autoconf and no make. Each passes
-  smoke + `pixi run contract`/`zig-contract` + `pixi run zig-check` +
-  `stage.sh`/`package-standalone.sh`/`verify-bundle.sh` (F4.1's adversarial
-  moved-tree test). File layout is within one deliberate file
-  (`bin/libtool`) of the make-installed tree. A `build-zig` CI job matrixes
-  all three flavors in `.github/workflows/build.yml`, beside the existing
-  autoconf `build` job (not yet observed on a real Actions run — no push
-  access from the session that added it; confirm on the next push).
-- Entry points: `build.zig` (root), `zigbuild/rspec.zig` (source
-  inventory), `zigbuild/tools/gen-subst.sh` (subst.txt regeneration),
-  `zigbuild/config/linux-x86_64-{slim,full}/` (vendored `config.h`,
-  `Rconfig.h`, `subst.txt`, `GENERATED_FROM` — one dir per variant, since
-  capabilities are compile-time), `scripts/zig-build.sh` (pixi wrapper,
-  takes `-Dvariant`/`-Dblas` from `env.sh`'s `$VARIANT`/`$BLAS`),
+- **Proven on linux-64 AND macOS (osx-arm64, on omicron), all three
+  flavors**: `pixi run zig-build` (slim), `pixi run -e full zig-build`,
+  and `pixi run -e openblas zig-build` each produce a complete R 4.6.1
+  with no autoconf and no make, on both platforms. Each passes smoke +
+  `pixi run contract`/`zig-contract` + `pixi run zig-check` +
+  `stage.sh`/`package-standalone.sh`/`verify-bundle.sh` (F4.1/F5.2's
+  adversarial moved-tree test, including the R CMD SHLIB/dyn.load check).
+  File layout on linux is within one deliberate file (`bin/libtool`) of
+  the make-installed tree. A `build-zig` CI job matrixes linux+macOS ×
+  default/full (openblas stays linux-only in CI, matching the autoconf
+  `build` job's own scope, even though it's verified working on macOS too)
+  in `.github/workflows/build.yml`, beside the existing autoconf `build`
+  job (not yet observed on a real Actions run — no push access from the
+  session that added it; confirm on the next push).
+- Entry points: `build.zig` (root — now genuinely cross-platform: `Os`
+  enum + `platform`/`dylib_ext` computed at runtime from the resolved
+  target, not a hardcoded linux constant), `zigbuild/rspec.zig` (source
+  inventory), `zigbuild/tools/gen-subst.sh` (subst.txt regeneration, OS-
+  aware since F5.1), `zigbuild/config/{linux-x86_64,osx-arm64}-{slim,full}/`
+  (vendored `config.h`, `Rconfig.h`, `subst.txt`, `GENERATED_FROM` — one
+  dir per platform × variant, since capabilities are compile-time),
+  `scripts/zig-build.sh` (pixi wrapper, takes `-Dvariant`/`-Dblas` from
+  `env.sh`'s `$VARIANT`/`$BLAS`, now allows macOS through),
   `scripts/zig-smoke.sh`/`zig-contract.sh` (test-script wrappers that
   resolve the zig prefix path so CI doesn't need to compute `$FLAVOR`
   itself).
@@ -62,9 +70,8 @@ green. The gating one was **F1** — until R's own regression suite passes on
 a zig-built R, the build is not trustworthy no matter how clean it looks
 (now proven, see above).
 
-Phases are ordered by dependency and value. F1–F4 are all on the
-already-proven linux-64 platform (**done**); F5/F6 are the ports (do them
-in order — F5 before F6).
+Phases are ordered by dependency and value. F1–F4 (linux-64) and F5
+(macOS) are **done**; F6 (Windows) is the last port.
 
 ---
 
@@ -359,6 +366,19 @@ after F1–F6 are all green on all platforms.
 
 ## Phase F5 — macOS port (osx-arm64 / osx-64)
 
+**✅ DONE (2026-07-27), both subtasks, on omicron/osx-arm64, all three
+flavors (slim/full/openblas).** Two real bugs found beyond what this spec
+anticipated (both in build.zig, both macOS-only, see TODO.md's "Bugs found
+by F5.1"): base packages need zig's `linker_allow_shlib_undefined` (the
+Mach-O equivalent of ELF's tolerance for undefined shlib symbols), and the
+`full` variant needs an explicit `LIBINTL`/`-framework` link that isn't
+needed on linux (macOS's libc has no native gettext, unlike glibc) — its
+absence didn't fail the *link* (dynamic_lookup masked it) but crashed R
+with a null-pointer SIGSEGV the instant startup code called gettext for
+the first time. `platform`/`dylib_ext` are now computed at runtime from
+the resolved target instead of a hardcoded linux constant, so build.zig
+itself, not just the vendored config, is genuinely cross-platform now.
+
 Port `build.zig` to macOS. gfortran instead of flang; Mach-O instead of
 ELF. Everything here is a known quantity from milestone 2 + the macOS
 staging work — reuse those lessons, don't rediscover them.
@@ -472,9 +492,10 @@ summary of TODO.md, not the other way around.
       (adversarial moved-tree test)
 - [x] **F4.2** CI `zig-build` leg (linux-64) — written + locally verified;
       not yet observed on a real Actions run
-- [ ] **F5.1** macOS compile graph (gfortran, -O1 cap, vendored osx config,
-      fd ulimit)
-- [ ] **F5.2** macOS Mach-O relocation + ad-hoc codesign; omicron green
+- [x] **F5.1** macOS compile graph (gfortran, -O1 cap, vendored osx config,
+      fd ulimit) — done 2026-07-27 on omicron, all 3 flavors
+- [x] **F5.2** macOS Mach-O relocation + ad-hoc codesign; omicron green
+      — done 2026-07-27, full adversarial bundle test included
 - [ ] **F6.1** Windows compile graph (MinGW gfortran, ld-emulation
       decision, Windows config table)
 - [ ] **F6.2** Windows layout (`Library/lib/R`, ICU_PATH) + traps; kappa
@@ -502,3 +523,6 @@ summary of TODO.md, not the other way around.
 | two builds differ in every package's DESCRIPTION/Meta despite `SOURCE_DATE_EPOCH` | `tools:::.install_package_description()` calls `Sys.time()` unless given an explicit `builtStamp` arg | pass `utcNow()` through as the 3rd arg (F2.2) |
 | RUNPATH has a bogus relative `build/zig-cache/local/o/<hash>` entry | zig adds an rpath for every sibling artifact it links against | `patchelf --set-rpath` post-link, keep only absolute entries (F2.3, `fixRpath`) |
 | `package-standalone.sh`'s final `tar` step: "Cannot stat: No such file or directory" | it hardcodes the dist dir *basename* to `R-$R_VERSION-$FLAVOR`, doesn't go through `$PREFIX` — breaks if the prefix has zig-build's `-zig` coexistence suffix | point `R_INSTALL_PREFIX` at the unsuffixed name for verification; a non-issue once autoconf retires (F4.1) |
+| `zig build` on macOS: "undefined symbol" linking every base package | Mach-O's lld doesn't tolerate undefined shlib symbols by default, unlike ELF | `linker_allow_shlib_undefined = true` on every `addLibrary` (F5.1, `addSharedLib`) |
+| macOS `full` variant: SIGSEGV (null function pointer) on the very first bootstrap R call | macOS libc has no native `gettext()` (unlike glibc) — `LIBINTL="-lintl -Wl,-framework -Wl,CoreFoundation"` on macOS wasn't applied; masked at *link* time by the `-undefined dynamic_lookup` fix above, so it only crashed at runtime | apply `LIBINTL` in `linkCoreLibs`; also fix `applyLinkFlags` to handle `-framework X` pairs (it silently dropped them before) (F5.1) |
+| `lldb` refuses to attach over SSH: "cannot get permission to debug processes" | non-interactive SSH sessions can't get macOS debug entitlements | use `~/Library/Logs/DiagnosticReports/*.ips` instead (JSON body after a one-line header) |
