@@ -253,6 +253,22 @@ pub const win_trio_c = [_][]const u8{ "compat.c", "trio.c" };
 /// API — see F6.0).
 pub const win_iconv_c = [_][]const u8{"win_iconv.c"};
 
+/// src/gnuwin32/getline/*.c — console line-editing/history (`gl.a` in the
+/// real Makefile); console.c calls wgl_hist_next/prev/histadd from
+/// wc_history.c, and getline.c is built alongside it in the same archive.
+pub const win_getline_c = [_][]const u8{ "getline.c", "wc_history.c" };
+
+/// src/extra/tzone/*.c — Windows adds registryTZ.c (registry-based TZ
+/// lookup) on top of the unix SOURCES (localtime.c, strftime.c, reused from
+/// rspec.tzone_c); real Makefile.win: `CSOURCES = localtime.c registryTZ.c
+/// strftime.c`.
+pub const win_tzone_c = [_][]const u8{"registryTZ.c"};
+
+/// src/main/mkdtemp.c — Windows-only mkdtemp() substitute (POSIX 2008
+/// function MSVCRT/UCRT don't provide); not part of unix's main_c list
+/// since glibc/macOS libc already have a native mkdtemp.
+pub const win_mkdtemp_c = [_][]const u8{"mkdtemp.c"};
+
 /// src/extra/blas/*.{f,f90} — Rblas.dll, internal (non-ATLAS/OpenBLAS)
 /// path only. Far more aggregated than unix's per-routine split.
 pub const win_blas_f = [_][]const u8{ "blas.f", "cmplxblas.f" };

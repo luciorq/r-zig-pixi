@@ -543,6 +543,13 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     try ctx.subst.put("CC_VER", "zig cc (LLVM/clang, MinGW target)");
     try ctx.subst.put("FC_VER", "gfortran (conda-forge, MinGW target)");
     try ctx.subst.put("RMATH_HAVE_WORKING_LOG1P", "# define HAVE_WORKING_LOG1P 1");
+    // libgnuintl.h.in's 4 tokens — gnuwin32's own Makefile.win generates
+    // libgnuintl.h from this .in via the exact same 4 sed substitutions
+    // (src/extra/intl/Makefile.win), not real configure output.
+    try ctx.subst.put("HAVE_POSIX_PRINTF", "1");
+    try ctx.subst.put("HAVE_ASPRINTF", "0");
+    try ctx.subst.put("HAVE_SNPRINTF", "1");
+    try ctx.subst.put("HAVE_WPRINTF", "0");
 
     const geninc = b.addWriteFiles();
     {
@@ -552,6 +559,17 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     _ = geninc.addCopyFile(b.path("zigbuild/config/win-x86_64-full/Rconfig.h"), "Rconfig.h");
     _ = geninc.add("Rversion.h", try genRversionH(ctx, io));
     _ = geninc.add("Rmath.h", try substFile(ctx, io, "src/include/Rmath.h0.in"));
+    // intl's own Makefile.win does `cp libgnuintl.h libintl.h` — client code
+    // (win-nls.h etc.) includes <libintl.h>, not <libgnuintl.h>. Without our
+    // own copy on the include path, conda-forge's REAL gettext package
+    // (Library/include/libintl.h, a completely different implementation)
+    // gets picked up instead for angle-bracket includes, silently
+    // redefining fprintf/vfprintf/setlocale to libintl_* names that our own
+    // compiled intl sources (built against R's config.h, HAVE_POSIX_PRINTF=1)
+    // never define — found via real undefined-symbol link errors.
+    const libgnuintl_h = try substFile(ctx, io, "src/extra/intl/libgnuintl.h.in");
+    _ = geninc.add("libgnuintl.h", libgnuintl_h);
+    _ = geninc.add("libintl.h", libgnuintl_h);
     ctx.geninc = geninc.getDirectory();
 
     // ------------------------------------------------------------------
@@ -587,9 +605,24 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const r_core_mod = newCMod(ctx);
     r_core_mod.addIncludePath(ctx.geninc);
     r_core_mod.addIncludePath(ctx.path("src/include"));
+    // src/gnuwin32/fixed/h/ also ships psignal.h and trioremap.h — plain,
+    // static headers (unlike config.h/Rconfig.h there, which are handled via
+    // ctx.geninc's substituted copies instead) that R's own main/*.c sources
+    // include unconditionally on Windows. Found via real compile errors
+    // ('psignal.h' / 'trioremap.h' file not found).
+    r_core_mod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
     const dll_build = "-DR_DLL_BUILD";
     addCGroup(ctx, r_core_mod, "src/main", &rspec.main_c, .{
-        .extra = &.{ "-I%S/src/extra", "-I%S/src/extra/xdr", "-I%S/src/nmath", dll_build },
+        // -I%S/src/gnuwin32: builtin.c/printutils.c (`rgui_UTF8.h`),
+        // edit.c (`run.h`), platform.c/sysutils.c (`dos_wglob.h`) all pull
+        // headers straight from gnuwin32's own dir (found via real compile
+        // errors — file not found).
+        .extra = &.{ "-I%S/src/extra", "-I%S/src/extra/xdr", "-I%S/src/nmath", "-I%S/src/gnuwin32", dll_build },
+    });
+    // mkdtemp.c: Windows-only POSIX mkdtemp() substitute, not part of
+    // unix's main_c list (found via a real undefined-symbol link error).
+    addCGroup(ctx, r_core_mod, "src/main", &rspec.win_mkdtemp_c, .{
+        .extra = &.{ "-I%S/src/extra", "-I%S/src/extra/xdr", "-I%S/src/nmath", "-I%S/src/gnuwin32", dll_build },
     });
     addCGroup(ctx, r_core_mod, "src/appl", &rspec.appl_c, .{ .extra = &.{dll_build} });
     addCGroup(ctx, r_core_mod, "src/nmath", &rspec.nmath_c, .{ .extra = &.{dll_build} });
@@ -599,11 +632,27 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     addCGroup(ctx, r_core_mod, "src/extra/tzone", &rspec.tzone_c, .{
         .extra = &.{ "-I%S/src/extra/tzone", "-I%S/src/main", dll_build },
     });
+    // registryTZ.c: Windows-only registry-based TZ lookup, added on top of
+    // unix's tzone_c list (real Makefile.win: `CSOURCES = localtime.c
+    // registryTZ.c strftime.c`); getTZinfo was undefined without it (real
+    // link error).
+    addCGroup(ctx, r_core_mod, "src/extra/tzone", &rspec.win_tzone_c, .{
+        .extra = &.{ "-I%S/src/extra/tzone", "-I%S/src/main", dll_build },
+    });
     addCGroup(ctx, r_core_mod, "src/extra/xdr", &rspec.xdr_c, .{
         .extra = &.{ "-I%S/src/extra/xdr", dll_build },
     });
     addCGroup(ctx, r_core_mod, "src/gnuwin32", &rspec.win_gnuwin32_c, .{
-        .extra = &.{ "-I%S/src/gnuwin32", "-I%S/src/extra", dll_build },
+        // gnuwin32's own Makefile carries `extra-CPPFLAGS = -I../library/
+        // grDevices/src` specifically for extra.c's `devWindows.h` include
+        // (found via a real compile error).
+        .extra = &.{ "-I%S/src/gnuwin32", "-I%S/src/extra", "-I%S/src/library/grDevices/src", dll_build },
+    });
+    // src/gnuwin32/getline/*.c (gl.a in the real build) — console.c calls
+    // wgl_hist_next/prev/histadd from wc_history.c (found via a real
+    // undefined-symbol link error).
+    addCGroup(ctx, r_core_mod, "src/gnuwin32/getline", &rspec.win_getline_c, .{
+        .extra = &.{ "-DWin32", dll_build },
     });
     addCGroup(ctx, r_core_mod, "src/extra/intl", &rspec.win_intl_c, .{
         .extra = &.{ "-DIN_LIBINTL", "-DLOCALEDIR=\"\"" },
@@ -684,19 +733,6 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     rlapack_mod.linkLibrary(rblas);
     linkFortranRt(ctx, rlapack_mod);
     const rlapack = addSharedLib(ctx, "Rlapack", rlapack_mod);
-
-    // modules/lapack.dll (the loadable module, unix's mod_lapack
-    // equivalent) — just Lapack.c; "flexiblas not supported on Windows"
-    // per Makefile.win, so no flexiblas.c counterpart here.
-    const lapmod = newCMod(ctx);
-    lapmod.addIncludePath(ctx.geninc);
-    lapmod.addIncludePath(ctx.path("src/include"));
-    addCGroup(ctx, lapmod, "src/modules/lapack", &rspec.win_lapack_module_c, .{});
-    lapmod.linkLibrary(rlapack);
-    lapmod.linkLibrary(rblas);
-    lapmod.addObjectFile(r_stub);
-    linkFortranRt(ctx, lapmod);
-    const mod_lapack = addSharedLib(ctx, "mod_lapack", lapmod);
 
     // ------------------------------------------------------------------
     // Rgraphapp.dll — full Win32 GUI-widget toolkit, required link-time
@@ -784,6 +820,26 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     ctx.rblas = rblas;
     ctx.rlapack = rlapack;
 
+    // modules/lapack.dll (the loadable module, unix's mod_lapack
+    // equivalent) — just Lapack.c; "flexiblas not supported on Windows"
+    // per Makefile.win, so no flexiblas.c counterpart here. Unlike
+    // Rblas.dll/Rlapack.dll/Rgraphapp.dll, this is a runtime-loaded module
+    // (like a base package), not part of R.dll's own circular link-time
+    // dependency — it needs the REAL libR (built above), not the r_stub,
+    // for the R API calls (Rf_getAttrib, R_PPStack, R_chk_calloc, ...) its
+    // own Lapack.c makes (found via real undefined-symbol link errors; the
+    // unix build's mod_lapack already does `linkLibrary(ctx.libR)` for the
+    // same reason — this was simply missing here).
+    const lapmod = newCMod(ctx);
+    lapmod.addIncludePath(ctx.geninc);
+    lapmod.addIncludePath(ctx.path("src/include"));
+    addCGroup(ctx, lapmod, "src/modules/lapack", &rspec.win_lapack_module_c, .{});
+    lapmod.linkLibrary(rlapack);
+    lapmod.linkLibrary(rblas);
+    lapmod.linkLibrary(libR);
+    linkFortranRt(ctx, lapmod);
+    const mod_lapack = addSharedLib(ctx, "mod_lapack", lapmod);
+
     // ------------------------------------------------------------------
     // Rscript.exe — the ONLY front-end built (F6.0): same unix/Rscript.c
     // linux/macOS already use, linked against R.dll/Rgraphapp.dll/shlwapi.
@@ -791,8 +847,16 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const rscript_mod = newCMod(ctx);
     rscript_mod.addIncludePath(ctx.geninc);
     rscript_mod.addIncludePath(ctx.path("src/include"));
+    // Same psignal.h/trioremap.h need as r_core_mod above (found via a real
+    // compile error).
+    rscript_mod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
     addCGroup(ctx, rscript_mod, "src/unix", &.{"Rscript.c"}, .{
-        .extra = &.{ctx.absSub("-DR_HOME=\"{s}\"", .{ctx.rhome})},
+        // On Windows, Rscript.c's own source directly `#include "rterm.c"`
+        // (with FOR_Rscript defined) as its Windows entry-point
+        // implementation — not an artifact of building a separate Rterm.exe
+        // (out of scope per F6.0), genuinely required for Rscript.exe
+        // itself to compile here (found via a real compile error).
+        .extra = &.{ "-I%S/src/gnuwin32/front-ends", ctx.absSub("-DR_HOME=\"{s}\"", .{ctx.rhome}) },
     });
     rscript_mod.linkLibrary(libR);
     rscript_mod.linkLibrary(rgraphapp);
@@ -816,6 +880,41 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const top = b.step("r", "Build R.dll+Rblas+Rlapack+Rgraphapp+Riconv+Rscript.exe (Windows, CLI-only — F6.0)");
     top.dependOn(b.getInstallStep());
     b.default_step = top;
+}
+
+/// Build a proper, complete dlltool-generated import library for `dllname`
+/// covering exactly `symbols` — same dlltool mechanism as winMakeImportStub
+/// below, but from a hardcoded symbol list rather than an object's own
+/// exports. First tried extracting the individual archive members that
+/// define these symbols straight out of conda-forge's real libgcc_s.a
+/// (`-lgcc_s`/`-lgcc`/`-lgcc_eh` in any combination couldn't get lld-link to
+/// resolve them at all) — that got Rlapack.dll to LINK, but the resulting
+/// R.dll then failed to LOAD at runtime with STATUS_DLL_NOT_FOUND:
+/// hand-assembling fragments of an import library skips whatever else
+/// dlltool normally bundles alongside each symbol's thunk (e.g.
+/// null-descriptor/null-thunk terminator members marking the end of the
+/// import directory), which the real Windows loader needs even though
+/// lld-link's own linking didn't complain. Generating a fresh, complete
+/// import lib through dlltool's normal path avoids relying on the internal
+/// structure of a real DLL's own import archive at all.
+fn winMakeImportLibFor(ctx: *const Ctx, dllname: []const u8, symbols: []const []const u8, out_stem: []const u8) std.Build.LazyPath {
+    const b = ctx.b;
+    var def_body = std.ArrayList(u8).empty;
+    def_body.appendSlice(b.allocator, "EXPORTS\n") catch @panic("OOM");
+    for (symbols) |s| {
+        def_body.appendSlice(b.allocator, s) catch @panic("OOM");
+        def_body.append(b.allocator, '\n') catch @panic("OOM");
+    }
+    const wf = b.addWriteFiles();
+    const def = wf.add(b.fmt("{s}.def", .{out_stem}), def_body.items);
+    const run = b.addSystemCommand(&.{
+        "x86_64-w64-mingw32-dlltool", "--dllname", dllname, "--input-def",
+    });
+    run.addFileArg(def);
+    run.addArg("--output-lib");
+    const implib = run.addOutputFileArg(b.fmt("{s}.dll.a", .{out_stem}));
+    run.setName(b.fmt("win import lib for {s} ({s})", .{ dllname, out_stem }));
+    return implib;
 }
 
 /// PE/COFF (unlike ELF/Mach-O) refuses to link a DLL with unresolved
@@ -1096,6 +1195,32 @@ fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
             mod.addLibraryPath(.{ .cwd_relative = ctx.gfortran_lib_dir });
             mod.linkSystemLibrary("gfortran", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("quadmath", .{ .use_pkg_config = .no });
+            // libgfortran.a itself references __gthr_win32_create/_join/_self
+            // (MinGW's generic-thread glue), __emutls_get_address
+            // (emulated-TLS helper), and _Unwind_GetIPInfo/_Unwind_Backtrace
+            // (libbacktrace) — needed only by Rlapack.dll's f90-module LAPACK
+            // code specifically (Rblas.dll/R.dll's plain f77 objects never
+            // pull in libgfortran's error/async-I/O runtime that references
+            // them). All are real exports of the actual libgcc_s_seh-1.dll
+            // runtime (present in Library/bin) but `-lgcc_s`/`-lgcc`/
+            // `-lgcc_eh` in any combination couldn't get lld-link to resolve
+            // them, and hand-extracting the individual archive members that
+            // define them (tried first) got everything to LINK but produced
+            // an R.dll that failed to LOAD at runtime (STATUS_DLL_NOT_FOUND)
+            // — an incomplete/malformed import table, missing whatever else
+            // a real dlltool-built import archive bundles alongside each
+            // symbol's thunk. Generating a fresh, complete import library
+            // through dlltool's normal path (same mechanism as the R_stub
+            // import lib above) sidesteps both problems at once.
+            const gthr_lib = winMakeImportLibFor(ctx, "libgcc_s_seh-1.dll", &.{
+                "__gthr_win32_create",
+                "__gthr_win32_join",
+                "__gthr_win32_self",
+                "__emutls_get_address",
+                "_Unwind_GetIPInfo",
+                "_Unwind_Backtrace",
+            }, "gthr_win32_lib");
+            mod.addObjectFile(gthr_lib);
         },
     }
 }

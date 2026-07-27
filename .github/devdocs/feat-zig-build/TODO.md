@@ -347,11 +347,19 @@ a carried-forward gotcha catalog.
       trace (R.dll's own `CSOURCES` bakes in console.c/rui.c/etc as
       required compile units; only the separate front-end *executables*
       are droppable, not R.dll's dependency graph).
-- [ ] **F6.1** Windows compile graph (MinGW gfortran, ld-emulation
-      decision — resolved, see FINALIZATION.md F6.1 — Windows config
-      table)
-- [ ] **F6.2** Windows layout (`Library/lib/R`, ICU_PATH) + traps; kappa
-      green
+- [x] **F6.1** Windows compile graph (2026-07-27): `zig build` on kappa
+      produces R.dll/Rblas.dll/Rlapack.dll/Rgraphapp.dll/Riconv.dll/
+      lapack.dll/Rscript.exe; `Rscript.exe --version` runs correctly
+      (proves the full runtime DLL dependency chain loads, not just
+      links). See FINALIZATION.md F6.1 for the full gotcha catalog
+      (include-path shadowing, conda lib naming, missing Windows-only
+      sources, libintl.h vs libgnuintl.h, mod_lapack needing libR, and
+      the libgcc_s_seh-1.dll runtime-symbol saga resolved via a
+      dlltool-generated import lib).
+- [ ] **F6.2** Windows layout (`Library/lib/R`, ICU_PATH) + bootstrap +
+      traps; kappa green. Rscript.exe can't evaluate R code yet (`-e`
+      exits 10) — no library staging/base-package lazy-loading wired up
+      in `buildWindows()`'s install step yet.
 - [ ] **Final**: retire autoconf/gnuwin32 from the default path once all
       six phases green on all platforms; keep them as a fallback one
       release, then remove

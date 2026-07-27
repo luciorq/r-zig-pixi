@@ -12,9 +12,14 @@ distribution/CI integration, and now the macOS port — see the per-phase
 status lines below and `TODO.md`'s finalization checklist for exact
 detail, including the two subst-table bugs, the join-logic bug, the
 reproducibility leaks, and the two macOS-only linking bugs found and fixed
-along the way). **F6 (Windows) is the only phase left** — needs real
-remote test hardware (kappa, see `[[test-servers]]` in memory), picked up
-in a separate session/pass.
+along the way). **F6.1 (Windows compile graph) is now green too**:
+`zig build` on kappa produces R.dll/Rblas.dll/Rlapack.dll/Rgraphapp.dll/
+Riconv.dll/lapack.dll/Rscript.exe, and `Rscript.exe --version` runs
+correctly. **F6.2 (Windows bootstrap/layout) is what's left** — Rscript.exe
+can't yet evaluate any real R code (`-e "1+1"` exits 10) because
+`buildWindows()` doesn't stage the R library or lazy-load base packages
+yet; see F6.1/F6.2 below for the full gotcha catalog from getting the
+compile graph green.
 
 ## Where things stand
 
@@ -558,7 +563,96 @@ build (`~/r-zig-pixi/build/R-4.6.1`, its actual DLL exports/imports via
 `objdump`/`dumpbin`) at each step, the same iterate-on-real-errors
 discipline that worked for F5.
 
-### F6.1 — Windows compile graph
+### F6.1 — Windows compile graph — RESOLVED (2026-07-27)
+
+`zig build` on kappa now produces a working R.dll + Rblas.dll + Rlapack.dll
++ Rgraphapp.dll + Riconv.dll + lapack.dll (module) + Rscript.exe, and
+`Rscript.exe --version` runs correctly (proves the whole DLL dependency
+chain loads at runtime, not just links). `-e` expression evaluation still
+fails (exit 10, no output) — expected, since `buildWindows()`'s install
+step doesn't yet stage R's library tree or lazy-load base packages
+(F6.2's job, not yet started).
+
+Gotchas found via real build attempts on kappa, each fixed in `build.zig`,
+roughly in the order hit:
+
+- **Missing headers via include-path ordering** (same root cause,
+  multiple sites): module-level `addIncludePath` calls precede a compile
+  group's own "extra" `-I` flags in the actual invocation, so a
+  same-named file elsewhere on the path can shadow the intended one.
+  Hit for: graphapp's own `internal.h` (shadowed by `src/include/
+  internal.h`), `win_iconv.c`'s `<iconv.h>` (shadowed by conda-forge's
+  real libiconv header — needs `src/gnuwin32/fixed/h/iconv.h` first),
+  and R's own `psignal.h`/`trioremap.h`/`rgui_UTF8.h`/`run.h`/
+  `dos_wglob.h`/`devWindows.h` (all need specific `-I` dirs: `src/
+  gnuwin32/fixed/h`, `src/gnuwin32`, `src/library/grDevices/src`,
+  `src/gnuwin32/front-ends` for Rscript.c's `#include "rterm.c"`).
+- **Missing Win32 import libs gcc implicitly links via `-mwindows`**:
+  `gdi32`/`user32` (Rgraphapp.dll, R.dll) and `comdlg32` (Rgraphapp.dll's
+  common-dialog APIs) — gcc's own mingw driver spec adds these
+  implicitly, zig cc/lld does not.
+  - **conda-forge Windows lib naming quirks**: `libbz2.lib` (not
+    `bz2.lib` — zig's dynamic search tries `{name}.lib`/`lib{name}.a`,
+    not `lib{name}.lib`, so link as `"libbz2"`), and `libgfortran.dll.a`/
+    `libquadmath.dll.a`/`libgcc*.a` living under a gcc-VERSION-specific
+    subdir (`Library/lib/gcc/x86_64-w64-mingw32/<ver>/`), not directly
+    under `Library/lib` — found the dir at build-config time by scanning
+    for the one subdirectory containing `libgfortran.dll.a` (mirrors
+    `findFlangRt`'s pattern for linux), not hardcoded.
+- **Missing Windows-only source files**: `src/main/mkdtemp.c` (Windows
+  has no native `mkdtemp`), `src/extra/tzone/registryTZ.c` (on top of
+  unix's `localtime.c`/`strftime.c`), `src/gnuwin32/getline/{getline,
+  wc_history}.c` (console history — `wgl_hist_*`).
+- **`libintl.h` vs `libgnuintl.h`**: R's own Makefile.win does `cp
+  libgnuintl.h libintl.h` (both names needed) — vendoring only the
+  former left angle-bracket `#include <libintl.h>` (in `win-nls.h`)
+  falling through to conda-forge's REAL gettext package header instead,
+  which redefines `fprintf`/`vfprintf`/`setlocale` to `libintl_*` names
+  our own compiled intl sources (built with R's own `HAVE_POSIX_PRINTF=1`,
+  which disables that exact redefinition) never define — a genuinely
+  confusing one, only resolved by tracing exactly which header's macros
+  were active for the failing translation unit.
+- **`mod_lapack` (lapack.dll) never linked the real `libR`** — unlike
+  the unix build, which does; needed for the R API calls
+  (`Rf_getAttrib`, `R_PPStack`, `R_chk_calloc`, ...) `Lapack.c` makes.
+  Required reordering `buildWindows()` so `libR` is built before
+  `lapmod`, since Zig's build graph needs the `*Step.Compile` value to
+  exist before it can be passed to `linkLibrary`.
+- **The big one — `libgfortran.a`'s runtime-support symbols**
+  (`__gthr_win32_create/join/self`, `__emutls_get_address`,
+  `_Unwind_GetIPInfo`/`_Unwind_Backtrace`, needed only by Rlapack.dll's
+  f90-module LAPACK code, not Rblas.dll's/R.dll's plain f77 objects):
+  `nm` proved all six are real, defined exports of
+  `libgcc_s_seh-1.dll` (via `libgcc_s.a`, its import lib), but no
+  combination of `-lgcc`/`-lgcc_eh`/`-lgcc_s` (any order, any
+  repetition/"sandwich" pattern) got lld-link to actually resolve them.
+  First workaround — extracting the exact archive members defining each
+  symbol via `nm -A`/`ar p` and feeding them as plain `addObjectFile`
+  inputs — got everything to **link**, but the resulting R.dll then
+  failed to **load** at runtime with `STATUS_DLL_NOT_FOUND`
+  (`-1073741511`): hand-picking individual thunk objects (plus the
+  `_head_libgcc_s_seh_1_dll`/`libgcc_s_seh_1_dll_iname` anchor members,
+  each surfacing only once the previous fix revealed the next missing
+  link) skips whatever else a real dlltool-built import archive bundles
+  (null-descriptor/null-thunk terminator members), which lld-link's own
+  linking didn't need but the real Windows loader does. Root-caused via
+  a minimal `LoadLibraryA` C test program + `objdump -p` dependency
+  dumps on kappa, isolating it from a red herring (an unrelated `ar`/nm
+  process-locking flake and an MSYS `as.exe`-over-non-interactive-ssh
+  hang, neither of which was the actual bug). **Fixed** by generating a
+  fresh, complete import library through `dlltool` directly (a
+  synthetic `.def` + `--dllname libgcc_s_seh-1.dll`, same mechanism
+  `winMakeImportStub` already uses for the R.dll↔Rblas.dll circular
+  dependency) instead of extracting fragments of the real one — see
+  `winMakeImportLibFor` in `build.zig`.
+- Also found along the way, not yet re-verified with a passing build at
+  the time: `zig cc`'s "coff does not support linking multiple objects
+  into one" (`b.addObject()` can't merge multiple C sources into one
+  COFF object, unlike ELF/Mach-O) — worked around by compiling the R.dll
+  stub as a single-file object instead of a merged one (see the
+  R_stub/`winMakeImportStub` code in `build.zig`).
+
+### F6.1 — Windows compile graph (original pre-implementation notes)
 
 - **Fortran = MinGW gfortran** (conda-forge `gcc_impl_win-64`); one
   GNU/MinGW ABI across the whole toolchain (zig targets `-windows-gnu`).
