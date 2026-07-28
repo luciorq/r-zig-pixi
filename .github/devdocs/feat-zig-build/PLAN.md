@@ -1,19 +1,29 @@
 # feat-zig-build — Milestone 5: R built by `zig build` alone
 
-**Status (2026-07-27): finalization phases F1–F5 all green, on linux-64
-AND macOS (osx-arm64, on omicron).** `pixi run zig-build` (slim), `-e
-full`, and `-e openblas` each build a complete R with no autoconf and no
-make on both platforms; each passes make-check-equivalent regression
-tests, the Rcpp/data.table/minqa contract test, and the existing
-stage.sh/package-standalone.sh/verify-bundle.sh distribution pipeline
-unchanged, and a CI job matrixes linux+macOS. File layout on linux is
-within 1 deliberate file of the make-installed tree (bin/libtool).
-build.zig itself is now cross-platform (`Os` enum, runtime-computed
-platform/dylib-extension, gfortran-vs-flang Fortran dispatch) rather than
-hardcoded to linux. See FINALIZATION.md for the phase-by-phase spec and
-status, and TODO.md for exact bugs found/fixed and verification detail.
-**F6 (Windows) is the only remaining phase** — needs real remote test
-hardware (kappa) and is picked up separately.
+**Status (2026-07-28): DONE, and then some — `zig build` is now the
+project's default build path on linux-64, macOS (osx-arm64), and Windows,
+including full package compilation there.** All six finalization phases
+(F1-F6, see FINALIZATION.md) are green, the "Final" item (retiring
+autoconf/gnuwin32 from the default path) is done, and F7 (the Windows
+package-compilation contract — originally scoped OUT of this milestone
+entirely) got done too, on direct request: `pixi run build`/`smoke`/
+`contract`/`install`/`package`/`verify-package` all run the zig pipeline
+and all pass on every platform now (`check`, R's regression suite, is
+still unix/macOS-only — no equivalent step exists in the Windows compile
+graph; `-e full`/`-e openblas` still select variant/BLAS flavor as
+before). The old autoconf (unix) / gnuwin32 (windows) pipeline survives as
+an explicit `*-legacy` fallback for one release, then removable.
+`recipe/build.sh` (the real rattler-build release pipeline) drives
+`zig-build.sh` too. See TODO.md's "Final", "F6.3", and "F7" entries for
+the exact task/CI/recipe changes, the real Windows capability-profile bugs
+(libcurl/ICU/cairo) found and fixed, and the package-compilation-contract
+work (a native `gcc.exe`/`g++.exe` forwarder, a real `R.exe`, and three
+wrong-by-default Makeconf.win values).
+build.zig itself is fully cross-platform (`Os` enum, runtime-computed
+platform/dylib-extension, gfortran-vs-flang Fortran dispatch, a real
+`buildWindows()` compile graph) rather than hardcoded to linux. See
+FINALIZATION.md for the phase-by-phase spec and status, and TODO.md for
+exact bugs found/fixed and verification detail.
 
 ## Goal
 

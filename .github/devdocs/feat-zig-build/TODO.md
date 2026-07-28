@@ -378,9 +378,277 @@ a carried-forward gotcha catalog.
       Still deferred (not needed by anything hit so far): full `etc/`
       (package-compilation contract), `tcltk`'s real Tcl/Tk linking,
       `ICU_PATH`, `winCairo.dll`.
-- [ ] **Final**: retire autoconf/gnuwin32 from the default path once all
-      six phases green on all platforms; keep them as a fallback one
-      release, then remove
+- [x] **F6.3** Windows capability-profile gaps found + fixed (2026-07-28):
+      F6.2's own "Rscript.exe -e evaluates real R code" acceptance bar
+      never actually ran the *full* `smoke-test.sh` capability-profile
+      assertions to completion on Windows — doing so for real (as prep for
+      retiring the legacy default path, below) found `capabilities()`
+      genuinely FALSE for `libcurl`/`ICU`/`cairo`, none of which were on
+      F6.2's own "still deferred" list except `winCairo.dll`. All three
+      fixed and verified on kappa (`pixi run zig-smoke`/`zig-contract`/
+      `stage.sh`/`package-standalone.sh`/`verify-bundle.sh` all green):
+      - **libcurl** (`modules/internet.dll` didn't exist at all): added,
+        mirroring unix's `mod_internet` — same `rspec.internet_c` source
+        list, links `-lR -lRgraphapp -lwininet -lws2_32 -llibcurl` (ground
+        truth from `src/modules/internet/Makefile.win`); needed the same
+        `src/gnuwin32/fixed/h` include path as `r_core_mod` for
+        `psignal.h`. Separately, `capabilities()$libcurl` turned out to be
+        a **pure compile-time `#ifdef HAVE_LIBCURL` check in `platform.c`**
+        (`src/main/platform.c`'s `do_capabilities`) — completely
+        independent of whether `internet.dll` exists at runtime; fixed by
+        defining `HAVE_CURL_CURL_H`/`HAVE_LIBCURL` in the vendored Windows
+        `config.h` (gnuwin32's own static `fixed/h/config.h` ships these
+        commented out, since its real build sets them via per-Makefile.win
+        `-D` flags from `MkRules`, which this project has no subst table
+        to source centrally — defining them once in the vendored config.h,
+        already included via `HAVE_CONFIG_H` everywhere, reproduces the
+        same effective behavior).
+      - **ICU**: same class of bug — `USE_ICU` was commented out in the
+        vendored `config.h` (copied verbatim from gnuwin32's static
+        `fixed/h/config.h`, whose real build instead flips it via
+        `MkRules`' `USE_ICU ?= YES` default plus per-Makefile `-D` flags).
+        Fixed by defining `USE_ICU 1` directly in the vendored config.h
+        (`platform.c`/`util.c`/`registryTZ.c` — all three already compiled
+        into `r_core_mod`/`win_tzone_c`, no new sources needed) plus
+        linking `icuin`/`icuuc`/`icudt` (ICU4C's Windows component names,
+        `icuin` not unix's `icui18n`; no lib-prefix quirk this time) into
+        R.dll's own link list.
+      - **cairo** (`capabilities()$cairo` on Windows is `stat()`-based —
+        `platform.c` checks whether `library/grDevices/libs/x64/
+        winCairo.dll` exists on disk, not a compile-time macro): built it
+        for real. Ground truth from gnuwin32's own
+        `src/library/grDevices/src/cairo/Makefile.win`: **one** source
+        (`cairoBM.c`, not unix's `cairoBM.c`+`rbitmap.c` pair — Windows
+        already compiles `winbitmap.c` straight into `grDevices.dll`
+        itself), linked against `grDevices.dll` (`-lgrDevices`) plus
+        `cairo`/`fontconfig` (the exact literal flags
+        `scripts/build-gnuwin32.sh`'s own live `$CONDA_PREFIX` patch
+        already uses for the legacy path: `-lcairo -lfontconfig`).
+        Needed `linkLibrary(libR)` too, *in addition to* the grDevices
+        import lib — gnuwin32's real link line is `-lgrDevices` alone,
+        relying on gcc's transitive DLL relinking, which lld-link does not
+        replicate (found via a real ~80-symbol undefined-R-API-symbol
+        link error). Required plumbing a `grdevices_lib` reference out of
+        the grDevices package block and a new `win_cairo` parameter into
+        `installLibraryWindows` (winCairo.dll isn't a per-package DLL —
+        it's an extra file dropped into grDevices' own `libs/x64/` dir).
+      - Ground truth for all three was pulled from kappa's OTHER, already-
+        working gnuwin32 checkout (`~/r-zig-pixi/build/R-4.6.1`, milestone
+        3's objdir — same source F6.1a used), via its real Makefile.win
+        files and a real `capabilities()` call — same "extract from a
+        known-good build rather than reverse-engineer gnuwin32's Makefile
+        system" methodology as F6.1a.
+      - Also found and fixed a real, independent bug while verifying the
+        packaging chain against these fixes: **`package-standalone.sh`/
+        `verify-bundle.sh` hardcoded the archive's top-level directory
+        name as `R-$R_VERSION-$FLAVOR`**, silently producing an empty
+        zip/tar (`zip error: Nothing to do!` / `tar: ...: No such file or
+        directory`) whenever `$PREFIX`'s actual basename didn't match
+        exactly — which every zig-built prefix's `-zig` suffix guarantees.
+        This is the same gap F4.1 already documented and worked around
+        per-invocation (pointing `R_INSTALL_PREFIX` at the unsuffixed
+        name); fixed at the source instead, now that `zig-package`/
+        `zig-verify-package` are first-class default tasks: both scripts
+        now derive the archive's directory name from `$(basename
+        "$PREFIX")` rather than a hardcoded string. Verified on both
+        linux (existing prefix) and kappa (against the real `-zig`-suffixed
+        prefix directly, no more manual workaround).
+- [x] **F7** Windows package-compilation contract (2026-07-28, on kappa) —
+      the last item FINALIZATION.md's original spec left explicitly
+      deferred ("Makeconf.win wiring... not required for the CLI-only,
+      headless R this milestone targets"). Done anyway, on direct request
+      after F7.0-F6.3 wrapped up: `pixi run contract` now passes on
+      Windows exactly like linux/macOS — Rcpp (C++), data.table (C +
+      OpenMP), and minqa (Rcpp + Fortran) all compile and run correctly
+      through the zig/gfortran toolchain via `install.packages(type=
+      "source")`. Three real, non-obvious blockers found and fixed, each
+      via the same "reproduce narrowly, read the real R/gnuwin32 source,
+      fix root cause, re-verify on kappa" discipline as every prior phase:
+      - **R's own Windows `system()`/`CreateProcess` call can NEVER find a
+        bash-script "gcc"/"g++" shim, no matter where it sits or how it's
+        referenced.** `do_system` (`src/gnuwin32/sys-win32.c`) →
+        `runcmd_timeout` → `pcreate` → `CreateProcess(NULL, cmd, ...)` —
+        with `lpApplicationName` NULL, Win32 only ever auto-appends
+        `.exe` to a bare command name; it does NOT consult `PATHEXT` the
+        way `cmd.exe` does, so a `.bat` wrapper is equally invisible.
+        Confirmed empirically before writing any fix: `system("gcc
+        --version")` against the EXISTING `win-toolchain` shim dir (the
+        legacy gnuwin32 build's own, already-proven-for-building-R-itself
+        mechanism, contract-test.sh's Windows branch already PATH-
+        prepends it) silently resolved to conda-forge's own unrelated
+        `gcc.exe` elsewhere on PATH instead — meaning **package
+        compilation on Windows had never actually exercised zig at all,
+        on the legacy gnuwin32 build either** (same bare `CC =
+        $(BINPREF)$(CCBASE)` line, `BINPREF` empty). Fixed with a real
+        native PE forwarder: `zigbuild/tools/win-exec-forward.c` (a ~20-
+        line C program, `_spawnv`-forwarding argv to the existing
+        `toolchain/zig-cc`/`zig-cxx` bash scripts unmodified) compiled by
+        build.zig itself into `gcc.exe`/`g++.exe` (`winCompilerWrapper` in
+        build.zig) — verified the mechanism in complete isolation on
+        kappa (a standalone test wrapper forwarding to a bash echo
+        script, then to the real `zig-cc`, compiling and running a
+        trivial `hello.c`) before wiring it into the real build.
+      - **`install.packages(type="source")` hard-requires a real,
+        compiled `R.exe`, contradicting F6.0's original "not needed,
+        `tools:::.install_packages()` is R-level" finding.** That finding
+        checked what `smoke`/`contract`*invoke directly* (only ever
+        `Rscript.exe`) but missed that `utils::install.packages()` itself
+        (`src/library/utils/R/packages2.R`) hardcodes `cmd0 <-
+        file.path(R.home("bin"), "R")` unconditionally, for both the
+        serial and `Ncpus>1` parallel-Makefile install paths — without a
+        real `bin/x64/R.exe`, package installation fails immediately
+        ("No such file or directory"), before the toolchain even matters.
+        Rather than reimplement `rcmdfn.c`'s ~15-subcommand CMD dispatch
+        (INSTALL/SHLIB/REMOVE/build/check/...) from scratch, compiled the
+        REAL gnuwin32 sources instead (`front-ends/R.c` + `rcmdfn.c` +
+        `src/main/Renviron.c` with `-DRENVIRON_WIN32_STANDALONE`, minus
+        the icon/manifest resource — same "no icon resource" precedent as
+        Rterm.exe) — reading `rcmdfn.c` directly showed every subcommand
+        is itself just a templated `Rterm.exe -e tools:::.foo() ...
+        --args ...` string it re-execs, so the real logic already lives
+        in R code this build has, not C to duplicate. `rhome.c`/`shext.c`
+        (R_HOME/RUser helpers `rcmdfn.c` needs) are NOT recompiled here —
+        they're already part of `R.dll`'s own `win_gnuwin32_c` group;
+        doing so again produced real "duplicate symbol: getRHOME" link
+        errors (zig/lld-link exports every public DLL symbol by default,
+        same class of issue as F6.2's `loadRconsole` collision) — fixed
+        by linking `libR` instead and letting its exports satisfy them.
+      - **Real `BINDIR`/`IMPDIR` values needed correcting against ground
+        truth, not guessed.** First attempt used `-DBINDIR="x64"`,
+        producing a silent, generic "The system cannot find the path
+        specified" from `R.exe`'s own `system(cmd)` call launching
+        Rterm.exe — traced (not guessed) by manually reproducing the
+        exact quoted command string via `cmd.exe` directly, then a
+        `Test-Path` check on the constructed path, which was missing a
+        `bin/` segment entirely. Real gnuwin32 value (confirmed against a
+        real generated Makeconf on kappa's milestone-3 objdir):
+        `BINDIR=bin$(R_ARCH)` = `"bin/x64"`, not just `"x64"`. The
+        vendored `Makeconf.win` template's own `IMPDIR = bin` (used by
+        `LIBR`/`BLAS_LIBS`/`LAPACK_LIBS` to find R.dll/Rblas.dll/
+        Rlapack.dll) has the identical gap — real value is `bin/x64`
+        too, found via a real "unable to find dynamic system library 'R'"
+        link error once BINDIR was already fixed.
+      - **`LDFLAGS` is empty in both the vendored template AND a real
+        generated Makeconf** — gnuwin32 provides external-library search
+        paths via `MkRules.local`'s `LOCAL_SOFT`, sourced only when
+        building R itself, not for package builds afterward. CRAN
+        packages routinely link bare `-lz`/`-lpng`/etc. expecting *some*
+        global search path to exist regardless (found via a real "unable
+        to find dynamic system library 'z'" link error compiling
+        data.table) — fixed by setting `LDFLAGS = -L"<conda>/Library/lib"`
+        directly in the installed Makeconf, since there's no
+        `MkRules.local`-equivalent mechanism for package builds to source
+        it from otherwise.
+      - **`gfortran.exe` cannot be relocated/copied — it locates its own
+        `f951` backend relative to its own original install path.**
+        Copying it into the `BINPREF` toolchain dir (matching `gcc.exe`/
+        `g++.exe`'s own treatment) broke it: "cannot execute 'f951':
+        CreateProcess: No such file or directory" compiling minqa's
+        Fortran. Fixed by pointing `FC` at the conda env's *original*
+        `gfortran.exe` path directly, bypassing `BINPREF` for that one
+        variable — the exact same absolute location `fortranOne`'s own
+        bare `"gfortran"` PATH lookup already resolves to successfully
+        when building R itself.
+      CI: `build-windows` job in `build.yml` now runs the `contract` step
+      too (previously build+smoke+verify-package only).
+- [x] **Final**: retire autoconf/gnuwin32 from the default path (2026-07-28)
+      — F1-F6 (+F6.3 above) all green on linux/macOS/Windows. `pixi run
+      build`/`install`/`package`/`verify-package`/`smoke`/`contract`/
+      `check` now run the zig pipeline (the old `zig-*`-prefixed task
+      names are gone, folded into the bare names); the old autoconf
+      (unix)/gnuwin32 (windows) pipeline is kept as an explicit `*-legacy`
+      fallback (`build-legacy`, `smoke-legacy`, etc.) for one release, per
+      this item's own original plan, then removable. `check`/`contract`
+      have no zig-Windows equivalent (see F6.3 above and F6.1/F6.2's own
+      scope) — `pixi run check`/`contract` are unix-only on the new
+      default path; Windows keeps `check-legacy`/`contract-legacy` as its
+      only regression-suite/package-contract coverage until Windows'
+      package-compilation contract (Makeconf.win) is done. `.github/
+      workflows/build.yml`: renamed `build`→`build-legacy`, `build-zig`→
+      `build` (added a Windows leg, build+smoke+package/verify only, no
+      check/contract), `build-windows`→`build-windows-legacy`.
+      `recipe/build.sh` (the real rattler-build release pipeline) now
+      calls `zig-build.sh` + `stage.sh` instead of `configure-r.sh`/
+      `build-r.sh`/`install-r.sh` — verified with a real `pixi run -e pkg
+      conda-package` run (not just read through), which took 5 real
+      attempts to go green and found genuine `recipe.yaml` gaps the old
+      autoconf-driven recipe never hit (rattler-build's split
+      build_env/host_env sandbox behaves differently from a single unified
+      pixi dev env — see "Bugs found switching `recipe/build.sh` to zig"
+      below for the four real, root-caused fixes: `harfbuzz`, `unzip`/
+      `gzip`/`tar`/`zip`, and `which`/`sed`/`grep` all missing from
+      `host:`).
+      New wrapper scripts `scripts/zig-stage.sh`/`zig-package.sh`/
+      `zig-verify-package.sh` (mirroring `zig-smoke.sh`'s own prefix-
+      derivation pattern) back the new `install`/`package`/
+      `verify-package` tasks — no `zig-install`/`zig-package`/
+      `zig-verify` equivalents existed before this. Along the way, fixed a
+      real, independent bug in `package-standalone.sh`/`verify-bundle.sh`
+      themselves (not recipe-specific): both hardcoded the packaged
+      archive's top-level directory name as `R-$R_VERSION-$FLAVOR`,
+      silently producing an empty zip/tar whenever `$PREFIX`'s actual
+      basename didn't match exactly — the same gap F4.1 already documented
+      and worked around per-invocation; fixed at the source now that
+      `zig-package`/`zig-verify-package` are first-class default tasks (see
+      F6.3 above for the full detail — found there first, on kappa, before
+      recipe verification even started).
+
+### Bugs found switching `recipe/build.sh` to zig (real, all in
+`recipe/recipe.yaml`, fixed 2026-07-28 — found via 5 real
+`pixi run -e pkg conda-package` attempts, each fixed and re-verified)
+
+`recipe.yaml`'s `host:`/`build:` dependency lists were written against the
+old autoconf-driven `recipe/build.sh`, which never exercised these gaps —
+either because `./configure`'s real feature detection degraded gracefully
+(cairo) or because it resolved tools via a plain `$PATH` search that
+happens to include both rattler-build's `$BUILD_PREFIX/bin` and
+`$PREFIX/bin` inside a build script, unlike this project's own
+vendored-config-replay design (`@ZR_CONDA@`-style subst placeholders,
+resolved from `ctx.conda`/`$CONDA_PREFIX` — a single directory, set by
+`recipe/build.sh` to rattler's host `$PREFIX`, not `$BUILD_PREFIX`).
+Every fix below is the same root shape: something the old path never
+needed as an explicit `host:` (not just `build:`) dependency, because a
+plain `$PATH` search would have found it in `$BUILD_PREFIX` regardless of
+which env variable pointed where.
+
+- **`harfbuzz` headers.** `hb.h` not found compiling `pango-coverage.h`
+  (pulled in by the cairo module's `CAIRO_CPPFLAGS`, which zig-build.sh
+  compiles unconditionally — the equivalent pixi.toml dev env never hit
+  this because something else in its much larger dependency graph happens
+  to pull `libharfbuzz-devel`'s headers in transitively too, but
+  recipe.yaml's narrower host list didn't). Fixed: added `harfbuzz` to
+  `host:`.
+- **`unzip`/`gzip`/`tar`/`zip` missing entirely from the unix `build:`
+  list** — the old autoconf path apparently never invoked these inside
+  the sandbox (or was never exercised there); `build.zig` shells out to
+  `unzip` directly for `share/zoneinfo` and `gzip` for grDevices' afm
+  compression. Fixed: added all four (matching `pixi.toml`'s own
+  `[target.unix.dependencies]` set this recipe otherwise mirrors) to
+  `build:`.
+- **`which` (then `sed`, then proactively `grep`) missing from `host:`.**
+  The deepest and most interesting bug: `@WHICH@`/`@SED@`/`@GREP@` in the
+  vendored subst table are `"@ZR_CONDA@/bin/<tool>"` — an *absolute path*
+  baked into R's own `Sys.which()` fallback and `bin/R`'s `SED=`/`GREP=`
+  variables at build time, resolved from `ctx.conda` (`$CONDA_PREFIX`).
+  `recipe/build.sh` sets `$CONDA_PREFIX="$PREFIX"` (the host env, matching
+  what R needs at *runtime* after install) — but `which`/`sed`/`grep` were
+  only `build:` dependencies, living in `$BUILD_PREFIX/bin`, not
+  `$PREFIX/bin`. The old autoconf path never hit this because
+  `AC_PATH_PROG`-style detection searches `$PATH` (which includes both
+  envs inside a rattler-build script) and bakes in whatever it *finds*,
+  which happens to work at configure time regardless of which prefix
+  variable was set to what. First surfaced as `library(utils)`'s
+  `.onLoad` failing (`Sys.which()` calling a nonexistent binary), fixed
+  for `which`, rebuilt, then hit the identical failure one bootstrap step
+  later for `sed` (`bin/R: line 195: $PREFIX/bin/sed: No such file or
+  directory`) — fixed, and `grep` added proactively in the same pass
+  (identical `@ZR_CONDA@/bin/grep[-flags]` pattern in `EGREP`/`FGREP`/
+  `GREP`, not yet hit by a real failure but the same bug waiting to
+  happen) rather than doing a fifth round trip just to rediscover it.
+  `AWK="gawk"` (no baked absolute path, `$PATH`-resolved) isn't affected.
+  Unix-only fix — this whole subst-table mechanism belongs to
+  `installStaticTree`/`mkRbase`, which `buildWindows()` never uses (no
+  `bin/R` front script on Windows, per F6.0).
 
 ### Bugs found by F1.2 (real, both in `loadSubstTable`/build.zig, fixed 2026-07-24)
 
@@ -471,8 +739,8 @@ a carried-forward gotcha catalog.
 - [x] openblas flavor (-Dblas=openblas) (2026-07-24, see F3.2 above)
 - [x] macOS (gfortran table entry, Mach-O/codesign handling in zig build)
       (2026-07-27, on omicron — see F5.1/F5.2 above)
-- [ ] Windows (replaces gnuwin32 — the big prize) — F6, needs kappa (real
-      hardware) access
+- [x] Windows (replaces gnuwin32 as the default — the big prize) — F6
+      (2026-07-27/28, on kappa — see F6.0-F6.3 above and the Final item)
 - [ ] `zig build fetch` (retire fetch-r.sh) — not attempted; still a real
       gap, low priority (fetch-r.sh is a one-line curl+checksum, no
       correctness risk in leaving it as-is)

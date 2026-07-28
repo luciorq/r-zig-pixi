@@ -169,7 +169,15 @@
 /* Define to 1 if you have the <curl/curl.h> header file.
    Set on the command line where supported (used via USE_LIBCURL)
 */
-/* #undef HAVE_CURL_CURL_H */
+/* Real gnuwin32's own Makefile.win files pass -DHAVE_CURL_CURL_H per
+   compile group (no shared config.h define) since MkRules defaults
+   USE_LIBCURL to yes with no subst table to source it from centrally;
+   define it here instead so every compile unit sees it uniformly,
+   matching HAVE_LIBCURL below (needed by platform.c's do_capabilities —
+   capabilities()$libcurl is a straight #ifdef HAVE_LIBCURL check, found
+   via a real capabilities() gap: it does NOT depend on whether
+   modules/internet.dll exists at runtime, unlike capabilities()$cairo). */
+#define HAVE_CURL_CURL_H 1
 
 /* Define if the GNU dcgettext() function is already present or preinstalled.
    */
@@ -465,7 +473,7 @@
 /* Define if your system has libcurl >= 7.28.0 with support for https.
    Set on the command line where supported.  (used via USE_LIBCURL)
  */
-/* #undef HAVE_LIBCURL */
+#define HAVE_LIBCURL 1
 
 /* Define if __libc_stack_end is visible. */
 /* #undef HAVE_LIBC_STACK_END */
@@ -1243,7 +1251,16 @@
 /* #undef TYPEOF_STRUCT_STAT_ST_ATIM_IS_STRUCT_TIMESPEC */
 
 /* Define to use ICU for collation. */
-/* #undef USE_ICU */
+/* gnuwin32's own static fixed/h/config.h ships this commented out, but its
+   real build always links ICU (MkRules defaults USE_ICU to YES and passes
+   -DUSE_ICU on the relevant compile lines) — capabilities()$ICU is TRUE on
+   the real gnuwin32 build (verified on kappa). Since this vendored config.h
+   is included via HAVE_CONFIG_H on every compile group, defining it here
+   directly (rather than replaying per-file -D flags, which gnuwin32 has no
+   subst table to source them from) reproduces that real behavior; needs
+   icuin/icuuc/icudt linked into R.dll to match (see linkCoreLibs's Windows
+   branch / buildWindows's R.dll link list). */
+#define USE_ICU 1
 
 /* Define to use Apple's ICU. */
 /* #undef USE_ICU_APPLE */

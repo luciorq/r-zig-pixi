@@ -45,6 +45,18 @@ requirements:
         - grep
         - gawk
         - which
+        # unzip: build.zig shells out to it directly for share/zoneinfo
+        # (zoneinfo.zip); gzip: grDevices' afm compression; tar/zip: not
+        # invoked by the R build itself but kept for parity with pixi.
+        # toml's own [target.unix.dependencies] set this recipe otherwise
+        # mirrors — real gap found via a real `pixi run -e pkg
+        # conda-package` run ("failed to spawn ... unzip: FileNotFound"),
+        # since the old autoconf path apparently never needed them in the
+        # rattler-build sandbox specifically (or was never exercised there).
+        - unzip
+        - gzip
+        - tar
+        - zip
     # gnuwin32 has no `configure`/autoconf step, so none of the unix
     # GNU-text-tool deps above apply — instead it needs the msys
     # userland to run at all (native make can't spawn the extensionless
@@ -69,6 +81,39 @@ requirements:
         - m2-unzip
         - m2-zip
   host:
+    # `which`: also needed here, not just build: — build.zig bakes an
+    # absolute "$CONDA_PREFIX/bin/which" path into R's own Sys.which()
+    # fallback (the @WHICH@ subst-table entry, substituted from whatever
+    # $CONDA_PREFIX/ctx.conda resolves to at build time), and recipe/
+    # build.sh points $CONDA_PREFIX at $PREFIX (host), not $BUILD_PREFIX —
+    # unlike the old autoconf path, which found `which` via a plain $PATH
+    # search (which already includes both build_env and host_env bins in
+    # a rattler-build script), this vendored-config-replay design needs
+    # the tool to exist at the SAME prefix its own path substitution
+    # points at. Found via a real `pixi run -e pkg conda-package` run:
+    # bootstrap's very first `library(utils)` load failed with ".onLoad
+    # failed ... error in running command" — traced to Sys.which() calling
+    # a `which` binary that didn't exist under $PREFIX/bin at all (only
+    # under $BUILD_PREFIX/bin, a plain build: dependency). stage.sh's own
+    # `bin/toolchain/which` rewrite (see TODO.md's gotcha catalog) fixes
+    # this up for the FINAL installed package; this fixes the bootstrap
+    # phase itself, before stage.sh has run. Unix-only: this @WHICH@
+    # subst-table mechanism is part of installStaticTree/mkRbase, which
+    # buildWindows() doesn't use at all (no bin/R front script on Windows,
+    # per F6.0 — Rscript.exe is the only front-end there).
+    # `sed`: same exact bug, confirmed by a real failure one step later
+    # ("$PREFIX/bin/sed: No such file or directory" from bin/R's own
+    # @SED@-substituted SED= line, R.sh.in's front-end argument parser).
+    # `grep`: not yet hit by a real failure, but SED's sibling GREP/EGREP/
+    # FGREP subst entries use the identical "@ZR_CONDA@/bin/grep[-flags]"
+    # pattern — added proactively rather than waiting for the next
+    # whack-a-mole round trip; AWK is a bare "gawk" (PATH-resolved, no
+    # baked absolute path) so it isn't part of this class of bug.
+    - if: unix
+      then:
+        - which
+        - sed
+        - grep
     # Fortran runtime: linked into libR, must be in host too
     - if: linux64
       then:
@@ -93,6 +138,19 @@ requirements:
     - freetype
     - libpng
     - glib
+    # pango/cairo only pull in libharfbuzz (the runtime .so) as their own
+    # transitive run dependency, not the headers — the vendored
+    # CAIRO_CPPFLAGS build.zig applies unconditionally references
+    # <include>/harfbuzz/hb.h directly (pango-coverage.h's own #include),
+    # a real gap only surfaced once zig-build.sh started compiling the
+    # cairo module unconditionally in the rattler-build sandbox (found via
+    # a real "'hb.h' file not found" error, verified with a real `pixi run
+    # -e pkg conda-package` run) — the equivalent pixi.toml dev env never
+    # hit this because something else in its much larger dependency graph
+    # happens to pull the headers package in transitively too. Build-time
+    # only: end users don't need hb.h, and libharfbuzz.so is already
+    # pulled in at runtime via pango's own run dependency.
+    - harfbuzz
     # conda-forge's linux cairo needs xorg proto headers even though R
     # builds --with-x=no (pkg-config chain, not an actual X11 dep)
     - if: linux

@@ -42,7 +42,13 @@ if [ "$ext" = zip ]; then
 else
   tar -xzf "$artifact" -C "$VERIFY_DIR"
 fi
-BUNDLE_DIR="$VERIFY_DIR/R-$R_VERSION-$FLAVOR"
+# Same $PREFIX-basename derivation as package-standalone.sh's own
+# prefix_base fix — the archive's top-level directory name matches
+# whatever $PREFIX actually was at package time (zig-built prefixes carry
+# a "-zig" suffix), not a hardcoded "R-$R_VERSION-$FLAVOR" (found via a
+# real verify-bundle run against a zig-built prefix on kappa: extraction
+# succeeded but the hardcoded BUNDLE_DIR guess didn't exist).
+BUNDLE_DIR="$VERIFY_DIR/$(basename "$PREFIX")"
 
 CHECK_R='
 stopifnot(max(abs(solve(matrix(c(2,0,0,2),2,2)) - matrix(c(.5,0,0,.5),2,2))) < 1e-9)

@@ -866,7 +866,13 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // so zig's dynamic-lookup naming (which tries {name}.lib, not
     // lib{name}.lib) misses it under the plain "bz2" name — found via a real
     // link error.
-    for ([_][]const u8{ "gdi32", "user32", "comctl32", "ole32", "uuid", "winmm", "version", "deflate", "pcre2-8", "z", "libbz2", "lzma", "zstd" }) |lib|
+    // icuin/icuuc/icudt: USE_ICU is now on in the vendored config.h (see its
+    // own comment) — platform.c/util.c/registryTZ.c's ICU collation code
+    // needs these at link time. conda-forge's Windows ICU import libs use
+    // ICU4C's short Windows component names (icuin = i18n, not icui18n like
+    // unix) with no lib-prefix quirk this time (plain icuin.lib/icuuc.lib/
+    // icudt.lib, verified present in the pixi env's Library/lib).
+    for ([_][]const u8{ "gdi32", "user32", "comctl32", "ole32", "uuid", "winmm", "version", "deflate", "pcre2-8", "z", "libbz2", "lzma", "zstd", "icuin", "icuuc", "icudt" }) |lib|
         r_final_mod.linkSystemLibrary(lib, .{ .use_pkg_config = .no });
     linkFortranRt(ctx, r_final_mod);
     // No Windows compile group currently sets `.openmp = true` (appl_c/
@@ -900,6 +906,73 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     lapmod.linkLibrary(libR);
     linkFortranRt(ctx, lapmod);
     const mod_lapack = addSharedLib(ctx, "mod_lapack", lapmod);
+
+    // modules/internet.dll (unix's mod_internet equivalent, same source
+    // list — rspec.internet_c) — capabilities()$libcurl/http-ftp were
+    // FALSE (this module simply didn't exist on Windows yet, found via a
+    // real capabilities() check on kappa, not anticipated in F6.1/F6.2's
+    // own spec). Ground truth from src/modules/internet/Makefile.win: same
+    // 6 sources as unix, links -lR -lRgraphapp plus -lwininet -lws2_32
+    // (gnuwin32's own EXTRA_LIBS) and libcurl itself.
+    const inetmod = newCMod(ctx);
+    inetmod.addIncludePath(ctx.geninc);
+    inetmod.addIncludePath(ctx.path("src/include"));
+    // Same psignal.h/trioremap.h need as r_core_mod/rscript_mod/rterm_mod
+    // above (Defn.h pulls psignal.h in unconditionally) — found via a real
+    // compile error.
+    inetmod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
+    addCGroup(ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{
+        // -DHAVE_CURL_CURL_H/-DHAVE_LIBCURL: Makefile.win's own
+        // libcurl-CPPFLAGS, gating libcurl.c's real (non-stub) code path.
+        .extra = &.{ "-I%S/src/extra/graphapp", "-DHAVE_CURL_CURL_H", "-DHAVE_LIBCURL" },
+    });
+    inetmod.linkLibrary(libR);
+    inetmod.linkLibrary(rgraphapp);
+    // "libcurl" not "curl": same lib-prefix naming quirk as libbz2/libpng
+    // above (conda-forge's Windows import lib is libcurl.lib).
+    for ([_][]const u8{ "libcurl", "wininet", "ws2_32" }) |lib|
+        inetmod.linkSystemLibrary(lib, .{ .use_pkg_config = .no });
+    const mod_internet = addSharedLib(ctx, "mod_internet", inetmod);
+
+    // ------------------------------------------------------------------
+    // Package-compilation contract: native "gcc.exe"/"g++.exe" wrappers.
+    // R's own Windows system()/CreateProcess call (do_system in sys-
+    // win32.c -> runcmd_timeout -> pcreate -> CreateProcess with
+    // lpApplicationName=NULL) only ever auto-appends ".exe" when
+    // resolving a bare command name from the command line it's given —
+    // it does NOT consult PATHEXT the way cmd.exe does, so it can never
+    // find a bash-script "gcc"/"g++" shim (extensionless, or even a
+    // ".bat" wrapper around one), no matter where on PATH it sits or
+    // whether Makeconf's BINPREF points at it directly. Confirmed
+    // empirically on kappa: `system("gcc --version")` silently resolved
+    // to conda-forge's OWN real gcc.exe elsewhere on PATH instead of a
+    // prepended shim — meaning package compilation on Windows (both this
+    // build AND the legacy gnuwin32 one, which has the identical bare
+    // `CC = $(BINPREF)$(CCBASE)` line) never actually exercised zig at
+    // all. Fixed with a real PE executable: zigbuild/tools/win-exec-
+    // forward.c just re-execs the existing toolchain/zig-cc(xx) shim via
+    // bash, unmodified — every actual compiler-flag decision (SONAME
+    // injection, -fno-sanitize=undefined, MinGW -l search fixes, OpenMP
+    // wiring) stays in that one shared bash script, not duplicated here.
+    // ctx.conda may still carry native (backslash) separators on Windows
+    // (unlike src_abs, which is normalized once at the top of `build()`)
+    // — a literal backslash inside the C string literal this feeds into
+    // (via -DBASH_PATH="...") is an escape-sequence introducer, so the
+    // compiler rejects it outright (found via a real "\U used with no
+    // following hex digits" compile error, the same class of bug F6.2's
+    // R-code-string fix already covers, just hitting a C string literal
+    // instead of an R one this time).
+    const bash_abs = std.mem.replaceOwned(u8, arena, ctx.absSub("{s}/Library/usr/bin/bash.exe", .{ctx.conda}), "\\", "/") catch @panic("OOM");
+    // Worktree-relative, not R_HOME-relative — matches the rest of this
+    // build's own convention (e.g. unix's raw installed Makeconf also
+    // bakes a worktree-absolute toolchain path; only stage.sh's later,
+    // separate normalization pass makes it relocatable). Good enough for
+    // the contract test itself, which runs directly against the
+    // freshly-built prefix, not a moved one.
+    const zig_cc_abs = std.mem.replaceOwned(u8, arena, b.pathFromRoot("toolchain/zig-cc"), "\\", "/") catch @panic("OOM");
+    const zig_cxx_abs = std.mem.replaceOwned(u8, arena, b.pathFromRoot("toolchain/zig-cxx"), "\\", "/") catch @panic("OOM");
+    const win_gcc_exe = winCompilerWrapper(ctx, "gcc", bash_abs, zig_cc_abs);
+    const win_gxx_exe = winCompilerWrapper(ctx, "g++", bash_abs, zig_cxx_abs);
 
     // ------------------------------------------------------------------
     // Rscript.exe — the ONLY front-end built (F6.0): same unix/Rscript.c
@@ -961,6 +1034,71 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     rterm.stack_size = 0x4000000;
 
     // ------------------------------------------------------------------
+    // R.exe: the "R CMD <subcommand>" dispatcher — genuinely required for
+    // `install.packages(type="source")` to work at all, not optional the
+    // way Rgui.exe/R.exe's OWN interactive use is (F6.0's original "no
+    // R.exe" call only ever checked whether smoke/contract *invoked* it
+    // directly, not whether R's own package-installer code shells out to
+    // it internally). Found via a real contract-test failure: `utils::
+    // install.packages()` hardcodes `cmd0 <- file.path(R.home("bin"), "R")`
+    // (src/library/utils/R/packages2.R) unconditionally — both the serial
+    // AND the Ncpus>1 parallel-Makefile install paths — so without a real
+    // `bin/x64/R.exe`, package installation fails immediately with "No
+    // such file or directory", regardless of how the C/C++/Fortran
+    // toolchain itself is wired.
+    //
+    // Rather than reimplement rcmdfn.c's ~15-subcommand CMD dispatch
+    // logic (INSTALL/SHLIB/REMOVE/build/check/Rprof/Rdiff/...) from
+    // scratch, compile the REAL gnuwin32 sources — R.exe's own real
+    // recipe (front-ends/Makefile: `R.exe: R.o ../rhome.o ../shext.o
+    // rcico.o rcmdfn.o Renviron.o`), minus rcico.o (icon/manifest
+    // resource — cosmetic, same "no icon resource" precedent as Rterm.exe
+    // above). Every subcommand rcmdfn.c dispatches to is itself just a
+    // templated `Rterm.exe -e tools:::.foo() ... --args ...` string it
+    // re-execs (verified by reading rcmdfn.c directly) — the real logic
+    // lives in R code this build already has, not in C we'd be
+    // duplicating.
+    const rcmd_mod = newCMod(ctx);
+    rcmd_mod.addIncludePath(ctx.geninc);
+    rcmd_mod.addIncludePath(ctx.path("src/include"));
+    rcmd_mod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
+    addCGroup(ctx, rcmd_mod, "src/gnuwin32/front-ends", &.{"R.c"}, .{
+        .extra = &.{"-I%S/src/gnuwin32"},
+    });
+    addCGroup(ctx, rcmd_mod, "src/gnuwin32/front-ends", &.{"rcmdfn.c"}, .{
+        // BINDIR="bin/x64": rcmdfn.c templates "<RHome>/<BINDIR>/Rterm.exe"
+        // for every subcommand it dispatches to. Real gnuwin32 value is
+        // `BINDIR=bin$(R_ARCH)` (MkRules.rules) — NOT just the arch
+        // component — found via a real "system cannot find the path
+        // specified" failure traced all the way down to a literal
+        // Test-Path check on the constructed path, which was missing the
+        // "bin/" segment entirely (RHome/x64/Rterm.exe instead of
+        // RHome/bin/x64/Rterm.exe). R_ARCH="x64": rcmdfn.c's own
+        // R_ARCH=... environment-variable propagation to the Rterm.exe
+        // child it launches (same macro every other R_ARCH-aware compile
+        // group here already needs).
+        .extra = &.{ "-I%S/src/gnuwin32", "-DBINDIR=\"bin/x64\"", "-DR_ARCH=\"x64\"" },
+    });
+    // rhome.c/shext.c NOT compiled here — they're already part of
+    // R.dll's own win_gnuwin32_c group (rhome.o/shext.o are directly in
+    // R.dll's real link recipe too, per gnuwin32/Makefile's R-DLLOBJS),
+    // and linking libR already provides getRHOME/getRUser/etc — compiling
+    // them again here duplicate-defines the same symbols against libR's
+    // own exports (found via a real "duplicate symbol: getRHOME" link
+    // error, since zig/lld-link exports every public symbol from a DLL
+    // by default, same class of issue as F6.2's loadRconsole collision).
+    addCGroup(ctx, rcmd_mod, "src/main", &.{"Renviron.c"}, .{
+        // -DRENVIRON_WIN32_STANDALONE: front-ends/Makefile's own
+        // Renviron.o recipe — a standalone-parsing mode distinct from
+        // Renviron.c's normal compile as part of r_core_mod above.
+        .extra = &.{"-DRENVIRON_WIN32_STANDALONE"},
+    });
+    rcmd_mod.linkLibrary(libR);
+    rcmd_mod.linkLibrary(rgraphapp);
+    rcmd_mod.linkSystemLibrary("shlwapi", .{ .use_pkg_config = .no });
+    const rcmd = b.addExecutable(.{ .name = "R", .root_module = rcmd_mod });
+
+    // ------------------------------------------------------------------
     // Install: bin/x64/ is gnuwin32's own arch-specific binary dir
     // convention (matches smoke-test.sh's existing lookup path).
     // "Library/lib/R", not "lib/R" — must match ctx.rhome (NTFS is
@@ -985,8 +1123,12 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rgraphapp.getEmittedBin(), bin_dir, "Rgraphapp.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(riconv.getEmittedBin(), bin_dir, "Riconv.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_lapack.getEmittedBin(), modules_dir, "lapack.dll").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_internet.getEmittedBin(), modules_dir, "internet.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript.getEmittedBin(), bin_dir, "Rscript.exe").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rterm.getEmittedBin(), bin_dir, "Rterm.exe").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rcmd.getEmittedBin(), bin_dir, "R.exe").step);
+
+    try installWindowsCompilerContract(ctx, io, win_gcc_exe, win_gxx_exe);
 
     // ------------------------------------------------------------------
     // Base-package shared libs (library/<pkg>/libs/x64/<pkg>.dll — R's
@@ -1000,6 +1142,9 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // as later steps reveal more (same iterative approach as the rest of
     // this build.zig).
     var win_pkg_libs = std.ArrayList(WinPkgLib).empty;
+    // Set inside the grDevices block below; winCairo.dll links against it
+    // (gnuwin32's own cairo/Makefile.win: `PKG_LIBS = $(CAIRO_LIBS) -L.. -lgrDevices`).
+    var grdevices_lib: ?*std.Build.Step.Compile = null;
     {
         const m = newPkgMod(ctx, "src/library/tools/src", &rspec.tools_c, .{
             .extra = &.{"-I%S/src/main"},
@@ -1040,8 +1185,44 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         // (no webp/libwebp lib file anywhere in Library/lib).
         for ([_][]const u8{ "libpng", "tiff", "jpeg", "zstd", "z", "lzma" }) |lib|
             m.linkSystemLibrary(lib, .{ .use_pkg_config = .no });
-        try win_pkg_libs.append(b.allocator, .{ .pkg = "grDevices", .lib = addSharedLib(ctx, "pkg_grDevices", m) });
+        grdevices_lib = addSharedLib(ctx, "pkg_grDevices", m);
+        try win_pkg_libs.append(b.allocator, .{ .pkg = "grDevices", .lib = grdevices_lib.? });
     }
+
+    // grDevices/libs/x64/winCairo.dll: a SEPARATE device DLL from
+    // grDevices.dll itself (distinct from grDevices' own devWindows.c
+    // device) — capabilities()$cairo was FALSE without it (a real gap
+    // found via kappa's capabilities() check, not just F6.2's already-
+    // documented "still deferred" note). Ground truth from gnuwin32's real
+    // src/library/grDevices/src/cairo/Makefile.win: one source (cairoBM.c),
+    // linked against grDevices.dll itself (-lgrDevices) plus cairo
+    // (CAIRO_LIBS/CAIRO_CPPFLAGS — Windows has no subst table to source
+    // these from, so they're the literal values scripts/build-gnuwin32.sh's
+    // own live CONDA_PREFIX patch already uses: -lcairo -lfontconfig).
+    const win_cairo = blk: {
+        const m = newCMod(ctx);
+        m.addIncludePath(ctx.geninc);
+        m.addIncludePath(ctx.path("src/include"));
+        addCGroup(ctx, m, "src/library/grDevices/src/cairo", &.{"cairoBM.c"}, .{
+            .extra = &.{
+                "-I%S/src/library/grDevices/src/cairo",
+                "-I%S/src/library/grDevices/src",
+                "-I%C/Library/include/cairo",
+                "-I%C/Library/include/freetype2",
+            },
+        });
+        // cairoBM.c/cairoFns.c call R API + graphics-engine functions
+        // (Rf_cons, R_GlobalEnv, GEcurrentDevice, ...) directly, not just
+        // through grDevices.dll — gnuwin32's real Makefile.win link line
+        // (`-lgrDevices` only) relies on gcc's transitive DLL relinking,
+        // which lld-link does not replicate; needs libR explicitly too
+        // (found via a real ~80-symbol undefined-symbol link error).
+        m.linkLibrary(libR);
+        m.linkLibrary(grdevices_lib.?);
+        for ([_][]const u8{ "cairo", "fontconfig" }) |lib|
+            m.linkSystemLibrary(lib, .{ .use_pkg_config = .no });
+        break :blk addSharedLib(ctx, "winCairo", m);
+    };
     {
         // grDevices' own bootstrap step (`tools:::makeLazyLoading
         // ("grDevices")`) transitively loadNamespace()s utils (a NAMESPACE
@@ -1120,7 +1301,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // find) — `Rscript.exe --version` works either way (doesn't touch
     // R_HOME's tree at all), but `-e` needs the full bootstrap below.
     // ------------------------------------------------------------------
-    const libstage_dir = try installLibraryWindows(ctx, io, win_pkg_libs.items);
+    const libstage_dir = try installLibraryWindows(ctx, io, win_pkg_libs.items, win_cairo);
     const boot_step = try bootstrap(ctx, io, libstage_dir.getDirectory());
 
     const top = b.step("r", "Build R.dll+Rblas+Rlapack+Rgraphapp+Riconv+Rscript.exe (Windows, CLI-only — F6.0)");
@@ -1130,14 +1311,95 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
 
 const WinPkgLib = struct { pkg: []const u8, lib: *std.Build.Step.Compile };
 
+/// Package-compilation contract on Windows: bundles a real toolchain into
+/// Library/lib/R/bin/toolchain/ (gcc.exe/g++.exe — the native forwarder
+/// wrappers built above; the MinGW binutils, plain copies from the conda
+/// env) and installs etc/x64/Makeconf (subst of the vendored gnuwin32
+/// Makeconf.win) with BINPREF pointed at that directory — so
+/// `$(BINPREF)$(CCBASE)` etc. resolve to real, absolute, working paths
+/// rather than a bare name that Windows would resolve to whatever
+/// unrelated compiler happens to be on PATH. gfortran is NOT bundled here
+/// (see the FC replacement below) — it internally locates its own f951
+/// backend relative to its own install location, so a standalone copy
+/// breaks it; FC points straight at the conda env's original gfortran.exe
+/// instead.
+fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build.Step.Compile, win_gxx_exe: *std.Build.Step.Compile) !void {
+    const b = ctx.b;
+    const toolchain_dir: std.Build.InstallDir = .{ .custom = "Library/lib/R/bin/toolchain" };
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_gcc_exe.getEmittedBin(), toolchain_dir, "gcc.exe").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_gxx_exe.getEmittedBin(), toolchain_dir, "g++.exe").step);
+
+    // Real conda-forge MinGW binutils — plain copies, no wrapper needed
+    // (already real .exe files, and none of them have gfortran's own
+    // relative-lookup problem). They ship only under the
+    // x86_64-w64-mingw32- prefix.
+    for ([_][]const u8{ "ar", "ranlib", "nm", "dlltool", "strip", "as", "ld", "windres" }) |t| {
+        const src: std.Build.LazyPath = .{ .cwd_relative = ctx.absSub("{s}/Library/bin/x86_64-w64-mingw32-{s}.exe", .{ ctx.conda, t }) };
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(src, toolchain_dir, ctx.absSub("{s}.exe", .{t})).step);
+    }
+
+    // etc/x64/Makeconf: subst of the vendored gnuwin32 Makeconf.win.
+    // Real values for the handful of @VAR@ placeholders it carries
+    // (gnuwin32's own fixed/Makefile substitutes these; captured from a
+    // real generated Makeconf on kappa's milestone-3 gnuwin32 objdir,
+    // same vendoring discipline as config.h/Rconfig.h) — none are
+    // @ZR_*@/config.status-style, this file predates that mechanism.
+    const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot("zigbuild/config/win-x86_64-full/Makeconf.win"), b.allocator, .limited(1024 * 1024));
+    var mkc = raw;
+    const toolchain_abs = ctx.absSub("{s}/Library/lib/R/bin/toolchain", .{ctx.prefix});
+    // ctx.conda may carry native backslash separators (see the bash_abs
+    // comment above) — this ends up embedded in a Makefile variable, not
+    // a C string literal, so it wouldn't break the *build* the same way,
+    // but normalize anyway for consistency with every other path this
+    // build.zig bakes in.
+    const conda_fwd = std.mem.replaceOwned(u8, b.allocator, ctx.conda, "\\", "/") catch @panic("OOM");
+    const replacements = [_][2][]const u8{
+        .{ "BINPREF =", b.fmt("BINPREF = {s}/", .{toolchain_abs}) },
+        // IMPDIR = bin/x64, not the vendored template's bare "bin" —
+        // real gnuwin32 value (`bin$(R_ARCH)`, confirmed against a real
+        // generated Makeconf on kappa) — LIBR/BLAS_LIBS/LAPACK_LIBS all
+        // key off it to find R.dll/Rblas.dll/Rlapack.dll, which live in
+        // the arch subdir, not directly under bin/ (found via a real
+        // "unable to find dynamic system library 'R'" link error).
+        .{ "IMPDIR = bin", "IMPDIR = bin/x64" },
+        // LDFLAGS: empty in both the vendored template AND a real
+        // generated Makeconf (gnuwin32 provides external-library search
+        // paths via MkRules.local's LOCAL_SOFT, sourced only at R's OWN
+        // build time — nothing sources it for package builds afterward).
+        // CRAN packages routinely link bare "-lz"/"-lpng" etc. expecting
+        // *some* global search path to exist; point it at the conda env
+        // directly (found via a real "unable to find dynamic system
+        // library 'z'" link error compiling data.table).
+        .{ "LDFLAGS =", b.fmt("LDFLAGS = -L\"{s}/Library/lib\"", .{conda_fwd}) },
+        // FC: NOT routed through BINPREF/toolchain like CC/CXX — gfortran
+        // internally locates its own backend (f951) relative to its OWN
+        // install location (a libexec/gcc/... tree alongside the real
+        // binary), so a standalone copy elsewhere breaks it ("cannot
+        // execute 'f951': CreateProcess: No such file or directory",
+        // found via a real minqa compile failure). Point FC straight at
+        // the conda env's own gfortran.exe — the same absolute location
+        // fortranOne's own bare "gfortran" PATH lookup already resolves
+        // to successfully when building R itself.
+        .{ "FC = $(BINPREF)gfortran $(M_ARCH)", b.fmt("FC = \"{s}/Library/bin/gfortran.exe\"", .{conda_fwd}) },
+        .{ "@CSTD@", "-std=gnu2x" },
+        .{ "@EOPTS@", "" },
+        .{ "@SANOPTS@", "" },
+        .{ "@OPENMP@", "-fopenmp" },
+        .{ "@PTHREAD@", "-pthread" },
+        .{ "@SYMPAT@", "'s/^.* [BCDRT] / /p'" },
+    };
+    for (replacements) |r| mkc = try std.mem.replaceOwned(u8, b.allocator, mkc, r[0], r[1]);
+    const mkc_wf = b.addWriteFiles();
+    const mkc_out = mkc_wf.add("Makeconf", mkc);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(mkc_out, .{ .custom = "Library/lib/R/etc/x64" }, "Makeconf").step);
+}
+
 /// Windows equivalent of installStaticTree: stages library/ (via the shared
 /// stageLibraryPayload), share/, doc/, and include/ under ctx.rhome
 /// (Library/lib/R/...). No bin/R wrapper, no etc/{Renviron,ldpaths,
-/// Makeconf,javaconf} — Rscript.exe is the only front end (F6.0) and the
-/// package-compilation contract (Makeconf.win wiring) is still deferred
-/// (F6.1/1b territory), so there's nothing to consume those yet; revisit if
-/// bootstrap or a real package build turns out to need one of them after all.
-fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib) !*std.Build.Step.WriteFile {
+/// javaconf} — Rscript.exe is the only front end (F6.0); Makeconf is
+/// installed separately by installWindowsCompilerContract, above.
+fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win_cairo: *std.Build.Step.Compile) !*std.Build.Step.WriteFile {
     const b = ctx.b;
     const inst = b.getInstallStep();
     const libstage = b.addWriteFiles();
@@ -1149,6 +1411,11 @@ fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib) !*s
     for (pkg_libs) |pl| {
         _ = libstage.addCopyFile(pl.lib.getEmittedBin(), b.fmt("{s}/libs/x64/{s}.dll", .{ pl.pkg, pl.pkg }));
     }
+    // winCairo.dll: NOT a package DLL (no R-level package named "winCairo"),
+    // it's an extra file dropped into grDevices' own libs dir — ground
+    // truth from gnuwin32's real installed tree
+    // (library/grDevices/libs/x64/winCairo.dll).
+    _ = libstage.addCopyFile(win_cairo.getEmittedBin(), "grDevices/libs/x64/winCairo.dll");
 
     // include/ (public headers) — not consumed by anything yet (package
     // compilation isn't wired up on Windows), but installed alongside
@@ -1410,6 +1677,30 @@ fn newCMod(ctx: *const Ctx) *std.Build.Module {
         },
     }
     return m;
+}
+
+/// A minimal native PE wrapper (see zigbuild/tools/win-exec-forward.c) that
+/// re-execs `script_abs` via `bash_abs`, forwarding argv unmodified — the
+/// real "gcc.exe"/"g++.exe" Makeconf.win's BINPREF points at (see the
+/// package-compilation-contract comment in buildWindows for why a bash
+/// script alone, even with an absolute path, can't be found by R's own
+/// system() call).
+fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, bash_abs: []const u8, script_abs: []const u8) *std.Build.Step.Compile {
+    const b = ctx.b;
+    const m = b.createModule(.{
+        .target = ctx.target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+    });
+    m.addCSourceFile(.{
+        .file = b.path("zigbuild/tools/win-exec-forward.c"),
+        .flags = &.{
+            "-std=gnu23",
+            b.fmt("-DBASH_PATH=\"{s}\"", .{bash_abs}),
+            b.fmt("-DSCRIPT_PATH=\"{s}\"", .{script_abs}),
+        },
+    });
+    return b.addExecutable(.{ .name = name, .root_module = m });
 }
 
 /// Every shared lib/module/package .so in this build (base packages don't

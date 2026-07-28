@@ -18,6 +18,12 @@ mkdir -p build
 mv R-src "build/R-$R_VERSION"
 chmod +x toolchain/zig-* scripts/*.sh
 
-bash scripts/configure-r.sh
-bash scripts/build-r.sh
-bash scripts/install-r.sh
+# zig build alone (no autoconf, no make) — the default path since
+# Milestone 5's F1-F6 (see .github/devdocs/feat-zig-build/). $R_INSTALL_
+# PREFIX is already rattler's own $PREFIX (set above), so zig-build.sh's
+# PREFIX_ZIG resolves to it directly (no "-zig" suffix leaks into the
+# conda package). stage.sh normalizes the result for conda-package use
+# (dual rpath, launcher shims, etc) — same tail call install-r.sh used to
+# make for the legacy path.
+bash scripts/zig-build.sh
+bash scripts/stage.sh

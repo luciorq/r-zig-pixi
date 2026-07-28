@@ -22,11 +22,34 @@ genuinely deep, hard-won bugs (an `R_ARCH` macro needed in two separate
 compile groups, Windows-native backslash paths breaking R string literals,
 a cross-DLL symbol name collision, and a silent `exit(10)` traced all the
 way to a missing `etc/Rconsole` file) and is worth reading before touching
-`buildWindows()` again. **Remaining work is package-compilation-contract
-territory** (Makeconf.win wiring, full `etc/`, `tcltk`'s real Tcl/Tk
-linking) — not required for the CLI-only, headless R this milestone
-targets, but needed before `R CMD INSTALL`-style package builds work on
-Windows the way F1.2 already proved they do on unix.
+`buildWindows()` again. **F6.3 (2026-07-28) then found and fixed a real
+gap in F6.2's own acceptance bar**: the full `smoke-test.sh` capability
+profile (as opposed to just `-e` evaluating real code) had never actually
+been run to completion on Windows — doing so while preparing to retire the
+legacy default path found `capabilities()` genuinely FALSE for `libcurl`/
+`ICU`/`cairo`. All three fixed and verified (see F6.3 in the task
+checklist below, and TODO.md's own F6.3 entry for the full detail).
+
+**Status (2026-07-28): the "Final" item is also done** — autoconf/gnuwin32
+retired from the default path project-wide (`pixi run build`/`smoke`/
+`contract`/`check`/`install`/`package`/`verify-package` all run the zig
+pipeline now; the old pipeline survives as an explicit `*-legacy` fallback
+for one release). See the "Final" entry in TODO.md's checklist for the
+exact task/CI/recipe changes.
+
+**Status (2026-07-28, same day): F7 (Windows package-compilation
+contract) is also done** — originally scoped out of this milestone
+entirely ("not required for the CLI-only, headless R this milestone
+targets"), then done anyway on direct request right after Final wrapped
+up. `pixi run contract` now passes on Windows exactly like linux/macOS:
+Rcpp/data.table/minqa all compile and run through the real zig/gfortran
+toolchain via `install.packages(type="source")`. This needed a real
+`R.exe` (contradicting F6.0's original "not needed" finding — see F7 in
+the task checklist below and TODO.md's F7 entry for the full detail: a
+native `gcc.exe`/`g++.exe` forwarder, the real `rcmdfn.c`/`R.c` gnuwin32 sources,
+and several Makeconf.win values that were wrong even in the vendored
+template's defaults). `tcltk`'s real Tcl/Tk linking remains genuinely out
+of scope (not attempted, not needed by the contract test).
 
 ## Where things stand
 
@@ -871,9 +894,25 @@ summary of TODO.md, not the other way around.
 - [x] **F6.2** Windows layout (`Library/lib/R`, ICU_PATH) + traps; kappa
       green — done 2026-07-27, `Rscript.exe -e` evaluates real R code
       with default flags
-- [ ] **Final**: retire autoconf/gnuwin32 from the default path once all
-      six phases green on all platforms; keep them as a fallback one
-      release, then remove
+- [x] **F6.3** Windows capability-profile gaps (libcurl/ICU/cairo) found
+      + fixed — done 2026-07-28 on kappa; see TODO.md's F6.3 entry for the
+      full detail (root causes, ground truth, and a real
+      package-standalone.sh/verify-bundle.sh basename bug found+fixed
+      along the way)
+- [x] **Final**: retire autoconf/gnuwin32 from the default path — done
+      2026-07-28; see TODO.md's Final entry for the exact task/CI/recipe
+      changes. Kept as `*-legacy` for one release per this item's own plan.
+- [x] **F7**: Windows package-compilation contract — done 2026-07-28 on
+      kappa, originally out of scope for this milestone; see TODO.md's F7
+      entry for the full detail (a native `gcc.exe`/`g++.exe` forwarder
+      since R's own `system()` call can never find a bash-script shim; a
+      real `R.exe` built from the actual gnuwin32 `rcmdfn.c`/`R.c`
+      sources, since `install.packages()` hardcodes needing one; and three
+      wrong-by-default values in the vendored `Makeconf.win` template
+      itself — `BINDIR`/`IMPDIR` missing their `bin/x64` arch subdir,
+      `LDFLAGS` needing an explicit conda-env search path, and `FC` needing
+      to bypass `BINPREF` entirely since `gfortran.exe` can't be relocated).
+      `pixi run contract` green on Windows; `build-windows` CI job updated.
 
 ## Gotcha catalog (carried from earlier milestones — do not rediscover)
 
