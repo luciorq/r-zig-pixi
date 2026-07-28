@@ -15,9 +15,31 @@ source:
     target_directory: scripts
   - path: ../toolchain
     target_directory: toolchain
+  # build.zig/zigbuild/: scripts/zig-build.sh's own build system (recipe/
+  # build.sh drives it since Milestone 5's default-path swap). Without
+  # these explicitly listed, a local `rattler-build build` still
+  # "succeeds" — `zig build` walks UP parent directories looking for
+  # build.zig when it's missing from the sandbox's own work dir, and
+  # rattler-build's local output-dir (dist/conda/bld/.../work/) happens
+  # to sit inside this same checkout, so it silently finds the REAL
+  # project's build.zig several levels up instead of the sandboxed copy
+  # (found by inspecting the kept work dir directly via `rattler-build
+  # build --keep-build` — it genuinely had no build.zig/zigbuild/ at all).
+  # That accidental behavior wouldn't survive the recipe/build.sh
+  # source being built anywhere other than nested inside this exact
+  # checkout (e.g. a standalone feedstock-style recipe repo) — vendor
+  # them explicitly instead of relying on it.
+  - path: ../build.zig
+    target_directory: .
+  - path: ../zigbuild
+    target_directory: zigbuild
 
 build:
-  number: 0
+  # Bumped from 0: this is the first zig-built release (recipe/build.sh
+  # switched from configure-r.sh/build-r.sh/install-r.sh to zig-build.sh +
+  # stage.sh, Milestone 5's default-path swap) — bump past 1 too since a
+  # Windows-only build 1 was already released.
+  number: 2
   script: build.sh
 
 requirements:
@@ -238,21 +260,37 @@ tests:
   # r-zig-slim — asserting them FALSE here would be a false expectation,
   # not a real regression check.
   - script:
-      - if: win
-        then:
-          # Bare `Rscript` (not the absolute path) deliberately — this is
-          # the one check that actually exercises PATH-based invocation,
-          # which is what real installs use. Found the hard way: R used
-          # to install under $PREFIX/lib/R, which NTFS's case-insensitive
-          # lookup silently folds into a real env's existing Lib/
-          # (Python's), and nothing was ever on PATH regardless — the
-          # absolute-path version of this test couldn't have caught
-          # either bug. See env.sh's R_HOME_DIR / stage.sh's Windows
-          # shims (Library/bin/R.bat, Rscript.bat).
-          - echo PATHDEBUG=%PATH%
-          - Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["png"]], caps[["iconv"]], caps[["libcurl"]], caps[["cairo"]]); cat("conda R OK\n")'
-        else:
-          - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
+      content:
+        - if: win
+          then:
+            # Bare `Rscript` (not the absolute path) deliberately — this is
+            # the one check that actually exercises PATH-based invocation,
+            # which is what real installs use. Found the hard way: R used
+            # to install under $PREFIX/lib/R, which NTFS's case-insensitive
+            # lookup silently folds into a real env's existing Lib/
+            # (Python's), and nothing was ever on PATH regardless — the
+            # absolute-path version of this test couldn't have caught
+            # either bug. See env.sh's R_HOME_DIR / stage.sh's Windows
+            # shims (Library/bin/R.bat, Rscript.bat).
+            #
+            # A real .R file, not inline `-e '...'`: cmd.exe has NO
+            # concept of single quotes as a quoting mechanism — they're
+            # just literal characters — so every cmd.exe metacharacter
+            # inside the "quoted" R code (`%*%`'s `%`, `<-`'s `<`) was
+            # being actively interpreted (`%...%` as variable expansion,
+            # `<` as input redirection) rather than protected. Found by
+            # inspecting the actual generated test/conda_build.bat
+            # directly (its own content was correct — `Rscript -e
+            # 'm <- matrix(...); ... %*% ...'`, verbatim from this
+            # recipe) and reproducing the corruption independently at
+            # cmd.exe's OWN runtime parsing stage, not YAML rendering.
+            - echo PATHDEBUG=%PATH%
+            - Rscript test-win.R
+          else:
+            - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
+    files:
+      recipe:
+        - test-win.R
 
 about:
   homepage: https://www.r-project.org

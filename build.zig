@@ -192,9 +192,22 @@ pub fn build(b: *std.Build) !void {
     // stdlib), silently dumping R's tree inside site-packages and off
     // PATH entirely (same bug class scripts/env.sh already works around
     // for the autoconf/gnuwin32 path — see FINALIZATION.md F6.2).
+    // b.install_prefix carries the OS-native separator too, same as
+    // b.pathFromRoot (see src_abs above) — normally harmless, but
+    // ctx.prefix/ctx.rhome (derived from it) get interpolated into R
+    // code strings throughout bootstrap()/stageLibraryPayload() just
+    // like src_abs does. Never hit before by coincidence: a conda-
+    // sandbox build with a short `--output-dir` (fixing an unrelated
+    // dlltool path-length limit) produced a host-env directory literally
+    // named "h_env", and "\h" is not a valid R escape sequence at all
+    // ('\h' is an unrecognized escape...) — surfacing a latent bug that,
+    // for OTHER letters forming a *valid* (but wrong) R escape (`\n`,
+    // `\t`, `\r`, ...), could have been silently corrupting the path
+    // instead of erroring. Normalize once here, matching src_abs exactly.
+    const install_prefix = std.mem.replaceOwned(u8, arena, b.install_prefix, "\\", "/") catch @panic("OOM");
     const rhome = switch (os) {
-        .windows => b.fmt("{s}/Library/lib/R", .{b.install_prefix}),
-        else => b.fmt("{s}/lib/R", .{b.install_prefix}),
+        .windows => b.fmt("{s}/Library/lib/R", .{install_prefix}),
+        else => b.fmt("{s}/lib/R", .{install_prefix}),
     };
 
     var ctx = Ctx{
@@ -207,7 +220,7 @@ pub fn build(b: *std.Build) !void {
         .conda = conda,
         .src_abs = src_abs,
         .src = b.path(src_rel),
-        .prefix = b.install_prefix,
+        .prefix = install_prefix,
         .rhome = rhome,
         .flangrt_dir = if (os == .linux) try findFlangRt(b, io, conda) else "",
         .gfortran_lib_dir = if (os == .windows) try findGfortranLibDir(b, io, conda) else "",

@@ -551,6 +551,24 @@ a carried-forward gotcha catalog.
         when building R itself.
       CI: `build-windows` job in `build.yml` now runs the `contract` step
       too (previously build+smoke+verify-package only).
+- [x] **Bug found by the conda-package republish (2026-07-28, real build.zig
+      fix)**: `ctx.prefix` (`b.install_prefix`) was never normalized to
+      forward slashes, unlike `src_abs`, which already got this exact fix
+      under F6.2 (Windows-native backslash paths breaking R code string
+      literals). Never hit on a normal `zig build` invocation by
+      coincidence — surfaced only via `.github/devdocs/feat-prefix-
+      publish/TODO.md`'s rattler-build sandbox work, where a short
+      `--output-dir` workaround (for an unrelated `dlltool` path-length
+      limit) produced a host-env directory literally named `h_env`, and
+      `\h` is not a valid R escape sequence at all. For *other* letters
+      forming a **valid** (but wrong) R escape (`\n`/`\t`/`\r`/...) this
+      could have been silently corrupting paths instead of erroring,
+      undetected, in any Windows build whose install prefix happened to
+      contain one of those sequences. Fixed by normalizing
+      `b.install_prefix` once, at the same point `ctx.prefix`/`ctx.rhome`
+      are derived from it — see feat-prefix-publish's TODO.md for the
+      full incident writeup (recipe.yaml/rattler-build side of the story).
+      Re-verified zero regression on linux.
 - [x] **Final**: retire autoconf/gnuwin32 from the default path (2026-07-28)
       — F1-F6 (+F6.3 above) all green on linux/macOS/Windows. `pixi run
       build`/`install`/`package`/`verify-package`/`smoke`/`contract`/
