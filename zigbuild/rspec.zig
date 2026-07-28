@@ -141,6 +141,15 @@ pub const grdevices_c = [_][]const u8{
     "devPicTeX.c", "devPS.c", "devQuartz.c",
 };
 
+/// Windows grDevices/src/Makefile.win SOURCES_C — devWindows.c (the actual
+/// "windows" graphics device) + winbitmap.c (png/jpeg/tiff bitmap I/O)
+/// replace unix's devCairo.c/devQuartz.c; the rest is shared.
+pub const win_grdevices_c = [_][]const u8{
+    "axis_scales.c", "chull.c", "devices.c", "init.c", "stubs.c", "colors.c",
+    "clippath.c", "patterns.c", "mask.c", "group.c",
+    "devPicTeX.c", "devPS.c", "devWindows.c", "winbitmap.c",
+};
+
 pub const grid_c = [_][]const u8{
     "clippath.c", "gpar.c", "grid.c", "just.c", "layout.c", "mask.c",
     "matrix.c", "path.c", "register.c", "state.c", "typeset.c", "unit.c",
@@ -164,6 +173,15 @@ pub const tools_c = [_][]const u8{
 
 pub const utils_c = [_][]const u8{
     "init.c", "io.c", "size.c", "sock.c", "stubs.c", "utils.c", "hashtab.c",
+};
+
+/// Windows utils/src/Makefile.win SOURCES_C — adds 5 windows/*.c files
+/// (dataentry/dialogs/registry/util/widgets) on top of the shared set.
+pub const win_utils_c = [_][]const u8{
+    "init.c", "io.c", "size.c", "sock.c", "stubs.c", "utils.c", "hashtab.c",
+};
+pub const win_utils_windows_c = [_][]const u8{
+    "dataentry.c", "dialogs.c", "registry.c", "util.c", "widgets.c",
 };
 
 /// full variant only (src/library/tcltk/src/Makefile.in SOURCES_C, unix

@@ -120,7 +120,24 @@ pub fn build(b: *std.Build) !void {
     };
 
     const src_rel = "build/R-" ++ r_version;
-    const src_abs = b.pathFromRoot(src_rel);
+    // b.pathFromRoot resolves using the OS-native separator (backslash on
+    // Windows) — harmless for compile-flag/file-path use (zig cc/clang and
+    // Windows APIs both accept forward slashes just fine either way), but
+    // this same string also gets interpolated directly into R code string
+    // literals throughout bootstrap()/stageLibraryPayload() (e.g.
+    // "tools:::sysdata2LazyLoadDB(\"{s}/...\", ...)"), where R's parser
+    // reads a literal backslash as the start of an escape sequence —
+    // `C:\Users\...` breaks specifically on the "\U" in "Users", which R
+    // parses as (and rejects) a malformed `\Uxxxxxxxx` Unicode escape.
+    // Found via a real bootstrap parse error ("'\U' used without hex
+    // digits") that only surfaced once the R_HOME/dirstrip fix let R
+    // actually start up far enough to parse the piped code at all.
+    // Normalize once here so every downstream use — compile flags AND R
+    // code strings — is uniformly forward-slash, matching ctx.rhome/
+    // ctx.prefix (already forward-slash, since Windows' own --prefix
+    // argument is passed that way); a no-op on unix, which has no
+    // backslashes to replace.
+    const src_abs = std.mem.replaceOwned(u8, b.allocator, b.pathFromRoot(src_rel), "\\", "/") catch @panic("OOM");
     std.Io.Dir.cwd().access(io, b.fmt("{s}/VERSION", .{src_abs}), .{}) catch {
         std.debug.print("error: R source tree not found at {s} — run `pixi run fetch` first\n", .{src_abs});
         return error.MissingRSource;
@@ -617,7 +634,20 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         // edit.c (`run.h`), platform.c/sysutils.c (`dos_wglob.h`) all pull
         // headers straight from gnuwin32's own dir (found via real compile
         // errors — file not found).
-        .extra = &.{ "-I%S/src/extra", "-I%S/src/extra/xdr", "-I%S/src/nmath", "-I%S/src/gnuwin32", dll_build },
+        //
+        // -DR_ARCH="x64": platform.c's do_Platform() populates R-level
+        // `.Platform$r_arch` from this same macro (`#ifdef R_ARCH
+        // SET_VECTOR_ELT(value, 7, mkString(R_ARCH))`) — without it,
+        // `.Platform$r_arch` is empty, so `library.dynam()`'s own R-level
+        // path construction looks for `libs/<pkg>.dll` instead of
+        // `libs/x64/<pkg>.dll`, failing with "DLL not found: maybe not
+        // installed for this architecture?" even though the compiled DLL
+        // is right there in libs/x64/. Same macro as system.c's dirstrip
+        // fix, just needed again here since platform.c is a different
+        // compile group (found via a real bootstrap failure — the very
+        // first R invocation, "tools sysdata", needs `tools:::` namespace
+        // access, which triggers `library.dynam("tools", ...)`).
+        .extra = &.{ "-I%S/src/extra", "-I%S/src/extra/xdr", "-I%S/src/nmath", "-I%S/src/gnuwin32", "-DR_ARCH=\"x64\"", dll_build },
     });
     // mkdtemp.c: Windows-only POSIX mkdtemp() substitute, not part of
     // unix's main_c list (found via a real undefined-symbol link error).
@@ -646,7 +676,38 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         // gnuwin32's own Makefile carries `extra-CPPFLAGS = -I../library/
         // grDevices/src` specifically for extra.c's `devWindows.h` include
         // (found via a real compile error).
-        .extra = &.{ "-I%S/src/gnuwin32", "-I%S/src/extra", "-I%S/src/library/grDevices/src", dll_build },
+        //
+        // -DR_ARCH="x64": system.c's cmdlineoptions() computes R_HOME by
+        // taking Rterm.exe's own module path (GetModuleFileName) and
+        // stripping `dirstrip` trailing path components — `dirstrip = 2`
+        // by default, `+1` only `if (strlen(R_ARCH) > 0)`. Real gnuwin32
+        // installs front-ends at <RHOME>/bin/<R_ARCH>/*.exe (3 levels:
+        // exe/x64/bin) and gets R_ARCH="/x64" injected externally at build
+        // time for exactly this; we install at bin/x64/ too (matching
+        // smoke-test.sh's existing lookup) but never defined R_ARCH, so
+        // dirstrip stayed at 2 — one level short — computing R_HOME as
+        // ".../bin" instead of the real R_HOME, and every subsequent
+        // R_Home-relative lookup (starting with R_OpenLibraryFile("base"))
+        // silently pointed one directory too high. Found via a real
+        // bootstrap failure ("unable to open the base package") traced all
+        // the way through main.c's R_OpenLibraryFile down to this exact
+        // strip-count computation in system.c.
+        // -DloadRconsole=Rwin_loadRconsole: preferences.c's internal
+        // `int loadRconsole(Gui, const char *)` (GUI-preferences loading,
+        // called from rui.c/extra.c) collides by NAME ONLY with utils.dll's
+        // own, unrelated, intentionally-exported `SEXP loadRconsole(SEXP)`
+        // (utils/src/stubs.c, a .Call entry point) — two coincidentally
+        // same-named, unrelated functions, one per DLL, that a real
+        // gnuwin32 build never conflates since each DLL only exports what
+        // its own hand-curated `Rdll.hide` list allows (which we don't
+        // replicate). Since utils.dll links against R.dll (needed for its
+        // OTHER R API calls), zig/lld-link's default "export everything
+        // public" DLL policy surfaces the clash as a real duplicate-symbol
+        // link error. A blanket textual rename via -D (applied to this
+        // whole compile group; harmless for the 16 other files that never
+        // reference the identifier at all) sidesteps it without patching
+        // R's own source. Found via a real link error compiling utils.dll.
+        .extra = &.{ "-I%S/src/gnuwin32", "-I%S/src/extra", "-I%S/src/library/grDevices/src", "-DR_ARCH=\"x64\"", "-DloadRconsole=Rwin_loadRconsole", dll_build },
     });
     // src/gnuwin32/getline/*.c (gl.a in the real build) — console.c calls
     // wgl_hist_next/prev/histadd from wc_history.c (found via a real
@@ -864,11 +925,60 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const rscript = b.addExecutable(.{ .name = "Rscript", .root_module = rscript_mod });
 
     // ------------------------------------------------------------------
+    // Rterm.exe — NOT a droppable GUI front-end (F6.0's original read on
+    // this was wrong): on Windows, Rscript.c's own main() handles only
+    // `--version`/`--help` directly — every other invocation constructs
+    // `<RHOME>\bin\x64\Rterm.exe` and re-execs it (`Rscript-LIBS`/the
+    // `RHOME`-relative `Rterm.exe` path built in Rscript.c, mirroring
+    // exactly how unix's Rscript re-execs `bin/R`, which is why unix
+    // already builds a full `bin/exec/R` binary alongside it). Without
+    // Rterm.exe actually present, every real Rscript.exe invocation beyond
+    // --version/--help fails with "unable to open the base package" —
+    // found via a real bootstrap failure, traced through Rscript.c's own
+    // source (its Windows branch builds `cmd = "<RHOME>\\bin\\x64\\
+    // Rterm.exe"` and directly re-execs it). Same gnuwin32 Makefile
+    // (front-ends/Makefile) builds it from graphappmain.c (WinMain, calls
+    // GA_startgraphapp then AppMain) + rterm.c (defines AppMain — the
+    // console-mode R engine loop); no icon resource (not needed for our
+    // CLI-only build).
+    const rterm_mod = newCMod(ctx);
+    rterm_mod.addIncludePath(ctx.geninc);
+    rterm_mod.addIncludePath(ctx.path("src/include"));
+    rterm_mod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
+    addCGroup(ctx, rterm_mod, "src/gnuwin32/front-ends", &.{ "graphappmain.c", "rterm.c" }, .{
+        // -DWin32: R's own legacy macro (distinct from the compiler's
+        // built-in _WIN32) gating `R_ext/RStartup.h`'s UImode/RGui/RTerm
+        // enum — front-ends/Makefile's own `rterm-CPPFLAGS = -DWin32` does
+        // the same (found via a real compile error: unknown type 'UImode').
+        .extra = &.{ "-I%S/src/gnuwin32", "-DWin32" },
+    });
+    rterm_mod.linkLibrary(libR);
+    rterm_mod.linkLibrary(rgraphapp);
+    rterm_mod.linkSystemLibrary("shlwapi", .{ .use_pkg_config = .no });
+    const rterm = b.addExecutable(.{ .name = "Rterm", .root_module = rterm_mod });
+    // Rterm-LINKFLAGS in front-ends/Makefile: a much larger default stack
+    // than MinGW's 2MB default, for R's own deep-recursion interpreter loop.
+    rterm.stack_size = 0x4000000;
+
+    // ------------------------------------------------------------------
     // Install: bin/x64/ is gnuwin32's own arch-specific binary dir
     // convention (matches smoke-test.sh's existing lookup path).
+    // "Library/lib/R", not "lib/R" — must match ctx.rhome (NTFS is
+    // case-insensitive and collides with Python's "Lib" otherwise;
+    // `-DR_HOME` embedded in Rscript.c above already uses ctx.rhome, so
+    // the actual install location has to agree with it (found via a real
+    // mismatch: everything installed under plain lib/R while R_HOME
+    // pointed at Library/lib/R).
     // ------------------------------------------------------------------
-    const bin_dir: std.Build.InstallDir = .{ .custom = "lib/R/bin/x64" };
-    const modules_dir: std.Build.InstallDir = .{ .custom = "lib/R/modules" };
+    const bin_dir: std.Build.InstallDir = .{ .custom = "Library/lib/R/bin/x64" };
+    // modules/x64/, not modules/ — R's module loader is just as
+    // R_ARCH-aware as library.dynam() (see the platform.c/.Platform$r_arch
+    // fix above); once R_ARCH was actually set correctly, R started
+    // looking for "modules/x64/lapack.dll" specifically and failed to find
+    // it at the (correctly-built, but wrongly-located) "modules/lapack.dll"
+    // — found via a real "LoadLibrary failure: module not found" error for
+    // a file that verifiably existed.
+    const modules_dir: std.Build.InstallDir = .{ .custom = "Library/lib/R/modules/x64" };
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(libR.getEmittedBin(), bin_dir, "R.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rblas.getEmittedBin(), bin_dir, "Rblas.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rlapack.getEmittedBin(), bin_dir, "Rlapack.dll").step);
@@ -876,10 +986,232 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(riconv.getEmittedBin(), bin_dir, "Riconv.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_lapack.getEmittedBin(), modules_dir, "lapack.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript.getEmittedBin(), bin_dir, "Rscript.exe").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rterm.getEmittedBin(), bin_dir, "Rterm.exe").step);
+
+    // ------------------------------------------------------------------
+    // Base-package shared libs (library/<pkg>/libs/x64/<pkg>.dll — R's
+    // Windows `library.dynam()` looks in an arch-specific `libs/x64/`
+    // subdir, unlike unix's flat `libs/<pkg>.so`). Bootstrap's per-package
+    // `tools:::makeLazyLoading(pkg)`/mklazycomp steps need the compiled
+    // library loadable already for any base package that has one — found
+    // via a real bootstrap failure ("DLL 'tools' not found") once the
+    // R_HOME/backslash fixes let bootstrap actually reach that far.
+    // Starting with the packages needed for bootstrap to progress; extend
+    // as later steps reveal more (same iterative approach as the rest of
+    // this build.zig).
+    var win_pkg_libs = std.ArrayList(WinPkgLib).empty;
+    {
+        const m = newPkgMod(ctx, "src/library/tools/src", &rspec.tools_c, .{
+            .extra = &.{"-I%S/src/main"},
+        });
+        // Unlike unix (ELF tolerates undefined symbols in shared libs, so
+        // packages there never link libR directly — see addSharedLib's own
+        // doc comment), PE/COFF needs every base-package DLL to link libR
+        // explicitly for its R API calls (same reason mod_lapack needed it
+        // — found via a real link error, ~100 undefined Rf_*/R_* symbols).
+        m.linkLibrary(libR);
+        try win_pkg_libs.append(b.allocator, .{ .pkg = "tools", .lib = addSharedLib(ctx, "pkg_tools", m) });
+    }
+    {
+        // grDevices needs its own DLL earlier than most base packages:
+        // `tools:::makeLazyLoading("grDevices")` itself fails without it
+        // (found via a real bootstrap failure), unlike e.g. utils/methods/
+        // parallel/splines/graphics/stats, whose own mklazycomp steps
+        // succeeded fine without their compiled libs existing yet — their
+        // compiled code is only actually touched once something really
+        // attaches the namespace via library(), not during bootstrap.
+        const m = newPkgMod(ctx, "src/library/grDevices/src", &rspec.win_grdevices_c, .{
+            // devWindows.c needs opt.h/console.h/rui.h/graphapp headers
+            // (gnuwin32, extra) plus R_ARCH for its own .Platform$r_arch-
+            // style path logic; winbitmap.c needs the bitmap format
+            // #defines — both straight from grDevices/src/Makefile.win's
+            // own per-file CPPFLAGS.
+            .extra = &.{ "-I%S/src/gnuwin32", "-I%S/src/extra", "-DR_ARCH=\"x64\"", "-DHAVE_PNG", "-DHAVE_JPEG", "-DHAVE_TIFF" },
+        });
+        m.linkLibrary(libR);
+        m.linkLibrary(rgraphapp);
+        // grDevices/src/Makefile.win's own PKG_LIBS: -lpng -ltiff -ljpeg
+        // -lzstd -lz -lwebp -llzma (skipping the optional LIBLERC/
+        // LIBDEFLATE/LIBSHARPYUV extras unless a real link error needs one).
+        // "libpng" not "png": conda-forge's Windows import lib is named
+        // libpng.lib, not png.lib (same lib{name}.lib naming quirk as
+        // libbz2 earlier — found via a real link error). webp dropped
+        // entirely: conda-forge's Windows env doesn't ship it at all here
+        // (no webp/libwebp lib file anywhere in Library/lib).
+        for ([_][]const u8{ "libpng", "tiff", "jpeg", "zstd", "z", "lzma" }) |lib|
+            m.linkSystemLibrary(lib, .{ .use_pkg_config = .no });
+        try win_pkg_libs.append(b.allocator, .{ .pkg = "grDevices", .lib = addSharedLib(ctx, "pkg_grDevices", m) });
+    }
+    {
+        // grDevices' own bootstrap step (`tools:::makeLazyLoading
+        // ("grDevices")`) transitively loadNamespace()s utils (a NAMESPACE
+        // import) — found via a real bootstrap failure once grDevices'
+        // own DLL was in place.
+        const m = newPkgMod(ctx, "src/library/utils/src", &rspec.win_utils_c, .{
+            .extra = &.{ "-I%S/src/main", "-I%S/src/gnuwin32", "-I%S/src/extra", "-I%S/src/library/grDevices/src" },
+        });
+        // windows/*.c (dataentry/dialogs/registry/util/widgets) — a second
+        // source group on the same module, per Makefile.win's SOURCES_C.
+        addCGroup(ctx, m, "src/library/utils/src/windows", &rspec.win_utils_windows_c, .{
+            .extra = &.{ "-DNDEBUG", "-I%S/src/main", "-I%S/src/gnuwin32", "-I%S/src/extra", "-I%S/src/library/grDevices/src" },
+        });
+        m.linkLibrary(libR);
+        m.linkLibrary(rgraphapp);
+        m.linkSystemLibrary("version", .{ .use_pkg_config = .no });
+        m.linkSystemLibrary("lzma", .{ .use_pkg_config = .no });
+        try win_pkg_libs.append(b.allocator, .{ .pkg = "utils", .lib = addSharedLib(ctx, "pkg_utils", m) });
+    }
+    {
+        // stats' bootstrap step namespace-imports graphics — found via a
+        // real bootstrap failure. Windows source list is identical to
+        // unix's graphics_c (graphics/src/Makefile.win's own SOURCES_C).
+        const m = newPkgMod(ctx, "src/library/graphics/src", &rspec.graphics_c, .{
+            .extra = &.{"-I%S/src/main"},
+        });
+        m.linkLibrary(libR);
+        try win_pkg_libs.append(b.allocator, .{ .pkg = "graphics", .lib = addSharedLib(ctx, "pkg_graphics", m) });
+    }
+    {
+        // datasets' bootstrap step namespace-imports stats — found via a
+        // real bootstrap failure. Windows source list is identical to
+        // unix's stats_c/stats_f (stats/src/Makefile.win's own SOURCES_C/
+        // SOURCES_F); needs LAPACK_LIBS/BLAS_LIBS/FLIBS, same as Rblas.dll/
+        // Rlapack.dll themselves.
+        const stats_f_win = fortranGroup(ctx, "src/library/stats/src", &rspec.stats_f, &.{});
+        const m = newPkgMod(ctx, "src/library/stats/src", &rspec.stats_c, .{});
+        for (stats_f_win) |o| m.addObjectFile(o);
+        m.linkLibrary(libR);
+        m.linkLibrary(rlapack);
+        m.linkLibrary(rblas);
+        linkFortranRt(ctx, m);
+        try win_pkg_libs.append(b.allocator, .{ .pkg = "stats", .lib = addSharedLib(ctx, "pkg_stats", m) });
+    }
+    {
+        // methods RfilesLazy needs its own DLL — same source list as unix
+        // (methods/src/Makefile.win's own SOURCES_C).
+        const m = newPkgMod(ctx, "src/library/methods/src", &rspec.methods_c, .{});
+        m.linkLibrary(libR);
+        try win_pkg_libs.append(b.allocator, .{ .pkg = "methods", .lib = addSharedLib(ctx, "pkg_methods", m) });
+    }
+    {
+        // Same source list as unix (grid/src/Makefile.win's own SOURCES_C).
+        const m = newPkgMod(ctx, "src/library/grid/src", &rspec.grid_c, .{});
+        m.linkLibrary(libR);
+        try win_pkg_libs.append(b.allocator, .{ .pkg = "grid", .lib = addSharedLib(ctx, "pkg_grid", m) });
+    }
+    {
+        // Same source list as unix (splines/src/Makefile.win's own SOURCES_C).
+        const m = newPkgMod(ctx, "src/library/splines/src", &rspec.splines_c, .{});
+        m.linkLibrary(libR);
+        try win_pkg_libs.append(b.allocator, .{ .pkg = "splines", .lib = addSharedLib(ctx, "pkg_splines", m) });
+    }
+    {
+        // Windows source list drops fork.c (no fork() on Windows) for
+        // ncpus.c (Windows CPU-count detection) instead — parallel/src/
+        // Makefile.win's own SOURCES_C: `init.c rngstream.c ncpus.c`.
+        const m = newPkgMod(ctx, "src/library/parallel/src", &.{ "init.c", "rngstream.c", "ncpus.c" }, .{});
+        m.linkLibrary(libR);
+        try win_pkg_libs.append(b.allocator, .{ .pkg = "parallel", .lib = addSharedLib(ctx, "pkg_parallel", m) });
+    }
+
+    // ------------------------------------------------------------------
+    // library/ + share/ + doc/ + bootstrap: without this, Rscript.exe can
+    // link/load fine but can't evaluate any real code (no base package to
+    // find) — `Rscript.exe --version` works either way (doesn't touch
+    // R_HOME's tree at all), but `-e` needs the full bootstrap below.
+    // ------------------------------------------------------------------
+    const libstage_dir = try installLibraryWindows(ctx, io, win_pkg_libs.items);
+    const boot_step = try bootstrap(ctx, io, libstage_dir.getDirectory());
 
     const top = b.step("r", "Build R.dll+Rblas+Rlapack+Rgraphapp+Riconv+Rscript.exe (Windows, CLI-only — F6.0)");
-    top.dependOn(b.getInstallStep());
+    top.dependOn(boot_step);
     b.default_step = top;
+}
+
+const WinPkgLib = struct { pkg: []const u8, lib: *std.Build.Step.Compile };
+
+/// Windows equivalent of installStaticTree: stages library/ (via the shared
+/// stageLibraryPayload), share/, doc/, and include/ under ctx.rhome
+/// (Library/lib/R/...). No bin/R wrapper, no etc/{Renviron,ldpaths,
+/// Makeconf,javaconf} — Rscript.exe is the only front end (F6.0) and the
+/// package-compilation contract (Makeconf.win wiring) is still deferred
+/// (F6.1/1b territory), so there's nothing to consume those yet; revisit if
+/// bootstrap or a real package build turns out to need one of them after all.
+fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib) !*std.Build.Step.WriteFile {
+    const b = ctx.b;
+    const inst = b.getInstallStep();
+    const libstage = b.addWriteFiles();
+
+    try stageLibraryPayload(ctx, io, libstage, "windows", "windows");
+    // library/<pkg>/libs/x64/<pkg>.dll — gnuwin32's own arch-specific
+    // `libs$(R_ARCH)` convention (found via a real "DLL not found: maybe
+    // not installed for this architecture?" error).
+    for (pkg_libs) |pl| {
+        _ = libstage.addCopyFile(pl.lib.getEmittedBin(), b.fmt("{s}/libs/x64/{s}.dll", .{ pl.pkg, pl.pkg }));
+    }
+
+    // include/ (public headers) — not consumed by anything yet (package
+    // compilation isn't wired up on Windows), but installed alongside
+    // share/doc for parity with the unix layout.
+    const inc_wf = b.addWriteFiles();
+    for (rspec.public_headers) |h| {
+        _ = inc_wf.addCopyFile(ctx.path(b.fmt("src/include/{s}", .{h})), h);
+    }
+    _ = inc_wf.addCopyFile(ctx.geninc.path(b, "Rconfig.h"), "Rconfig.h");
+    _ = inc_wf.addCopyFile(ctx.geninc.path(b, "Rversion.h"), "Rversion.h");
+    _ = inc_wf.addCopyFile(ctx.geninc.path(b, "Rmath.h"), "Rmath.h");
+    inst.dependOn(&b.addInstallDirectory(.{
+        .source_dir = inc_wf.getDirectory(),
+        .install_dir = .{ .custom = "Library/lib/R/include" },
+        .install_subdir = "",
+    }).step);
+    inst.dependOn(&b.addInstallDirectory(.{
+        .source_dir = ctx.path("src/include/R_ext"),
+        .install_dir = .{ .custom = "Library/lib/R/include/R_ext" },
+        .install_subdir = "",
+        .include_extensions = &.{".h"},
+    }).step);
+
+    // etc/repositories: R reads this at startup for install.packages()'s
+    // default CRAN-mirror-style repo list — cheap to install even though
+    // the rest of etc/ (Renviron/ldpaths/Makeconf/javaconf) stays deferred
+    // (found via a real bootstrap warning, not yet fatal but trivial to fix).
+    inst.dependOn(&b.addInstallFileWithDir(ctx.path("etc/repositories"), .{ .custom = "Library/lib/R/etc" }, "repositories").step);
+    // etc/Rconsole: rterm.c's AppMain() unconditionally calls
+    // readconsolecfg() on startup, which R_Suicide()s with exit(10) and
+    // ZERO output if it can't find *either* $R_USER/Rconsole or
+    // $R_HOME/etc/Rconsole — this is what was silently killing every
+    // `Rscript.exe -e`/non-`--vanilla` Rterm.exe invocation (found by
+    // testing Rterm.exe directly with `--vanilla` — which works — vs. its
+    // documented individual-flag expansion — which still failed the same
+    // way, then tracing exit code 10 to this exact R_Suicide call). gnuwin32
+    // ships a static, ready-to-use etc/Rconsole (like config.h/Rconsole.h);
+    // vendor it as-is rather than reverse-engineering a `--vanilla`-only
+    // workaround.
+    inst.dependOn(&b.addInstallFileWithDir(ctx.path("src/gnuwin32/fixed/etc/Rconsole"), .{ .custom = "Library/lib/R/etc" }, "Rconsole").step);
+
+    // share/ and doc/ wholesale from the source tree — same content as
+    // unix, installed under the Windows R_HOME layout.
+    inst.dependOn(&b.addInstallDirectory(.{
+        .source_dir = ctx.path("share"),
+        .install_dir = .{ .custom = "Library/lib/R/share" },
+        .install_subdir = "",
+        .exclude_extensions = &.{"Makefile.in"},
+    }).step);
+    inst.dependOn(&b.addInstallDirectory(.{
+        .source_dir = ctx.path("doc"),
+        .install_dir = .{ .custom = "Library/lib/R/doc" },
+        .install_subdir = "",
+        .exclude_extensions = &.{ "Makefile.in", ".texi", "R.aux", "Rscript.aux" },
+    }).step);
+
+    // utils iconvlist (basepkg iconvlist target: `iconv -l`) — same as
+    // unix; conda-forge's Windows env also ships iconv.exe.
+    const iconv_run = b.addSystemCommand(&.{ "iconv", "-l" });
+    const iconv_out = iconv_run.captureStdOut(.{});
+    _ = libstage.addCopyFile(iconv_out, "utils/iconvlist");
+
+    return libstage;
 }
 
 /// Build a proper, complete dlltool-generated import library for `dllname`
@@ -1122,6 +1454,11 @@ fn newPkgMod(ctx: *const Ctx, dir: []const u8, files: []const []const u8, opts: 
     const m = newCMod(ctx);
     m.addIncludePath(ctx.geninc);
     m.addIncludePath(ctx.path("src/include"));
+    // Same psignal.h/trioremap.h need as r_core_mod/rscript_mod — any base
+    // package's C source including <Defn.h> hits this too (found via a
+    // real compile error compiling pkg_tools, the first package DLL built
+    // for Windows).
+    if (ctx.os == .windows) m.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
     var extra = std.ArrayList([]const u8).empty;
     extra.append(b.allocator, "-DNDEBUG") catch @panic("OOM");
     extra.appendSlice(b.allocator, opts.extra) catch @panic("OOM");
@@ -1536,6 +1873,91 @@ fn genRversionH(ctx: *const Ctx, io: std.Io) ![]u8 {
 // static R_HOME payload + library/ package sources
 // ----------------------------------------------------------------------
 
+/// The per-package library/ payload (basepkg.mk's mkR1/mkR2/mkRbase, plus
+/// the fixed set of per-package extras) — identical logic on every OS,
+/// parameterized only by which R/<os_subdir>/*.R directory basepkg.mk (or
+/// its Windows counterpart, src/library/Makefile.win's `R_OSTYPE`) appends,
+/// and the OS name recorded in each package's `Built:` DESCRIPTION stamp.
+/// Shared by installStaticTree (unix/macOS, os_subdir="unix") and
+/// installLibraryWindows (os_subdir="windows").
+fn stageLibraryPayload(ctx: *const Ctx, io: std.Io, libstage: *std.Build.Step.WriteFile, os_subdir: []const u8, os_stamp: []const u8) !void {
+    const b = ctx.b;
+
+    // profile: library/base/R/Rprofile = Common.R + Rprofile.<os_subdir>
+    {
+        const common = try readSrcFile(ctx, io, "src/library/profile/Common.R");
+        const osp = try readSrcFile(ctx, io, b.fmt("src/library/profile/Rprofile.{s}", .{os_subdir}));
+        _ = libstage.add("base/R/Rprofile", b.fmt("{s}{s}", .{ common, osp }));
+    }
+
+    const built_stamp = b.fmt("Built: R {s}; ; {s}; {s}\n", .{ r_version, utcNow(b, io), os_stamp });
+
+    for (rspec.pkgs_base) |pkg| {
+        const pkg_src = b.fmt("src/library/{s}", .{pkg});
+
+        // R code concatenation (basepkg.mk mkR1/mkR2/mkRbase)
+        if (std.mem.eql(u8, pkg, "datasets")) {
+            // no R code, data only
+        } else if (std.mem.eql(u8, pkg, "tcltk") and ctx.variant == .slim) {
+            // slim: use_tcltk=no → stub only, none of the top-level R/*.R
+            // (dead branch on Windows: variant is always forced to .full there)
+            _ = libstage.addCopyFile(ctx.path(b.fmt("{s}/R/{s}/zzzstub.R", .{ pkg_src, os_subdir })), b.fmt("{s}/R/{s}", .{ pkg, pkg }));
+        } else if (std.mem.eql(u8, pkg, "tcltk")) {
+            // full: real R/*.R + R/<os_subdir>/zzz.R (not zzzstub.R)
+            const all_r = try concatRSourcesEx(ctx, io, b.fmt("{s}/R", .{pkg_src}), os_subdir, null, &.{"zzzstub.R"});
+            _ = libstage.add(b.fmt("{s}/R/{s}", .{ pkg, pkg }), all_r);
+        } else {
+            const s4 = std.mem.eql(u8, pkg, "methods") or std.mem.eql(u8, pkg, "stats4");
+            const with_os = std.mem.eql(u8, pkg, "base") or std.mem.eql(u8, pkg, "utils") or
+                std.mem.eql(u8, pkg, "grDevices") or std.mem.eql(u8, pkg, "parallel");
+            var all_r = try concatRSources(ctx, io, b.fmt("{s}/R", .{pkg_src}), if (with_os) os_subdir else null, if (s4) pkg else null);
+            if (std.mem.eql(u8, pkg, "base")) {
+                // mkRbase: substitute configure's @WHICH@ — only appears in
+                // R/unix/system.unix.R (real value comes from vendored
+                // config.status, which only exists on unix/macOS); Windows's
+                // R/windows/-only concatenation never even includes that
+                // file, so the token is never actually present there — the
+                // "which" fallback is a no-op in that case, not a real value.
+                all_r = try std.mem.replaceOwned(u8, b.allocator, all_r, "@WHICH@", ctx.subst.get("WHICH") orelse "which");
+            }
+            _ = libstage.add(b.fmt("{s}/R/{s}", .{ pkg, pkg }), all_r);
+        }
+
+        // NAMESPACE (base has none)
+        if (!std.mem.eql(u8, pkg, "base")) {
+            _ = libstage.addCopyFile(ctx.path(b.fmt("{s}/NAMESPACE", .{pkg_src})), b.fmt("{s}/NAMESPACE", .{pkg}));
+        }
+
+        // DESCRIPTION: base and tools get the file + Built stamp directly
+        // (mkdesc2); the rest are installed by R during bootstrap (mkdesc).
+        if (std.mem.eql(u8, pkg, "base") or std.mem.eql(u8, pkg, "tools")) {
+            const desc = try substFile(ctx, io, b.fmt("{s}/DESCRIPTION.in", .{pkg_src}));
+            _ = libstage.add(b.fmt("{s}/DESCRIPTION", .{pkg}), b.fmt("{s}{s}", .{ desc, built_stamp }));
+        }
+    }
+
+    // package-specific extras
+    _ = libstage.addCopyFile(ctx.path("src/library/base/inst/CITATION"), "base/CITATION");
+    _ = libstage.addCopyDirectory(ctx.path("src/library/base/demo"), "base/demo", .{ .exclude_extensions = &.{"00Index"} });
+    _ = libstage.add("tools/misc/top.txt", b.fmt("{s}\n", .{ctx.src_abs}));
+    _ = libstage.add("tools/misc/wre.txt", try makeWreTxt(ctx, io));
+    _ = libstage.addCopyDirectory(ctx.path("src/library/utils/inst/Sweave"), "utils/Sweave", .{});
+    _ = libstage.addCopyDirectory(ctx.path("src/library/utils/inst/doc"), "utils/doc", .{});
+    _ = libstage.addCopyDirectory(ctx.path("src/library/utils/inst/misc"), "utils/misc", .{});
+    for ([_][]const u8{ "afm", "enc", "fonts/Roboto", "fonts/Montserrat/static", "icc" }) |d| {
+        _ = libstage.addCopyDirectory(ctx.path(b.fmt("src/library/grDevices/inst/{s}", .{d})), b.fmt("grDevices/{s}", .{d}), .{});
+    }
+    _ = libstage.addCopyDirectory(ctx.path("src/library/graphics/man/figures"), "graphics/help/figures", .{});
+    _ = libstage.addCopyFile(ctx.path("src/library/stats/COPYRIGHTS.modreg"), "stats/COPYRIGHTS.modreg");
+    _ = libstage.addCopyFile(ctx.path("src/library/stats/SOURCES.ts"), "stats/SOURCES.ts");
+    _ = libstage.addCopyDirectory(ctx.path("src/library/stats/inst/doc"), "stats/doc", .{});
+    _ = libstage.addCopyDirectory(ctx.path("src/library/grid/inst/doc"), "grid/doc", .{});
+    _ = libstage.addCopyDirectory(ctx.path("src/library/parallel/inst/doc"), "parallel/doc", .{});
+    _ = libstage.addCopyDirectory(ctx.path("src/library/datasets/data"), "datasets/data", .{});
+    _ = libstage.addCopyDirectory(ctx.path("src/library/tcltk/exec"), "tcltk/exec", .{});
+    _ = libstage.addCopyDirectory(ctx.path("src/library/translations/inst"), "translations", .{});
+}
+
 fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     const b = ctx.b;
     const inst = b.getInstallStep();
@@ -1598,73 +2020,7 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     _ = stage.add("bin/R", r_front);
 
     // --- library/: per-package static payload ---
-    // profile: library/base/R/Rprofile = Common.R + Rprofile.unix
-    {
-        const common = try readSrcFile(ctx, io, "src/library/profile/Common.R");
-        const unixp = try readSrcFile(ctx, io, "src/library/profile/Rprofile.unix");
-        _ = libstage.add("base/R/Rprofile", b.fmt("{s}{s}", .{ common, unixp }));
-    }
-
-    const built_stamp = b.fmt("Built: R {s}; ; {s}; unix\n", .{ r_version, utcNow(b, io) });
-
-    for (rspec.pkgs_base) |pkg| {
-        const pkg_src = b.fmt("src/library/{s}", .{pkg});
-
-        // R code concatenation (basepkg.mk mkR1/mkR2/mkRbase)
-        if (std.mem.eql(u8, pkg, "datasets")) {
-            // no R code, data only
-        } else if (std.mem.eql(u8, pkg, "tcltk") and ctx.variant == .slim) {
-            // slim: use_tcltk=no → stub only, none of the top-level R/*.R
-            _ = libstage.addCopyFile(ctx.path(b.fmt("{s}/R/unix/zzzstub.R", .{pkg_src})), b.fmt("{s}/R/{s}", .{ pkg, pkg }));
-        } else if (std.mem.eql(u8, pkg, "tcltk")) {
-            // full: real R/*.R + R/unix/zzz.R (not zzzstub.R)
-            const all_r = try concatRSourcesEx(ctx, io, b.fmt("{s}/R", .{pkg_src}), true, null, &.{"zzzstub.R"});
-            _ = libstage.add(b.fmt("{s}/R/{s}", .{ pkg, pkg }), all_r);
-        } else {
-            const s4 = std.mem.eql(u8, pkg, "methods") or std.mem.eql(u8, pkg, "stats4");
-            const with_unix = std.mem.eql(u8, pkg, "base") or std.mem.eql(u8, pkg, "utils") or
-                std.mem.eql(u8, pkg, "grDevices") or std.mem.eql(u8, pkg, "parallel");
-            var all_r = try concatRSources(ctx, io, b.fmt("{s}/R", .{pkg_src}), with_unix, if (s4) pkg else null);
-            if (std.mem.eql(u8, pkg, "base")) {
-                // mkRbase: substitute configure's @WHICH@
-                all_r = try std.mem.replaceOwned(u8, b.allocator, all_r, "@WHICH@", ctx.subst.get("WHICH").?);
-            }
-            _ = libstage.add(b.fmt("{s}/R/{s}", .{ pkg, pkg }), all_r);
-        }
-
-        // NAMESPACE (base has none)
-        if (!std.mem.eql(u8, pkg, "base")) {
-            _ = libstage.addCopyFile(ctx.path(b.fmt("{s}/NAMESPACE", .{pkg_src})), b.fmt("{s}/NAMESPACE", .{pkg}));
-        }
-
-        // DESCRIPTION: base and tools get the file + Built stamp directly
-        // (mkdesc2); the rest are installed by R during bootstrap (mkdesc).
-        if (std.mem.eql(u8, pkg, "base") or std.mem.eql(u8, pkg, "tools")) {
-            const desc = try substFile(ctx, io, b.fmt("{s}/DESCRIPTION.in", .{pkg_src}));
-            _ = libstage.add(b.fmt("{s}/DESCRIPTION", .{pkg}), b.fmt("{s}{s}", .{ desc, built_stamp }));
-        }
-    }
-
-    // package-specific extras
-    _ = libstage.addCopyFile(ctx.path("src/library/base/inst/CITATION"), "base/CITATION");
-    _ = libstage.addCopyDirectory(ctx.path("src/library/base/demo"), "base/demo", .{ .exclude_extensions = &.{"00Index"} });
-    _ = libstage.add("tools/misc/top.txt", b.fmt("{s}\n", .{ctx.src_abs}));
-    _ = libstage.add("tools/misc/wre.txt", try makeWreTxt(ctx, io));
-    _ = libstage.addCopyDirectory(ctx.path("src/library/utils/inst/Sweave"), "utils/Sweave", .{});
-    _ = libstage.addCopyDirectory(ctx.path("src/library/utils/inst/doc"), "utils/doc", .{});
-    _ = libstage.addCopyDirectory(ctx.path("src/library/utils/inst/misc"), "utils/misc", .{});
-    for ([_][]const u8{ "afm", "enc", "fonts/Roboto", "fonts/Montserrat/static", "icc" }) |d| {
-        _ = libstage.addCopyDirectory(ctx.path(b.fmt("src/library/grDevices/inst/{s}", .{d})), b.fmt("grDevices/{s}", .{d}), .{});
-    }
-    _ = libstage.addCopyDirectory(ctx.path("src/library/graphics/man/figures"), "graphics/help/figures", .{});
-    _ = libstage.addCopyFile(ctx.path("src/library/stats/COPYRIGHTS.modreg"), "stats/COPYRIGHTS.modreg");
-    _ = libstage.addCopyFile(ctx.path("src/library/stats/SOURCES.ts"), "stats/SOURCES.ts");
-    _ = libstage.addCopyDirectory(ctx.path("src/library/stats/inst/doc"), "stats/doc", .{});
-    _ = libstage.addCopyDirectory(ctx.path("src/library/grid/inst/doc"), "grid/doc", .{});
-    _ = libstage.addCopyDirectory(ctx.path("src/library/parallel/inst/doc"), "parallel/doc", .{});
-    _ = libstage.addCopyDirectory(ctx.path("src/library/datasets/data"), "datasets/data", .{});
-    _ = libstage.addCopyDirectory(ctx.path("src/library/tcltk/exec"), "tcltk/exec", .{});
-    _ = libstage.addCopyDirectory(ctx.path("src/library/translations/inst"), "translations", .{});
+    try stageLibraryPayload(ctx, io, libstage, "unix", "unix");
 
     const stage_install = b.addInstallDirectory(.{
         .source_dir = stage.getDirectory(),
@@ -1751,22 +2107,26 @@ fn makeWreTxt(ctx: *const Ctx, io: std.Io) ![]u8 {
 }
 
 /// Concatenate a package's R sources the way basepkg.mk does:
-/// LC_COLLATE=C sorted R/*.R (+ R/unix/*.R), S4 packages prefixed with
-/// `.packageName <- "pkg"`.
-fn concatRSources(ctx: *const Ctx, io: std.Io, rdir_rel: []const u8, with_unix: bool, s4_pkgname: ?[]const u8) ![]u8 {
-    return concatRSourcesEx(ctx, io, rdir_rel, with_unix, s4_pkgname, &.{});
+/// LC_COLLATE=C sorted R/*.R (+ R/<os_subdir>/*.R), S4 packages prefixed
+/// with `.packageName <- "pkg"`. `os_subdir` is `"unix"` on linux/macOS,
+/// `"windows"` on Windows (`src/library/Makefile.win`'s own `R_OSTYPE =
+/// windows; RSRC = ... $(srcdir)/R/$(R_OSTYPE)/*.R` — the same per-OS-
+/// subdir convention as unix's basepkg.mk, just a different directory
+/// name), or `null` for packages with no OS-specific R code at all.
+fn concatRSources(ctx: *const Ctx, io: std.Io, rdir_rel: []const u8, os_subdir: ?[]const u8, s4_pkgname: ?[]const u8) ![]u8 {
+    return concatRSourcesEx(ctx, io, rdir_rel, os_subdir, s4_pkgname, &.{});
 }
 
 /// Like concatRSources, but skips any filename in `exclude` — tcltk's
 /// R/unix/ has both zzz.R (real, full only) and zzzstub.R (slim's
 /// no-op .onLoad); alphabetical sort would concatenate both.
-fn concatRSourcesEx(ctx: *const Ctx, io: std.Io, rdir_rel: []const u8, with_unix: bool, s4_pkgname: ?[]const u8, exclude: []const []const u8) ![]u8 {
+fn concatRSourcesEx(ctx: *const Ctx, io: std.Io, rdir_rel: []const u8, os_subdir: ?[]const u8, s4_pkgname: ?[]const u8, exclude: []const []const u8) ![]u8 {
     const b = ctx.b;
     var out = std.ArrayList(u8).empty;
     if (s4_pkgname) |p| try out.appendSlice(b.allocator, b.fmt(".packageName <- \"{s}\"\n", .{p}));
 
-    const dirs: []const []const u8 = if (with_unix)
-        &.{ rdir_rel, b.fmt("{s}/unix", .{rdir_rel}) }
+    const dirs: []const []const u8 = if (os_subdir) |sub|
+        &.{ rdir_rel, b.fmt("{s}/{s}", .{ rdir_rel, sub }) }
     else
         &.{rdir_rel};
 
@@ -1831,12 +2191,29 @@ const Boot = struct {
     ctx: *const Ctx,
     last: *std.Build.Step,
 
-    /// Run `bin/R --vanilla --no-echo` with `code` on stdin.
+    /// Run `bin/R --vanilla --no-echo` with `code` on stdin (unix/macOS), or
+    /// `bin/x64/Rterm.exe --vanilla --no-echo` with `code` on stdin
+    /// (Windows) — exactly gnuwin32's own bootstrap mechanism
+    /// (`src/gnuwin32/fixed/Makeconf`: `R_EXE = ... Rterm.exe --vanilla
+    /// --no-echo`, fed via `cat file | $(R_EXE)`), NOT Rscript.exe: on
+    /// Windows, Rscript.c's own main() only handles `--version`/`--help`
+    /// directly — anything else gets re-exec'd to `<RHOME>\bin\x64\
+    /// Rterm.exe` internally, so bootstrapping straight against Rterm.exe
+    /// is both more direct and the one path gnuwin32 actually exercises
+    /// (found the hard way: an earlier Rscript.exe+tempfile version of this
+    /// function got every bootstrap step to report success, but silently
+    /// never produced a working base package, since Rscript.exe's own
+    /// startup for anything beyond --version/--help depends on a real,
+    /// already-installed Rterm.exe existing).
     fn r(self: *Boot, name: []const u8, code: []const u8) *std.Build.Step.Run {
         const b = self.ctx.b;
-        const run = b.addSystemCommand(&.{ b.fmt("{s}/bin/R", .{self.ctx.rhome}), "--vanilla", "--no-echo" });
-        run.setName(b.fmt("R bootstrap: {s}", .{name}));
+        const rbin = switch (self.ctx.os) {
+            .windows => b.fmt("{s}/bin/x64/Rterm.exe", .{self.ctx.rhome}),
+            else => b.fmt("{s}/bin/R", .{self.ctx.rhome}),
+        };
+        const run = b.addSystemCommand(&.{ rbin, "--vanilla", "--no-echo" });
         run.setStdIn(.{ .bytes = b.dupe(code) });
+        run.setName(b.fmt("R bootstrap: {s}", .{name}));
         run.setEnvironmentVariable("TZ", "UTC");
         run.setEnvironmentVariable("LC_ALL", "C");
         run.setEnvironmentVariable("R_DEFAULT_PACKAGES", "NULL");
@@ -1877,8 +2254,11 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
     // zig cache artifacts can carry read-only modes; R must write here
     _ = boot.cmd("make library writable", &.{ "chmod", "-R", "u+w", lib });
 
-    // executable bits: WriteFiles/InstallDir produce 0644 files
-    {
+    // executable bits: WriteFiles/InstallDir produce 0644 files. Windows has
+    // neither a bin/R wrapper script nor the unix scripts_s/scripts_b shell
+    // scripts (Rscript.exe *is* the front end, and .exe files need no
+    // execute bit on NTFS) — skip entirely there.
+    if (ctx.os != .windows) {
         var argv = std.ArrayList([]const u8).empty;
         try argv.appendSlice(b.allocator, &.{ "chmod", "+x" });
         try argv.append(b.allocator, b.fmt("{s}/bin/R", .{ctx.prefix}));
@@ -1951,7 +2331,14 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
         const run = boot.r("tools mklazycomp", code);
         run.setEnvironmentVariable("_R_COMPILE_PKGS_", "1");
         run.setEnvironmentVariable("R_COMPILER_SUPPRESS_ALL", "1");
-        run.setEnvironmentVariable("R_SYSTEM_ABI", ctx.subst.get("R_SYSTEM_ABI").?);
+        // R_SYSTEM_ABI: configure's case-statement has no mingw/Windows
+        // branch at all (falls through to "?"), and there's no real
+        // config.status to capture on Windows anyway (F6.1) — only read by
+        // tools/R/sotools.R (informational ABI-compatibility string for
+        // compiled-package loading, not load-bearing for base bootstrap).
+        // Shape matches configure's own gcc/gfortran-detected pattern
+        // ("<os>,<cc>,<cxx>,<fc>,<fc>"); revisit if a real value is needed.
+        run.setEnvironmentVariable("R_SYSTEM_ABI", ctx.subst.get("R_SYSTEM_ABI") orelse "windows,gcc,gxx,gfortran,gfortran");
     }
     // tools/Makefile.in's `all` ends with .install_package_description —
     // unlike other mkdesc2 users this is not optional: it writes
@@ -2096,10 +2483,17 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
         run.setCwd(.{ .cwd_relative = b.fmt("{s}/doc", .{rhome}) });
     }
 
-    // sanity: the built product answers from its own launchers
+    // sanity: the built product answers from its own launchers. Windows has
+    // no top-level {prefix}/bin/Rscript convenience copy (F6.0: no unix-style
+    // bin/ front-end layer at all) — verify against the real installed
+    // Rscript.exe directly instead.
     {
+        const rscript_path = switch (ctx.os) {
+            .windows => b.fmt("{s}/bin/x64/Rscript.exe", .{rhome}),
+            else => b.fmt("{s}/bin/Rscript", .{ctx.prefix}),
+        };
         const run = boot.cmd("verify Rscript", &.{
-            b.fmt("{s}/bin/Rscript", .{ctx.prefix}),
+            rscript_path,
             "-e",
             "set.seed(1); m <- matrix(rnorm(64), 8); s <- svd(m); stopifnot(max(abs(s$u %*% diag(s$d) %*% t(s$v) - m)) < 1e-9); cat('zig-built R OK:', R.version.string, '\\n')",
         });

@@ -12,14 +12,21 @@ distribution/CI integration, and now the macOS port — see the per-phase
 status lines below and `TODO.md`'s finalization checklist for exact
 detail, including the two subst-table bugs, the join-logic bug, the
 reproducibility leaks, and the two macOS-only linking bugs found and fixed
-along the way). **F6.1 (Windows compile graph) is now green too**:
-`zig build` on kappa produces R.dll/Rblas.dll/Rlapack.dll/Rgraphapp.dll/
-Riconv.dll/lapack.dll/Rscript.exe, and `Rscript.exe --version` runs
-correctly. **F6.2 (Windows bootstrap/layout) is what's left** — Rscript.exe
-can't yet evaluate any real R code (`-e "1+1"` exits 10) because
-`buildWindows()` doesn't stage the R library or lazy-load base packages
-yet; see F6.1/F6.2 below for the full gotcha catalog from getting the
-compile graph green.
+along the way). **F6 (Windows) is now fully green too**: `zig build` on
+kappa produces a complete, working Windows R — `Rscript.exe -e "cat(1+1,
+R.version.string)"` runs with completely default flags (no `--vanilla`
+needed) and evaluates real R code correctly, exit 0. Both F6.1 (compile
+graph) and F6.2 (bootstrap/layout) are done; see the two sections below
+for the full gotcha catalogs — F6.2's in particular chases down some
+genuinely deep, hard-won bugs (an `R_ARCH` macro needed in two separate
+compile groups, Windows-native backslash paths breaking R string literals,
+a cross-DLL symbol name collision, and a silent `exit(10)` traced all the
+way to a missing `etc/Rconsole` file) and is worth reading before touching
+`buildWindows()` again. **Remaining work is package-compilation-contract
+territory** (Makeconf.win wiring, full `etc/`, `tcltk`'s real Tcl/Tk
+linking) — not required for the CLI-only, headless R this milestone
+targets, but needed before `R CMD INSTALL`-style package builds work on
+Windows the way F1.2 already proved they do on unix.
 
 ## Where things stand
 
@@ -683,15 +690,129 @@ roughly in the order hit:
   rather than assuming. Vendor it close to as-is; `Rconfig.h` still comes
   from running `tools/GETCONFIG` against it (that script is OS-agnostic).
 
-### F6.2 — Windows layout + known traps
+### F6.2 — Windows layout + known traps — RESOLVED (2026-07-27)
 
-- **`R_HOME` must be `<prefix>/Library/lib/R`, NOT `lib/R`** — NTFS is
-  case-insensitive and collides with Python's `Lib` (env.sh already
-  branches this; `build.zig` currently hardcodes `lib/R` — parameterize).
-- **`ICU_PATH` must be set** so `src/extra/tzone/registryTZ.c` finds
-  `unicode/ucal.h` (the 2026-07-23 bug — masked by an incremental dev
-  objdir, exposed only by a clean build; the zig build is always clean, so
-  this WILL surface — set it from day one).
+**`zig build` on kappa now produces a fully working Windows R**:
+`Rscript.exe -e "cat(1+1, R.version.string)"` runs with completely default
+flags (no `--vanilla` needed) and prints `2 R version 4.6.1 (2026-06-24
+ucrt)`, exit 0 — real expression evaluation, not just `--version`. The
+library/ tree, base-package bootstrap, and 9 base-package DLLs
+(tools/grDevices/utils/graphics/stats/methods/grid/splines/parallel) all
+build and load correctly.
+
+**F6.0 correction**: `Rterm.exe` is NOT a droppable GUI component the way
+`Rgui.exe` is — it's the console-mode R *engine* binary, structurally
+analogous to unix's `bin/exec/R`. It IS built now (`graphappmain.c` +
+`rterm.c`, no icon resource), both because the bootstrap sequence's
+`Boot.r()` invokes it directly (`Rterm.exe --vanilla --no-echo` with
+stdin-piped code, mirroring gnuwin32's own `R_EXE` bootstrap mechanism
+exactly) and because early investigation assumed (incorrectly, per
+`Rscript.c`'s actual source) that `Rscript.exe` re-execs it as a subprocess
+on Windows — it doesn't; Windows `Rscript.c`'s `main()` calls `AppMain()`
+**in-process**, using the *same* compiled-in `rterm.c` code
+(`#include "rterm.c"` under `FOR_Rscript`). Still, having a real
+`Rterm.exe` was essential for bootstrap and remains a useful direct
+debugging tool.
+
+**Gotcha catalog**, found via real build/bootstrap attempts on kappa, in
+roughly the order hit (see `zigbuild/rspec.zig` for the exact per-package
+Windows source lists, several of which differ from unix's):
+
+- **`R_ARCH` (a distinct macro from the compiler's `_WIN32`) has to be
+  defined in TWO separate compile groups, not one.** `system.c`'s
+  `cmdlineoptions()` computes `R_HOME` by taking the running exe's own
+  module path and stripping `dirstrip` trailing components — `dirstrip =
+  2` by default, `3` only if `strlen(R_ARCH) > 0`. We install front-ends
+  at `bin/x64/*.exe` (3 levels from `R_HOME`) but only added `-DR_ARCH=
+  "x64"` to the `win_gnuwin32_c` group at first — `R_HOME` silently came
+  out one directory too high, and `main.c`'s very first `R_OpenLibraryFile
+  ("base")` call failed with **"Fatal error: unable to open the base
+  package"**, killing every single bootstrap step, including ones that
+  looked unrelated. `platform.c` (a *different* compile group, `main_c`)
+  needed the identical `-DR_ARCH="x64"` too, to populate R-level
+  `.Platform$r_arch` — without it `library.dynam()`'s own path
+  construction looked for `libs/<pkg>.dll` instead of `libs/x64/<pkg>.dll`
+  and failed with **"DLL not found: maybe not installed for this
+  architecture?"** even when the DLL genuinely existed right there.
+  Same class of bug hit the `modules/` install path too (`modules/x64/
+  lapack.dll`, not `modules/lapack.dll`).
+- **Windows paths embedded in R code strings.** `ctx.src_abs` (via `zig`'s
+  `b.pathFromRoot`) resolves with the OS-native separator — harmless for
+  compile flags/file paths (clang and Windows APIs both accept `/` fine
+  either way) but fatal once the *same string* gets interpolated into an R
+  code string literal for `bootstrap()`'s `boot.r()` calls: R's parser
+  reads a literal `\` as an escape-sequence introducer, and `C:\Users\...`
+  breaks specifically on the `\U` in `\Users` (a malformed `\Uxxxxxxxx`
+  Unicode escape) — `Error: '\U' used without hex digits`. Fixed once,
+  at the source (`src_abs`'s own definition), by normalizing to forward
+  slashes universally (a no-op on unix/macOS).
+- **Every base-package DLL needs `linkLibrary(libR)` explicitly.** Unlike
+  unix (ELF tolerates undefined symbols in shared libs, so packages never
+  link `libR` directly — see `addSharedLib`'s doc comment), PE/COFF needs
+  it for every single `Rf_*`/`R_*` API call a package's C code makes (same
+  root cause as F6.1's `mod_lapack` finding) — surfaces as dozens of
+  `undefined symbol` link errors per package if omitted.
+- **Windows-specific per-package C source lists differ from unix's** —
+  checked each package's real `Makefile.win` rather than assuming the
+  unix `rspec.zig` list transfers as-is:
+  - `parallel`: `init.c rngstream.c ncpus.c` (Windows CPU-count detection),
+    **not** `fork.c` (no `fork()` on Windows).
+  - `grDevices`: `... devWindows.c winbitmap.c` (the actual "windows"
+    graphics device + bitmap I/O), **not** `devCairo.c`/`devQuartz.c`;
+    needs `-lRgraphapp` + `libpng`/`tiff`/`jpeg`/`zstd`/`z`/`lzma` (found
+    conda-forge's Windows import lib is `libpng.lib` not `png.lib` — same
+    `lib<name>.lib` naming quirk as `libbz2` in F6.1 — and that `webp`
+    isn't installed in this conda-forge Windows env at all, so it's
+    dropped from the link list entirely).
+  - `utils`: adds 5 `windows/*.c` files (`dataentry`/`dialogs`/`registry`/
+    `util`/`widgets.c`) on top of the shared set; needs `-lRgraphapp
+    -lversion -llzma`.
+  - `tools`/`graphics`/`methods`/`grid`/`splines`/`stats`: identical
+    source lists to unix. `stats` needs the same `Rblas`/`Rlapack`/
+    Fortran-runtime linking as `Rblas.dll`/`Rlapack.dll` themselves.
+  - `stats4`/`datasets`: no compiled code on either platform (nothing to
+    build). `tcltk` deliberately deferred (needs real Tcl/Tk from
+    `TCL_HOME`/`TCL_VERSION`, not yet wired up — not required for any
+    bootstrap step that was actually hit).
+- **A genuine cross-DLL symbol name collision**: `preferences.c`'s
+  internal `int loadRconsole(Gui, const char*)` (GUI-preferences loading,
+  part of `R.dll`) and `utils/src/stubs.c`'s own, unrelated, intentionally
+  -exported `SEXP loadRconsole(SEXP)` (a `.Call` entry point) happen to
+  share a name — never a problem for a real gnuwin32 build, since each
+  DLL there only exports what a hand-curated `Rdll.hide` list allows
+  (which this build doesn't replicate), but zig/lld-link's default
+  "export everything public" policy turns it into a real `duplicate
+  symbol` link error once `utils.dll` links against `libR`. Fixed via a
+  blanket compile-time rename (`-DloadRconsole=Rwin_loadRconsole` on the
+  `win_gnuwin32_c` group) rather than patching R's own source.
+- **The last blocker — `readconsolecfg()`'s silent `exit(10)`.** After the
+  *entire* bootstrap sequence (163/165 zig steps) succeeded — `library/
+  base/R/base` correctly shrank from the raw 833KB source to the ~5KB
+  loader script, `base.rdb`/`base.rdx` existed, direct `Rterm.exe`
+  invocations worked — the very last "verify Rscript" sanity check still
+  failed with exit code 10 and **zero output** (not even a garbled
+  message). Traced by testing flag combinations directly on kappa:
+  `Rterm.exe --vanilla ...` worked, but `Rterm.exe --no-echo --no-restore
+  ...` (Rscript.c's own, narrower default flag set — no full `--vanilla`)
+  reproduced the failure identically. `rterm.c`'s `AppMain()` calls
+  `readconsolecfg()` **unconditionally** on every startup; that function
+  tries `$R_USER/Rconsole` then `$R_HOME/etc/Rconsole`, and if *neither*
+  exists, calls `R_Suicide()` → `exit(10)`, printing nothing. Since `etc/`
+  is otherwise deliberately deferred on this build (F6.1's scoping
+  decision), `etc/Rconsole` never existed. gnuwin32 ships a static,
+  ready-to-use `src/gnuwin32/fixed/etc/Rconsole` (same vendoring pattern
+  as `config.h`/`Rconfig.h`) — installing it as `etc/Rconsole` was the fix.
+- **Methodology note — zig's Windows error-render panic keeps recurring**
+  (`thread N panic: reached unreachable code` in `fileWriteStreamingWindows`,
+  triggered while zig tries to print a *multi-line* error/dependency-tree
+  report over a plain redirected `cmd.exe`/ssh pipe) and can truncate or
+  completely swallow the real error text, making `ssh kappa 'pixi run
+  zig-build 2>&1'`-style invocations unreliable for anything but the
+  simplest failures. **Fix**: run through PowerShell with `Tee-Object`
+  instead — `ssh kappa 'powershell -Command "... | Tee-Object -FilePath
+  ..."'` — which reliably captures the full output (including the "Build
+  Summary: N/M steps succeeded" line) every time. Use this for all future
+  Windows build invocations on kappa.
 - jpeg/tiff/tcltk are forced on (gnuwin32 has no off-switches → slim==full
   on Windows). Keep that parity caveat. Independent of, and not resolved
   by, F6.0's GUI-executable scoping decision — that's about which
@@ -699,13 +820,13 @@ roughly in the order hit:
 - gnuwin32 builds in-tree with no `make install`; the zig build installs
   into the prefix layout directly, which is actually *simpler* than the
   gnuwin32 manual-copy path.
-- Per F6.0: no `Rgui.exe`/`Rterm.exe`/`R.exe`/`Rcmd.exe` — skip
-  `graphappmain.o`, `rgui.o`, `rterm.o`, `rcmd.o`, `rcmdfn.o`, and the
-  per-exe icon/manifest resource compiles entirely. `R.dll`'s own
-  `CSOURCES` and `Rgraphapp.dll` are still built in full (see F6.0 for
-  why they can't be pruned); only `Rscript.exe` needs building as a
-  front-end (from the same `unix/Rscript.c` linux/macOS already use, plus
-  a trivial compiled icon resource).
+- **Still deferred, not yet needed by anything hit so far**: `ICU_PATH`
+  for `registryTZ.c` (the file compiles and links fine as currently
+  configured; revisit if a real ICU-dependent code path is exercised),
+  full `etc/` (`Renviron`/`ldpaths`/`Makeconf`/`javaconf` — package
+  compilation contract), `tcltk`'s real Tcl/Tk linking, `winCairo.dll`
+  (the separate cairo-backed graphics device DLL, distinct from
+  `grDevices.dll`'s own `devWindows.c` device).
 
 **Acceptance**: build + smoke + `zig-check` + contract + bundle on kappa
 (Windows 11) — see [[test-servers]]. `smoke`/`contract`/`zig-check` all
@@ -745,10 +866,11 @@ summary of TODO.md, not the other way around.
       fd ulimit) — done 2026-07-27 on omicron, all 3 flavors
 - [x] **F5.2** macOS Mach-O relocation + ad-hoc codesign; omicron green
       — done 2026-07-27, full adversarial bundle test included
-- [ ] **F6.1** Windows compile graph (MinGW gfortran, ld-emulation
-      decision, Windows config table)
-- [ ] **F6.2** Windows layout (`Library/lib/R`, ICU_PATH) + traps; kappa
-      green
+- [x] **F6.1** Windows compile graph (MinGW gfortran, ld-emulation
+      decision, Windows config table) — done 2026-07-27 on kappa
+- [x] **F6.2** Windows layout (`Library/lib/R`, ICU_PATH) + traps; kappa
+      green — done 2026-07-27, `Rscript.exe -e` evaluates real R code
+      with default flags
 - [ ] **Final**: retire autoconf/gnuwin32 from the default path once all
       six phases green on all platforms; keep them as a fallback one
       release, then remove

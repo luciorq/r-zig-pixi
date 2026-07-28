@@ -356,10 +356,28 @@ a carried-forward gotcha catalog.
       sources, libintl.h vs libgnuintl.h, mod_lapack needing libR, and
       the libgcc_s_seh-1.dll runtime-symbol saga resolved via a
       dlltool-generated import lib).
-- [ ] **F6.2** Windows layout (`Library/lib/R`, ICU_PATH) + bootstrap +
-      traps; kappa green. Rscript.exe can't evaluate R code yet (`-e`
-      exits 10) — no library staging/base-package lazy-loading wired up
-      in `buildWindows()`'s install step yet.
+- [x] **F6.2** Windows layout + bootstrap (2026-07-27): `zig build` on
+      kappa produces a complete, working Windows R — `Rscript.exe -e
+      "cat(1+1, R.version.string)"` runs with completely default flags
+      and evaluates real R code, exit 0. library/ staging, the full
+      R-level bootstrap (base package lazy-loading, DESCRIPTION/NAMESPACE
+      installation, metadata caches, docs), and 9 base-package DLLs
+      (tools/grDevices/utils/graphics/stats/methods/grid/splines/parallel)
+      all build and load correctly. See FINALIZATION.md F6.2 for the full
+      gotcha catalog — an `R_ARCH` macro needed in two separate compile
+      groups (system.c's R_HOME `dirstrip` computation AND platform.c's
+      `.Platform$r_arch`), Windows-native backslash paths breaking R code
+      string literals, per-package Windows source-list differences
+      (parallel's ncpus.c, grDevices' devWindows.c/winbitmap.c, utils'
+      windows/*.c), a genuine cross-DLL symbol collision (loadRconsole),
+      and the final blocker — a silent `exit(10)` traced to `rterm.c`'s
+      unconditional `readconsolecfg()` call failing to find a missing
+      `etc/Rconsole` (fixed by vendoring gnuwin32's own static copy).
+      Also corrects F6.0: `Rterm.exe` is not GUI-only after all and IS now
+      built (needed for `Boot.r()`'s bootstrap invocations).
+      Still deferred (not needed by anything hit so far): full `etc/`
+      (package-compilation contract), `tcltk`'s real Tcl/Tk linking,
+      `ICU_PATH`, `winCairo.dll`.
 - [ ] **Final**: retire autoconf/gnuwin32 from the default path once all
       six phases green on all platforms; keep them as a fallback one
       release, then remove
