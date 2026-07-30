@@ -128,3 +128,73 @@ history), out of scope here.
   marked "planned, not yet implemented").
 - Record the three runners' labels/machine mapping here for future
   reference once registered.
+
+## Phase 1 — done (2026-07-30)
+
+All three runners provisioned, registered, and confirmed `online` via
+`gh api repos/luciorq/r-zig-pixi/actions/runners`:
+
+| machine | os      | labels                               | service                                                              |
+|---------|---------|---------------------------------------|-----------------------------------------------------------------------|
+| gamma   | linux   | `self-hosted,linux,gamma`            | systemd, installed via `sudo ./svc.sh install && sudo ./svc.sh start` (user ran directly, sudo needs a TTY) |
+| omicron | macOS   | `self-hosted,macos,omicron`          | per-user LaunchAgent via `./svc.sh install && ./svc.sh start` — **must not** run under `sudo`, `svc.sh` refuses it outright |
+| kappa   | windows | `self-hosted,windows,kappa`          | Windows Service via `config.cmd --runasservice`, runs as `NT AUTHORITY\NETWORK SERVICE` |
+
+One real gotcha hit on kappa: the runner was first installed under
+`C:\Users\admin\actions-runner-kappa`. `NETWORK SERVICE` cannot traverse a
+user profile directory (`C:\Users\admin` itself is ACL'd against it), so
+the service installed and reported "started successfully" but the listener
+process crashed immediately on every launch with
+`UnauthorizedAccessException: Access to the path 'C:\Users\admin' is
+denied.` (visible in `_diag/Runner_*.log`, not in the install-time
+console output). Fixed by removing the runner (`config.cmd remove
+--token <removal-token>`) and reinstalling at `C:\actions-runner-kappa`
+instead — outside any user profile, so the default `NETWORK SERVICE` ACLs
+work unmodified. Takeaway for any future Windows runner: install to a
+plain top-level path, not under `C:\Users\<name>\...`.
+
+Also observed: right after (re)registering, `gh api .../runners` can
+report a freshly-connected runner as `offline` for up to ~15-20s even
+though its own `_diag` log already shows `Listening for Jobs` with no
+errors — a GitHub-side status-propagation lag, not a real disconnect.
+Confirmed by polling 3x at 15s intervals until all three settled on
+`online` consistently. Don't chase this by restarting services unless the
+process log itself shows an actual error/crash.
+
+A second, related gotcha found while wiring up Phase 2 (dropping
+`setup-pixi` means jobs rely on each runner's own `.path` file to find
+`pixi` — the GitHub Actions runner reads a `.path` file in its root dir,
+one entry per line, and prepends it to the job's `PATH`):
+- **omicron**: `.path` existed but only had system dirs, missing
+  `/Users/luciorq/.pixi/bin` — fixed by rewriting it to include that.
+- **kappa**: `.path` didn't exist at all, and pixi lived at
+  `C:\Users\admin\AppData\Local\pixi\bin\pixi.exe` — the *exact same*
+  `NETWORK SERVICE`-can't-read-a-user-profile problem as the runner
+  install path above (`icacls` confirmed no ACL entry for `NETWORK
+  SERVICE` on that file). Fixed the same way: copied `pixi.exe` to
+  `C:\pixi\bin\pixi.exe` (a fresh top-level dir, default ACLs grant
+  `Authenticated Users` — which includes `NETWORK SERVICE` — read+execute),
+  and pointed kappa's new `.path` file at `C:\pixi\bin`. Not yet verified
+  under an actual queued job (only ACLs inspected) — first real
+  `conda-package / windows` run is the real test.
+- **gamma**: already had a correct `.path` from earlier setup, no change
+  needed.
+
+## Phase 2 — done (2026-07-30)
+
+`.github/workflows/build.yml`'s `conda-package` job now matrixes over
+`labels: [self-hosted, linux|macos|windows]` instead of hosted-runner
+`os:` strings, drops the `prefix-dev/setup-pixi` step, and adds a
+`Publish to prefix.dev` step gated to `github.ref ==
+'refs/heads/main' && github.event_name == 'push'` (reuses `pixi.toml`'s
+existing per-platform `conda-publish` tasks, confirmed present for all 4
+platform targets — no new task needed). Matrix keys renamed
+`matrix.os` → `matrix.name` (`linux`/`macos`/`windows`) since `runs-on`
+now needs the `labels` array, not a bare os string; the Windows-only
+`Fresh-env consume test` step's `if:` condition was updated to match
+(`matrix.name == 'windows'`).
+
+Not yet committed — per this project's standing rule, the user runs all
+`git commit`/push. Phase 3 (real end-to-end verification) needs a push to
+`main` to actually trigger the self-hosted matrix and the gated publish
+step, so it can't proceed further without that handoff.

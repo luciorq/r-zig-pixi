@@ -4,6 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# Cancel a still-running run for the same branch/PR the moment a newer
+# commit lands (or a second manual dispatch fires) — matters most on the
+# self-hosted matrix (gamma/omicron/kappa), where each label set is a
+# single physical machine, so a stale run would otherwise sit occupying
+# the runner queue behind/instead of the current commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # Every job starts from a bare runner: the only bootstrap is pixi itself.
 # All compilers, shells, and libraries come from conda-forge via pixi.
@@ -14,6 +24,11 @@ jobs:
   # below) is now the primary one.
   build:
     name: ${{ matrix.os }} / ${{ matrix.env }}
+    # Gated behind ENABLE_HOSTED_JOBS (repo Settings > Actions > Variables)
+    # — off by default while out of GitHub Actions minutes. Toggle with
+    # `gh variable set ENABLE_HOSTED_JOBS --body true` when minutes are
+    # available again; conda-package below is unaffected (self-hosted).
+    if: vars.ENABLE_HOSTED_JOBS == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -54,6 +69,8 @@ jobs:
   # runs here same as linux/macOS.
   build-windows:
     name: windows-latest / default
+    # Gated behind ENABLE_HOSTED_JOBS — see `build` job above for details.
+    if: vars.ENABLE_HOSTED_JOBS == 'true'
     runs-on: windows-latest
     timeout-minutes: 180
     steps:
@@ -77,6 +94,8 @@ jobs:
   # transition.
   build-legacy:
     name: legacy / ${{ matrix.os }} / ${{ matrix.env }}
+    # Gated behind ENABLE_HOSTED_JOBS — see `build` job above for details.
+    if: vars.ENABLE_HOSTED_JOBS == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -116,6 +135,8 @@ jobs:
   # the default environment is built.
   build-windows-legacy:
     name: windows-latest-legacy / default
+    # Gated behind ENABLE_HOSTED_JOBS — see `build` job above for details.
+    if: vars.ENABLE_HOSTED_JOBS == 'true'
     runs-on: windows-latest
     timeout-minutes: 300
     steps:
@@ -144,21 +165,31 @@ jobs:
   # omicron/kappa run. recipe/build.sh itself now drives zig-build.sh, not
   # the legacy autoconf/gnuwin32 scripts.
   conda-package:
-    name: conda-package / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: conda-package / ${{ matrix.name }}
+    # Self-hosted runners on gamma/omicron/kappa — the same machines every
+    # zig-build fix in this project was verified against, with persistent
+    # caches and already-authenticated `rattler-build auth login` sessions
+    # (no GitHub secrets needed for the publish step below). See
+    # devdocs/feat-prefix-publish/CI_SELF_HOSTED_PLAN.md.
+    runs-on: ${{ matrix.labels }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - name: linux
+            labels: [self-hosted, linux]
+          - name: macos
+            labels: [self-hosted, macos]
+          - name: windows
+            labels: [self-hosted, windows]
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.10.0
-        with:
-          environments: pkg
-          cache: true
       - name: Build + test conda package
-        run: pixi run -e pkg conda-package
+        run: |
+          pixi self-update --no-progress --no-release-note --quiet;
+          pixi --version;
+          pixi run -e pkg conda-package;
       # rattler-build's own test phase runs with a literal unexpanded
       # %PREFIX% on PATH on Windows, so it can never exercise the
       # Library/bin/{R,Rscript}.bat shims a real install relies on (see
@@ -167,13 +198,17 @@ jobs:
       # installing straight from the just-built local channel, invoking
       # bare `Rscript` the same way a real user would.
       - name: Fresh-env consume test (Windows PATH shim)
-        if: matrix.os == 'windows-latest'
+        if: matrix.name == 'windows'
         shell: bash
         run: |
-          set -euo pipefail
-          channel="$(cd dist/conda && pwd -W)"
-          consume_dir="$(mktemp -d)"
-          pixi init --channel "$channel" --channel conda-forge --platform win-64 "$consume_dir"
-          cd "$consume_dir"
-          pixi add r-zig-slim
-          pixi run Rscript -e 'r_home <- R.home(); cat("R_HOME =", r_home, "\n"); stopifnot(grepl("Library", r_home, fixed = TRUE)); cat("consume test OK\n")'
+          set -euo pipefail;
+          channel="$(cd dist/conda && pwd -W)";
+          consume_dir="$(mktemp -d)";
+          pixi init --channel "$channel" --channel conda-forge --platform win-64 "$consume_dir";
+          cd "$consume_dir";
+          pixi add r-zig-slim;
+          pixi run Rscript -e 'r_home <- R.home(); cat("R_HOME =", r_home, "\n"); stopifnot(grepl("Library", r_home, fixed = TRUE)); cat("consume test OK\n")';
+      - name: Publish to prefix.dev
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: pixi run -e pkg conda-publish;
+
