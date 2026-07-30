@@ -161,7 +161,28 @@ pub fn build(b: *std.Build) !void {
     // x86_64-w64-mingw32-* binutils, .dll.a import libraries) is built on
     // the GNU/MinGW ABI instead (matches the existing toolchain/zig-cc
     // shim's own `-target x86_64-windows-gnu`), so re-resolve explicitly.
-    const target = if (os == .windows) b.resolveTargetQuery(.{ .abi = .gnu }) else native;
+    //
+    // On Linux, pin the glibc floor to 2.17 (RHEL/CentOS 7 era, ~2013) —
+    // zig cross-links against its own bundled old-glibc stubs for this,
+    // no old build machine/container needed. glibc's own ABI guarantee is
+    // strictly backward compatible (a 2.17-targeted binary runs unchanged
+    // on any newer glibc), so this is a strict compatibility win with no
+    // downside, not a separate build variant: requested for older HPC
+    // servers still on glibc 2.17, but there's no reason every other
+    // Linux target shouldn't get the same floor for free. Verified this
+    // is not just theoretical: conda-forge's own linux-64 packages
+    // (libcurl.so.4 checked directly via `objdump -T`) already cap out at
+    // GLIBC_2.17 themselves — conda-forge deliberately builds against an
+    // old sysroot for exactly this reason, so the non-zig-compiled
+    // dependencies (conda libs, gfortran's own runtime) were already
+    // compatible; only this project's own zig-compiled code defaulted to
+    // the host's (much newer) native glibc before this.
+    const target = if (os == .windows)
+        b.resolveTargetQuery(.{ .abi = .gnu })
+    else if (os == .linux)
+        b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = .{ .major = 2, .minor = 17, .patch = 0 } })
+    else
+        native;
     // gnuwin32 has no slim/full switch at all (jpeg/tiff/tcltk are always
     // on — "slim==full on Windows", a pre-existing project convention);
     // -Dvariant is meaningless there, force .full regardless of what was
@@ -223,7 +244,11 @@ pub fn build(b: *std.Build) !void {
         .prefix = install_prefix,
         .rhome = rhome,
         .flangrt_dir = if (os == .linux) try findFlangRt(b, io, conda) else "",
-        .gfortran_lib_dir = if (os == .windows) try findGfortranLibDir(b, io, conda) else "",
+        .gfortran_lib_dir = switch (os) {
+            .windows => try findGfortranLibDir(b, io, b.fmt("{s}/Library/lib/gcc/x86_64-w64-mingw32", .{conda}), "libgfortran.dll.a"),
+            .macos => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/arm64-apple-darwin20.0.0", .{conda}), "libgfortran.a"),
+            .linux => "",
+        },
         .subst = std.StringHashMap([]const u8).init(arena),
         .geninc = undefined,
         .libR = undefined,
@@ -967,25 +992,23 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // bash, unmodified — every actual compiler-flag decision (SONAME
     // injection, -fno-sanitize=undefined, MinGW -l search fixes, OpenMP
     // wiring) stays in that one shared bash script, not duplicated here.
-    // ctx.conda may still carry native (backslash) separators on Windows
-    // (unlike src_abs, which is normalized once at the top of `build()`)
-    // — a literal backslash inside the C string literal this feeds into
-    // (via -DBASH_PATH="...") is an escape-sequence introducer, so the
-    // compiler rejects it outright (found via a real "\U used with no
-    // following hex digits" compile error, the same class of bug F6.2's
-    // R-code-string fix already covers, just hitting a C string literal
-    // instead of an R one this time).
-    const bash_abs = std.mem.replaceOwned(u8, arena, ctx.absSub("{s}/Library/usr/bin/bash.exe", .{ctx.conda}), "\\", "/") catch @panic("OOM");
-    // Worktree-relative, not R_HOME-relative — matches the rest of this
-    // build's own convention (e.g. unix's raw installed Makeconf also
-    // bakes a worktree-absolute toolchain path; only stage.sh's later,
-    // separate normalization pass makes it relocatable). Good enough for
-    // the contract test itself, which runs directly against the
-    // freshly-built prefix, not a moved one.
-    const zig_cc_abs = std.mem.replaceOwned(u8, arena, b.pathFromRoot("toolchain/zig-cc"), "\\", "/") catch @panic("OOM");
-    const zig_cxx_abs = std.mem.replaceOwned(u8, arena, b.pathFromRoot("toolchain/zig-cxx"), "\\", "/") catch @panic("OOM");
-    const win_gcc_exe = winCompilerWrapper(ctx, "gcc", bash_abs, zig_cc_abs);
-    const win_gxx_exe = winCompilerWrapper(ctx, "g++", bash_abs, zig_cxx_abs);
+    // BASH_PATH/SCRIPT_PATH are NOT baked in as compile-time absolute
+    // paths anymore (they used to be: ctx.conda-derived bash.exe path +
+    // a worktree-absolute toolchain/zig-cc path). A conda/pixi package
+    // builds inside a rattler-build sandbox (torn down right after) and
+    // installs into a completely different prefix on the end user's
+    // machine — any absolute path baked in at compile time is guaranteed
+    // wrong post-install (found via a real "had status 1" failure from
+    // glue/cli's own `cc --version` compiler probe on a real installed
+    // package; `strings` on the shipped gcc.exe showed the baked bash.exe/
+    // zig-cc paths literally pointing into the rattler-build sandbox's own
+    // temp directory, neither of which exists once the package lands
+    // anywhere else). win-exec-forward.c now resolves both at runtime
+    // instead: the script by its own install directory (GetModuleFileName),
+    // bash.exe via the *runtime* CONDA_PREFIX env var. Only the bare
+    // script filename is baked in here.
+    const win_gcc_exe = winCompilerWrapper(ctx, "gcc", "zig-cc");
+    const win_gxx_exe = winCompilerWrapper(ctx, "g++", "zig-cxx");
 
     // ------------------------------------------------------------------
     // Rscript.exe — the ONLY front-end built (F6.0): same unix/Rscript.c
@@ -1071,45 +1094,20 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // re-execs (verified by reading rcmdfn.c directly) — the real logic
     // lives in R code this build already has, not in C we'd be
     // duplicating.
-    const rcmd_mod = newCMod(ctx);
-    rcmd_mod.addIncludePath(ctx.geninc);
-    rcmd_mod.addIncludePath(ctx.path("src/include"));
-    rcmd_mod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
-    addCGroup(ctx, rcmd_mod, "src/gnuwin32/front-ends", &.{"R.c"}, .{
-        .extra = &.{"-I%S/src/gnuwin32"},
-    });
-    addCGroup(ctx, rcmd_mod, "src/gnuwin32/front-ends", &.{"rcmdfn.c"}, .{
-        // BINDIR="bin/x64": rcmdfn.c templates "<RHome>/<BINDIR>/Rterm.exe"
-        // for every subcommand it dispatches to. Real gnuwin32 value is
-        // `BINDIR=bin$(R_ARCH)` (MkRules.rules) — NOT just the arch
-        // component — found via a real "system cannot find the path
-        // specified" failure traced all the way down to a literal
-        // Test-Path check on the constructed path, which was missing the
-        // "bin/" segment entirely (RHome/x64/Rterm.exe instead of
-        // RHome/bin/x64/Rterm.exe). R_ARCH="x64": rcmdfn.c's own
-        // R_ARCH=... environment-variable propagation to the Rterm.exe
-        // child it launches (same macro every other R_ARCH-aware compile
-        // group here already needs).
-        .extra = &.{ "-I%S/src/gnuwin32", "-DBINDIR=\"bin/x64\"", "-DR_ARCH=\"x64\"" },
-    });
-    // rhome.c/shext.c NOT compiled here — they're already part of
-    // R.dll's own win_gnuwin32_c group (rhome.o/shext.o are directly in
-    // R.dll's real link recipe too, per gnuwin32/Makefile's R-DLLOBJS),
-    // and linking libR already provides getRHOME/getRUser/etc — compiling
-    // them again here duplicate-defines the same symbols against libR's
-    // own exports (found via a real "duplicate symbol: getRHOME" link
-    // error, since zig/lld-link exports every public symbol from a DLL
-    // by default, same class of issue as F6.2's loadRconsole collision).
-    addCGroup(ctx, rcmd_mod, "src/main", &.{"Renviron.c"}, .{
-        // -DRENVIRON_WIN32_STANDALONE: front-ends/Makefile's own
-        // Renviron.o recipe — a standalone-parsing mode distinct from
-        // Renviron.c's normal compile as part of r_core_mod above.
-        .extra = &.{"-DRENVIRON_WIN32_STANDALONE"},
-    });
-    rcmd_mod.linkLibrary(libR);
-    rcmd_mod.linkLibrary(rgraphapp);
-    rcmd_mod.linkSystemLibrary("shlwapi", .{ .use_pkg_config = .no });
-    const rcmd = b.addExecutable(.{ .name = "R", .root_module = rcmd_mod });
+    //
+    // Rcmd.exe (front-ends/Makefile: `Rcmd.exe: rcmd.o ../rhome.o
+    // ../shext.o rcico.o rcmdfn.o Renviron.o`, the exact same recipe with
+    // rcmd.c swapped for R.c) shares this whole compile+link shape — its
+    // own main() is just `exit(rcmdfn(1, argc, argv))` (rcmd.c, verified
+    // directly: no "-h"/"CMD"-token dispatch logic at all, cmdarg is
+    // hardcoded to 1, so `Rcmd INSTALL` behaves like `R CMD INSTALL`
+    // without needing the literal "CMD" argument). Genuinely required,
+    // not just a nicety: many CRAN source packages with compiled code
+    // call `system2(file.path(R.home("bin"), "Rcmd.exe"), c("config",
+    // ...))` directly to query compiler settings (found via a real
+    // `install.packages("pak")` failure — R.exe alone wasn't enough).
+    const win_rcmd = winCmdFrontend(ctx, libR, rgraphapp, "R.c", "R");
+    const win_rcmd_cmd = winCmdFrontend(ctx, libR, rgraphapp, "rcmd.c", "Rcmd");
 
     // ------------------------------------------------------------------
     // Install: bin/x64/ is gnuwin32's own arch-specific binary dir
@@ -1139,7 +1137,42 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_internet.getEmittedBin(), modules_dir, "internet.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript.getEmittedBin(), bin_dir, "Rscript.exe").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rterm.getEmittedBin(), bin_dir, "Rterm.exe").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rcmd.getEmittedBin(), bin_dir, "R.exe").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_rcmd.getEmittedBin(), bin_dir, "R.exe").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_rcmd_cmd.getEmittedBin(), bin_dir, "Rcmd.exe").step);
+    // bin/config.sh (RHome/bin directly — NOT bin/x64/, unlike Rterm.exe/
+    // R.exe/Rcmd.exe themselves; rcmdfn.c's own fallback case builds this
+    // path as plain "%s/bin/config.sh" with only RHome, no BINDIR
+    // component — found via a real "No such file or directory" once it
+    // was first installed into bin_dir/x64 by mistake, confirmed against
+    // BINDIR's absence in rcmdfn.c's own snprintf call for this one case).
+    // `Rcmd config`/`R CMD config` runs `sh "$RHome/bin/config.sh"` — R
+    // packages' configure scripts routinely call this directly (`R CMD
+    // config CC`, etc.) to discover compiler settings; found via a real
+    // `install.packages("pak")` failure. Confirmed byte-identical to
+    // src/scripts/config (the same file installStaticTree's scripts_s
+    // already copies verbatim into unix's bin/config, no @VAR@
+    // substitution) against a real gnuwin32 build's own bin/config.sh —
+    // just copied under the .sh name Windows' `sh "path.sh"` invocation
+    // convention expects.
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.path("src/scripts/config"), .{ .custom = "Library/lib/R/bin" }, "config.sh").step);
+    // etc/Rcmd_environ: rcmdfn.c's own `process_Renviron(RHome/etc/
+    // Rcmd_environ)` call (right before dispatching to a subcommand) —
+    // sets R_OSTYPE=windows among other defaults (R_SHARE_DIR/R_GZIPCMD/
+    // etc). Without it, config.sh's own `if test "${R_OSTYPE}" =
+    // "windows"` check (which sets MAKE=make) silently fails, leaving
+    // MAKE empty — found via a real "eval: -s: invalid option" error
+    // (config.sh's `query="${MAKE} -s ..."` becomes just " -s ..." with
+    // MAKE unset, and `eval`ing that treats "-s" as its own first,
+    // invalid argument) that reproduced identically even when Rcmd.exe
+    // was launched from inside a real Rscript.exe session (ruling out
+    // "R's own startup sets this" as an alternative explanation — it
+    // doesn't). A real, static gnuwin32 file (src/gnuwin32/fixed/etc/
+    // Rcmd_environ) already exists for exactly this — same "vendor
+    // gnuwin32's own ready-made file" pattern as config.h/Rconsole.
+    // RHome/etc/ directly, no bin/x64 arch subdir (matches config.sh's
+    // own path convention, confirmed via rcmdfn.c's literal
+    // string-concat: RHome + "/etc/Rcmd_environ").
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.path("src/gnuwin32/fixed/etc/Rcmd_environ"), .{ .custom = "Library/lib/R/etc" }, "Rcmd_environ").step);
 
     try installWindowsCompilerContract(ctx, io, win_gcc_exe, win_gxx_exe);
 
@@ -1341,6 +1374,16 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     const toolchain_dir: std.Build.InstallDir = .{ .custom = "Library/lib/R/bin/toolchain" };
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_gcc_exe.getEmittedBin(), toolchain_dir, "gcc.exe").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_gxx_exe.getEmittedBin(), toolchain_dir, "g++.exe").step);
+    // zig-cc/zig-cxx installed directly alongside the forwarder stubs above
+    // (not left to scripts/stage.sh's later, separate copy) — win-exec-
+    // forward.c now resolves SCRIPT_NAME relative to its own install
+    // directory at runtime, so the script must already be co-located here
+    // right after `zig build install`, before stage.sh ever runs (the
+    // contract test exercises gcc.exe/g++.exe against exactly this state).
+    // stage.sh's own `cp "$TOOLCHAIN"/zig-*` copy becomes a harmless no-op
+    // overwrite for Windows once this runs first.
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("toolchain/zig-cc"), toolchain_dir, "zig-cc").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("toolchain/zig-cxx"), toolchain_dir, "zig-cxx").step);
 
     // Real conda-forge MinGW binutils — plain copies, no wrapper needed
     // (already real .exe files, and none of them have gfortran's own
@@ -1360,9 +1403,9 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot("zigbuild/config/win-x86_64-full/Makeconf.win"), b.allocator, .limited(1024 * 1024));
     var mkc = raw;
     const toolchain_abs = ctx.absSub("{s}/Library/lib/R/bin/toolchain", .{ctx.prefix});
-    // ctx.conda may carry native backslash separators (see the bash_abs
-    // comment above) — this ends up embedded in a Makefile variable, not
-    // a C string literal, so it wouldn't break the *build* the same way,
+    // ctx.conda may carry native backslash separators — this ends up
+    // embedded in a Makefile variable, not a C string literal, so it
+    // wouldn't break the *build* the same way,
     // but normalize anyway for consistency with every other path this
     // build.zig bakes in.
     const conda_fwd = std.mem.replaceOwned(u8, b.allocator, ctx.conda, "\\", "/") catch @panic("OOM");
@@ -1645,14 +1688,26 @@ fn findFlangRt(b: *std.Build, io: std.Io, conda: []const u8) ![]const u8 {
     return error.FlangRtNotFound;
 }
 
-/// libgfortran.dll.a/libquadmath.dll.a live under $CONDA/Library/lib/gcc/
-/// x86_64-w64-mingw32/<gcc-version>/ (not directly under Library/lib, unlike
-/// most other conda-forge Windows libs) — found via a real link error
-/// ("unable to find dynamic system library 'gfortran'"). Scan for the single
-/// installed gcc version rather than hardcoding it, since it tracks whatever
-/// gcc_impl_win-64/gfortran_win-64 build conda-forge currently ships.
-fn findGfortranLibDir(b: *std.Build, io: std.Io, conda: []const u8) ![]const u8 {
-    const gcc_root = b.fmt("{s}/Library/lib/gcc/x86_64-w64-mingw32", .{conda});
+/// gfortran's runtime libs (libgfortran/libquadmath/libemutls_w/...) live
+/// under a gcc-version-specific subdirectory of `gcc_root` (Windows:
+/// $CONDA/Library/lib/gcc/x86_64-w64-mingw32/<gcc-version>/; macOS:
+/// $CONDA/lib/gcc/arm64-apple-darwin20.0.0/<gcc-version>/) — not directly
+/// on the default library search path. Found via a real link error on
+/// Windows ("unable to find dynamic system library 'gfortran'"); the same
+/// class of bug hit macOS later (F7.4, 2026-07-29): the macOS side used to
+/// take this path straight from the vendored FLIBS string in subst.txt
+/// (`-L.../lib/gcc/arm64-apple-darwin20.0.0/15.2.0`, captured once on
+/// omicron), which broke the moment conda-forge's gcc_impl_osx-arm64
+/// package moved past 15.2.0 (a real rattler-build sandbox — which always
+/// solves fresh, unlike the dev pixi env's locked/cached solve — resolved
+/// 16.1.0 instead, and the stale hardcoded 15.2.0 path silently didn't
+/// exist there: "unable to find dynamic system library 'emutls_w'").
+/// Scan for the single installed gcc version rather than hardcoding it, on
+/// both platforms, since it tracks whatever gcc_impl_win-64/gfortran_win-64
+/// (or osx-arm64) build conda-forge currently ships — `marker` is the file
+/// used to confirm a given version subdirectory is the right one (differs
+/// by platform: Windows' import-lib naming vs macOS's static-lib naming).
+fn findGfortranLibDir(b: *std.Build, io: std.Io, gcc_root: []const u8, marker: []const u8) ![]const u8 {
     var dir = std.Io.Dir.cwd().openDir(io, gcc_root, .{ .iterate = true }) catch {
         return error.GfortranLibNotFound;
     };
@@ -1661,7 +1716,7 @@ fn findGfortranLibDir(b: *std.Build, io: std.Io, conda: []const u8) ![]const u8 
     while (try it.next(io)) |ent| {
         if (ent.kind != .directory) continue;
         const cand = b.fmt("{s}/{s}", .{ gcc_root, ent.name });
-        std.Io.Dir.cwd().access(io, b.fmt("{s}/libgfortran.dll.a", .{cand}), .{}) catch continue;
+        std.Io.Dir.cwd().access(io, b.fmt("{s}/{s}", .{ cand, marker }), .{}) catch continue;
         return cand;
     }
     return error.GfortranLibNotFound;
@@ -1692,13 +1747,47 @@ fn newCMod(ctx: *const Ctx) *std.Build.Module {
     return m;
 }
 
+/// A "CMD dispatcher" front-end (R.exe or Rcmd.exe): both share the exact
+/// same real gnuwin32 recipe (front-ends/Makefile: `<name>.o ../rhome.o
+/// ../shext.o rcico.o rcmdfn.o Renviron.o`, minus the icon/manifest
+/// resource) — only the top-level `main()` differs (`front_c`: "R.c" reads
+/// -h/--help/looks-for-a-"CMD"-token before falling into rcmdfn.c's
+/// dispatch; "rcmd.c" is a one-liner that always dispatches straight in).
+/// rhome.c/shext.c are NOT recompiled here — see the caller's own comment
+/// on why (duplicate-symbol against libR's own exports).
+fn winCmdFrontend(ctx: *Ctx, libR: *std.Build.Step.Compile, rgraphapp: *std.Build.Step.Compile, front_c: []const u8, name: []const u8) *std.Build.Step.Compile {
+    const b = ctx.b;
+    const mod = newCMod(ctx);
+    mod.addIncludePath(ctx.geninc);
+    mod.addIncludePath(ctx.path("src/include"));
+    mod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
+    addCGroup(ctx, mod, "src/gnuwin32/front-ends", &.{front_c}, .{
+        .extra = &.{"-I%S/src/gnuwin32"},
+    });
+    addCGroup(ctx, mod, "src/gnuwin32/front-ends", &.{"rcmdfn.c"}, .{
+        // BINDIR="bin/x64"/R_ARCH="x64": see the caller's own comment
+        // (found via a real "system cannot find the path specified"
+        // failure tracing rcmdfn.c's own Rterm.exe-launch path).
+        .extra = &.{ "-I%S/src/gnuwin32", "-DBINDIR=\"bin/x64\"", "-DR_ARCH=\"x64\"" },
+    });
+    addCGroup(ctx, mod, "src/main", &.{"Renviron.c"}, .{
+        .extra = &.{"-DRENVIRON_WIN32_STANDALONE"},
+    });
+    mod.linkLibrary(libR);
+    mod.linkLibrary(rgraphapp);
+    mod.linkSystemLibrary("shlwapi", .{ .use_pkg_config = .no });
+    return b.addExecutable(.{ .name = name, .root_module = mod });
+}
+
 /// A minimal native PE wrapper (see zigbuild/tools/win-exec-forward.c) that
-/// re-execs `script_abs` via `bash_abs`, forwarding argv unmodified — the
-/// real "gcc.exe"/"g++.exe" Makeconf.win's BINPREF points at (see the
-/// package-compilation-contract comment in buildWindows for why a bash
-/// script alone, even with an absolute path, can't be found by R's own
-/// system() call).
-fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, bash_abs: []const u8, script_abs: []const u8) *std.Build.Step.Compile {
+/// re-execs `script_name` (a bare filename, resolved at runtime relative to
+/// this executable's own install directory) via bash.exe (resolved at
+/// runtime from the CONDA_PREFIX environment variable), forwarding argv
+/// unmodified — the real "gcc.exe"/"g++.exe" Makeconf.win's BINPREF points
+/// at (see the package-compilation-contract comment in buildWindows for why
+/// a bash script alone, even with an absolute path, can't be found by R's
+/// own system() call).
+fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, script_name: []const u8) *std.Build.Step.Compile {
     const b = ctx.b;
     const m = b.createModule(.{
         .target = ctx.target,
@@ -1709,8 +1798,7 @@ fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, bash_abs: []const u8, s
         .file = b.path("zigbuild/tools/win-exec-forward.c"),
         .flags = &.{
             "-std=gnu23",
-            b.fmt("-DBASH_PATH=\"{s}\"", .{bash_abs}),
-            b.fmt("-DSCRIPT_PATH=\"{s}\"", .{script_abs}),
+            b.fmt("-DSCRIPT_NAME=\"{s}\"", .{script_name}),
         },
     });
     return b.addExecutable(.{ .name = name, .root_module = m });
@@ -1810,10 +1898,16 @@ fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {
 
 /// Link the Fortran runtime: flang_rt.runtime on linux (found by
 /// findFlangRt's clang-resource-dir search); gfortran's own runtime libs
-/// on macOS, taken straight from the vendored FLIBS (captured on omicron:
-/// `-L.../lib/gcc/<triple>/<ver> -L.../lib/gcc -lemutls_w -lheapt_w
-/// -lgfortran -lquadmath` — gfortran's private libdir convention, distinct
-/// from flang's single clang-resource-dir .a file).
+/// on macOS (`-lemutls_w -lheapt_w -lgfortran -lquadmath` — gfortran's
+/// private libdir convention, distinct from flang's single
+/// clang-resource-dir .a file) — same gcc-version-specific-subdirectory
+/// shape as Windows below, so the `-L` path is resolved the same way
+/// (findGfortranLibDir), not taken from the vendored FLIBS string anymore
+/// (F7.4, 2026-07-29: that path goes stale the moment conda-forge bumps
+/// its gcc_impl_osx-arm64 package — see findGfortranLibDir's own comment
+/// for the real failure this caused). Still reuses FLIBS for the `-l`
+/// library *names* (those don't change with the gcc version), just not
+/// its embedded `-L` path.
 fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
     switch (ctx.os) {
         .linux => {
@@ -1821,7 +1915,13 @@ fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
             mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
         },
-        .macos => applyLinkFlags(ctx, mod, ctx.subst.get("FLIBS").?),
+        .macos => {
+            mod.addLibraryPath(.{ .cwd_relative = ctx.gfortran_lib_dir });
+            mod.linkSystemLibrary("emutls_w", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("heapt_w", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("gfortran", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("quadmath", .{ .use_pkg_config = .no });
+        },
         // No real `configure` capture on Windows (F6) to pull FLIBS from
         // — conda-forge's MinGW gfortran runtime libs, standard names,
         // found on the default library search path already set up by

@@ -125,6 +125,108 @@ generated output/source rather than guessed:
   `rattler-build build --render-only` before committing to a full
   rebuild.
 
+## 2026-07-28 (same day, continued): Windows-only follow-up (build number 3)
+
+Real user bug report: `install.packages("pak", ...)` failed with `Rcmd.exe`
+not found — F7's own package-compilation-contract work only ever built
+`R.exe`, not the separate `Rcmd.exe` many packages call directly for `R
+CMD config`-style compiler discovery. Fixed on the `build.zig` side (see
+`feat-zig-build/TODO.md`'s F7.1 entry for the full detail: a shared
+`winCmdFrontend` helper builds both `R.exe`/`Rcmd.exe`; two more real
+installed-file-location bugs found and fixed alongside it —
+`bin/config.sh` needed installing directly under `RHome/bin/`, not
+`RHome/bin/x64/`, and a completely missing `etc/Rcmd_environ`, a real
+static gnuwin32 file that sets `R_OSTYPE=windows`). `recipe.yaml`'s `build:
+number` bumped `2` → `3` (Windows-only bump — linux-64/osx-arm64 stay at
+build 2, since this fix is Windows-specific and there's no requirement
+build numbers stay in lockstep across platforms).
+
+Published: `r-zig-slim-4.6.1-h9490d1a_3.conda` (win-64 only), confirmed via
+`rattler-build upload prefix -vv`'s "Packages successfully uploaded to
+prefix.dev server" line — same verification standard as every other
+publish in this doc.
+
+**Still open, not fixed by this release** (see F7.1 in `feat-zig-build/
+TODO.md` for the full detail): a real access-violation crash surfaces when
+a package's own `configure` script recursively re-invokes `R.exe` (`pak`'s
+does, calling `dynamic-help.R` via a fresh `R.exe` → `Rterm.exe` chain,
+5 process levels deep). Root cause not isolated yet — needs a real
+interactive Windows console to debug properly, not available over the
+non-interactive SSH sessions used for everything else in this project so
+far.
+
+## 2026-07-28 (same day, continued again): Windows-only follow-up (build number 4)
+
+Real user bug report: `install.packages()` for packages with compiled C
+code (`glue`, `cli` — unlike `pak`, which has none) failed at their own
+`system(paste(cc, "--version"), ...)` compiler probe, "had status 1". Root
+cause was much broader than `--version` itself — see `feat-zig-build/
+TODO.md`'s F7.2 entry for the full detail: the `gcc.exe`/`g++.exe` native
+forwarder stubs had `BASH_PATH`/`SCRIPT_PATH` baked in at **compile time**
+from the rattler-build sandbox's own paths (confirmed via `strings` on the
+shipped binary — both pointed at `C:/rb/bld/rattler-build_r-zig-slim/...`,
+which doesn't exist post-install), so *every* invocation on a real
+installed package was silently broken, not just `--version`. Compounding
+it, `m2-bash` was `build:`-only in `recipe.yaml`, so `bash.exe` wasn't even
+guaranteed present in an installed env. Fixed: `win-exec-forward.c` now
+resolves both paths at runtime (script co-located via `GetModuleFileName`,
+bash via the runtime `CONDA_PREFIX` env var); `m2-bash` added to `run:`.
+
+Verified in three stages on kappa before publishing: real `pixi run`
+activation against a bare build tree, a fresh `rattler-build build`, and —
+critically, matching the user's actual failure mode — installing that
+fresh artifact into a brand-new throwaway pixi env (not the build sandbox,
+not the dev env) and confirming `gcc.exe --version`/`g++.exe --version`
+both exit 0 with real `clang version 21.1.8` output there.
+
+Published: `r-zig-slim-4.6.1-h9490d1a_4.conda` (win-64 only), confirmed via
+`rattler-build upload prefix -vv`'s "Packages successfully uploaded to
+prefix.dev server" line.
+
+## 2026-07-29: all 3 platforms (build number 5)
+
+Requested directly (not a bug): differentiate the default per-user R
+package library from any other R install on the machine. Went through
+three design rounds on direct feedback before landing on the shipped one —
+see `feat-zig-build/TODO.md`'s F7.3 entry for the full history. Final
+design: unix (Linux and macOS alike) follows the XDG base directory spec
+(`$XDG_DATA_HOME` if set, else `~/.local/share`) instead of R core's own
+per-OS defaults, landing on `R/<platform>-zig/<x.y>` under that —
+`~/.local/share/R/linux-64-zig/4.6`, `~/.local/share/R/osx-arm64-zig/4.6`.
+Windows has no XDG equivalent; `LOCALAPPDATA` (already what R core uses,
+for the same non-roaming/machine-local reason) is unchanged:
+`%LOCALAPPDATA%/R/win-64-zig/4.6`. Implemented as an `R_LIBS_USER_default()`
+source patch (`library.R`, same "compiled into base.rdb" constraint as the
+existing `Sys.which()` patch), applied idempotently in both
+`scripts/zig-build.sh` and `scripts/configure-r.sh`.
+
+Verified for real on all three platforms before publishing (not just read
+through): `Rscript -e 'Sys.getenv("R_LIBS_USER")'` against a fresh
+`pixi run build` on each of linux (local), kappa (Windows), and omicron
+(macOS), including confirming `$XDG_DATA_HOME` overrides are actually
+respected on Linux/macOS.
+
+Building the macOS package for this release found a second, unrelated real
+bug along the way (F7.4 in `feat-zig-build/TODO.md`): `linkFortranRt`'s
+macOS branch took gfortran's runtime link path from a vendored `subst.txt`
+value hardcoding gcc 15.2.0 — a fresh `rattler-build` sandbox solve (no
+lockfile, unlike the dev pixi env) resolved conda-forge's current
+`gcc_impl_osx-arm64` (16.1.0) instead, and the stale path broke the build
+(`unable to find dynamic system library 'emutls_w'`). Fixed by generalizing
+`findGfortranLibDir` (previously Windows-only) to scan for the actually-
+installed gcc version on macOS too, the same pattern Windows already used
+for exactly this reason. Re-verified: the macOS package built clean against
+16.1.0 afterward.
+
+Published, all confirmed via `rattler-build upload prefix -vv`'s "Packages
+successfully uploaded to prefix.dev server" line (one transient network
+error on the Windows upload — "error sending request for url" — cleared on
+a plain retry, no code involved):
+
+- linux-64: `r-zig-slim-4.6.1-hb0f4dca_5.conda`
+- osx-arm64: `r-zig-slim-4.6.1-h60d57d3_5.conda`
+- win-64: `r-zig-slim-4.6.1-h9490d1a_5.conda`
+
 ## End goal: CI trusted publishing
 
 - [ ] Decide a version-bump / build-number strategy (`recipe.yaml`'s

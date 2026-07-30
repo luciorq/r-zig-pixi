@@ -551,6 +551,77 @@ a carried-forward gotcha catalog.
         when building R itself.
       CI: `build-windows` job in `build.yml` now runs the `contract` step
       too (previously build+smoke+verify-package only).
+- [x] **F7.1** `Rcmd.exe` missing, found via a real user report (2026-07-28,
+      on kappa): `install.packages("pak", ...)` failed with `Error in
+      system2(file.path(R.home("bin"), "Rcmd.exe"), ...) : ... not found`.
+      F7 only built `R.exe` (needs the literal "CMD" token before its
+      subcommand); real gnuwin32 also ships a separate `Rcmd.exe`
+      (`front-ends/rcmd.c`'s `main()` is a one-liner —
+      `exit(rcmdfn(1, argc, argv))`, always dispatches straight into CMD
+      mode) that many R packages call directly (`R.home("bin")/Rcmd.exe
+      config CC` etc. — a common, standard way for a package's own
+      `configure` to discover compiler settings, not pak-specific). Fixed
+      by factoring the R.exe compile block into a shared `winCmdFrontend`
+      helper (front_c parameter: "R.c" vs "rcmd.c", everything else
+      identical — same real front-ends/Makefile recipe swapped by one
+      source file) and building both. Two more real, connected bugs found
+      getting `Rcmd.exe config CC` to actually work end-to-end (verified
+      via `system2()` from inside a real Rscript.exe session, matching
+      `install.packages()`'s own call pattern, not just a standalone
+      invocation):
+      - **`bin/config.sh` needed installing at `RHome/bin/config.sh`
+        directly — not `RHome/bin/x64/`** (rcmdfn.c's own "config"
+        fallback case builds this path as plain `"%s/bin/config.sh"`
+        with only `RHome`, no `BINDIR` component, unlike every other
+        subcommand it dispatches). Confirmed byte-identical to
+        `src/scripts/config` (the same file unix's `scripts_s` already
+        installs verbatim as `bin/config`) against a real gnuwin32 build's
+        own `bin/config.sh`.
+      - **`etc/Rcmd_environ` was never installed at all** — rcmdfn.c calls
+        `process_Renviron(RHome/etc/Rcmd_environ)` right before dispatching
+        to a subcommand, and this file sets `R_OSTYPE=windows` (among
+        other defaults). Without it, `config.sh`'s own `if test
+        "${R_OSTYPE}" = "windows"` check (which sets `MAKE=make`) silently
+        fails, leaving `MAKE` empty — surfaced as `eval: -s: invalid
+        option` (`config.sh`'s `query="${MAKE} -s ..."` becomes just
+        `" -s ..."` with `MAKE` unset). Confirmed this wasn't "R's own
+        startup sets R_OSTYPE some other way" by testing `Rcmd.exe`
+        launched from inside a real `Rscript.exe` session — same failure.
+        A real, static gnuwin32 file already exists for exactly this
+        (`src/gnuwin32/fixed/etc/Rcmd_environ`) — same "vendor gnuwin32's
+        own ready-made file" pattern as `config.h`/`Rconsole`.
+      **Verified fixed**: `Rcmd.exe config CC` now correctly prints the
+      real `gcc.exe` wrapper path, from inside a real `Rscript.exe`
+      session, matching `install.packages()`'s exact call pattern.
+      `install.packages("pak", ...)` now gets past the point it originally
+      failed at (no more "Rcmd.exe not found", no more config.sh errors)
+      and reaches `** Running ./configure`.
+      **Not yet resolved — a real, separate, deeper issue found while
+      verifying the fix above**: `pak`'s own `configure` script re-invokes
+      `R.exe` directly (`"${R_HOME}/bin${R_ARCH_BIN}/R" --vanilla --slave
+      -f tools/dynamic-help.R`) — a *recursive* front-end invocation
+      (`Rcmd.exe INSTALL` → `Rterm.exe` running `tools:::.install_packages()`
+      → `sh configure` → `R.exe` → `R.exe`'s own cmdarg==0 passthrough →
+      *another* `Rterm.exe`) that F7's own testing never exercised (every
+      prior R.exe/Rcmd.exe test was either `--version` or a single-level
+      `CMD <subcommand>` dispatch). Observed two different failure modes
+      depending on invocation context — a `sed: command not found` inside
+      `configure` when `Rcmd.exe` is launched from a shell that isn't
+      pixi-activated (its own toolchain-dir PATH addition prepends to,
+      but doesn't replace, the inherited PATH — confirmed via rcmdfn.c's
+      own `newpath` construction — so this is about whether the *inherited*
+      PATH had `Library/usr/bin` on it in the first place, not a bug in
+      the PATH-prepending itself), and, separately, a genuine access
+      violation (`-1073741819` / `0xC0000005`) whose exact trigger point
+      in that 5-level-deep recursive chain isn't isolated yet — plausibly
+      gnuwin32's console-handling code (`rui.c`/`run.c`, written for a
+      real interactive console) misbehaving under fully piped, no-console
+      SSH invocation, but not confirmed against a real interactive
+      Windows session. **Deliberately stopped here rather than guessing
+      further** — flagged to the user rather than silently declared fixed;
+      picking this up needs either a real interactive-console
+      reproduction (not SSH-piped) or a debugger attached to the crashing
+      process, neither available in this remote-SSH session.
 - [x] **Bug found by the conda-package republish (2026-07-28, real build.zig
       fix)**: `ctx.prefix` (`b.install_prefix`) was never normalized to
       forward slashes, unlike `src_abs`, which already got this exact fix
@@ -610,6 +681,223 @@ a carried-forward gotcha catalog.
       `zig-package`/`zig-verify-package` are first-class default tasks (see
       F6.3 above for the full detail — found there first, on kappa, before
       recipe verification even started).
+- [x] **F7.2** `gcc.exe`/`g++.exe` forwarder silently broken on every real
+      installed package, found via a real user report (2026-07-28, on
+      kappa): `glue`/`cli` (both have compiled C code, unlike `pak`) probe
+      the compiler with `system(paste(cc, "--version"), ...)` at install
+      time, which failed with exit status 1. Root cause was **not**
+      `--version` specifically — every invocation of the win-exec-forward.c
+      native stub was broken on any genuinely-installed package. `strings`
+      on the shipped `gcc.exe` showed its baked-in `BASH_PATH`/`SCRIPT_PATH`
+      (`-DBASH_PATH="..."`/`-DSCRIPT_PATH="..."`, computed from
+      `ctx.conda`/`b.pathFromRoot` at **compile time**) pointed literally
+      into the rattler-build sandbox: `C:/rb/bld/rattler-build_r-zig-slim/
+      h_env/Library/usr/bin/bash.exe` and `.../work/toolchain/zig-cc` —
+      neither path exists once the package is built and installed anywhere
+      else (confirmed via `Test-Path` on kappa: both `False`). This never
+      surfaced in F7/F7.1's own testing because those tests ran against a
+      freshly `zig build`-ed local prefix (same env the compile-time paths
+      were baked from) or against `pak` (no compiled code to trigger a `cc`
+      probe) — never a *separately installed* conda package with a package
+      that actually compiles. Compounding it: `m2-bash` was only a
+      `requirements: build:` dependency in `recipe.yaml`, never `host:`/
+      `run:`, so `bash.exe` wasn't guaranteed to exist in a real installed
+      env at all, independent of the path bug.
+      **Fixed**: `zigbuild/tools/win-exec-forward.c` now resolves both
+      paths at **runtime** instead of baking them in — the target script
+      (`SCRIPT_NAME`, now just a bare filename like `"zig-cc"`) is looked
+      up next to the forwarder's own install location via
+      `GetModuleFileName` (`installWindowsCompilerContract` now installs
+      `zig-cc`/`zig-cxx` directly alongside `gcc.exe`/`g++.exe`, not left
+      solely to `stage.sh`'s later, separate copy — needed so the contract
+      test, which runs against a bare `zig build install` before `stage.sh`
+      ever runs, has the script co-located too); `bash.exe` is looked up
+      via the **runtime** `CONDA_PREFIX` environment variable, not a
+      build-time constant — correct in both the local dev-env case (R
+      installs to a project-local `dist/` dir, unrelated to `CONDA_PREFIX`,
+      but `CONDA_PREFIX` at runtime still correctly points at the dev pixi
+      env) and the real packaged case (R and bash share the same prefix,
+      whatever the end user's own env happens to be). `recipe.yaml`: added
+      `m2-bash` to the Windows `requirements: run:` list (build number
+      3 → 4).
+      **Verified fixed** on kappa, in three progressively more realistic
+      scenarios: (1) `gcc.exe --version`/`g++.exe --version` against a bare
+      `pixi run build` output tree, under real `pixi run` activation; (2) a
+      fresh `rattler-build build` producing `r-zig-slim-4.6.1-h9490d1a_4
+      .conda`; (3) that artifact installed into a brand-new, throwaway pixi
+      env (`verify-toolchain-fix`, unrelated to any build sandbox or dev
+      env) — `gcc.exe --version`/`g++.exe --version` both exit 0 with real
+      `clang version 21.1.8` output, and `bash.exe` is now genuinely
+      present in the installed env. Not yet published to prefix.dev as of
+      this entry.
+
+- [x] **F7.3** Differentiate the default user package library from any
+      other R install (2026-07-28/29), requested directly (not a bug). R
+      core's own `R_LIBS_USER_default()` (`library.R`, invoked via
+      `etc/Renviron`'s `R_LIBS_USER=${R_LIBS_USER:-'%U'}` + `Common.R`'s
+      startup `Sys.setenv`) computes an OS-aware default (`LOCALAPPDATA/R/
+      win-library/<x.y>` on Windows, `~/R/<platform>-library/<x.y>` on
+      Linux, `~/Library/R/<arch>/<x.y>/library` on macOS) — identical to
+      what any *other* R install of the same version/platform would use
+      (CRAN R, r-native, the legacy gnuwin32 build here), so packages could
+      silently cross-contaminate between them. Same "compiled into
+      base.rdb, can't be sed-patched after the fact" constraint as the
+      existing `Sys.which()` source patch, so this patches `library.R`
+      itself, at the same point in the pipeline (`scripts/zig-build.sh`,
+      mirrored in `scripts/configure-r.sh` for the legacy fallback),
+      idempotent (guarded on the literal `"win-64-zig"` string). Went
+      through three rounds, each on direct feedback:
+      1. First attempt: rename the whole top-level `"R"` directory to
+         `"R-zig"` — rejected, too different from R's own convention.
+      2. Second: keep `~/R` (unix) / `~/Library/R` (macOS) /
+         `LOCALAPPDATA/R` (Windows) unchanged, differentiate only the
+         platform-library subdirectory with a conda-style tag
+         (`linux-64-zig`, `osx-arm64-zig`, `win-64-zig`) — closer, but
+         still used R core's own per-OS parent directories (macOS's
+         `~/Library/R/...` in particular called out as "even weirder"
+         than necessary).
+      3. **Final, shipped design**: unix (Linux and macOS alike) follows
+         the XDG base directory spec instead of R core's own per-OS
+         defaults — `$XDG_DATA_HOME` if set and non-empty, else
+         `~/.local/share`, then `R/<platform>-zig/<x.y>`. Windows has no
+         XDG equivalent; `LOCALAPPDATA` (non-roaming, machine-local) is
+         already the right semantic match and R core already uses it for
+         exactly that reason, so it's unchanged:
+         `%LOCALAPPDATA%/R/win-64-zig/<x.y>`. Implementation replaces the
+         whole `R_LIBS_USER_default()` function body (not single-line
+         `sed`, since the unix branches merged into one `{ }` block reading
+         `Sys.getenv("XDG_DATA_HOME")`) via a small `awk` block-replace
+         matched between the function's own opening/closing lines (safe:
+         no nested braces in the body, so the first `"    }"` after the
+         opening is unambiguously this function's own close) — each
+         reversion started from a pristine source tree (`rm -rf
+         build/R-4.6.1 && pixi run fetch`, cheap: re-extracts the
+         already-downloaded tarball, no network) rather than layering sed
+         edits on top of a previous patch.
+      This project only ships linux-64/osx-arm64/win-64, so those three
+      conda-style platform tags are hardcoded; anything else falls back to
+      R core's own platform string, `-zig`-tagged, rather than guessing a
+      conda subdir that doesn't exist. **Verified on all three real
+      platforms** (linux locally, kappa, omicron): fresh `pixi run build`,
+      `Rscript -e 'Sys.getenv("R_LIBS_USER")'` prints
+      `~/.local/share/R/linux-64-zig/4.6`,
+      `~/.local/share/R/osx-arm64-zig/4.6`, and
+      `%LOCALAPPDATA%\R\win-64-zig\4.6` respectively; `XDG_DATA_HOME`
+      override confirmed respected on both linux and macOS (prints e.g.
+      `/custom/xdg/data/R/linux-64-zig/4.6`); re-running `pixi run build`
+      on all three confirms the guard is idempotent (still exactly one
+      patched copy, not doubled). `R_LIBS_SITE` (the site-wide library) is
+      untouched — it already defaults to `R.home()/site-library`, inside
+      R_HOME itself, so it never had a collision risk to begin with.
+- [x] **F7.4** macOS gfortran runtime link path goes stale on any
+      conda-forge gcc_impl_osx-arm64 version bump (found 2026-07-29, while
+      building the F7.3 conda package release on omicron — a real,
+      previously-undiscovered bug, unrelated to F7.3 itself).
+      `linkFortranRt`'s macOS branch used to take gfortran's runtime `-L`
+      path straight from the vendored `FLIBS` string in `subst.txt`
+      (`-L$CONDA/lib/gcc/arm64-apple-darwin20.0.0/15.2.0 ...`, captured
+      once on omicron via `gen-subst.sh`) — this is exactly the class of
+      drift risk `findGfortranLibDir` was already written to avoid on
+      Windows (its own doc comment: "scan for the single installed gcc
+      version rather than hardcoding it"), just not applied to macOS yet.
+      Surfaced as a real `rattler-build build` failure: the **dev pixi
+      env** has a locked/cached solve (still gfortran 15.2.0, matching the
+      vendored `subst.txt`), but a **fresh rattler-build sandbox solve**
+      (no lockfile, resolves `recipe.yaml`'s loose `gfortran` constraint
+      against whatever conda-forge currently ships) picked up 16.1.0
+      instead — `zig build`'s own error, `unable to find dynamic system
+      library 'emutls_w'`, traced by inspecting the kept failed work
+      directory's `conda_build.log` directly (`rattler-build` leaves it in
+      place on failure) and confirming the actual installed version via
+      `ls .../lib/gcc/arm64-apple-darwin20.0.0/` (16.1.0, not 15.2.0).
+      Fixed: generalized `findGfortranLibDir` (now takes `gcc_root` +
+      `marker` file params instead of being Windows-hardcoded) and call it
+      for macOS too (`$CONDA/lib/gcc/arm64-apple-darwin20.0.0`, marker
+      `libgfortran.a`); `linkFortranRt`'s macOS branch now adds that
+      dynamically-resolved path via `addLibraryPath` and links
+      `emutls_w`/`heapt_w`/`gfortran`/`quadmath` individually, instead of
+      trusting FLIBS's embedded (and now provably stale-prone) `-L`
+      component — still uses FLIBS-equivalent library *names*, just not
+      its baked path. **Verified**: `rattler-build build` on omicron
+      succeeded against the actual-installed 16.1.0 with no further
+      changes needed (`r-zig-slim-4.6.1-h60d57d3_5.conda`, no
+      `emutls_w`/library-not-found errors) — confirms the dynamic scan
+      works for real, not just that it compiles. Published to prefix.dev
+      alongside the rest of build 5 (see the conda-package republish
+      section below).
+- [x] **F7.5** Pin the Linux build's glibc floor to 2.17 (2026-07-29),
+      requested directly (not a bug) — HPC servers running older
+      distros (RHEL/CentOS 7 era) need this. Linux's target previously
+      resolved as plain `native` (`build.zig`'s own `target` variable,
+      `os == .windows` was the only branch that overrode it), so a build
+      on any modern dev/CI machine (glibc 2.39 here) silently required
+      glibc that old HPC systems don't have. Fixed with a single
+      `b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = .{ .major =
+      2, .minor = 17, .patch = 0 } })` for `os == .linux` — zig links
+      against its own bundled old-glibc stubs for this, no old build
+      machine/container/variant needed (glibc's ABI guarantee is strictly
+      backward compatible, so there's no downside to targeting old
+      unconditionally — not a separate build variant, just a lower
+      floor for the one existing linux-64 build).
+      Verified for real, not just that it compiles: fresh `pixi run build`
+      (full clean `zig-cache`) succeeded; `objdump -T` symbol-version
+      checks on the actual output confirm nothing exceeds `GLIBC_2.17` —
+      `libR.so` tops out at 2.17 itself, `libRlapack.so`/`bin/exec/R`
+      (the main engine binary) top out at `GLIBC_2.2.5` (glibc's own
+      long-stable baseline symbol version, i.e. even older/safer than the
+      2.17 floor), `library/stats/libs/stats.so` (a base-package compile,
+      exercising the same `newPkgMod`/`addSharedLib` path every CRAN
+      package with compiled code goes through) tops out at 2.14.
+      Cross-checked against conda-forge's own dependency libraries too
+      (not just this project's zig-compiled code): `libcurl.so.4` in the
+      pixi env already caps at `GLIBC_2.17` on its own — conda-forge
+      deliberately builds `linux-64` packages against an old sysroot for
+      the same HPC-compatibility reason, so the non-zig-compiled
+      dependency floor was already fine; only this project's own code
+      needed the explicit pin. `pixi run smoke` and `pixi run contract`
+      (the latter exercises real compiled-code package installs — Rcpp,
+      data.table+OpenMP, minqa+Fortran) both pass unchanged, confirming
+      this is a pure ABI-floor change with no functional regression.
+
+      **Follow-up, same day**: this only covers R itself — packages
+      *users* compile against this R build (`R CMD INSTALL`/`SHLIB`) go
+      through a completely separate path, `toolchain/zig-cc`/`zig-cxx`
+      (Makeconf's `CC`/`CXX`), which had no `-target` at all and so
+      defaulted to zig's native glibc resolution on whatever machine is
+      doing the compiling — a real gap for HPC clusters, which routinely
+      build on a newer head/login node and run on older compute nodes.
+      Fixed: both shims now prepend `-target $(uname -m)-linux-gnu.2.17`
+      when actually running on Linux (guarded so it doesn't affect the
+      same scripts' Windows/macOS use — `uname -s` reports `MINGW64_NT`/
+      `MSYS_NT` under the MSYS bash that runs them on Windows, not
+      `Linux`). Verified: a standalone C file compiled directly through
+      the patched shim tops out at `GLIBC_2.2.5`; a real
+      `install.packages(..., type="source")` through the local
+      `dist/R-4.6.1-slim-zig` build shows R's own package-build machinery
+      invoking the exact same patched shim script unmodified (confirmed
+      via R's own printed build command line), producing a working
+      compiled `.so`.
+
+      **Known, deliberately unfixed gap**: pure Fortran-only packages (no
+      C/C++ at all) still bypass this — R's `install.R` routes their
+      final link through `SHLIB_FCLD` (bare `flang`, not the `CC` shim)
+      and, in that mode, deliberately *omits* `$(FLIBS)` from the link
+      command, relying on `flang` to auto-link its own runtime the way
+      `gfortran` does. Simply pointing `SHLIB_FCLD` at the `CC` shim would
+      silently break that auto-link (`zig cc` doesn't know to inject
+      `-lflang_rt.runtime`), and `flang`'s own `-target` doesn't accept
+      the zig-specific `.2.17` glibc-version-suffix syntax at all (tested
+      directly — real clang/LLVM target-triple parsing rejects it; that
+      suffix is a zig-only extension). A real fix needs a purpose-built
+      shim that both pins the target *and* replicates flang's implicit
+      runtime auto-link — scoped but more involved than the `CC`/`CXX`
+      fix, and deliberately deferred (per direct decision) since most
+      Fortran-using CRAN packages also carry C/C++ glue code, which
+      already routes through the fixed shim.
+
+      Not yet verified on macOS/Windows CI or republished as a conda
+      package — this is a `build.zig` + `toolchain/zig-cc`/`zig-cxx`-only
+      change so far, local (linux) verification only.
 
 ### Bugs found switching `recipe/build.sh` to zig (real, all in
 `recipe/recipe.yaml`, fixed 2026-07-28 — found via 5 real

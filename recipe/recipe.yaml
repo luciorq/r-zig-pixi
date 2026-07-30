@@ -35,11 +35,23 @@ source:
     target_directory: zigbuild
 
 build:
-  # Bumped from 0: this is the first zig-built release (recipe/build.sh
-  # switched from configure-r.sh/build-r.sh/install-r.sh to zig-build.sh +
-  # stage.sh, Milestone 5's default-path swap) — bump past 1 too since a
-  # Windows-only build 1 was already released.
-  number: 2
+  # 2: first zig-built release (recipe/build.sh switched from configure-
+  # r.sh/build-r.sh/install-r.sh to zig-build.sh + stage.sh, Milestone 5's
+  # default-path swap; also past 1, a Windows-only build already
+  # released). 3: Windows-only follow-up — Rcmd.exe/config.sh/
+  # Rcmd_environ fixes (F7.1, see feat-zig-build/TODO.md) for a real user-
+  # reported install.packages() failure. 4: Windows-only follow-up — the
+  # gcc.exe/g++.exe forwarder's baked-in bash.exe/zig-cc paths pointed into
+  # the (torn-down) build sandbox, and m2-bash wasn't a run: dependency at
+  # all, so package compilation was silently broken on every real install
+  # (see build.zig's win-exec-forward.c rewrite). 5: all 3 platforms —
+  # default user package library (R_LIBS_USER) now differentiated from any
+  # other R install: XDG base dir spec on Linux/macOS
+  # (~/.local/share/R/<platform>-zig/<x.y>, respects $XDG_DATA_HOME),
+  # LOCALAPPDATA/R/win-64-zig/<x.y> on Windows (unchanged, already the
+  # right semantic equivalent) — requested directly, not a bug (F7.3, see
+  # feat-zig-build/TODO.md).
+  number: 5
   script: build.sh
 
 requirements:
@@ -237,6 +249,15 @@ requirements:
         - libtiff
         - tk
         - gettext
+        # bash.exe: the native gcc.exe/g++.exe forwarder stubs (win-exec-
+        # forward.c) exec into toolchain/zig-cc(xx) via bash at runtime —
+        # m2-bash was build:-only until this was found via a real
+        # `install.packages()` failure (glue/cli probing `cc --version`):
+        # every package-compilation invocation was silently failing on a
+        # freshly `pixi add`-installed package because bash.exe simply
+        # didn't exist in the env at all, not just because the forwarder's
+        # old baked-in path was wrong (see build.zig's winCompilerWrapper).
+        - m2-bash
     # package compilation works out of the box: Makeconf records the
     # bundled zig shims; these provide the actual compilers
     - zig 0.16.*

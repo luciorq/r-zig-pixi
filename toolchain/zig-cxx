@@ -3,6 +3,12 @@
 # Same UBSan, SONAME, dll.a-search, and zig-name handling as zig-cc.
 ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
 
+# Linux glibc floor: see zig-cc's own comment for the full rationale.
+target=()
+if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
+  target=(-target "$(uname -m)-linux-gnu.2.17")
+fi
+
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*)
     libdirs=()
@@ -80,4 +86,4 @@ if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
   fi
 fi
 
-exec "$ZIG" c++ -fno-sanitize=undefined "${extra[@]}" "$@" "${omp[@]}"
+exec "$ZIG" c++ -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}"
