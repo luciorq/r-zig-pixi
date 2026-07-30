@@ -185,10 +185,14 @@ jobs:
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          cache: true
+ 
       - name: Build + test conda package
         run: |
-          pixi self-update --no-progress --no-release-note --quiet;
-          pixi --version;
+          # pixi self-update --no-progress --no-release-note --quiet;
+          # pixi --version;
           pixi run -e pkg conda-package;
       # rattler-build's own test phase runs with a literal unexpanded
       # %PREFIX% on PATH on Windows, so it can never exercise the
