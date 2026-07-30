@@ -74,7 +74,7 @@ build:
   # plain C. Both found and fixed while adding `pak` (a package that
   # exercises both) to contract-test.sh; see F7.7/F7.8 in
   # feat-zig-build/TODO.md.
-  number: 8
+  number: 9
   script: build.sh
 
 requirements:
