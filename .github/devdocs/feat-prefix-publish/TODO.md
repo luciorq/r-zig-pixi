@@ -32,9 +32,41 @@
       log style doesn't render well without a real TTY) — ran with
       `-vv` directly to get an explicit confirmation line when verifying
       remotely; the task itself is unchanged and fine to use normally.
-- [ ] Verify an install actually works: `pixi add -c https://prefix.dev/universe
-      r-zig-slim` (or equivalent) from a machine that isn't one of the
-      three that built it
+- [x] **Windows post-install bug found and fixed (2026-07-24)**: after
+      installing the published win-64 package into a fresh env, R landed
+      inside the env's Python `Lib/` (NTFS case-folds our `lib/R` into the
+      pre-existing capital `Lib`) and neither `R` nor `Rscript` was on
+      PATH. Two fixes: `R_HOME_DIR="$PREFIX/Library/lib/R"` on Windows
+      (env.sh) + `Library/bin/{R,Rscript}.bat` PATH shims (stage.sh).
+      Neither this project's `dist/` runs nor rattler-build's own
+      absolute-path test could catch it. build.number bumped 0→1 to
+      republish over the broken win-64 build-0. Verified end-to-end: fresh
+      pixi project + `pixi add r-zig-slim` from a local file:// channel,
+      then bare `R --version` and `Rscript -e ...` both resolve (ahead of
+      system R) and run, `R.home()` → `...\Library\lib\R`. Fixed win-64
+      `_1` published to universe. linux-64/osx-arm64 left at `_0` (not
+      broken there; user chose win-64-only for now).
+- [x] Verified a real fresh-env install works on win-64 (see above). Still
+      open for linux-64/osx-arm64: confirm `pixi add -c
+      https://prefix.dev/universe r-zig-slim` from a machine that didn't
+      build it (the unix packages were only tested via rattler-build's own
+      isolated test env, which — unlike Windows — does exercise a real
+      solved run env, but a true fresh consume is still worth doing).
+- [x] **Automate the fresh-env PATH-shim check for Windows** — added a
+      `Fresh-env consume test (Windows PATH shim)` step to the
+      `conda-package` CI job's windows-latest leg
+      (`.github/workflows/build.yml`): after `conda-package` builds,
+      `pixi init`s a throwaway project pointed at the just-built
+      `dist/conda` local channel (plus `conda-forge` for transitive
+      deps), `pixi add r-zig-slim`, then `pixi run Rscript -e ...`
+      invoking bare `Rscript` and asserting `R.home()` contains
+      `Library` — the same shape of check done by hand on kappa, now
+      gated on every CI run instead of only a manual one. Verified the
+      `pixi init`/`pixi add`/`pixi run` mechanics locally against the
+      existing linux-64 `dist/conda` build (bare-path channel, no
+      `file://` prefix needed — pixi accepts a plain absolute path
+      directly); the Windows-specific `pwd -W` path conversion and the
+      actual shim regression can only be confirmed on a real CI run.
 
 ## 2026-07-28: republished with zig-built packages (build number 2)
 

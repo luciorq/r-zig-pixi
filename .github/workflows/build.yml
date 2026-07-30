@@ -159,3 +159,21 @@ jobs:
           cache: true
       - name: Build + test conda package
         run: pixi run -e pkg conda-package
+      # rattler-build's own test phase runs with a literal unexpanded
+      # %PREFIX% on PATH on Windows, so it can never exercise the
+      # Library/bin/{R,Rscript}.bat shims a real install relies on (see
+      # recipe/recipe.yaml's win test comment + scripts/stage.sh). This
+      # is the regression check for that: a genuinely fresh pixi project
+      # installing straight from the just-built local channel, invoking
+      # bare `Rscript` the same way a real user would.
+      - name: Fresh-env consume test (Windows PATH shim)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(cd dist/conda && pwd -W)"
+          consume_dir="$(mktemp -d)"
+          pixi init --channel "$channel" --channel conda-forge --platform win-64 "$consume_dir"
+          cd "$consume_dir"
+          pixi add r-zig-slim
+          pixi run Rscript -e 'r_home <- R.home(); cat("R_HOME =", r_home, "\n"); stopifnot(grepl("Library", r_home, fixed = TRUE)); cat("consume test OK\n")'
