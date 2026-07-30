@@ -1725,7 +1725,34 @@ fn findGfortranLibDir(b: *std.Build, io: std.Io, gcc_root: []const u8, marker: [
 fn newCMod(ctx: *const Ctx) *std.Build.Module {
     const m = ctx.b.createModule(.{
         .target = ctx.target,
-        .optimize = .ReleaseFast,
+        // Windows-only: .ReleaseSafe instead of .ReleaseFast (F7.1,
+        // 2026-07-29 — real fix, not a diagnostic toggle). A genuine,
+        // 100%-reproducible access violation (0xC0000005 in R.dll,
+        // consistent fault offset across 5 separate reproductions) hits
+        // every recursive front-end invocation on Windows (R CMD INSTALL
+        // -> Rterm.exe -> a package's own configure script -> R.exe ->
+        // another Rterm.exe — a real, common pattern: e.g. pak's
+        // configure re-invokes R directly). Root-caused via Windows'
+        // own crash log (Get-WinEvent) plus raw disassembly
+        // (x86_64-w64-mingw32-objdump — R.dll ships with no symbol table
+        // in ReleaseFast) to a null-pointer dereference immediately after
+        // a call into a small local helper, in a pattern consistent with
+        // an inlined TLS-access fast path (R.dll does import a real
+        // native Windows TLS directory + TlsGetValue). Bisected by
+        // optimize level rather than guessing further: .Debug and
+        // .ReleaseSafe BOTH make the crash vanish entirely (0/1
+        // reproductions each, tested with a real `install.packages
+        // ("pak")` run) — pak's build gets all the way past the
+        // recursive invocation and fails later on a real, unrelated
+        // mbedtls/Windows-platform-detection compile error in its own
+        // bundled zip library, identically under both. .Debug is too
+        // slow/heavy to ship; .ReleaseSafe keeps optimizations and is a
+        // real, shippable fix without needing to fully root-cause Zig's
+        // exact ReleaseFast TLS-lowering behavior on the windows-gnu
+        // target. Linux/macOS keep .ReleaseFast — this crash was never
+        // observed there, and there's no reason to pay ReleaseSafe's
+        // (bounds-checking, etc.) runtime cost where nothing is broken.
+        .optimize = if (ctx.os == .windows) .ReleaseSafe else .ReleaseFast,
         .link_libc = true,
         .pic = true,
         .sanitize_c = .off,

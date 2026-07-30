@@ -35,10 +35,29 @@
  *   this executable's own location can't be right for both cases at
  *   once (R.dll and bash.exe share a prefix only in the packaged case),
  *   so this reads the environment instead of computing an offset.
+ *
+ * Command-line construction: _spawnv's own argv-to-command-line
+ * conversion (MinGW/MSVCRT's built-in quoting) does NOT correctly
+ * preserve an embedded double-quote character inside an argument — found
+ * via a real, reproduced bug: a CRAN package's own Makevars.win passes
+ * -DMBEDTLS_CONFIG_FILE='"zip_mbedtls_config.h"' (correctly shell-quoted,
+ * confirmed intact in bash's own argv via `set -x`, and confirmed intact
+ * when bash spawns `zig cc` *directly*), but the compiler ends up seeing
+ * `#define MBEDTLS_CONFIG_FILE zip_mbedtls_config.h` — quotes silently
+ * gone — only when the call is routed through this forwarder's own
+ * `_spawnv` re-invocation of bash. Root-caused by isolating each hop:
+ * bash -> native exe (this forwarder, or zig directly) preserves the
+ * embedded quote; this forwarder -> bash via `_spawnv` does not. Fixed by
+ * not trusting `_spawnv`'s own quoting at all: build the child command
+ * line ourselves with the exact Microsoft-documented argv-quoting
+ * algorithm (the same one `rcmdfn.c`'s own `quoted_arg_cat`/
+ * `quoted_arg_len` already implement elsewhere in this codebase for the
+ * identical reason — CreateProcess takes one command-line string, not an
+ * argv array, so *something* has to encode array boundaries into it
+ * correctly), then call `CreateProcess` directly.
  */
-#include <process.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <windows.h>
 
@@ -58,6 +77,49 @@ static char *own_dir(void) {
   if (!p) { free(buf); return NULL; }
   *p = '\0';
   return buf;
+}
+
+/* Microsoft's documented argv-quoting algorithm (CommandLineToArgvW's own
+ * inverse): double backslashes immediately before a literal quote or at
+ * the very end of the argument, escape the quote itself as \", surround
+ * the whole argument in "..." unconditionally (simpler than deciding
+ * per-argument whether quoting is needed, and always correct). */
+static size_t quoted_arg_len(const char *arg) {
+  size_t len = 0, nbackslashes = 0;
+  for (size_t i = 0; arg[i]; i++) {
+    if (arg[i] == '\\') {
+      nbackslashes++;
+    } else if (arg[i] == '"') {
+      len += 2 * nbackslashes + 2;
+      nbackslashes = 0;
+    } else {
+      len += nbackslashes + 1;
+      nbackslashes = 0;
+    }
+  }
+  len += 2 * nbackslashes;
+  len += 2; /* surrounding quotes */
+  return len;
+}
+
+static void quoted_arg_cat(char *dest, const char *arg) {
+  size_t j = strlen(dest), nbackslashes = 0;
+  dest[j++] = '"';
+  for (size_t i = 0; arg[i]; i++) {
+    if (arg[i] == '\\') {
+      nbackslashes++;
+    } else if (arg[i] == '"') {
+      for (; nbackslashes; nbackslashes--) { dest[j++] = '\\'; dest[j++] = '\\'; }
+      dest[j++] = '\\';
+      dest[j++] = '"';
+    } else {
+      for (; nbackslashes; nbackslashes--) dest[j++] = '\\';
+      dest[j++] = arg[i];
+    }
+  }
+  for (; nbackslashes; nbackslashes--) { dest[j++] = '\\'; dest[j++] = '\\'; }
+  dest[j++] = '"';
+  dest[j] = '\0';
 }
 
 int main(int argc, char **argv) {
@@ -80,13 +142,35 @@ int main(int argc, char **argv) {
   snprintf(bash_path, sizeof(bash_path), "%s\\Library\\usr\\bin\\bash.exe",
            conda_prefix);
 
-  char **newargv = malloc(sizeof(char *) * ((size_t)argc + 2));
-  if (!newargv) return 1;
-  newargv[0] = bash_path;
-  newargv[1] = script_path;
-  for (int i = 1; i < argc; i++) newargv[i + 1] = argv[i];
-  newargv[argc + 1] = NULL;
-  intptr_t rc = _spawnv(_P_WAIT, bash_path, (const char *const *)newargv);
-  free(newargv);
-  return rc < 0 ? 1 : (int)rc;
+  size_t total = quoted_arg_len(bash_path) + 1 + quoted_arg_len(script_path);
+  for (int i = 1; i < argc; i++) total += 1 + quoted_arg_len(argv[i]);
+  char *cmdline = (char *)malloc(total + 1);
+  if (!cmdline) return 1;
+  cmdline[0] = '\0';
+  quoted_arg_cat(cmdline, bash_path);
+  strcat(cmdline, " ");
+  quoted_arg_cat(cmdline, script_path);
+  for (int i = 1; i < argc; i++) {
+    strcat(cmdline, " ");
+    quoted_arg_cat(cmdline, argv[i]);
+  }
+
+  STARTUPINFOA si;
+  PROCESS_INFORMATION pi;
+  ZeroMemory(&si, sizeof(si));
+  si.cb = sizeof(si);
+  ZeroMemory(&pi, sizeof(pi));
+  if (!CreateProcessA(bash_path, cmdline, NULL, NULL, TRUE, 0, NULL, NULL,
+                       &si, &pi)) {
+    fprintf(stderr, "%s: CreateProcess failed for %s\n", argv[0], bash_path);
+    free(cmdline);
+    return 1;
+  }
+  free(cmdline);
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  DWORD code = 1;
+  GetExitCodeProcess(pi.hProcess, &code);
+  CloseHandle(pi.hProcess);
+  CloseHandle(pi.hThread);
+  return (int)code;
 }

@@ -146,6 +146,16 @@ fi
 mkdir -p "$OBJ_DIR"
 cd "$OBJ_DIR"
 
+# OBJC/OBJCXX: without an explicit OBJC=, autoconf falls back to a bare
+# PATH search and finds Xcode's real gcc/clang instead of our zig-cc shim
+# (OBJCXX happens to end up right anyway, since autoconf's own default for
+# it reuses $CXX — but that's not documented/guaranteed behavior, so set
+# both explicitly). Found via a real compile failure: pak's bundled `ps`
+# package has genuine Objective-C source (arch/macos/apps.m, using AppKit
+# for GUI-app enumeration) that was silently being compiled as plain C by
+# whatever real "gcc" was on PATH in the vendored subst.txt's OBJC value —
+# harmless to CC/CXX themselves (which correctly pointed at zig-cc/zig-cxx
+# already), but this variable never got the same treatment.
 "$SRC_DIR/configure" \
   --prefix="$PREFIX" \
   "${BLAS_ARGS[@]}" \
@@ -160,6 +170,8 @@ cd "$OBJ_DIR"
   "${VARIANT_ARGS[@]}" \
   CC="$TOOLCHAIN/zig-cc" \
   CXX="$TOOLCHAIN/zig-cxx" \
+  OBJC="$TOOLCHAIN/zig-cc" \
+  OBJCXX="$TOOLCHAIN/zig-cxx" \
   FC="$FC" \
   AR="$TOOLCHAIN/zig-ar" \
   RANLIB="$TOOLCHAIN/zig-ranlib" \

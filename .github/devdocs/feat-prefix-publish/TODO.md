@@ -227,6 +227,74 @@ a plain retry, no code involved):
 - osx-arm64: `r-zig-slim-4.6.1-h60d57d3_5.conda`
 - win-64: `r-zig-slim-4.6.1-h9490d1a_5.conda`
 
+## 2026-07-29 (continued, into 2026-07-30): Windows-only follow-up (build number 7)
+
+Root-caused and fixed a real, previously-unconfirmed bug: a deterministic
+access violation (`0xC0000005` in `R.dll`) hit every recursive front-end
+invocation on Windows — `R CMD INSTALL` → `Rterm.exe` → a package's own
+`configure` script → `R.exe` → another `Rterm.exe`, a real, not-uncommon
+pattern (e.g. `pak`'s own `configure` re-invokes R directly). Confirmed
+with 5 separate reproductions correlated precisely against Windows' own
+crash log (`Get-WinEvent`), then root-caused via a bisection by Zig
+optimize level rather than guessing from unsymbolized disassembly further:
+`.Debug` and `.ReleaseSafe` both make the crash vanish entirely (pak's
+build gets all the way past the recursive invocation and fails later on a
+real, unrelated `mbedtls`/Windows-platform-detection compile error in its
+own bundled `zip` library, identically under both) while `.ReleaseFast`
+(the shipped default) crashes every single time on identical source — a
+Zig/MinGW codegen issue specific to that optimize level on the
+`windows-gnu` target (likely TLS-access lowering), not a plain logic bug
+in R's own C code. See `feat-zig-build/TODO.md`'s F7.6 entry for the full
+diagnostic detail (WER `LocalDumps` setup, WinDbg/`cdbX64.exe`
+installation, `x86_64-w64-mingw32-objdump` disassembly at the crash
+offset, etc.).
+
+Fix: `build.zig`'s `newCMod` now builds Windows with `.ReleaseSafe`
+instead of `.ReleaseFast` (Linux/macOS unchanged — this was never
+observed there). Verified against the actual shipped conditionally-scoped
+code (not just an ad-hoc throwaway build): `pixi run smoke` and `pixi run
+contract` both pass on Windows with zero regression, and a real
+`install.packages("pak")` reproduction against the final build no longer
+crashes.
+
+Published, confirmed via `rattler-build upload prefix -vv`'s "Packages
+successfully uploaded to prefix.dev server" line (first attempt, no
+retry needed this time):
+
+- win-64: `r-zig-slim-4.6.1-h9490d1a_7.conda`
+
+(linux-64/osx-arm64 stay at build 5 — `build.zig`'s change is Windows-only
+in effect, `ctx.os != .windows` still resolves to unchanged `.ReleaseFast`,
+so there's nothing new to rebuild/republish on those platforms.)
+
+## 2026-07-30: win-64 + osx-arm64 follow-up (build number 8)
+
+Two more real bugs found and fixed while adding `pak` to `contract-test.sh`
+(requested directly): F7.7 (Windows) — `win-exec-forward.c`'s `_spawnv`-
+based command-line construction silently stripped embedded double-quote
+characters from `-D` flag values, breaking any package quoting a string
+literal that way (not just `pak`'s `mbedtls` config); fixed by building the
+command line manually with the Microsoft-documented argv-quoting algorithm
+and calling `CreateProcessA` directly. F7.8 (macOS) — `OBJC` was never
+routed through the `zig-cc` toolchain shim (only `OBJCXX` was, by an
+autoconf fallback accident), so any package with real Objective-C source
+silently compiled as plain C; fixed in both the vendored `subst.txt` and
+`configure-r.sh`'s own `./configure` invocation. Full detail in
+`feat-zig-build/TODO.md`'s F7.7/F7.8 entries.
+
+Verified via the real `contract-test.sh` path (with `pak` now included)
+passing on all 3 platforms before publishing, not just ad-hoc reproductions.
+
+Published, confirmed via `rattler-build upload prefix -vv`'s "Packages
+successfully uploaded to prefix.dev server" line (one transient network
+error on the Windows upload, cleared on a plain retry — same class of
+blip seen on earlier releases):
+
+- win-64: `r-zig-slim-4.6.1-h9490d1a_8.conda`
+- osx-arm64: `r-zig-slim-4.6.1-h60d57d3_8.conda`
+
+(linux-64 stays at build 5 — neither fix touches Linux.)
+
 ## End goal: CI trusted publishing
 
 - [ ] Decide a version-bump / build-number strategy (`recipe.yaml`'s

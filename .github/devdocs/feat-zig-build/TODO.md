@@ -622,6 +622,110 @@ a carried-forward gotcha catalog.
       picking this up needs either a real interactive-console
       reproduction (not SSH-piped) or a debugger attached to the crashing
       process, neither available in this remote-SSH session.
+
+      **Follow-up investigation (2026-07-29)**: user asked directly
+      whether adding `m2-bash` to `run:` (the toolchain-forwarder fix,
+      F7.2/build 4) incidentally fixed this too. Traced it precisely
+      instead of guessing: `m2-bash` alone only makes the shell
+      *interpreter* (`bash.exe`/`sh.exe`) present — `m2-sed`/`m2-grep`/
+      `m2-gawk`/`m2-coreutils`/`m2-make`/`m2-which`/`m2-findutils` were
+      still `build:`-only, so `sed`/etc. genuinely didn't exist on disk in
+      an installed env. Reproduced for real: a fresh `install.packages
+      ("pak")` on the then-current build failed cleanly at
+      `./configure: line 62: sed: command not found` (exit 127) — real
+      progress (past F7.1's original `Rcmd.exe not found` failure) but a
+      new, different, non-crashing blocker, and one that stops `configure`
+      *before* it ever reaches the recursive `R.exe` re-invocation that
+      was hypothesized to trigger the access violation — meaning the
+      crash simply wasn't reachable to test at all in that state.
+
+      Added `m2-sed`/`m2-grep`/`m2-gawk`/`m2-coreutils`/`m2-make`/
+      `m2-which`/`m2-findutils` to `run:` (build 6; `m2-texinfo`/
+      `m2-diffutils`/`m2-tar`/`m2-gzip`/`m2-unzip`/`m2-zip` deliberately
+      left `build:`-only — no evidence yet a package's own `configure`
+      needs them, same "fix what's proven, don't guess-fix" discipline as
+      everything else in this list). Rebuilt, confirmed all six tools
+      present in the installed env, re-ran the exact same `pak` install.
+
+      **The access-violation crash is now conclusively confirmed real,
+      deterministic, and unrelated to the missing-tools gap** — not
+      environment flakiness, not something `m2-bash`/the coreutils fix
+      touches at all. Windows' own crash log (`Get-WinEvent -FilterHashtable
+      @{LogName='Application'; ProviderName='Application Error'}`), not
+      just R's own (unreliable, sometimes-truncated) stdout, gives
+      independent, precise confirmation: **five separate reproductions**
+      across two days, all `Rterm.exe` faulting in `R.dll` with exception
+      `0xC0000005`, clustering at essentially the same code offset
+      (`0x1a665d` today's build, `0x1a66fd` a day-old build — consistent
+      with the same bug surviving an unrelated rebuild in between). The
+      build-6 test's crash timestamp (`20:33:57`) was verified to fall
+      precisely inside that specific test run's own captured start/end
+      window (`20:33:44`–`20:34:01`), ruling out a stale/unrelated crash
+      log entry. With `sed`/`grep`/`gawk`/etc. now present, `configure`
+      still produces no further visible progress past `** Running
+      ./configure` and no clean exit-code message (unlike the
+      `sed`-missing case's clean `Exit code was 127`) — consistent with an
+      abrupt crash rather than a graceful failure.
+
+      This being a stable, reliably reproducible crash (not a one-off)
+      made it a real debugging target rather than a "can't reproduce"
+      dead end — see F7.6 below for the actual root-cause/fix.
+- [x] **F7.6** F7.1's access-violation crash — root-caused and fixed
+      (2026-07-29). Enabled Windows Error Reporting's `LocalDumps`
+      (`HKLM\SOFTWARE\...\Windows Error Reporting\LocalDumps`, full dumps
+      to `C:\crashdumps`) and installed WinDbg (`winget install
+      Microsoft.WinDbg`, which bundles the classic console debugger
+      `cdbX64.exe` — the modern Store package, not the older standalone
+      Debugging Tools for Windows installer). `R.dll` ships with no COFF
+      symbol table at all in `ReleaseFast` (`x86_64-w64-mingw32-nm` →
+      "no symbols") and no separate `.pdb`, so first went straight to raw
+      disassembly (`x86_64-w64-mingw32-objdump -d`) at the crash RVA
+      (image base `0x180000000` + WER's own fault offset `0x1a665d`):
+      the faulting instruction is `mov 0x20(%rax),%rdi`, where `rax` is
+      the return value of a call to a small local `R.dll` function
+      immediately preceded by a comparison against a global sentinel —
+      the classic shape of a null-pointer dereference right after an
+      inlined accessor call. `R.dll` does import real native Windows TLS
+      (`TlsGetValue` + a genuine `.tls` section), consistent with — but
+      not proven to be — an inlined thread-local-storage fast path.
+      Rather than keep reverse-engineering unsymbolized assembly,
+      rebuilt with debug info (`build.zig`'s `newCMod`, `.optimize`
+      temporarily `.Debug`) and reproduced the exact same
+      `install.packages("pak")` scenario against it: **the crash did not
+      happen at all** — `pak`'s build got all the way past the recursive
+      `R.exe` re-invocation that used to crash every time, and instead
+      failed later on a real but entirely unrelated compile error in its
+      bundled `zip`/`mbedtls` library (`"MBEDTLS_PLATFORM_C is required
+      on Windows"` — a separate, pre-existing bug in that dependency's
+      own Windows-platform detection, not investigated further here).
+      Bisected by optimize level instead of guessing why: `.ReleaseSafe`
+      (keeps optimizations, adds safety checks) **also** made the crash
+      vanish, with the exact same downstream `mbedtls` failure — strong
+      evidence the bug is specific to `.ReleaseFast`'s codegen (most
+      likely its TLS-access lowering on the `windows-gnu` target) rather
+      than a plain logic bug in R's own C source, since the identical
+      source produces working code under two different optimize levels
+      and only crashes under one.
+      **Fix**: `newCMod`'s `.optimize` is now `.ReleaseSafe` when
+      `ctx.os == .windows`, unchanged `.ReleaseFast` everywhere else —
+      real, shippable (`.Debug` would carry too much runtime overhead to
+      ship; this crash was never observed on Linux/macOS, so there's no
+      reason to pay `ReleaseSafe`'s cost where nothing is broken).
+      **Verified end-to-end against the actual shipped (conditionally-
+      scoped) code**, not just the throwaway all-`.ReleaseSafe` test:
+      fresh clean-cache `pixi run build` + `install` on kappa, `pixi run
+      smoke` (`Smoke test passed (windows/slim)`) and `pixi run contract`
+      (`Contract test passed (slim/windows)` — Rcpp/data.table+OpenMP/
+      minqa+Fortran all compile and run correctly) both pass with zero
+      regression, and a final `install.packages("pak")` reproduction
+      against this exact build shows no crash (Windows crash log and
+      `C:\crashdumps` both checked directly — no new entries), reaching
+      the same known `mbedtls` failure as the diagnostic builds. Local
+      Linux build/smoke/contract also re-verified unaffected (still
+      `.ReleaseFast`, unchanged).
+      Not yet republished as a conda package — this is a `build.zig`-only
+      change so far, verified via the local `dist/` build + stage +
+      smoke + contract pipeline, not yet packaged/published.
 - [x] **Bug found by the conda-package republish (2026-07-28, real build.zig
       fix)**: `ctx.prefix` (`b.install_prefix`) was never normalized to
       forward slashes, unlike `src_abs`, which already got this exact fix
@@ -898,6 +1002,100 @@ a carried-forward gotcha catalog.
       Not yet verified on macOS/Windows CI or republished as a conda
       package — this is a `build.zig` + `toolchain/zig-cc`/`zig-cxx`-only
       change so far, local (linux) verification only.
+- [x] **F7.7** `win-exec-forward.c` silently strips embedded double-quote
+      characters from `-D` flag values (found 2026-07-30, while adding
+      `pak` to `contract-test.sh` per direct request — a real,
+      previously-unknown bug, unrelated to F7.6). `pak`'s bundled `zip`
+      package compiles its vendored `mbedtls` with
+      `-DMBEDTLS_CONFIG_FILE='"zip_mbedtls_config.h"'` (correctly
+      shell-quoted in its own `Makevars.win` — `#include
+      MBEDTLS_CONFIG_FILE` needs the macro to expand to an actual quoted
+      string literal) — but the compiler received
+      `#define MBEDTLS_CONFIG_FILE zip_mbedtls_config.h`, quotes silently
+      gone, failing with mbedtls's own `"MBEDTLS_PLATFORM_C is required on
+      Windows"` config-check error. Root-caused by isolating each hop
+      individually (via a real extracted copy of `pak`'s `zip` sub-package
+      and `Rcmd.exe SHLIB`, not guessing): `bash` invoking `zig cc`
+      *directly* preserves an embedded `"` in a `-D` value correctly;
+      `bash` invoking `gcc.exe` (this forwarder) does not, even though the
+      forwarder's own `argv` (confirmed via `set -x`) already has the
+      correct value at that point. The loss happens inside the forwarder
+      itself: `_spawnv`'s own built-in argv-to-command-line conversion
+      (used to re-invoke `bash` for `toolchain/zig-cc`) does not correctly
+      re-escape an embedded double quote. This affects *any* package
+      passing a quoted string literal via `-D` — not `pak`-specific, and
+      not something F7.2's earlier `win-exec-forward.c` rewrite (runtime
+      `CONDA_PREFIX`/`GetModuleFileName` path resolution) touched, since
+      that fix was about *finding* bash/the script, not the argument
+      encoding used to invoke it.
+      Fixed: stopped relying on `_spawnv`'s automatic quoting entirely —
+      the command line is now built manually using the exact
+      Microsoft-documented argv-quoting algorithm (the same one
+      `rcmdfn.c`'s own `quoted_arg_cat`/`quoted_arg_len` already implement
+      elsewhere in this codebase, for the identical reason: `CreateProcess`
+      takes one command-line string, not an argv array, so something has
+      to encode array boundaries into it correctly), then invokes
+      `CreateProcessA` directly instead of `_spawnv`.
+      **Verified**: an isolated `-DFOO='"bar.h"'` probe through the
+      rebuilt `gcc.exe` now shows `#define FOO "bar.h"` (quotes intact,
+      previously `#define FOO bar.h`); the real `pak` `zip`/`mbedtls`
+      compile no longer hits the config-check error; a full
+      `install.packages("pak")` now completes end-to-end on Windows for
+      the first time in this investigation (`* DONE (pak)`); `pixi run
+      contract` (with `pak` added, see below) passes for real via the
+      normal `contract-test.sh` path.
+- [x] **F7.8** `OBJC` (the Objective-C compiler) was never routed through
+      the `zig-cc` toolchain shim on macOS — only `OBJCXX` was, and only
+      by an autoconf default-fallback accident (found 2026-07-30, same
+      `pak`-on-contract-test session as F7.7, macOS-specific, unrelated to
+      F7.7). `pak`'s bundled `ps` package has genuine Objective-C source
+      (`arch/macos/apps.m`, AppKit-based process/GUI-app enumeration) that
+      was silently compiled as plain C by whatever real `gcc` happened to
+      be on `PATH` (Xcode's own), failing with `expected identifier or '('
+      before 'class'` on `@class`/`@interface` syntax. Root cause: the
+      vendored `zigbuild/config/osx-arm64-{slim,full}/subst.txt` had
+      `OBJC="gcc"` — the *original* real `./configure` run this file was
+      captured from never had `OBJC=` passed explicitly (`scripts/
+      configure-r.sh` sets `CC=`/`CXX=`/`FC=` to the zig shims but never
+      set `OBJC=`), so autoconf's own bare-PATH-search default won. Why
+      `OBJCXX` happened to be correct already despite the identical gap:
+      undocumented autoconf behavior — its own default apparently reuses
+      `$CXX` when unset, `OBJC` has no equivalent fallback onto `$CC`.
+      Fixed at both the immediate and root-cause level: patched the
+      *currently-vendored* `subst.txt` files directly (`OBJC` now
+      `"@ZR_TOOLCHAIN@/zig-cc"`, matching `OBJCXX`'s own already-correct
+      pattern — build.zig's existing generic `@ZR_TOOLCHAIN@` substitution
+      picks it up with no other code change needed), and added explicit
+      `OBJC=`/`OBJCXX=` to `configure-r.sh`'s own `./configure` invocation
+      so a future `gen-subst.sh` regeneration gets this right without
+      relying on the same accidental fallback. GNU Make has a built-in
+      implicit `.m.o:` rule using `$(OBJC)`/`$(OBJCFLAGS)` — no explicit
+      suffix rule needed in `Makeconf.in` beyond the `@OBJC@`/`@OBJCFLAGS@`
+      substitution slots it already had.
+      **Verified**: fresh `pixi run build` + `pixi run contract` (with
+      `pak` added) on omicron — `* DONE (pak)`,
+      `Contract test passed (slim/macos)`.
+- [x] **Added `pak` to `contract-test.sh`** (2026-07-30, requested
+      directly): the real-world repro case behind F7.1/F7.6/F7.7/F7.8 —
+      its own `configure` recursively re-invokes `R.exe`/`Rterm.exe`
+      (F7.6's crash), and its bundled `keyring`/`zip` sub-packages compile
+      `mbedtls` with quoted `-D` values (F7.7) and (macOS only) genuine
+      Objective-C source (F7.8). Locks in all three fixes against
+      regression going forward. Verified passing on all 3 platforms for
+      real, via the actual `contract-test.sh` script (not ad-hoc manual
+      reproductions): `Contract test passed (slim/linux)`,
+      `Contract test passed (slim/windows)`,
+      `Contract test passed (slim/macos)` — each includes
+      `pak (recursive R.exe invocation + mbedtls quoted -D flags): OK`.
+      Deliberately placed in `contract-test.sh`, not `smoke-test.sh` (per
+      direct decision) — matches the existing convention (that script
+      already exists specifically for "compile a real CRAN package from
+      source and exercise it," alongside Rcpp/data.table/minqa).
+      Not yet republished as conda packages — `win-exec-forward.c` (F7.7)
+      and the `subst.txt`/`configure-r.sh` changes (F7.8) are real fixes
+      with broader impact than just `pak` (any package with a quoted `-D`
+      value on Windows; any package with Objective-C source on macOS), so
+      worth a release, but not done without checking in first.
 
 ### Bugs found switching `recipe/build.sh` to zig (real, all in
 `recipe/recipe.yaml`, fixed 2026-07-28 — found via 5 real

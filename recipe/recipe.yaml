@@ -54,8 +54,27 @@ build:
   # m2-gawk/m2-coreutils/m2-make/m2-which/m2-findutils added to run: (only
   # m2-bash was there before); real packages' own configure scripts need
   # them, found via a real `install.packages("pak")` failure (F7.1
-  # follow-up, see feat-zig-build/TODO.md).
-  number: 6
+  # follow-up, see feat-zig-build/TODO.md). 7: Windows-only follow-up —
+  # the real root cause behind F7.1's recursive-configure access
+  # violation (0xC0000005 in R.dll, deterministic, 5/5 reproductions):
+  # a ReleaseFast-specific Zig/MinGW codegen issue on the windows-gnu
+  # target (likely TLS-access lowering) — .Debug and .ReleaseSafe both
+  # avoid it entirely, .ReleaseFast crashes every time on identical
+  # source. build.zig's newCMod now builds Windows with .ReleaseSafe
+  # instead of .ReleaseFast (Linux/macOS unchanged — never observed
+  # there); see F7.6 in feat-zig-build/TODO.md for the full root-cause
+  # writeup and verification (smoke + contract both pass, no
+  # regression). 8: win-64 + osx-arm64 (linux-64 untouched, stays at 5) —
+  # F7.7: win-exec-forward.c's _spawnv-based command-line construction
+  # silently stripped embedded double-quote characters from -D flag
+  # values (any package quoting a string literal that way, not just one
+  # package); F7.8: OBJC was never routed through the zig-cc toolchain
+  # shim on macOS (only OBJCXX was, by an autoconf fallback accident),
+  # so any package with real Objective-C source silently compiled as
+  # plain C. Both found and fixed while adding `pak` (a package that
+  # exercises both) to contract-test.sh; see F7.7/F7.8 in
+  # feat-zig-build/TODO.md.
+  number: 8
   script: build.sh
 
 requirements:
