@@ -185,15 +185,15 @@ jobs:
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.10.0
-        with:
-          cache: true
- 
+      # No setup-pixi action here: these machines already have pixi
+      # installed for interactive use, and the action errors out trying
+      # to (re)install over it ("Destination file path ... already
+      # exists" — hit for real on omicron). Each runner's own `.path`
+      # file (in the runner root, one entry per line, prepended to the
+      # job's PATH) points at the existing install instead — see
+      # devdocs/feat-prefix-publish/CI_SELF_HOSTED_PLAN.md.
       - name: Build + test conda package
-        run: |
-          # pixi self-update --no-progress --no-release-note --quiet;
-          # pixi --version;
-          pixi run -e pkg conda-package;
+        run: pixi run -e pkg conda-package
       # rattler-build's own test phase runs with a literal unexpanded
       # %PREFIX% on PATH on Windows, so it can never exercise the
       # Library/bin/{R,Rscript}.bat shims a real install relies on (see

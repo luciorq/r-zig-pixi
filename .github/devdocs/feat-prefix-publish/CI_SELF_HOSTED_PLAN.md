@@ -194,7 +194,38 @@ now needs the `labels` array, not a bare os string; the Windows-only
 `Fresh-env consume test` step's `if:` condition was updated to match
 (`matrix.name == 'windows'`).
 
-Not yet committed — per this project's standing rule, the user runs all
-`git commit`/push. Phase 3 (real end-to-end verification) needs a push to
-`main` to actually trigger the self-hosted matrix and the gated publish
-step, so it can't proceed further without that handoff.
+Committed and pushed by the user (2026-07-30). First real run
+(`30572259051`) surfaced two genuine bugs, both specific to a self-hosted
+runner that already has pixi installed for interactive use (unlike a
+fresh hosted VM):
+
+- **omicron (macOS)**: job failed with `pixi: command not found`. The
+  `.path` file (see Phase 1's writeup above) was correct on disk, but a
+  GitHub Actions runner only reads `.path` at the *listener/service*
+  process's own startup, not per-job — it had been written after the
+  LaunchAgent was already running, so the fix never actually took effect
+  until the service was restarted (`launchctl kickstart -k
+  gui/$(id -u)/actions.runner.luciorq-r-zig-pixi.omicron`). Lesson: any
+  `.path`/`.env` edit on an already-running self-hosted runner needs an
+  explicit restart, not just the file write.
+- **kappa (Windows)**: failed even earlier than pixi resolution —
+  `running scripts is disabled on this system`
+  (`PSSecurityException`/`UnauthorizedAccess`). The runner service (as
+  `NETWORK SERVICE`) invokes each step's generated `.ps1` via
+  `powershell -command ". '{0}'"`; `Get-ExecutionPolicy -List` showed
+  every scope `Undefined`, which defaults to `Restricted` — blocks all
+  script execution regardless of account. Fixed with `Set-ExecutionPolicy
+  -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force` (must be
+  `LocalMachine` scope specifically — `CurrentUser`/`Process` scope set
+  from an interactive admin session doesn't apply to the `NETWORK
+  SERVICE` account's own effective policy).
+
+A third, unrelated regression from mid-flight manual debugging: someone
+added a `prefix-dev/setup-pixi@v0.10.0` step directly to `conda-package`
+in-between runs, trying to fix the "not found" error above — this made
+things worse (`Destination file path /Users/luciorq/.pixi/bin/pixi
+already exists`, since the action isn't designed to run against a
+runner that already has pixi installed globally). Reverted; the fix is
+the `.path` file + service restart above, not adding `setup-pixi` back.
+
+Next real run after these three fixes is the actual Phase 3 check.
