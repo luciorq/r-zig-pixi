@@ -1,1 +1,1 @@
-.github/devdocs/feat-prefix-publish/TODO.md
+.github/devdocs/feat-zig-build/TODO.md

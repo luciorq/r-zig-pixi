@@ -12,6 +12,21 @@
 # On win-64 the conda-forge zig binary is named x86_64-w64-mingw32-zig.
 ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
 
+# Linux: pin the same glibc 2.17 floor build.zig uses for R itself
+# (HPC servers on old distros — RHEL/CentOS 7 era). Without this,
+# packages compiled through this shim (R CMD INSTALL/SHLIB) default to
+# zig's native glibc resolution — whatever's actually on the machine
+# doing the compiling, not necessarily the machine that later dyn.load()s
+# the result (HPC clusters routinely build on a newer head/login node and
+# run on older compute nodes). No downside: glibc's ABI is strictly
+# backward compatible, so this is a floor, not a restriction. Windows/
+# macOS have no glibc concept, so this only applies when uname reports a
+# real Linux kernel (not MSYS's "MINGW64_NT"/"MSYS_NT").
+target=()
+if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
+  target=(-target "$(uname -m)-linux-gnu.2.17")
+fi
+
 # Windows: zig's MinGW -l search tries only <n>.dll, <n>.lib, lib<n>.a —
 # missing lib<n>.dll.a (MinGW import libs, what GNU ld searches first)
 # and lib<n>.lib (conda-forge MSVC naming, e.g. libbz2.lib, libcurl.lib).
@@ -100,4 +115,4 @@ if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
   fi
 fi
 
-exec "$ZIG" cc -fno-sanitize=undefined "${extra[@]}" "$@" "${omp[@]}"
+exec "$ZIG" cc -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}"

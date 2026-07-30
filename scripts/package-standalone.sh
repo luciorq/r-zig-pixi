@@ -11,6 +11,17 @@
 
 test -d "$R_HOME_DIR" || { echo "error: run 'pixi run install' first" >&2; exit 1; }
 CONDA="${CONDA_PREFIX:?}"
+# Derive the archive's source-directory name from $PREFIX itself rather
+# than hardcoding "R-$R_VERSION-$FLAVOR" — the zig-built prefix carries a
+# "-zig" suffix ($ROOT/dist/R-$R_VERSION-$FLAVOR-zig, from zig-build.sh's
+# own PREFIX_ZIG) precisely so it can coexist with an autoconf/gnuwin32
+# build of the same flavor; a hardcoded basename here silently zipped/
+# tarred nothing ("zip error: Nothing to do!" / "tar: ...: No such file or
+# directory") whenever $PREFIX didn't match it exactly (found via a real
+# zig-package run on kappa — previously worked around per-invocation by
+# pointing $R_INSTALL_PREFIX at the unsuffixed name; fixed at the source
+# instead now that zig-package/zig-verify-package are first-class tasks).
+prefix_base="$(basename "$PREFIX")"
 
 if [ "$OS" = windows ]; then
   BIN="$R_HOME_DIR/bin/x64"
@@ -59,7 +70,7 @@ if [ "$OS" = windows ]; then
 
   artifact="$ROOT/dist/R-$R_VERSION-$FLAVOR-win-64.zip"
   echo "== creating $artifact"
-  (cd "$ROOT/dist" && rm -f "$artifact" && zip -qr "$artifact" "R-$R_VERSION-$FLAVOR")
+  (cd "$ROOT/dist" && rm -f "$artifact" && zip -qr "$artifact" "$prefix_base")
   sha256sum "$artifact" | sed "s|\\\\||; s|$ROOT/dist/||" > "$artifact.sha256"
   echo "== done: $(du -h "$artifact" | cut -f1)"
   exit 0
@@ -156,7 +167,7 @@ if [ "$OS" = macos ]; then
   esac
   artifact="$ROOT/dist/R-$R_VERSION-$FLAVOR-$plat.tar.gz"
   echo "== creating $artifact"
-  tar -czf "$artifact" -C "$ROOT/dist" "R-$R_VERSION-$FLAVOR"
+  tar -czf "$artifact" -C "$ROOT/dist" "$prefix_base"
   sha256sum "$artifact" | sed "s|$ROOT/dist/||" > "$artifact.sha256"
   echo "== done: $(du -h "$artifact" | cut -f1) $(cat "$artifact.sha256")"
   exit 0
@@ -169,6 +180,6 @@ case "$(uname -m)" in
 esac
 artifact="$ROOT/dist/R-$R_VERSION-$FLAVOR-$plat.tar.gz"
 echo "== creating $artifact"
-tar -czf "$artifact" -C "$ROOT/dist" "R-$R_VERSION-$FLAVOR"
+tar -czf "$artifact" -C "$ROOT/dist" "$prefix_base"
 sha256sum "$artifact" | sed "s|$ROOT/dist/||" > "$artifact.sha256"
 echo "== done: $(du -h "$artifact" | cut -f1) $(cat "$artifact.sha256")"

@@ -7,38 +7,76 @@ Make the conda packages already built and tested by `recipe/recipe.yaml`
 `pixi add`/`conda install` from a real channel, not just artifacts sitting
 in `dist/conda/` on whichever machine built them.
 
-## End goal: CI trusted publishing (target state, not yet implemented)
+## End goal: CI trusted publishing (target state)
 
-The channel gets updated automatically by GitHub Actions, with **no
-long-lived credentials stored anywhere** — not a repo secret, not a
-machine's keychain. This is the correct end state and should replace the
-interim strategy below once it's wired up.
+The channel gets updated automatically by CI, with no human manually
+SSHing into a machine and running `rattler-build upload` by hand — that
+manual loop is what every real release (build numbers 2 through 8) has
+used so far, and it doesn't scale (see `TODO.md`'s per-build entries for
+how much friction it's caused: quoting bugs across the SSH/PowerShell/bash
+chain, stale-process-tracking issues, transient network errors needing
+manual retries).
 
-How it works: `rattler-build`'s `upload prefix` (and the newer unified
-`publish --to <url>`) subcommands support OIDC **trusted publishing** —
-GitHub Actions mints a short-lived, repo-and-workflow-scoped OIDC token
-(via the standard `id-token: write` permission), rattler-build hands it to
-prefix.dev, and prefix.dev verifies it against a trusted-publisher entry
-configured on the channel itself before accepting the upload. No API key
-ever exists to leak or rotate. Confirmed working with plain
-`rattler-build upload prefix --channel <name> <file>` — no extra flags — as
-long as:
+Two designs were considered for *how* CI actually runs the platform-
+specific builds:
+
+### Option A: OIDC trusted publishing on GitHub-hosted runners (originally sketched here, not chosen for now)
+
+`rattler-build`'s `upload prefix` (and the newer unified `publish --to
+<url>`) subcommands support OIDC **trusted publishing** — GitHub Actions
+mints a short-lived, repo-and-workflow-scoped OIDC token (via the standard
+`id-token: write` permission), rattler-build hands it to prefix.dev, and
+prefix.dev verifies it against a trusted-publisher entry configured on the
+channel itself before accepting the upload. No API key ever exists to leak
+or rotate — the strongest security story of the two options. Needs:
 
 1. The workflow has `permissions: id-token: write`.
 2. The channel's *Trusted Publishers* settings on prefix.dev list this
    repo (owner/name) and the exact workflow filename allowed to publish.
-3. rattler-build ≥0.31.1 (we're pinned to `>=0.70`, comfortably past this).
+3. rattler-build ≥0.31.1 (pinned to `>=0.70`, comfortably past this).
 
-Implementation sketch for later: extend the existing `conda-package` CI
-job (see `feat-initial-setup`'s workflow) with an upload step gated to
-`push` on `main` (not `pull_request`), using `--skip-existing=all` so
-re-running against an unchanged version is a no-op rather than an error.
-Requires deciding a version-bump/build-number strategy first (currently
-both are static in `recipe.yaml`) so repeat CI runs don't need `--force`.
+This runs cleanly on GitHub-*hosted* runners (`ubuntu-latest`/
+`macos-latest`/`windows-latest`), same as the existing `build`/
+`build-windows` jobs in `.github/workflows/build.yml`.
+
+### Option B: self-hosted runners on gamma/omicron/kappa (chosen — see `CI_SELF_HOSTED_PLAN.md` in this same devdocs folder)
+
+Instead of hosted runners + OIDC, install a persistent GitHub Actions
+runner agent directly on the three machines already used for every manual
+build/publish this whole project (gamma = linux-64, this same machine;
+omicron = osx-arm64; kappa = win-64). Chosen over Option A for now because:
+
+- **No new auth setup at all.** All three machines already have a live,
+  interactive `rattler-build auth login prefix.dev` session (see "Interim
+  strategy" below) — a self-hosted runner inherits that local credential
+  automatically if it runs as the same user account. Option A requires
+  configuring Trusted Publishers on the prefix.dev channel settings
+  first, a one-time step not yet done.
+- **Persistent build cache.** Self-hosted runners keep their checkout
+  directory between runs (`build/zig-cache`, the fetched R tarball, the
+  resolved pixi env all stay warm) — hosted runners start from a bare VM
+  every single time, meaningfully slower for a build this size (10–25
+  minutes even with a warm cache).
+- These are the exact machines every Windows/macOS fix in this project
+  has been verified against — known-good environments, not generic CI
+  images.
+
+Trade-off, explicitly acknowledged: Option A's "no persistent credential
+anywhere" property is real security hardening that Option B gives up in
+exchange for simplicity — worth revisiting later if that matters more than
+it does today (a private repo, personal machines). Full implementation
+plan (runner provisioning steps, exact `build.yml` changes, verification)
+is in `CI_SELF_HOSTED_PLAN.md`, this same devdocs folder.
+
+**Status: planned, not yet implemented** — deliberately postponed until
+after the `worktree-feat-zig-build` branch merges back to `main` (a
+cleaner base for CI changes than an in-progress feature branch).
 
 We picked prefix.dev over anaconda.org specifically because anaconda.org
 has no equivalent trusted-publishing support at the time of writing — it's
-API-key-only, meaning a stored secret either way.
+API-key-only, meaning a stored secret either way (relevant to Option A
+specifically; Option B doesn't use either channel's trusted-publishing
+feature).
 
 ## Interim strategy: publish by hand from an authenticated dev machine
 

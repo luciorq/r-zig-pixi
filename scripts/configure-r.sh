@@ -104,9 +104,58 @@ if [ -f "$sw" ] && ! grep -q 'bin/toolchain/which' "$sw"; then
     "$sw"
 fi
 
+# R_LIBS_USER_default() (library.R): same "compiled into base.rdb" patch
+# as scripts/zig-build.sh applies — kept in sync here so the legacy
+# fallback path behaves identically. See zig-build.sh's own comment for
+# the full rationale (XDG base dir spec on unix, LOCALAPPDATA unchanged
+# on Windows).
+lu="$SRC_DIR/src/library/base/R/library.R"
+if [ -f "$lu" ] && ! grep -q '"win-64-zig"' "$lu"; then
+  r_libs_user_repl=$(cat <<'RCODE'
+    R_LIBS_USER_default <- function() {
+        home <- normalizePath("~", mustWork = FALSE)  # possibly /nonexistent
+        ## FIXME: could re-use v from "above".
+        x.y <- paste(R.version$major, sep=".",
+                     strsplit(R.version$minor, ".", fixed=TRUE)[[1L]][1L])
+        if(.Platform$OS.type == "windows" && s["machine"] == "x86-64")
+            file.path(Sys.getenv("LOCALAPPDATA"), "R", "win-64-zig", x.y)
+        else if (.Platform$OS.type == "windows") # including aarch64
+            file.path(Sys.getenv("LOCALAPPDATA"), "R",
+                      paste0("win-", s["machine"], "-zig"), x.y)
+        else {
+            xdg <- Sys.getenv("XDG_DATA_HOME")
+            data_home <- if (nzchar(xdg)) xdg else file.path(home, ".local", "share")
+            plat <- if (s["sysname"] == "Darwin")
+                        paste0("osx-", if (s["machine"] == "arm64") "arm64" else "64", "-zig")
+                    else if (s["sysname"] == "Linux") "linux-64-zig"
+                    else paste0(R.version$platform, "-zig")
+            file.path(data_home, "R", plat, x.y)
+        }
+    }
+RCODE
+  )
+  awk -v repl="$r_libs_user_repl" '
+    BEGIN { in_block=0 }
+    /R_LIBS_USER_default <- function\(\) \{/ { print repl; in_block=1; next }
+    in_block && /^    \}$/ { in_block=0; next }
+    in_block { next }
+    { print }
+  ' "$lu" > "$lu.tmp" && mv "$lu.tmp" "$lu"
+fi
+
 mkdir -p "$OBJ_DIR"
 cd "$OBJ_DIR"
 
+# OBJC/OBJCXX: without an explicit OBJC=, autoconf falls back to a bare
+# PATH search and finds Xcode's real gcc/clang instead of our zig-cc shim
+# (OBJCXX happens to end up right anyway, since autoconf's own default for
+# it reuses $CXX — but that's not documented/guaranteed behavior, so set
+# both explicitly). Found via a real compile failure: pak's bundled `ps`
+# package has genuine Objective-C source (arch/macos/apps.m, using AppKit
+# for GUI-app enumeration) that was silently being compiled as plain C by
+# whatever real "gcc" was on PATH in the vendored subst.txt's OBJC value —
+# harmless to CC/CXX themselves (which correctly pointed at zig-cc/zig-cxx
+# already), but this variable never got the same treatment.
 "$SRC_DIR/configure" \
   --prefix="$PREFIX" \
   "${BLAS_ARGS[@]}" \
@@ -121,6 +170,8 @@ cd "$OBJ_DIR"
   "${VARIANT_ARGS[@]}" \
   CC="$TOOLCHAIN/zig-cc" \
   CXX="$TOOLCHAIN/zig-cxx" \
+  OBJC="$TOOLCHAIN/zig-cc" \
+  OBJCXX="$TOOLCHAIN/zig-cxx" \
   FC="$FC" \
   AR="$TOOLCHAIN/zig-ar" \
   RANLIB="$TOOLCHAIN/zig-ranlib" \

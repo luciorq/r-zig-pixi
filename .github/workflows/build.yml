@@ -8,6 +8,10 @@ on:
 # Every job starts from a bare runner: the only bootstrap is pixi itself.
 # All compilers, shells, and libraries come from conda-forge via pixi.
 jobs:
+  # Default build path: `zig build` alone (no autoconf, no make, no
+  # gnuwin32) — see .github/devdocs/feat-zig-build/. Milestone 5's F1-F6
+  # are all green on linux/macOS/Windows, so this job (not `build-legacy`
+  # below) is now the primary one.
   build:
     name: ${{ matrix.os }} / ${{ matrix.env }}
     runs-on: ${{ matrix.os }}
@@ -27,29 +31,91 @@ jobs:
         with:
           environments: ${{ matrix.env }}
           cache: true
-      - name: Build R
+      - name: Build R (zig build alone, no autoconf/make)
         run: pixi run -e ${{ matrix.env }} build
       - name: Smoke test
         run: pixi run -e ${{ matrix.env }} smoke
       - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
         run: pixi run -e ${{ matrix.env }} contract
-      - name: Regression suite
+      - name: Regression suite (Examples/Specific/Reg)
         run: pixi run -e ${{ matrix.env }} check
-      # Standalone bundle: reuses this job's already-built objdir (cheap).
+      # Standalone bundle: reuses this job's already-built prefix (cheap).
       # Only the default (slim) variant is packaged in CI for now — full/
       # openblas relocation is exercised manually, not automated yet.
       - name: Package + verify standalone bundle
         if: matrix.env == 'default'
         run: pixi run -e ${{ matrix.env }} verify-package
 
-  # Windows builds via src/gnuwin32 driven by scripts/build-gnuwin32.sh
-  # (zig cc MinGW target + conda-forge MinGW gfortran). Proven on real
-  # hardware (kappa) across build/smoke/contract/check — gating like the
-  # other two platforms.
-  # NB: slim==full on Windows (gnuwin32 has no slim switches), so only
-  # the default environment is built.
+  # `zig build` on Windows — no `check` step (make-check parity was never
+  # in scope for Windows, see FINALIZATION.md F6: addCheckStep is only
+  # wired into the unix build() path). The package-compilation contract
+  # (Makeconf.win wiring, a real R.exe CMD dispatcher, native gcc.exe/
+  # g++.exe wrappers) IS done — see FINALIZATION.md F7 — so `contract`
+  # runs here same as linux/macOS.
   build-windows:
     name: windows-latest / default
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: default
+          cache: true
+      - name: Build R (zig build alone, no autoconf/make/gnuwin32)
+        run: pixi run build
+      - name: Smoke test
+        run: pixi run smoke
+      - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
+        run: pixi run contract
+      - name: Package + verify standalone bundle
+        run: pixi run verify-package
+
+  # Legacy autoconf (unix) / gnuwin32 (windows) path — fallback for one
+  # release per FINALIZATION.md's "Final" item, then removed. Kept at full
+  # matrix parity with `build` above as the safety net during the
+  # transition.
+  build-legacy:
+    name: legacy / ${{ matrix.os }} / ${{ matrix.env }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        env: [default, full]
+        include:
+          # external optimized BLAS/LAPACK variant (linux only for now)
+          - os: ubuntu-latest
+            env: openblas
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: ${{ matrix.env }}
+          cache: true
+      - name: Build R
+        run: pixi run -e ${{ matrix.env }} build-legacy
+      - name: Smoke test
+        run: pixi run -e ${{ matrix.env }} smoke-legacy
+      - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
+        run: pixi run -e ${{ matrix.env }} contract-legacy
+      - name: Regression suite
+        run: pixi run -e ${{ matrix.env }} check-legacy
+      # Standalone bundle: reuses this job's already-built objdir (cheap).
+      # Only the default (slim) variant is packaged in CI for now — full/
+      # openblas relocation is exercised manually, not automated yet.
+      - name: Package + verify standalone bundle
+        if: matrix.env == 'default'
+        run: pixi run -e ${{ matrix.env }} verify-package-legacy
+
+  # Windows builds via src/gnuwin32 driven by scripts/build-gnuwin32.sh
+  # (zig cc MinGW target + conda-forge MinGW gfortran) — legacy fallback,
+  # same one-release retirement plan as build-legacy above.
+  # NB: slim==full on Windows (gnuwin32 has no slim switches), so only
+  # the default environment is built.
+  build-windows-legacy:
+    name: windows-latest-legacy / default
     runs-on: windows-latest
     timeout-minutes: 300
     steps:
@@ -59,23 +125,24 @@ jobs:
           environments: default
           cache: true
       - name: Build R (gnuwin32 + zig)
-        run: pixi run build
+        run: pixi run build-legacy
       - name: Smoke test
-        run: pixi run smoke
+        run: pixi run smoke-legacy
       - name: Package contract test (Rcpp, data.table, minqa)
-        run: pixi run contract
+        run: pixi run contract-legacy
       - name: Regression suite
-        run: pixi run check
+        run: pixi run check-legacy
       - name: Package + verify standalone bundle
-        run: pixi run verify-package
+        run: pixi run verify-package-legacy
 
   # conda-forge-style package (rattler-build) — always the slim variant
   # regardless of matrix.env above, since recipe/build.sh never sets
   # R_BUILD_VARIANT. A from-scratch build in its own isolated sandbox, so
-  # it can't reuse the `build`/`build-windows` jobs' objdirs; this roughly
+  # it can't reuse the `build`/`build-windows` jobs' prefixes; this roughly
   # doubles total Windows CI time, which is the tradeoff for catching a
-  # recipe regression (e.g. the ICU_PATH bug) before a real release
-  # instead of relying on a manual omicron/kappa run.
+  # recipe regression before a real release instead of relying on a manual
+  # omicron/kappa run. recipe/build.sh itself now drives zig-build.sh, not
+  # the legacy autoconf/gnuwin32 scripts.
   conda-package:
     name: conda-package / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
