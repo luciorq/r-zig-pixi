@@ -50,8 +50,12 @@ build:
   # (~/.local/share/R/<platform>-zig/<x.y>, respects $XDG_DATA_HOME),
   # LOCALAPPDATA/R/win-64-zig/<x.y> on Windows (unchanged, already the
   # right semantic equivalent) — requested directly, not a bug (F7.3, see
-  # feat-zig-build/TODO.md).
-  number: 5
+  # feat-zig-build/TODO.md). 6: Windows-only follow-up — m2-sed/m2-grep/
+  # m2-gawk/m2-coreutils/m2-make/m2-which/m2-findutils added to run: (only
+  # m2-bash was there before); real packages' own configure scripts need
+  # them, found via a real `install.packages("pak")` failure (F7.1
+  # follow-up, see feat-zig-build/TODO.md).
+  number: 6
   script: build.sh
 
 requirements:
@@ -258,6 +262,31 @@ requirements:
         # didn't exist in the env at all, not just because the forwarder's
         # old baked-in path was wrong (see build.zig's winCompilerWrapper).
         - m2-bash
+        # sed/grep/gawk/coreutils/make/which/find: real CRAN packages' own
+        # `configure` scripts (autoconf-generated, arbitrary — not
+        # something this project controls) lean on these heavily; m2-bash
+        # alone only gets the shell *interpreter* present, not the tools
+        # the script's own body calls. Found via a real, reproduced
+        # `install.packages("pak")` failure on a freshly-installed
+        # package: `./configure: line 62: sed: command not found` —
+        # `sed.exe` genuinely didn't exist anywhere in the installed env
+        # (these were build:-only, same gap m2-bash had). `make` also
+        # needed here, separately from build:'s own `make >=4.4` below —
+        # `R CMD SHLIB`/`INSTALL` shells out to it to actually drive
+        # compilation for any package with a Makevars or multiple source
+        # files, not just packages with a configure script.
+        # texinfo/diffutils/tar/gzip/unzip/zip stay build:-only —
+        # documentation-generation and archive tools a package's own
+        # `configure`/compile step essentially never needs; add if a real
+        # failure ever proves otherwise, same discipline as everything
+        # else in this list.
+        - m2-sed
+        - m2-grep
+        - m2-gawk
+        - m2-coreutils
+        - m2-make
+        - m2-which
+        - m2-findutils
     # package compilation works out of the box: Makeconf records the
     # bundled zig shims; these provide the actual compilers
     - zig 0.16.*
