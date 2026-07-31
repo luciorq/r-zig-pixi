@@ -362,8 +362,8 @@ tests:
             # 'm <- matrix(...); ... %*% ...'`, verbatim from this
             # recipe) and reproducing the corruption independently at
             # cmd.exe's OWN runtime parsing stage, not YAML rendering.
-            - echo PATHDEBUG=%PATH%
-            - ../../../../../Library/lib/R/bin/x64/Rscript.exe test-win.R
+            - 'echo PATHDEBUG=%PATH%'
+            - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-win.R'
           else:
             - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
     files:
