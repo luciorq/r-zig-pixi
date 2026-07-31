@@ -332,17 +332,24 @@ tests:
       content:
         - if: win
           then:
-            # Absolute path, not bare `Rscript`: rattler-build's Windows
-            # test phase runs with an unexpanded literal "%PREFIX%" on
-            # PATH (verified with an `echo %PATH%` probe), so PATH-based
-            # invocation of the Library/bin/{R,Rscript}.bat shims can't be
-            # exercised here at all — bare `Rscript` was never actually
-            # testing what its own comment used to claim. The shims (the
-            # real win-64 fix, see env.sh + stage.sh) are covered by the
-            # separate fresh-env consume test instead (build.yml /
-            # feat-prefix-publish devdocs) — that's where PATH-based
-            # invocation is genuinely exercised, against a real installed
-            # env where PATH is expanded correctly.
+            # Neither %PREFIX% (verified via an `echo %PATH%` probe) nor
+            # $PREFIX (verified for real: a real CI run got this far and
+            # cmd.exe choked trying to literally run a program named
+            # "$PREFIX/Library/...", exit 9009 — bash syntax means
+            # nothing to cmd.exe) reliably expand in rattler-build's
+            # Windows test sandbox. Bare `Rscript` was never actually
+            # testing what its own comment used to claim either (PATH-
+            # based invocation of the Library/bin/{R,Rscript}.bat shims
+            # is covered by the separate fresh-env consume test instead —
+            # build.yml / feat-prefix-publish devdocs — where PATH is
+            # genuinely expanded, against a real installed env). So: a
+            # relative path back to the test env root instead of any
+            # PREFIX substitution at all. The test's own cwd is always
+            # <test_run_env>/etc/conda/test-files/r-zig-slim/0 (fixed —
+            # PKG_NAME is a constant "r-zig-slim", "0" is the single
+            # test-script index rattler-build assigns), 5 levels below
+            # <test_run_env>, so 5 `..` reaches Library/lib/R directly,
+            # dialect-agnostic since it's plain relative path syntax.
             #
             # A real .R file, not inline `-e '...'`: cmd.exe has NO
             # concept of single quotes as a quoting mechanism — they're
@@ -356,7 +363,7 @@ tests:
             # recipe) and reproducing the corruption independently at
             # cmd.exe's OWN runtime parsing stage, not YAML rendering.
             - echo PATHDEBUG=%PATH%
-            - $PREFIX/Library/lib/R/bin/x64/Rscript.exe test-win.R
+            - ../../../../../Library/lib/R/bin/x64/Rscript.exe test-win.R
           else:
             - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
     files:

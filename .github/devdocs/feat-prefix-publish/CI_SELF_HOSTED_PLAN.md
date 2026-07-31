@@ -290,12 +290,51 @@ SERVICE` has neither by default, so the Rust `tar` crate's symlink-
 creation call fails on the first such entry it hits (`cluster.tgz` sorts
 first alphabetically — every one of the 15 would have failed the same
 way, one at a time, if patched around individually instead of at the
-root cause). Fixed system-wide with the standard Windows unprivileged-
-symlink opt-in: `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\
-AppModelUnlock\AllowDevelopmentWithoutDevMode = 1` (the registry-level
-equivalent of enabling Developer Mode; applies regardless of which
-account creates the symlink, unlike the privilege-grant route). Verified
-directly on kappa: a plain `New-Item -ItemType SymbolicLink` that would
-otherwise require elevation now succeeds.
+root cause).
 
-Next real run after all four fixes is the actual Phase 3 check.
+First attempted fix — `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\
+AppModelUnlock\AllowDevelopmentWithoutDevMode = 1` (the registry-level
+equivalent of enabling Developer Mode, which lets `CreateSymbolicLinkW`
+succeed unprivileged *if the caller passes
+`SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE`*) — did **not** work: a
+real CI run hit the exact same `cluster.tgz` error afterward, byte for
+byte. Root cause of *that*: PowerShell's own `New-Item
+-ItemType SymbolicLink` (used to verify the registry change) does pass
+that flag, but rattler-build's underlying Rust `tar`-extraction code
+apparently doesn't — so Developer Mode alone was never going to help
+here regardless of how it was enabled. The actually-effective fix:
+directly grant `NETWORK SERVICE` (`*S-1-5-20`) the real
+`SeCreateSymbolicLinkPrivilege` local security right via `secedit`
+(`secedit /export /cfg C:\secpol.cfg /areas USER_RIGHTS`, append
+`,*S-1-5-20` to the `SeCreateSymbolicLinkPrivilege` line, `secedit
+/configure ... /areas USER_RIGHTS`), which works unconditionally,
+independent of whether the calling code requests the unprivileged flag.
+Needed a runner **service restart** afterward — local security rights
+are baked into a process's logon token at token-creation time, so the
+already-running service's token didn't have it until a fresh one was
+created. Verified for real: a subsequent CI run's `conda-package /
+windows` leg ran for 12+ minutes (vs. ~1 minute for every prior
+`cluster.tgz` failure) and got all the way through fetching, building,
+and packaging with zero extraction errors.
+
+A fifth, unrelated bug surfaced immediately after — the first time the
+Windows leg has ever gotten this far in an automated run. rattler-
+build's own package-test phase failed with `Script failed with status
+9009` (cmd.exe's "command not found"). Cause: `recipe/recipe.yaml`'s
+Windows test script literally read `$PREFIX/Library/lib/R/bin/x64/
+Rscript.exe test-win.R` — bash variable syntax (`$PREFIX`), meaningless
+to cmd.exe, which tried to run a program named that verbatim. This line
+already existed *before* today specifically because `%PREFIX%` (the
+correct cmd.exe syntax) had separately been found not to expand either
+in this sandbox (see the file's own long-standing comment about an
+`echo %PATH%` probe) — but nobody had caught that its replacement used
+the wrong shell's syntax entirely, since no automated Windows run had
+ever gotten far enough to exercise this exact line before today. Fixed
+by dropping PREFIX substitution entirely in favor of a plain relative
+path (`../../../../../Library/lib/R/bin/x64/Rscript.exe`) — the test's
+cwd is always exactly 5 levels below the test-env root
+(`<test_run_env>/etc/conda/test-files/r-zig-slim/0`, both segments
+fixed for this recipe), so this works identically regardless of which
+shell dialect actually executes it.
+
+Next real run after all five fixes is the actual Phase 3 check.
