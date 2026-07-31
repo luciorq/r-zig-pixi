@@ -228,4 +228,74 @@ already exists`, since the action isn't designed to run against a
 runner that already has pixi installed globally). Reverted; the fix is
 the `.path` file + service restart above, not adding `setup-pixi` back.
 
-Next real run after these three fixes is the actual Phase 3 check.
+Next real run after these three fixes surfaced two more, genuinely
+distinct bugs on kappa specifically — both about long paths, but at two
+different layers:
+
+- **`dlltool` vs. Windows' 260-char `MAX_PATH`**: `x86_64-w64-mingw32-
+  dlltool` builds each import-lib "head file" temp name by flattening
+  the *entire* resolved absolute output path into one string (separators
+  replaced with `_`), then opens that flat name in the current working
+  directory — so the final open call is roughly `2×cwd_len +
+  output_arg_len`, not just `cwd_len`. With the runner's default
+  `_work\r-zig-pixi\r-zig-pixi\dist\conda\bld\rattler-
+  build_r-zig-slim_<timestamp>\work` as cwd (107 chars), that blew past
+  260 for real (`failed to open temporary head file: ...`, confirmed
+  reproduced directly on kappa, not just in CI). Confirmed this is
+  **not** the OS-level `MAX_PATH` — flipping `HKLM\SYSTEM\
+  CurrentControlSet\Control\FileSystem\LongPathsEnabled` to `1` changed
+  nothing (old mingw-w64 binutils uses a fixed-size internal buffer, not
+  a Win32 API call that the modern long-path policy patches). Fixed by
+  shortening the two things that actually compound: reconfigured kappa's
+  runner with a short `--work C:\w` (via `config.cmd remove` +
+  reconfigure, same maneuver as the profile-directory fix in Phase 1),
+  and added `--no-build-id` to `pixi.toml`'s `conda-package` task (drops
+  rattler-build's own `_<timestamp>` suffix from its `bld/` directory
+  name). Verified directly on kappa: a manual `rattler-build build
+  --no-build-id` under the new short `C:\w\...` tree completed with zero
+  `dlltool` errors, all the way through packaging.
+- **git-for-windows vs. the same 260-char limit, at a different layer**:
+  once the build itself got past the dlltool issue, the *next* run's
+  checkout step failed to clean up the previous run's deep `dist/conda/`
+  tree (`hint: Setting core.longPaths may allow the deletion to
+  succeed`), and `actions/checkout`'s own fallback (delete-and-recreate
+  the whole workspace) hung indefinitely (confirmed: the job sat
+  `in_progress` for 44+ minutes, `node`/`Runner.Worker` on kappa idle at
+  0% CPU — not slow, genuinely stuck). Root cause: git-for-windows has
+  its *own* long-path opt-in, `core.longpaths`, entirely separate from
+  the OS-level `LongPathsEnabled` policy above — it was unset. Fixed with
+  `git config --system core.longpaths true` (system scope, so it applies
+  to `NETWORK SERVICE` too, not just the interactive admin account).
+  Also cleaned up `C:\w\r-zig-pixi` by hand — the stuck run's directory
+  contained leftovers from the manual `dlltool` reproduction above (same
+  `C:\w` root, since that's the runner's real `--work` dir), which is
+  most likely what the real checkout step choked on in the first place.
+
+Both fixes are infra-only (runner reconfiguration, git config) plus the
+one-line `--no-build-id` in `pixi.toml` — no `build.zig` changes needed
+for either.
+
+A fourth bug, unrelated to any path-length work above and actually the
+very first Windows failure seen (present before any of today's fixes,
+just never reached root-cause since later stages kept failing first):
+`rattler-build`'s own source-fetch step failed to extract R's source
+tarball — `Failed to unpack ...\src_cache\...\R-4.6.1\src\library\
+Recommended\cluster.tgz`. Root cause, confirmed via `tar -tvzf` on the
+real downloaded tarball: R ships its 15 "Recommended" packages (cluster,
+class, survival, MASS, ...) as **symlinks** (e.g. `cluster.tgz ->
+cluster_2.1.8.2.tar.gz`) — a completely ordinary Unix packaging
+convention that Windows can't replicate without either
+`SeCreateSymbolicLinkPrivilege` or Developer Mode enabled; `NETWORK
+SERVICE` has neither by default, so the Rust `tar` crate's symlink-
+creation call fails on the first such entry it hits (`cluster.tgz` sorts
+first alphabetically — every one of the 15 would have failed the same
+way, one at a time, if patched around individually instead of at the
+root cause). Fixed system-wide with the standard Windows unprivileged-
+symlink opt-in: `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\
+AppModelUnlock\AllowDevelopmentWithoutDevMode = 1` (the registry-level
+equivalent of enabling Developer Mode; applies regardless of which
+account creates the symlink, unlike the privilege-grant route). Verified
+directly on kappa: a plain `New-Item -ItemType SymbolicLink` that would
+otherwise require elevation now succeeds.
+
+Next real run after all four fixes is the actual Phase 3 check.

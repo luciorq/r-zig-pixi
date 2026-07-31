@@ -58,6 +58,17 @@ install-legacy = { cmd = "bash scripts/install-r.sh", depends-on = ["build-legac
 package-legacy = { cmd = "bash scripts/package-standalone.sh", depends-on = ["install-legacy"] }
 verify-package-legacy = { cmd = "bash scripts/verify-bundle.sh", depends-on = ["package-legacy"] }
 
+# --- CI (build-r.yml on GitHub Actions; needs `gh auth login`) ---
+# Full run on-demand (all jobs, same as a push to main — see
+# workflow_dispatch in .github/workflows/build.yaml).
+ci-trigger = "gh workflow run build.yaml --ref main"
+# Re-run only the jobs that failed in the most recent build-r run (e.g.
+# just conda-package/windows) without re-running everything that already
+# passed. `gh run rerun --job <id>` reruns one specific job by its
+# databaseId if you need an exact target instead — see `gh run view
+# <run-id> --json jobs --jq '.jobs[] | {name, databaseId}'`.
+ci-rerun-failed = "gh run rerun --failed $(gh run list --workflow=build.yaml --limit 1 --json databaseId --jq '.[0].databaseId')"
+
 [dependencies]
 # --- toolchain ---
 zig = "0.16.*"
