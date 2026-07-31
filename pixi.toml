@@ -186,7 +186,15 @@ R_BLAS = "openblas"
 rattler-build = ">=0.70"
 
 [feature.pkg.tasks]
-conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda"
+# --no-build-id: drops the "_<timestamp>" suffix from rattler-build's own
+# bld/rattler-build_<pkg>_<id>/work directory name. Purely a path-length
+# optimization for Windows (see devdocs/feat-prefix-publish/
+# CI_SELF_HOSTED_PLAN.md) — dlltool mangles the full absolute path of
+# each generated import lib into a single flat temp filename, and that
+# combined length blew past Windows' 260-char MAX_PATH once nested under
+# the self-hosted runner's own _work directory. Harmless on linux/macOS
+# (never hit the bug there; just a slightly simpler directory name).
+conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id"
 
 # Interim publish path: upload from an already-authenticated dev machine
 # (`rattler-build auth login prefix.dev`). Not chained onto conda-package
