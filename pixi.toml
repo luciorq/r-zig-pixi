@@ -24,11 +24,11 @@ R_VERSION = "4.6.1"
 
 [tasks]
 fetch = "bash scripts/fetch-r.sh"
-# Default build path: `zig build` alone (no autoconf, no make, no
-# gnuwin32) — see .github/devdocs/feat-zig-build/. Milestone 5's F1-F6 are
-# all green on linux/macOS/Windows; the autoconf/gnuwin32 pipeline below
-# is kept as an explicit "-legacy" fallback for one release (FINALIZATION.
-# md's "Final" item), then removed.
+# Only build path: `zig build` alone (no autoconf, no make, no gnuwin32)
+# — see .github/devdocs/feat-zig-build/. The autoconf/gnuwin32 pipeline
+# was kept as an explicit "-legacy" fallback for one release past
+# Milestone 5 (FINALIZATION.md's "Final" item), then retired — see
+# Milestone 7 in feat-legacy-retirement/.
 build = { cmd = "bash scripts/zig-build.sh", depends-on = ["fetch"] }
 # R's regression suite (Examples/Specific/Reg) against the zig build —
 # linux/macOS only, no `check` step exists in the Windows compile graph
@@ -47,16 +47,6 @@ install = { cmd = "bash scripts/zig-stage.sh", depends-on = ["build"] }
 package = { cmd = "bash scripts/zig-package.sh", depends-on = ["install"] }
 verify-package = { cmd = "bash scripts/zig-verify-package.sh", depends-on = ["package"] }
 clean = "bash scripts/clean.sh"
-
-# --- legacy: autoconf (unix) / gnuwin32 (windows) — fallback only ---
-configure-legacy = { cmd = "bash scripts/configure-r.sh", depends-on = ["fetch"] }
-build-legacy = { cmd = "bash scripts/build-r.sh", depends-on = ["configure-legacy"] }
-smoke-legacy = "bash scripts/smoke-test.sh"
-check-legacy = "bash scripts/check-r.sh"
-contract-legacy = "bash scripts/contract-test.sh"
-install-legacy = { cmd = "bash scripts/install-r.sh", depends-on = ["build-legacy"] }
-package-legacy = { cmd = "bash scripts/package-standalone.sh", depends-on = ["install-legacy"] }
-verify-package-legacy = { cmd = "bash scripts/verify-bundle.sh", depends-on = ["package-legacy"] }
 
 # --- CI (build-r.yml on GitHub Actions; needs `gh auth login`) ---
 # Full run on-demand (all jobs, same as a push to main — see

@@ -901,7 +901,9 @@ summary of TODO.md, not the other way around.
       along the way)
 - [x] **Final**: retire autoconf/gnuwin32 from the default path — done
       2026-07-28; see TODO.md's Final entry for the exact task/CI/recipe
-      changes. Kept as `*-legacy` for one release per this item's own plan.
+      changes. Kept as `*-legacy` for one release per this item's own plan,
+      then fully deleted (scripts, pixi tasks, CI jobs) as Milestone 7 —
+      see `.github/devdocs/feat-legacy-retirement/`.
 - [x] **F7**: Windows package-compilation contract — done 2026-07-28 on
       kappa, originally out of scope for this milestone; see TODO.md's F7
       entry for the full detail (a native `gcc.exe`/`g++.exe` forwarder
