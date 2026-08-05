@@ -30,6 +30,12 @@ jobs:
     # available again; conda-package below is unaffected (self-hosted).
     if: vars.ENABLE_HOSTED_JOBS == 'true'
     runs-on: ${{ matrix.os }}
+    # No arch dimension in this matrix at all today — one runner per OS
+    # (whatever GitHub-hosted x86_64 image), not per (OS, arch). Same for
+    # conda-package's self-hosted labels below (one machine per OS).
+    # Whenever real osx-64/linux-aarch64/win-arm64 hardware/CI arrives
+    # (see .github/devdocs/feat-cross-platform-standardization/PLAN.md),
+    # this matrix — not just build.zig — needs an arch axis added too.
     strategy:
       fail-fast: false
       matrix:
@@ -107,6 +113,10 @@ jobs:
     runs-on: ${{ matrix.labels }}
     strategy:
       fail-fast: false
+      # One machine per OS, no arch axis — see the `build` job's own
+      # comment above (same gap, same pointer to
+      # feat-cross-platform-standardization/PLAN.md for when it's
+      # actually worth closing).
       matrix:
         include:
           - name: linux
