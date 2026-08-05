@@ -14,7 +14,7 @@ The package (`r-zig-slim`) targets `linux-64`, `osx-64`, `osx-arm64`, and
 `win-64`, publishing to the `universe` channel on prefix.dev (currently
 private — requires `rattler-build auth login prefix.dev` access):
 
-```sh
+```bash
 pixi init my-r-project
 cd my-r-project
 pixi workspace channel add https://prefix.dev/universe
@@ -29,7 +29,7 @@ without any extra system setup.
 
 ### Build the conda package yourself
 
-```sh
+```bash
 pixi run -e pkg conda-package
 ```
 
@@ -40,7 +40,7 @@ platform not published upstream.
 
 ### Publish to your own channel
 
-```sh
+```bash
 pixi run -e pkg conda-publish
 ```
 
@@ -53,7 +53,7 @@ typically run once per machine/OS as part of a release.
 
 For iterating on the build itself rather than consuming a package:
 
-```sh
+```bash
 pixi run build   # zig build, no autoconf/make/gnuwin32
 pixi run smoke   # quick sanity check
 pixi run check   # R's own regression suite (linux/macOS)
@@ -72,15 +72,23 @@ distributions than the build machine, without a separate build variant.
 
 ## Toggling the hosted-runner CI jobs
 
-The GitHub-hosted matrix (`build`, `build-windows`, `build-legacy`,
-`build-windows-legacy`) is gated behind a repo variable, off by default to
-avoid burning Actions minutes — only `conda-package` (self-hosted) runs
-unconditionally:
+The GitHub-hosted matrix (`build`, `build-windows`) is gated behind a repo
+variable, off by default to avoid burning Actions minutes — only
+`conda-package` (self-hosted) runs unconditionally:
 
-```sh
+```bash
 gh variable set ENABLE_HOSTED_JOBS --body true   # turn hosted jobs on
 gh variable set ENABLE_HOSTED_JOBS --body false  # turn them back off
 ```
+
+Equally, the self hosted jobs have a separate flag for enabling it.
+
+```bash
+gh variable set ENABLE_SELFHOSTED_JOBS --body true
+gh variable set ENABLE_SELFHOSTED_JOBS --body false
+```
+
+
 
 No commit or workflow edit needed either way.
 
@@ -89,3 +97,4 @@ No commit or workflow edit needed either way.
 Build internals, platform-specific fixes, and the CI/publish pipeline are
 tracked in `.github/devdocs/` (`PLAN.md`/`TODO.md` at the repo root point
 at the current feature's docs).
+
