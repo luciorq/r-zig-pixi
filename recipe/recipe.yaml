@@ -73,7 +73,16 @@ build:
   # so any package with real Objective-C source silently compiled as
   # plain C. Both found and fixed while adding `pak` (a package that
   # exercises both) to contract-test.sh; see F7.7/F7.8 in
-  # feat-zig-build/TODO.md.
+  # feat-zig-build/TODO.md. 9: no functional change — bumped solely to
+  # force a fresh publish while testing the self-hosted CI pipeline
+  # itself (see feat-prefix-publish/CI_SELF_HOSTED_PLAN.md).
+  #
+  # Version-bump policy (decided 2026-08-06, see feat-prefix-publish/
+  # TODO.md's "End goal" section): stays fully manual — bump this number
+  # as a deliberate part of any PR that should trigger a republish, same
+  # as every prior bump above. `--skip-existing` on the publish task is
+  # the safety net for CI runs that don't include one (same version+
+  # build already on the channel is silently skipped, not an error).
   number: 9
   script: build.sh
 
