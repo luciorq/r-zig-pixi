@@ -1,0 +1,5 @@
+S["CAIRO_LIBS"]="-lcairo -lfontconfig"
+S["WIN_INTERNET_LIBS"]="-llibcurl -lwininet -lws2_32"
+S["WIN_BITMAP_LIBS"]="-llibpng -ltiff -ljpeg -lzstd -lz -llzma"
+S["WIN_R_DLL_LIBS"]="-lgdi32 -luser32 -lcomctl32 -lole32 -luuid -lwinmm -lversion -ldeflate -lpcre2-8 -lz -llibbz2 -llzma -lzstd -licuin -licuuc -licudt"
+S["WIN_RGRAPHAPP_LIBS"]="-lgdi32 -luser32 -lcomdlg32 -lole32 -luuid -lcomctl32 -limm32 -lmsimg32"

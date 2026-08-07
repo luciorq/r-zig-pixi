@@ -47,6 +47,12 @@ install = { cmd = "bash scripts/zig-stage.sh", depends-on = ["build"] }
 package = { cmd = "bash scripts/zig-package.sh", depends-on = ["install"] }
 verify-package = { cmd = "bash scripts/zig-verify-package.sh", depends-on = ["package"] }
 clean = "bash scripts/clean.sh"
+# Not part of the build path (zig-build.sh never calls this) — exists
+# solely so zigbuild/tools/gen-subst.sh has a config.status to replay
+# when regenerating a vendored zigbuild/config/<plat>-<variant>/subst.txt
+# (see PLAN.md's "Regenerating the vendored config"). Deliberately does
+# NOT apply the R-source patches scripts/zig-build.sh already owns.
+configure = { cmd = "bash zigbuild/tools/configure-only.sh", depends-on = ["fetch"] }
 
 # --- CI (build-r.yml on GitHub Actions; needs `gh auth login`) ---
 # Full run on-demand (all jobs, same as a push to main — see
@@ -217,6 +223,14 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 
 [feature.pkg.target.win-64.tasks]
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/win-64/*.conda"
+
+# No zigbuild/config/linux-aarch64-* dir exists yet (see
+# feat-cross-platform-standardization/PLAN.md Phase 7) — nothing to
+# publish through this task today. Added now purely so this block stays
+# consistent with the [target.linux-aarch64.dependencies] block above,
+# which already exists.
+[feature.pkg.target.linux-aarch64.tasks]
+conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/linux-aarch64/*.conda"
 
 [environments]
 pkg = ["pkg"]

@@ -135,20 +135,22 @@ pub const graphics_c = [_][]const u8{
     "init.c", "base.c", "graphics.c", "par.c", "plot.c", "plot3d.c", "stem.c",
 };
 
-pub const grdevices_c = [_][]const u8{
+/// grDevices/src/Makefile(.win) SOURCES_C, the 12 files shared by every
+/// platform — compiled via one addCGroup/newPkgMod call, then a second
+/// call adds the platform-specific device pair below (same "shared base
+/// + platform tail via two calls" shape as tzone_c/win_tzone_c).
+pub const grdevices_shared_c = [_][]const u8{
     "axis_scales.c", "chull.c", "devices.c", "init.c", "stubs.c", "colors.c",
-    "clippath.c", "patterns.c", "mask.c", "group.c", "devCairo.c",
-    "devPicTeX.c", "devPS.c", "devQuartz.c",
+    "clippath.c", "patterns.c", "mask.c", "group.c", "devPicTeX.c", "devPS.c",
 };
 
-/// Windows grDevices/src/Makefile.win SOURCES_C — devWindows.c (the actual
-/// "windows" graphics device) + winbitmap.c (png/jpeg/tiff bitmap I/O)
-/// replace unix's devCairo.c/devQuartz.c; the rest is shared.
-pub const win_grdevices_c = [_][]const u8{
-    "axis_scales.c", "chull.c", "devices.c", "init.c", "stubs.c", "colors.c",
-    "clippath.c", "patterns.c", "mask.c", "group.c",
-    "devPicTeX.c", "devPS.c", "devWindows.c", "winbitmap.c",
-};
+/// unix-only: the cairo/quartz graphics devices.
+pub const grdevices_cairo_c = [_][]const u8{ "devCairo.c", "devQuartz.c" };
+
+/// Windows-only: devWindows.c (the actual "windows" graphics device) +
+/// winbitmap.c (png/jpeg/tiff bitmap I/O) — replace unix's
+/// devCairo.c/devQuartz.c pair above.
+pub const win_grdevices_c = [_][]const u8{ "devWindows.c", "winbitmap.c" };
 
 pub const grid_c = [_][]const u8{
     "clippath.c", "gpar.c", "grid.c", "just.c", "layout.c", "mask.c",
@@ -175,11 +177,11 @@ pub const utils_c = [_][]const u8{
     "init.c", "io.c", "size.c", "sock.c", "stubs.c", "utils.c", "hashtab.c",
 };
 
-/// Windows utils/src/Makefile.win SOURCES_C — adds 5 windows/*.c files
-/// (dataentry/dialogs/registry/util/widgets) on top of the shared set.
-pub const win_utils_c = [_][]const u8{
-    "init.c", "io.c", "size.c", "sock.c", "stubs.c", "utils.c", "hashtab.c",
-};
+/// Windows utils/src/Makefile.win SOURCES_C adds 5 windows/*.c files
+/// (dataentry/dialogs/registry/util/widgets) on top of the shared set
+/// above (`utils_c`) — build.zig's own Windows call site references
+/// `rspec.utils_c` directly for the shared part, matching how
+/// `tzone_c`/`win_tzone_c` already do it.
 pub const win_utils_windows_c = [_][]const u8{
     "dataentry.c", "dialogs.c", "registry.c", "util.c", "widgets.c",
 };
@@ -287,17 +289,12 @@ pub const win_tzone_c = [_][]const u8{"registryTZ.c"};
 /// since glibc/macOS libc already have a native mkdtemp.
 pub const win_mkdtemp_c = [_][]const u8{"mkdtemp.c"};
 
-/// src/extra/blas/*.{f,f90} — Rblas.dll, internal (non-ATLAS/OpenBLAS)
-/// path only. Far more aggregated than unix's per-routine split.
-pub const win_blas_f = [_][]const u8{ "blas.f", "cmplxblas.f" };
-pub const win_blas_f90 = [_][]const u8{ "blas2.f90", "cmplxblas2.f90" };
-
 /// src/modules/lapack/*.f90 — same la_constants -> la_xisnan module-
 /// dependency chain as unix's rlapack_f90_ordered (this is the one place
 /// Windows' LAPACK layout still matches unix's shape), in compile order.
 pub const win_lapack_f90_ordered = [_][]const u8{
-    "la_constants.f90", "la_xisnan.f90",
-    "dlartg.f90", "dlassq.f90", "zlartg.f90", "zlassq.f90",
+    "la_constants.f90", "la_xisnan.f90", "dlassq.f90", "zlassq.f90",
+    "dlartg.f90",       "zlartg.f90",
 };
 /// src/modules/lapack/*.f — dlapack.f is a single file aggregating what
 /// unix splits across ~15 files; dlamch.f needs -ffloat-store (Makefile.win:

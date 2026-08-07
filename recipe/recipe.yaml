@@ -362,6 +362,13 @@ tests:
             # 'm <- matrix(...); ... %*% ...'`, verbatim from this
             # recipe) and reproducing the corruption independently at
             # cmd.exe's OWN runtime parsing stage, not YAML rendering.
+            # bin/x64: the same hardcoded R_ARCH="x64" convention
+            # build.zig's buildWindows() has throughout (bin/x64,
+            # libs/x64, modules/x64, etc/x64) — see
+            # feat-cross-platform-standardization/PLAN.md's explicit
+            # win-arm64 non-goal. Fixing just this one literal without
+            # also fixing build.zig's dozen would be cosmetic, not real
+            # readiness; revisit together if win-arm64 is ever attempted.
             - 'echo PATHDEBUG=%PATH%'
             - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-win.R'
           else:
