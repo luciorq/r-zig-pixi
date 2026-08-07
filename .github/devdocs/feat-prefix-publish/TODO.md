@@ -329,20 +329,49 @@ blip seen on earlier releases):
 
 ## End goal: CI trusted publishing
 
-- [ ] Decide a version-bump / build-number strategy (`recipe.yaml`'s
-      version and build number are both static today — repeat CI runs
-      against an unchanged R version would need this settled before
-      `--skip-existing`-based idempotency is meaningful)
-- [ ] Configure *Trusted Publishers* on the `universe` channel (prefix.dev
-      channel settings): this repo's owner/name + the exact CI workflow
-      filename that will be allowed to publish
-- [ ] Add an upload step to the existing `conda-package` CI job (see
-      `feat-initial-setup`'s `.github/workflows/build.yml`), gated to
-      `push` on `main` only (not `pull_request`), with
-      `permissions: id-token: write`
-- [ ] Decide whether `universe` stays private or goes public before wiring
-      real automated publishes to it
-- [ ] Once CI publishing is green and trusted, retire the interim
-      dev-machine `rattler-build auth login` credentials (revoke via
-      prefix.dev account settings) — no reason to keep long-lived tokens
-      around once nothing needs them
+**Status update (2026-08-06): this checklist predates the Option A vs.
+Option B decision recorded above** ("Two designs were considered..."),
+and 3 of its original 5 items assumed Option A (OIDC Trusted Publishers)
+was the path taken — it wasn't. Corrected below, matching what was
+actually built (`CI_SELF_HOSTED_PLAN.md`, `.github/workflows/build.yaml`'s
+`conda-package` job):
+
+- [x] ~~Configure Trusted Publishers on the `universe` channel~~ — N/A,
+      Option B (self-hosted runners + local `rattler-build auth login`
+      credentials) was chosen instead of Option A (OIDC). No Trusted
+      Publishers config needed.
+- [x] ~~Add an upload step to the `conda-package` CI job, gated to push
+      on main, with `permissions: id-token: write`~~ — done, but not via
+      `id-token: write` (that's Option A's OIDC permission, unused here).
+      The `Publish to prefix.dev` step in `.github/workflows/build.yaml`'s
+      `conda-package` job already exists, gated to
+      `github.ref == 'refs/heads/main' && (push || workflow_dispatch)`,
+      authenticating via each self-hosted runner's own already-logged-in
+      `rattler-build` session.
+- [x] ~~Once CI publishing is green and trusted, retire the interim
+      dev-machine `rattler-build auth login` credentials~~ — N/A under
+      Option B: those credentials aren't "interim," they're the
+      permanent auth mechanism the self-hosted runners themselves use
+      (the runner service inherits the same local session — see
+      `CI_SELF_HOSTED_PLAN.md`). Nothing to retire; revoking them would
+      break publishing, not clean it up.
+- [x] **Version-bump / build-number strategy — decided 2026-08-06: stays
+      fully manual.** A human bumps `recipe.yaml`'s `number:` as a
+      deliberate part of any PR that should trigger a republish (exactly
+      how all 9 build numbers to date have been produced — this just
+      writes the existing practice down as the going-forward policy,
+      not a change). `--skip-existing` is the safety net for CI runs
+      that don't include a bump: same version+build string already on
+      the channel, silently skipped, not an error. Considered and
+      rejected: auto-incrementing the build number in CI (e.g. querying
+      the channel for the current max, or a run-counter) — real added
+      complexity (querying channel state or maintaining counter state)
+      for a project that publishes maybe once every few days, and
+      against this project's established discipline of deliberate,
+      human-reviewed changes over inferred/computed ones.
+- [x] **Channel visibility — decided 2026-08-06: go public**, but only
+      after a cleanup pass first (see `CHANNEL_CLEANUP.md`, this same
+      devdocs folder) — remove existing broken/superseded releases and
+      republish a single clean release at build number 1 before flipping
+      the channel to public, so first-time consumers don't land on a
+      messy build-number history from the zig-build migration period.
