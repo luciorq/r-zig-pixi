@@ -23,11 +23,11 @@ LINKFLAGS += -static-libgcc
 ## Things which are substituted by fixed/Makefile (and also -O3 -> -O2)
 WIN = 64
 MINGW_PREFIX = /mingw$(WIN)
-BINPREF =
+BINPREF = @BINPREF@
 COMPILED_BY =
 # SYMPAT = 's/^.* [BCDRT] / /p' for 64-bit
 SYMPAT = @SYMPAT@
-IMPDIR = bin
+IMPDIR = @IMPDIR@
 # flags for multilib builds, for compilers, dlltool and windres
 M_ARCH =
 DT_ARCH =
@@ -160,7 +160,7 @@ F_VISIBILITY =
 ifdef USE_LLVM
   FC = $(BINPREF)flang $(M_ARCH)
 else
-  FC = $(BINPREF)gfortran $(M_ARCH)
+  FC = @FC@
 endif
 FCFLAGS = -O3 $(FDEBUGFLAG) @EOPTS@ $(LTO)
 ## additional libs needed when linking with $(FC), e.g. on some Oracle compilers
@@ -183,7 +183,7 @@ JAVA_CPPFLAGS = -I"$(JAVA_HOME)/../include" -I"$(JAVA_HOME)/../include/win32"
 JAVA_LIBS = -L"$(JAVA_HOME)/bin/client" -ljvm -ljvm-w32
 # JAVA_LD_LIBRARY_PATH = 
 LAPACK_LIBS = -L"$(R_HOME)/$(IMPDIR)" -lRlapack
-LDFLAGS =
+LDFLAGS = @LDFLAGS@
 ## we only need this is if it is external, as otherwise link to R
 LIBINTL =
 LIBM = -lm

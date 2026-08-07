@@ -1508,9 +1508,14 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     // (gnuwin32's own fixed/Makefile substitutes these; captured from a
     // real generated Makeconf on kappa's milestone-3 gnuwin32 objdir,
     // same vendoring discipline as config.h/Rconfig.h) — none are
-    // @ZR_*@/config.status-style, this file predates that mechanism.
-    const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
-    var mkc = raw;
+    // @ZR_CONDA@/config.status-style (that's unix's subst.txt mechanism,
+    // sourced from a real captured config.status this file has no
+    // equivalent of), but as of the cross-platform-standardization
+    // milestone this file's own @VAR@ tokens ARE processed through the
+    // same generic `substitute()`/`ctx.subst` mechanism unix uses for
+    // its own templates, not a bespoke replaceOwned loop — the same
+    // unification Phase 4 already did for this file's link-flag
+    // siblings (CAIRO_LIBS etc., loaded via loadSubstFile above).
     const toolchain_abs = ctx.absSub("{s}/Library/lib/R/bin/toolchain", .{ctx.prefix});
     // ctx.conda may carry native backslash separators — this ends up
     // embedded in a Makefile variable, not a C string literal, so it
@@ -1518,42 +1523,51 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     // but normalize anyway for consistency with every other path this
     // build.zig bakes in.
     const conda_fwd = std.mem.replaceOwned(u8, b.allocator, ctx.conda, "\\", "/") catch @panic("OOM");
-    const replacements = [_][2][]const u8{
-        .{ "BINPREF =", b.fmt("BINPREF = {s}/", .{toolchain_abs}) },
-        // IMPDIR = bin/x64, not the vendored template's bare "bin" —
-        // real gnuwin32 value (`bin$(R_ARCH)`, confirmed against a real
-        // generated Makeconf on kappa) — LIBR/BLAS_LIBS/LAPACK_LIBS all
-        // key off it to find R.dll/Rblas.dll/Rlapack.dll, which live in
-        // the arch subdir, not directly under bin/ (found via a real
-        // "unable to find dynamic system library 'R'" link error).
-        .{ "IMPDIR = bin", "IMPDIR = bin/x64" },
-        // LDFLAGS: empty in both the vendored template AND a real
-        // generated Makeconf (gnuwin32 provides external-library search
-        // paths via MkRules.local's LOCAL_SOFT, sourced only at R's OWN
-        // build time — nothing sources it for package builds afterward).
-        // CRAN packages routinely link bare "-lz"/"-lpng" etc. expecting
-        // *some* global search path to exist; point it at the conda env
-        // directly (found via a real "unable to find dynamic system
-        // library 'z'" link error compiling data.table).
-        .{ "LDFLAGS =", b.fmt("LDFLAGS = -L\"{s}/Library/lib\"", .{conda_fwd}) },
-        // FC: NOT routed through BINPREF/toolchain like CC/CXX — gfortran
-        // internally locates its own backend (f951) relative to its OWN
-        // install location (a libexec/gcc/... tree alongside the real
-        // binary), so a standalone copy elsewhere breaks it ("cannot
-        // execute 'f951': CreateProcess: No such file or directory",
-        // found via a real minqa compile failure). Point FC straight at
-        // the conda env's own gfortran.exe — the same absolute location
-        // fortranOne's own bare "gfortran" PATH lookup already resolves
-        // to successfully when building R itself.
-        .{ "FC = $(BINPREF)gfortran $(M_ARCH)", b.fmt("FC = \"{s}/Library/bin/gfortran.exe\"", .{conda_fwd}) },
-        .{ "@CSTD@", "-std=gnu2x" },
-        .{ "@EOPTS@", "" },
-        .{ "@SANOPTS@", "" },
-        .{ "@OPENMP@", "-fopenmp" },
-        .{ "@PTHREAD@", "-pthread" },
-        .{ "@SYMPAT@", "'s/^.* [BCDRT] / /p'" },
-    };
-    for (replacements) |r| mkc = try std.mem.replaceOwned(u8, b.allocator, mkc, r[0], r[1]);
+    try ctx.subst.put("BINPREF", b.fmt("{s}/", .{toolchain_abs}));
+    // IMPDIR = bin/x64, not the vendored template's bare "bin" — real
+    // gnuwin32 value (`bin$(R_ARCH)`, confirmed against a real generated
+    // Makeconf on kappa) — LIBR/BLAS_LIBS/LAPACK_LIBS all key off it to
+    // find R.dll/Rblas.dll/Rlapack.dll, which live in the arch subdir,
+    // not directly under bin/ (found via a real "unable to find dynamic
+    // system library 'R'" link error).
+    try ctx.subst.put("IMPDIR", "bin/x64");
+    // LDFLAGS: empty in both the vendored template AND a real generated
+    // Makeconf (gnuwin32 provides external-library search paths via
+    // MkRules.local's LOCAL_SOFT, sourced only at R's OWN build time —
+    // nothing sources it for package builds afterward). CRAN packages
+    // routinely link bare "-lz"/"-lpng" etc. expecting *some* global
+    // search path to exist; point it at the conda env directly (found
+    // via a real "unable to find dynamic system library 'z'" link error
+    // compiling data.table). Previously applied via a bare
+    // `"LDFLAGS ="` substring replace, which also silently matched
+    // (and corrupted) 12 unrelated variables whose names happen to END
+    // in "LDFLAGS =" too (DYLIB_LDFLAGS, SHLIB_CXXLDFLAGS,
+    // SHLIB_CXX17LDFLAGS, SHLIB_FCLDFLAGS, SHLIB_LDFLAGS, ...) — confirmed
+    // by simulating the old replace against the real vendored file. Never
+    // caused an observed failure (an extra, unused `-L` flag on a
+    // shared-lib link line is harmless to zig cc/lld), but a real latent
+    // bug this token-anchored substitution fixes as a side effect, not
+    // just a mechanism cleanup.
+    try ctx.subst.put("LDFLAGS", b.fmt("-L\"{s}/Library/lib\"", .{conda_fwd}));
+    // FC: NOT routed through BINPREF/toolchain like CC/CXX — gfortran
+    // internally locates its own backend (f951) relative to its OWN
+    // install location (a libexec/gcc/... tree alongside the real
+    // binary), so a standalone copy elsewhere breaks it ("cannot
+    // execute 'f951': CreateProcess: No such file or directory",
+    // found via a real minqa compile failure). Point FC straight at
+    // the conda env's own gfortran.exe — the same absolute location
+    // fortranOne's own bare "gfortran" PATH lookup already resolves
+    // to successfully when building R itself.
+    try ctx.subst.put("FC", b.fmt("\"{s}/Library/bin/gfortran.exe\"", .{conda_fwd}));
+    try ctx.subst.put("CSTD", "-std=gnu2x");
+    try ctx.subst.put("EOPTS", "");
+    try ctx.subst.put("SANOPTS", "");
+    try ctx.subst.put("OPENMP", "-fopenmp");
+    try ctx.subst.put("PTHREAD", "-pthread");
+    try ctx.subst.put("SYMPAT", "'s/^.* [BCDRT] / /p'");
+
+    const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
+    const mkc = try substitute(ctx, raw);
     const mkc_wf = b.addWriteFiles();
     const mkc_out = mkc_wf.add("Makeconf", mkc);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(mkc_out, ctx.rhomeInstallDir("etc/x64"), "Makeconf").step);

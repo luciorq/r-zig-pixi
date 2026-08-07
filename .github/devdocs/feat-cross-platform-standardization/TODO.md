@@ -3,6 +3,65 @@
 See `PLAN.md` in this directory for full context, rationale, and exact
 file/line references per phase. This file tracks progress only.
 
+## Follow-up work (post-milestone, picked up after Phase 7)
+
+- [x] **Regenerated `linux-x86_64-slim/subst.txt` for real** — Phase 0's
+      verification run found it stale (missing the F7.8 `OBJC=zig-cc`
+      fix, originally found/applied on macOS, never backported to the
+      vendored Linux config via a real regen). Confirmed genuinely
+      consumed, not dead data: `etc/Makeconf.in` has `OBJC = @OBJC@`,
+      substituted into the real installed `etc/Makeconf` — a package
+      with real Objective-C source compiled on Linux today would get
+      `OBJC` pointing at nothing instead of `zig-cc` (rare in practice,
+      but a real correctness gap). `config.h` confirmed byte-identical
+      before/after (no defines changed); `Rconfig.h` isn't produced by
+      plain `configure` at all, so neither needed re-copying —only
+      `subst.txt` changed, and `GENERATED_FROM` didn't need bumping
+      (R version unchanged, that field only tracks version staleness).
+      Full trust bar (build/smoke/contract/check/install/package/
+      verify-package) green on gamma. Linux-only change, no
+      omicron/kappa impact (their own vendored configs untouched).
+
+- [x] **Unified `Makeconf.win`'s substitution with `ctx.subst`/
+      `substitute()`** (the mechanism Phase 4 already unified for this
+      file's link-flag entries). Edited the vendored
+      `zigbuild/config/win-x86_64-full/Makeconf.win` template itself to
+      turn 4 previously bespoke-substring-patched lines
+      (`BINPREF`/`IMPDIR`/`LDFLAGS`/`FC`) into real `@VAR@` tokens,
+      matching the file's own pre-existing convention (`SYMPAT =
+      @SYMPAT@` etc.). `installWindowsCompilerContract` now just
+      `ctx.subst.put()`s all 10 values (the 4 new ones plus the 6
+      already-`@VAR@` ones — `CSTD`/`EOPTS`/`SANOPTS`/`OPENMP`/`PTHREAD`/
+      `SYMPAT`, previously their own separate replaceOwned loop) and
+      calls `substitute(ctx, raw)`, the identical call shape unix's own
+      template processing uses.
+      **Found and fixed a real, previously-silent bug as a side effect**:
+      the old `std.mem.replaceOwned(u8, ..., "LDFLAGS =", ...)` was a
+      bare substring match, not anchored to line start — confirmed by
+      simulating it against the real vendored file that it also matched
+      (and corrupted) 12 unrelated variables whose names happen to end in
+      "LDFLAGS =" too (`DYLIB_LDFLAGS`, `SHLIB_CXXLDFLAGS`,
+      `SHLIB_CXX17LDFLAGS`, `SHLIB_FCLDFLAGS`, `SHLIB_LDFLAGS`, ...),
+      silently injecting an extra `-L"..."` into each. Never caused an
+      observed failure (an unused extra `-L` flag on a shared-lib-link
+      line is harmless to zig cc/lld — that's exactly why it went
+      unnoticed), but a real latent defect nonetheless; the token-
+      anchored `@LDFLAGS@` substitution only ever touches the one
+      intended line, fixing this as a natural side effect of the
+      unification rather than a separately-hunted bug.
+      Verified for real on kappa: full trust bar green
+      (build/smoke/contract/install/package/verify-package — `contract`'s
+      minqa/Rcpp checks specifically exercise real Fortran/C++ package
+      compilation via the substituted Makeconf), plus direct inspection
+      of the generated `Makeconf` confirming `BINPREF`/`IMPDIR`/
+      `LDFLAGS`/`FC` all resolved to the correct real paths AND that
+      `DYLIB_LDFLAGS`/`SHLIB_CXXLDFLAGS`/`SHLIB_CXX17LDFLAGS`/
+      `SHLIB_FCLDFLAGS`/`SHLIB_LDFLAGS` are all clean `-shared` with no
+      stray `-L` — the collateral-damage bug is confirmed gone, not just
+      theoretically fixed. Smoke-only sanity pass green on omicron/gamma
+      (this function is Windows-only, but the shared `substitute()`
+      helper it now calls is common code).
+
 - [x] Phase 0 — restored `zigbuild/tools/configure-only.sh` (byte-identical
       flags to the deleted `configure-r.sh`, minus its two R-source-patch
       blocks — those stay solely owned by `scripts/zig-build.sh`) + a
