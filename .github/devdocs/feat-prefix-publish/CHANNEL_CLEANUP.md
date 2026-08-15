@@ -127,9 +127,11 @@ authoritative — wait/retry before concluding a delete didn't work.
    all 3 platforms since the zig-build migration. **Blocked on step 1
    being confirmed complete first** — publishing at "1" while old content
    still sits at that number on win-64 would either collide or silently
-   overwrite the wrong thing. **In progress — see "Linux publish + stuck
-   indexer" below. omicron/kappa deliberately not started yet (explicit
-   user instruction: "run just the Linux publishing for now").**
+   overwrite the wrong thing. **linux-64 done and index-verified
+   2026-08-15 (see "Linux publish + stuck indexer" below);
+   omicron/kappa still pending (explicit user instruction was "run just
+   the Linux publishing for now" — awaiting go-ahead for the other
+   two).**
 4. **You flip `universe` to public** via prefix.dev's channel settings —
    also your own action, not something to script. **Not started.**
 
@@ -171,6 +173,16 @@ in storage, will be picked up whenever indexing recovers) but not yet
 visible/installable through the channel. **Step 3 is not complete** —
 don't treat the linux-64 publish as done until `conda-channel-list
 universe linux-64` actually shows it.
+
+**Resolved 2026-08-15**: re-checked after ~4 days; `conda-channel-list
+universe linux-64` now shows exactly `r-zig-slim-4.6.1-hb0f4dca_1.conda`
+(total: 1). The indexer recovered on its own — no further reindex
+triggers or intervention needed. The linux-64 leg of step 3 is complete
+end-to-end. Amended lesson: post-deletion/publish indexing delays on
+this channel can run to *days*, not seconds — the docs' "usually
+completes within a few seconds" is not a bound to alarm on, and
+uploaded blobs are safe in storage regardless (they get indexed
+whenever the backlog clears).
 
 ## Verification
 
