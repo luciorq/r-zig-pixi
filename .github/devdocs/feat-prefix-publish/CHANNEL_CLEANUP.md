@@ -124,16 +124,24 @@ authoritative — wait/retry before concluding a delete didn't work.
    release, verified via the "Packages successfully uploaded" line each
    time. This produces `linux-64`/`osx-arm64`/`win-64` all at build
    number 1 together — the first genuinely synchronized release across
-   all 3 platforms since the zig-build migration. **Blocked on step 1
-   being confirmed complete first** — publishing at "1" while old content
-   still sits at that number on win-64 would either collide or silently
-   overwrite the wrong thing. **linux-64 done and index-verified
-   2026-08-15 (see "Linux publish + stuck indexer" below);
-   omicron/kappa still pending (explicit user instruction was "run just
-   the Linux publishing for now" — awaiting go-ahead for the other
-   two).**
+   all 3 platforms since the zig-build migration. **Done 2026-08-15 on
+   all 3 platforms.** linux-64 (`hb0f4dca_1`) published 2026-08-11,
+   index-verified 2026-08-15 after the stuck-indexer episode below.
+   osx-arm64 (`h60d57d3_1`, 28.28 MiB) and win-64 (`h9490d1a_1`,
+   31.38 MiB) built and published 2026-08-15 from the fresh
+   `r-zig-pixi-test` copies on omicron/kappa (same tree as the
+   committed build-number-1 state; recipe tests passed — `conda R OK` /
+   `all tests passed!` — on both), each upload confirmed via
+   `rattler-build upload prefix -vv`'s "Packages successfully uploaded
+   to prefix.dev server" line. Index state at time of writing: linux-64
+   and osx-arm64 both listed; win-64 uploaded and blob-confirmed (HTTP
+   303 on the package URL) but not yet indexed — same benign lag
+   documented below, re-check before step 4.
 4. **You flip `universe` to public** via prefix.dev's channel settings —
-   also your own action, not something to script. **Not started.**
+   also your own action, not something to script. **Unblocked as of
+   2026-08-25: every gate before it is green** (3 packages on the
+   channel, one per platform, all at build 1, all index-visible, all
+   fresh-env consume-tested — see Verification below).
 
 ### Linux publish + stuck indexer (2026-08-11)
 
@@ -191,3 +199,27 @@ After step 3, before step 4: fresh-env consume test on all 3 platforms
 a throwaway project, same check already automated for Windows in CI's
 `conda-package` job) — confirm the new build-1 packages install and run
 cleanly before making the channel visible to anyone outside this project.
+
+**Done 2026-08-25 — all 3 platforms pass.** win-64's index entry had
+appeared by then (the usual lag; see above). Each test: fresh
+`pixi init --channel https://prefix.dev/universe --channel conda-forge`
++ `pixi add r-zig-slim` + `pixi run Rscript` asserting R_HOME resolves
+inside the env and `capabilities()` shows cairo/libcurl/ICU. gamma and
+omicron passed immediately. kappa initially FAILED with `pixi run
+Rscript` resolving a system-wide R 4.6.0 from Program Files — which
+looked exactly like a packaging bug in the Library/bin .bat shims, and
+cost a full false-alarm investigation (including building a compiled
+.exe PATH forwarder that was ultimately reverted, correctly, as
+unnecessary). Real root cause: the test project's directory had been
+created from a cmd one-liner using `set TMPDIR=... && cd %TMPDIR%` —
+cmd expands every `%VAR%` in a `&&` chain at parse time, so the
+directory was literally named `%TMPDIR%`, and those literal `%`
+characters broke pixi's own activation inside it (PATH contained no env
+directories at all — verified via `pixi run cmd /c echo %PATH%`).
+Re-run in a normal directory, the SAME published package passed
+everything: `R_HOME = .../consume-clean/.pixi/envs/default/Library/lib/R`,
+`consume test OK`. The published packages are correct as-is; the .bat
+shims work fine under `pixi run`. **Lesson: never build remote-cmd
+one-liners that set and consume an env var in one `&&` chain — and when
+a consume test fails somewhere a system R is installed, check
+activation actually ran before suspecting the package.**
