@@ -13,6 +13,15 @@
 #                a -D flag whose value is a quoted string literal (the
 #                win-exec-forward.c command-line quoting bug fixed by
 #                F7.7). Locks in both fixes against regression.
+#   ps         — already pulled in transitively via pak, but listed and
+#                exercised explicitly here since it's the actual origin
+#                of the F7.8 repro (see TODO.md): its src/arch/macos/
+#                apps.m is genuine Objective-C (AppKit-based running-app
+#                enumeration), silently compiled as plain C before the
+#                OBJC toolchain-shim fix. ps_apps() (macOS only) calls
+#                straight into that compiled code; on linux/windows ps
+#                has no Objective-C to exercise, so only the plain
+#                load + a basic call is asserted there.
 # (No backslash escapes in the R code — see smoke-test.sh.)
 . "$(dirname "$0")/env.sh"
 
@@ -35,14 +44,14 @@ LIB="$BUILD_DIR/testlib-$VARIANT"
 mkdir -p "$LIB"
 
 echo "Contract test (variant: $VARIANT, os: $OS)"
-echo "Compiling Rcpp + data.table + minqa + pak from source..."
+echo "Compiling Rcpp + data.table + minqa + pak + ps from source..."
 R_CONTRACT_LIB="$LIB" "$R_BIN" --vanilla -e '
   lib <- Sys.getenv("R_CONTRACT_LIB")
-  install.packages(c("Rcpp", "data.table", "minqa", "pak"),
+  install.packages(c("Rcpp", "data.table", "minqa", "pak", "ps"),
                    repos = "https://cloud.r-project.org",
                    lib = lib, type = "source", Ncpus = 4)
   .libPaths(lib)
-  library(Rcpp); library(data.table); library(minqa); library(pak)
+  library(Rcpp); library(data.table); library(minqa); library(pak); library(ps)
   stopifnot(evalCpp("2 + 2") == 4)
   dt <- data.table(g = rep(1:3, 4), x = 1:12)
   stopifnot(identical(dt[, sum(x), by = g][[2]], c(22L, 26L, 30L)))
@@ -60,9 +69,21 @@ R_CONTRACT_LIB="$LIB" "$R_BIN" --vanilla -e '
   # (keyring, pkgdepends tree-sitter/yaml C code) built and link-loaded
   # correctly; packageVersion() is a real call into the loaded package.
   stopifnot(is.character(as.character(packageVersion("pak"))))
+  # ps: a plain call proves the package loaded/link-loaded on every OS;
+  # on macOS specifically, ps_apps() calls straight into apps.m -- the
+  # genuine Objective-C source behind the F7.8 OBJC-toolchain-shim fix.
+  stopifnot(ps::ps_pid(ps::ps_handle()) == Sys.getpid())
+  if (ps::ps_os_type()[["MACOS"]]) {
+    # nrow not asserted > 0 -- omicron is an SSH-only session with no
+    # guaranteed GUI apps running; a successful, non-crashing data frame
+    # already proves the compiled apps.m call worked end-to-end.
+    apps <- ps::ps_apps()
+    stopifnot(is.data.frame(apps))
+  }
   cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
   cat("data.table grouped aggregation: OK\n")
   cat("minqa (Rcpp-dependent + package Fortran) bobyqa: OK\n")
   cat("pak (recursive R.exe invocation + mbedtls quoted -D flags): OK\n")
+  cat("ps (process introspection", if (ps::ps_os_type()[["MACOS"]]) "+ apps.m Objective-C ps_apps()" else "", "): OK\n")
 '
 echo "Contract test passed ($VARIANT/$OS)."

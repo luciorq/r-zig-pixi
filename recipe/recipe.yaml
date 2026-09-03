@@ -83,7 +83,21 @@ build:
   # as every prior bump above. `--skip-existing` on the publish task is
   # the safety net for CI runs that don't include one (same version+
   # build already on the channel is silently skipped, not an error).
-  number: 9
+  #
+  # Reset 9 → 1 (2026-08-07, see feat-prefix-publish/CHANNEL_CLEANUP.md):
+  # the `universe` channel is going public, and the messy build-number
+  # history above (builds 0/1 from the retired autoconf/gnuwin32
+  # pipeline, per-platform numbers that never lined up — win-64 topped
+  # out at 8 while linux-64/osx-arm64 reached 9) isn't something a new
+  # public consumer should have to understand just to `pixi add
+  # r-zig-slim`. All 18 previously-published packages across all 3
+  # platforms were deleted first (CHANNEL_CLEANUP.md's own inventory —
+  # no CLI/API deletion path exists in rattler-build/pixi, done by hand
+  # via prefix.dev's own dashboard) so this reset doesn't collide with
+  # anything already on the channel. This is a one-time reset tied to
+  # going public, not a new precedent — the manual-bump policy above is
+  # unaffected and still governs every future change.
+  number: 1
   script: build.sh
 
 requirements:

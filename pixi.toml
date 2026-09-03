@@ -203,6 +203,19 @@ rattler-build = ">=0.70"
 # (never hit the bug there; just a slightly simpler directory name).
 conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id"
 
+# Channel administration: list/delete published package files. Neither
+# rattler-build nor pixi has CLI support for either operation (upload-
+# only); prefix.dev's own dashboard has no delete button by design (to
+# discourage casual deletion) but the real DELETE API still exists and
+# is documented — see scripts/prefix-delete-package.sh's own header
+# comment for the full rationale, auth requirements, and safety notes
+# (dry-run by default, needs a separately-scoped PREFIX_API_KEY, not the
+# upload credential `rattler-build auth login` already stores).
+# Usage: pixi run -e pkg conda-channel-list universe linux-64
+conda-channel-list = "bash scripts/prefix-list-packages.sh"
+# Usage: pixi run -e pkg conda-channel-delete -- --yes universe linux-64 <file.conda> [<file.conda> ...]
+conda-channel-delete = "bash scripts/prefix-delete-package.sh"
+
 # Interim publish path: upload from an already-authenticated dev machine
 # (`rattler-build auth login prefix.dev`). Not chained onto conda-package
 # via depends-on — publishing an already-built artifact shouldn't force a
