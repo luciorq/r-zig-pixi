@@ -103,7 +103,7 @@ const Ctx = struct {
     rhome: []const u8, // prefix ++ "/lib/R"
     config_dir: []const u8, // "zigbuild/config/<platform>-<variant>" — vendored config.h/Rconfig.h/subst.txt/(Makeconf.win on Windows)
     flangrt_dir: []const u8, // conda clang resource dir with libflang_rt (linux only)
-    gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran/libquadmath (windows only)
+    gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran (every gfortran platform: windows, macOS, linux-aarch64; "" on linux-64/flang)
     subst: std.StringHashMap([]const u8),
     geninc: std.Build.LazyPath, // generated headers dir (config.h, Rconfig.h, ...)
     libR: *std.Build.Step.Compile,
@@ -313,29 +313,24 @@ pub fn build(b: *std.Build) !void {
             .windows => try findGfortranLibDir(b, io, b.fmt("{s}/Library/lib/gcc/x86_64-w64-mingw32", .{conda}), "libgfortran.dll.a"),
             .macos => switch (arch) {
                 .aarch64 => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/arm64-apple-darwin20.0.0", .{conda}), "libgfortran.a"),
-                // osx-64 (Intel Mac): no hardware to verify the real
-                // Darwin-triple gcc-root directory name against — see
-                // Phase 7 of feat-cross-platform-standardization/PLAN.md
-                // for the real-package-inspection procedure that
-                // resolves this without needing hardware. Fail loudly
-                // rather than guess (same discipline as every other
-                // ground-truth extraction in this project).
-                .x86_64 => {
-                    std.debug.print("error: osx-64 (Intel Mac) gfortran lib dir not yet verified — see Phase 7 of feat-cross-platform-standardization/PLAN.md\n", .{});
-                    return error.UnverifiedOsx64GfortranDir;
-                },
+                // osx-64 triple verified by real package inspection
+                // (gfortran_impl_osx-64-15.2.0's own lib/gcc/ layout, not
+                // guessed) — see feat-cross-platform-standardization/
+                // DRY_RUN_NEW_PLATFORMS.md §2. darwin13.4.0 is genuinely
+                // different from arm64's darwin20.0.0 above; both come
+                // straight from what conda-forge ships.
+                .x86_64 => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/x86_64-apple-darwin13.4.0", .{conda}), "libgfortran.a"),
             },
             .linux => switch (arch) {
                 .x86_64 => "", // flang's own clang-resource-dir search (flangrt_dir above) covers this instead
                 // linux-aarch64: conda-forge has no flang build there
                 // (pixi.toml's [target.linux-aarch64.dependencies] pins
-                // gfortran instead, matching macOS/Windows) — same
-                // "no hardware to confirm the real gcc-root triple"
-                // situation as osx-64 above; see Phase 7.
-                .aarch64 => {
-                    std.debug.print("error: linux-aarch64 gfortran lib dir not yet verified — see Phase 7 of feat-cross-platform-standardization/PLAN.md\n", .{});
-                    return error.UnverifiedLinuxAarch64GfortranDir;
-                },
+                // gfortran instead, matching macOS/Windows). Triple
+                // verified by real package inspection (gfortran_impl_
+                // linux-aarch64-15.2.0): conda-forge's own custom sysroot
+                // triple `aarch64-conda-linux-gnu`, NOT the generic
+                // aarch64-unknown-linux-gnu — see DRY_RUN_NEW_PLATFORMS.md §2.
+                .aarch64 => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/aarch64-conda-linux-gnu", .{conda}), "libgfortran.a"),
             },
         },
         .subst = std.StringHashMap([]const u8).init(arena),
@@ -1858,7 +1853,18 @@ fn findFlangRt(b: *std.Build, io: std.Io, conda: []const u8, arch: Arch) ![]cons
 /// used to confirm a given version subdirectory is the right one (differs
 /// by platform: Windows' import-lib naming vs macOS's static-lib naming).
 fn findGfortranLibDir(b: *std.Build, io: std.Io, gcc_root: []const u8, marker: []const u8) ![]const u8 {
+    // On failure, always print WHICH gcc_root was probed: the triple
+    // segment of that path is hardcoded per (os, arch) at the call
+    // sites, and conda-forge triples do move (the version segment one
+    // level down already broke once — F7.4, 15.2.0 → 16.1.0). A bare
+    // GfortranLibNotFound with no path forces rediscovery from scratch;
+    // naming the stale path makes the fix a one-line triple bump. The
+    // triples stay hardcoded deliberately (ground-truth pins from real
+    // package inspection, DRY_RUN_NEW_PLATFORMS.md §2) — a lib/gcc/*
+    // scan could silently pick the wrong triple when a cross toolchain
+    // coexists in the same env, since both would ship the marker file.
     var dir = std.Io.Dir.cwd().openDir(io, gcc_root, .{ .iterate = true }) catch {
+        std.debug.print("error: gfortran gcc root not found at '{s}' — conda-forge triple moved? (see findGfortranLibDir)\n", .{gcc_root});
         return error.GfortranLibNotFound;
     };
     defer dir.close(io);
@@ -1869,6 +1875,7 @@ fn findGfortranLibDir(b: *std.Build, io: std.Io, gcc_root: []const u8, marker: [
         std.Io.Dir.cwd().access(io, b.fmt("{s}/{s}", .{ cand, marker }), .{}) catch continue;
         return cand;
     }
+    std.debug.print("error: no versioned subdir of '{s}' contains '{s}' (see findGfortranLibDir)\n", .{ gcc_root, marker });
     return error.GfortranLibNotFound;
 }
 
@@ -2069,10 +2076,27 @@ fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {
 /// its embedded `-L` path.
 fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
     switch (ctx.os) {
-        .linux => {
-            mod.addLibraryPath(.{ .cwd_relative = ctx.flangrt_dir });
-            mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no });
-            mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
+        // Keyed on arch within linux, mirroring fortranOne's own (os,
+        // arch) compiler split: linux-64 compiles with flang → link
+        // flang_rt.runtime; linux-aarch64 has no conda-forge flang and
+        // compiles with gfortran → its objects reference _gfortran_*
+        // symbols, which flang's runtime does not provide (and
+        // flang_rt.runtime doesn't even exist in a linux-aarch64 conda
+        // env). Uses the same gfortran gcc-version-subdir mechanism as
+        // macOS below; without this branch, linux-aarch64 died at link
+        // time with 'unable to find library flang_rt.runtime' plus
+        // unresolved _gfortran_* symbols.
+        .linux => switch (ctx.arch) {
+            .x86_64 => {
+                mod.addLibraryPath(.{ .cwd_relative = ctx.flangrt_dir });
+                mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no });
+                mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
+            },
+            .aarch64 => {
+                mod.addLibraryPath(.{ .cwd_relative = ctx.gfortran_lib_dir });
+                mod.linkSystemLibrary("gfortran", .{ .use_pkg_config = .no });
+                mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
+            },
         },
         .macos => {
             mod.addLibraryPath(.{ .cwd_relative = ctx.gfortran_lib_dir });

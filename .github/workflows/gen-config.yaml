@@ -1,0 +1,65 @@
+# One-off (workflow_dispatch) generator for the vendored zigbuild/config/
+# directories of NEW platforms — the single genuinely hardware-gated step
+# in adding a platform (feat-cross-platform-standardization/
+# DRY_RUN_NEW_PLATFORMS.md §4): run the real autoconf `configure` on real
+# hardware, replay its substitution table via gen-subst.sh, and capture
+# config.h/Rconfig.h. GitHub-hosted ubuntu-24.04-arm (linux-aarch64) and
+# macos-15-intel (osx-64) runners ARE that hardware now that this repo is
+# public (free, no minute caps).
+#
+# Not part of the regular CI pipeline: dispatch it manually, download the
+# artifacts, vendor them under zigbuild/config/, commit. Re-run only when
+# a platform's config needs regeneration (same trigger discipline as the
+# local `pixi run configure` + gen-subst.sh procedure documented in
+# feat-zig-build/PLAN.md — this is that exact procedure, just on runners
+# instead of dev machines).
+name: gen-config
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gen-config:
+    name: ${{ matrix.platform }} / ${{ matrix.env }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64 # build.zig/gen-subst.sh dir naming ("arm64", not conda's "aarch64")
+            env: default
+            variant: slim
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            env: full
+            variant: full
+          - runner: macos-15-intel
+            platform: osx-x86_64
+            env: default
+            variant: slim
+          - runner: macos-15-intel
+            platform: osx-x86_64
+            env: full
+            variant: full
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: ${{ matrix.env }}
+          cache: true
+      - name: Run real configure (autoconf, configure-only)
+        run: pixi run -e ${{ matrix.env }} configure
+      # gen-subst.sh writes the complete vendored config dir (subst.txt +
+      # config.h + Rconfig.h + GENERATED_FROM) — R version/objdir paths
+      # all come from env.sh, nothing platform- or version-specific here.
+      - name: Generate vendored config dir from config.status
+        run: pixi run -e ${{ matrix.env }} bash zigbuild/tools/gen-subst.sh
+      - name: Show generated config dir
+        run: ls -la zigbuild/config/${{ matrix.platform }}-${{ matrix.variant }}/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: config-${{ matrix.platform }}-${{ matrix.variant }}
+          path: zigbuild/config/${{ matrix.platform }}-${{ matrix.variant }}/
+          if-no-files-found: error

@@ -91,12 +91,14 @@ build:
   # out at 8 while linux-64/osx-arm64 reached 9) isn't something a new
   # public consumer should have to understand just to `pixi add
   # r-zig-slim`. All 18 previously-published packages across all 3
-  # platforms were deleted first (CHANNEL_CLEANUP.md's own inventory —
-  # no CLI/API deletion path exists in rattler-build/pixi, done by hand
-  # via prefix.dev's own dashboard) so this reset doesn't collide with
-  # anything already on the channel. This is a one-time reset tied to
-  # going public, not a new precedent — the manual-bump policy above is
-  # unaffected and still governs every future change.
+  # platforms were deleted first (CHANNEL_CLEANUP.md's own inventory),
+  # via prefix.dev's REST delete API — the dashboard deliberately has no
+  # delete button; use scripts/prefix-delete-package.sh / the
+  # conda-channel-delete pixi task if deletion is ever needed again.
+  # This reset doesn't collide with anything already on the channel, and
+  # is a one-time reset tied to going public, not a new precedent — the
+  # manual-bump policy above is unaffected and still governs every
+  # future change.
   number: 1
   script: build.sh
 
@@ -104,12 +106,14 @@ requirements:
   build:
     - zig 0.16.*
     # Fortran: flang where conda-forge ships a matching-ABI build
-    # (linux-64), explicit gfortran elsewhere — same split as pixi.toml.
+    # (linux-64), explicit gfortran elsewhere — same split as pixi.toml
+    # (linux-aarch64 has no conda-forge flang, so it takes the gfortran
+    # path like macOS/Windows; see [target.linux-aarch64.dependencies]).
     - if: linux64
       then:
         - flang
         - flang-rt_linux-64
-    - if: osx or win
+    - if: not linux64
       then:
         - gfortran
     - make >=4.4
@@ -195,10 +199,11 @@ requirements:
         - sed
         - grep
     # Fortran runtime: linked into libR, must be in host too
+    # (linux-aarch64: gfortran, no conda-forge flang there)
     - if: linux64
       then:
         - flang-rt_linux-64
-    - if: osx or win
+    - if: not linux64
       then:
         - gfortran
     - zlib
@@ -331,12 +336,13 @@ requirements:
         - m2-findutils
     # package compilation works out of the box: Makeconf records the
     # bundled zig shims; these provide the actual compilers
+    # (linux-aarch64: gfortran, no conda-forge flang there)
     - zig 0.16.*
     - if: linux64
       then:
         - flang
         - flang-rt_linux-64
-    - if: osx or win
+    - if: not linux64
       then:
         - gfortran
     - make >=4.4

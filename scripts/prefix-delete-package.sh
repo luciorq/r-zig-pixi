@@ -41,7 +41,11 @@ for arg in "$@"; do
   case "$arg" in
     --yes) DRY_RUN=false ;;
     -h|--help)
-      sed -n '2,29p' "$0"
+      # Print the whole header comment block (everything between the
+      # shebang and `set -euo`), not a hardcoded line range — the old
+      # `sed -n '2,29p'` silently truncated the real-deletion example
+      # the moment the header grew past line 29.
+      awk 'NR >= 2 && /^set -euo/ { exit } NR >= 2' "$0"
       exit 0
       ;;
     *)

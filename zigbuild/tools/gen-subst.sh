@@ -67,4 +67,14 @@ awk '
   > "$OUT_DIR/subst.txt"
 
 echo "wrote $OUT_DIR/subst.txt ($(wc -l < "$OUT_DIR/subst.txt") entries)"
-echo "next: copy config.h/Rconfig.h and bump GENERATED_FROM — see PLAN.md"
+
+# Stage the other three files of a complete vendored config dir from the
+# same objdir, so one run of this script produces the whole thing (used
+# to be a manual "next: copy config.h/Rconfig.h and bump GENERATED_FROM"
+# step — folding it in here keeps R_VERSION/OBJ_DIR ownership in env.sh,
+# the single source of truth, instead of every caller re-deriving them;
+# gen-config.yaml's CI staging step hardcoded "4.6.1" twice before this).
+cp "$OBJ_DIR/src/include/config.h" "$OUT_DIR/config.h"
+cp "$OBJ_DIR/src/include/Rconfig.h" "$OUT_DIR/Rconfig.h"
+echo "$R_VERSION" > "$OUT_DIR/GENERATED_FROM"
+echo "staged config.h + Rconfig.h + GENERATED_FROM ($R_VERSION) into $OUT_DIR"
