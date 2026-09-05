@@ -17,6 +17,14 @@ name: gen-config
 
 on:
   workflow_dispatch:
+  # workflow_dispatch only works once the file exists on the DEFAULT
+  # branch (GitHub doesn't register branch-only workflows for manual
+  # dispatch — hit for real trying `gh workflow run` from the feature
+  # branch). The paths-scoped push trigger is the workaround: pushing
+  # a change to this file runs it from that branch, nothing else does.
+  push:
+    paths:
+      - ".github/workflows/gen-config.yaml"
 
 jobs:
   gen-config:
