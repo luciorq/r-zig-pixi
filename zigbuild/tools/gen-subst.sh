@@ -74,7 +74,14 @@ echo "wrote $OUT_DIR/subst.txt ($(wc -l < "$OUT_DIR/subst.txt") entries)"
 # step — folding it in here keeps R_VERSION/OBJ_DIR ownership in env.sh,
 # the single source of truth, instead of every caller re-deriving them;
 # gen-config.yaml's CI staging step hardcoded "4.6.1" twice before this).
+#
+# Rconfig.h is NOT configure-generated (only config.h is, via
+# AC_CONFIG_HEADERS) — a plain `make` derives it from config.h with
+# tools/GETCONFIG (src/include/Makefile.in's own rule, a grep-and-echo
+# script reading ./config.h from cwd). A configure-only objdir has no
+# Rconfig.h to copy (found via a real gen-config CI failure: `cp: cannot
+# stat .../Rconfig.h`), so run GETCONFIG here exactly as make would.
 cp "$OBJ_DIR/src/include/config.h" "$OUT_DIR/config.h"
-cp "$OBJ_DIR/src/include/Rconfig.h" "$OUT_DIR/Rconfig.h"
+(cd "$OBJ_DIR/src/include" && sh "$SRC_DIR/tools/GETCONFIG" > "$OUT_DIR/Rconfig.h")
 echo "$R_VERSION" > "$OUT_DIR/GENERATED_FROM"
 echo "staged config.h + Rconfig.h + GENERATED_FROM ($R_VERSION) into $OUT_DIR"
