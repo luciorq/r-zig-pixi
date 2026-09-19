@@ -30,20 +30,26 @@ jobs:
     # available again; conda-package below is unaffected (self-hosted).
     if: vars.ENABLE_HOSTED_JOBS == 'true'
     runs-on: ${{ matrix.os }}
-    # No arch dimension in this matrix at all today — one runner per OS
-    # (whatever GitHub-hosted x86_64 image), not per (OS, arch). Same for
-    # conda-package's self-hosted labels below (one machine per OS).
-    # Whenever real osx-64/linux-aarch64/win-arm64 hardware/CI arrives
-    # (see .github/devdocs/feat-cross-platform-standardization/PLAN.md),
-    # this matrix — not just build.zig — needs an arch axis added too.
+    # The arch axis arrived with the repo going public (2026-09-03):
+    # GitHub-hosted arm64-linux (ubuntu-24.04-arm) and Intel-macOS
+    # (macos-15-intel) runners are free for public repos, dissolving the
+    # "no hardware access" boundary feat-cross-platform-standardization/
+    # PLAN.md's Phase 7 was scoped around — linux-aarch64 and osx-64 are
+    # now first-class legs. Still absent: win-arm64 (a runner exists, but
+    # build.zig's Windows path is x86_64-only by explicit design — the
+    # MinGW prefix and R_ARCH="x64" convention need an upstream design
+    # decision first; see PLAN.md's Phase 2 non-goal).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
         env: [default, full]
         include:
-          # external optimized BLAS/LAPACK variant (linux only for now)
+          # external optimized BLAS/LAPACK variant (linux only for now,
+          # both linux archs)
           - os: ubuntu-latest
+            env: openblas
+          - os: ubuntu-24.04-arm
             env: openblas
     timeout-minutes: 180
     steps:
@@ -163,4 +169,41 @@ jobs:
       - name: Publish to prefix.dev
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: pixi run -e pkg conda-publish;
+
+  # Same conda-package pipeline for the two platforms that have NO
+  # self-hosted machine — linux-aarch64 and osx-64 exist as hardware only
+  # through GitHub-hosted runners (free since the repo went public).
+  # Publishing uses prefix.dev trusted publishing (OIDC): `id-token:
+  # write` below lets rattler-build mint a short-lived token — no stored
+  # credentials anywhere on the runner, unlike the self-hosted job above
+  # (whose machines carry their own `rattler-build auth login` sessions).
+  # Requires the repo+workflow to be registered as a Trusted Publisher in
+  # the `universe` channel's settings on prefix.dev.
+  conda-package-hosted:
+    name: conda-package / ${{ matrix.name }} (hosted)
+    if: vars.ENABLE_HOSTED_JOBS == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - name: osx-64
+            runner: macos-15-intel
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: pkg
+          cache: true
+      - name: Build + test conda package
+        run: pixi run -e pkg conda-package
+      - name: Publish to prefix.dev (OIDC trusted publishing)
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: pixi run -e pkg conda-publish
 

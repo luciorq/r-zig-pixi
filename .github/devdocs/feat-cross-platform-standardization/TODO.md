@@ -285,3 +285,53 @@ file/line references per phase. This file tracks progress only.
       one genuinely hardware-gated remaining step (running real
       `configure` + `gen-subst.sh` on real hardware) — everything else
       in the procedure is confirmed mechanical.
+
+## 2026-09: the hardware arrived — linux-aarch64 and osx-64 made real (feat-hosted-ci-platforms)
+
+The repo going public (2026-09-03) made GitHub-hosted runners free with
+no minute caps, including `ubuntu-24.04-arm` (real linux-aarch64) and
+`macos-15-intel` (real osx-64) — dissolving the "no hardware access"
+boundary this whole milestone was scoped around. What Phase 7 proved
+mechanical on paper was then executed for real:
+
+- **Phase 7's reference diffs applied to build.zig**: the two
+  loud-failure placeholders replaced with the verified triples
+  (`aarch64-conda-linux-gnu`, `x86_64-apple-darwin13.4.0`).
+  `findGfortranLibDir` failures now print the probed gcc_root (review
+  finding — a bare GfortranLibNotFound named neither the path nor the
+  stale triple).
+- **One real gap Phase 7's dry run missed** (caught by code review, not
+  CI): `linkFortranRt`'s `.linux` branch unconditionally linked
+  `flang_rt.runtime` — right for linux-64/flang, nonexistent on
+  linux-aarch64/gfortran. Now keyed on `(os, arch)` like `fortranOne`.
+- **Vendored configs generated on real hardware via CI**: new
+  `gen-config.yaml` workflow (paths-triggered push + workflow_dispatch)
+  runs `pixi run configure` + `gen-subst.sh` on the new runner types;
+  gen-subst.sh now stages the complete config dir itself (subst.txt +
+  config.h + GETCONFIG-derived Rconfig.h + GENERATED_FROM). Verified
+  reproducible: on gamma the round-trip regenerates the vendored
+  linux-x86_64-slim config byte-identically.
+- **Two real bugs found by the first CI generation runs**: (1) Rconfig.h
+  is make-generated, not configure-generated — staging now runs
+  `tools/GETCONFIG` exactly as make's own src/include rule does; (2) the
+  macos-15-intel image returns "unknown" from `uname -p`, which R's
+  config.guess defaults to **powerpc** — configure detected
+  `powerpc64-apple-darwin24.6.0` on a genuine x86_64 runner and poisoned
+  R_PLATFORM in the generated headers. configure-only.sh now passes an
+  explicit `--build` when (and only when) that misdetection would occur.
+- **CI matrix**: `build` job gained the arch axis (ubuntu-24.04-arm,
+  macos-15-intel × default/full; openblas on both linux archs); new
+  `conda-package-hosted` job builds + publishes linux-aarch64/osx-64 to
+  `universe` via prefix.dev OIDC trusted publishing (no stored
+  credentials — unlike the self-hosted legs' rattler-build auth
+  sessions).
+- **recipe.yaml**: Fortran selectors collapsed to `linux64 → flang`,
+  `not linux64 → gfortran` (render-verified for both linux archs).
+
+**Feature-parity statement**: linux-64, linux-aarch64, osx-arm64,
+osx-64, win-64 all get build/smoke/contract (+check on unix) CI legs and
+a conda-package publish path. **win-arm64 stays excluded** — a
+`windows-11-arm` runner exists, but build.zig's Windows path is
+x86_64-only by explicit design (pervasive MinGW-prefix/R_ARCH="x64"
+conventions needing an upstream R design decision — Phase 2's documented
+non-goal, unchanged by runner availability).

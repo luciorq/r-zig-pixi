@@ -99,6 +99,23 @@ fi
 mkdir -p "$OBJ_DIR"
 cd "$OBJ_DIR"
 
+# GitHub's macos-15-intel runner image returns "unknown" from `uname -p`,
+# and R's bundled config.guess defaults an unknown Darwin processor to
+# powerpc — a real gen-config CI run detected build/host as
+# powerpc64-apple-darwin24.6.0 on a genuine x86_64 runner, silently
+# poisoning R_PLATFORM in every generated config header. Pass an explicit
+# --build (from `uname -m`, mapping Darwin's "arm64" to config.guess's
+# canonical "aarch64") only when the misdetection would happen; healthy
+# machines keep using config.guess untouched.
+BUILD_ARGS=()
+if [ "$OS" = macos ] && [ "$(uname -p)" = unknown ]; then
+  case "$(uname -m)" in
+    x86_64) BUILD_ARGS+=("--build=x86_64-apple-darwin$(uname -r)") ;;
+    arm64) BUILD_ARGS+=("--build=aarch64-apple-darwin$(uname -r)") ;;
+  esac
+  echo "note: uname -p is 'unknown' — overriding ${BUILD_ARGS[0]:-nothing} (config.guess would misdetect powerpc)"
+fi
+
 # OBJC/OBJCXX: without an explicit OBJC=, autoconf falls back to a bare
 # PATH search and finds Xcode's real gcc/clang instead of our zig-cc shim
 # (OBJCXX happens to end up right anyway, since autoconf's own default for
@@ -107,6 +124,7 @@ cd "$OBJ_DIR"
 # failure (pak's bundled `ps` package) this was found from.
 "$SRC_DIR/configure" \
   --prefix="$PREFIX" \
+  "${BUILD_ARGS[@]}" \
   "${BLAS_ARGS[@]}" \
   --enable-R-shlib \
   --with-x=no \
