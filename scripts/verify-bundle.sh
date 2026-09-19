@@ -67,3 +67,25 @@ else
     "$R_BIN" --vanilla --no-echo -e "$CHECK_R"
 fi
 echo "== standalone bundle verified relocatable ($OS/$FLAVOR)"
+
+# Old-server guarantee (Linux only): fail if any shipped ELF requires glibc
+# newer than the 2.17 floor build.zig/toolchain pin. This is the check side
+# of the floor — a zig update or stray flag that raises the requirement
+# should die here, not on a customer's CentOS 7 box.
+if [ "$OS" = linux ]; then
+  GLIBC_FLOOR="2.17"
+  worst=""
+  worst_file=""
+  while IFS= read -r f; do
+    ceil=$(objdump -T "$f" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/^GLIBC_//' | sort -uV | tail -1)
+    [ -z "$ceil" ] && continue
+    if [ "$(printf '%s\n' "$ceil" "$GLIBC_FLOOR" | sort -V | tail -1)" != "$GLIBC_FLOOR" ]; then
+      echo "error: $f requires GLIBC_$ceil > floor $GLIBC_FLOOR" >&2
+      exit 1
+    fi
+    if [ -z "$worst" ] || [ "$(printf '%s\n' "$ceil" "$worst" | sort -V | tail -1)" = "$ceil" ]; then
+      worst="$ceil"; worst_file="$f"
+    fi
+  done < <(find "$BUNDLE_DIR" -type f \( -name '*.so*' -o -perm -u+x \) -exec sh -c 'head -c4 "$1" | od -An -tx1 | grep -q "7f 45 4c 46"' _ {} \; -print)
+  echo "== glibc ceiling verified: worst $worst ($worst_file) <= floor $GLIBC_FLOOR"
+fi
