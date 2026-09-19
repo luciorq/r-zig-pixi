@@ -442,3 +442,10 @@ surfaced one layer deeper:
    Fortran package with a >= 2.30 sysroot gets the same undefined symbol,
    since R's Makeconf FFLAGS are plain `-O2` and zig-cc links no libmvec —
    noted, not fixed here.
+
+**Outcome**: with rounds 1 and 2 in, run 35446891595 (commit 8f2165b,
+2026-09-19) is the first fully green hosted-runner run — all 16 jobs:
+build × {ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel}
+× {default, full} + both linux openblas legs, windows-latest, and all five
+conda-package legs. The PR is mergeable pending prefix.dev
+trusted-publisher registration.
