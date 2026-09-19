@@ -239,12 +239,20 @@ pub fn build(b: *std.Build) !void {
     // dependencies (conda libs, gfortran's own runtime) were already
     // compatible; only this project's own zig-compiled code defaulted to
     // the host's (much newer) native glibc before this.
+    // .cpu_model = .baseline everywhere (not native): these artifacts
+    // ship to arbitrary consumer machines through the conda channel, so
+    // native-CPU codegen was always wrong for them — same portability
+    // argument as the glibc floor above, and conda-forge's own packages
+    // are baseline-ISA for the same reason. Found the hard way: zig's
+    // native CPU detection on GitHub's ubuntu-24.04-arm runners
+    // (Neoverse cores) produced binaries that died with SIGILL running
+    // R's own bootstrap on the very machine that built them.
     const target = if (os == .windows)
-        b.resolveTargetQuery(.{ .abi = .gnu })
+        b.resolveTargetQuery(.{ .abi = .gnu, .cpu_model = .baseline })
     else if (os == .linux)
-        b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = .{ .major = 2, .minor = 17, .patch = 0 } })
+        b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = .{ .major = 2, .minor = 17, .patch = 0 }, .cpu_model = .baseline })
     else
-        native;
+        b.resolveTargetQuery(.{ .cpu_model = .baseline });
     // gnuwin32 has no slim/full switch at all (jpeg/tiff/tcltk are always
     // on — "slim==full on Windows", a pre-existing project convention);
     // -Dvariant is meaningless there, force .full regardless of what was

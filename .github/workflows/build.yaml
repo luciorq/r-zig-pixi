@@ -101,6 +101,64 @@ jobs:
       - name: Package + verify standalone bundle
         run: pixi run verify-package
 
+  # DIAGNOSTIC (temporary): windows-latest fails `zig build` with
+  # "failed to check zig installation for DLL import libs: Unexpected"
+  # at the first system-DLL link (Rgraphapp), deterministically (3/3,
+  # zig _8 and _15 alike) — while the identical build worked for months
+  # on self-hosted kappa (Win11). This job bisects the difference in
+  # minutes instead of 3-hour full builds: zig env, a plain `zig cc`
+  # system-lib link, and the same with an absolute ZIG_LIB_DIR override
+  # (the failing command line shows conda's wrapper handing zig a
+  # cwd-RELATIVE lib dir — prime suspect for an unmapped Win32 error in
+  # zig's mingw libExists check on this image). Delete once root-caused.
+  windows-zig-probe:
+    name: windows zig import-lib probe (diagnostic)
+    if: vars.ENABLE_HOSTED_JOBS == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: default
+          cache: true
+      - name: zig version + env + lib dir reality check
+        shell: bash
+        continue-on-error: true
+        run: |
+          pixi run -- x86_64-w64-mingw32-zig version
+          pixi run -- x86_64-w64-mingw32-zig env
+          ls .pixi/envs/default/Library/lib/zig/libc/mingw | head -5
+      - name: "probe A: zig cc link gdi32 (wrapper-default lib dir)"
+        shell: bash
+        continue-on-error: true
+        run: |
+          echo 'int main(void){return 0;}' > probe.c
+          pixi run -- x86_64-w64-mingw32-zig cc -target x86_64-windows-gnu probe.c -lgdi32 -o probe-a.exe && echo "PROBE A OK"
+      - name: "probe B: same link, absolute ZIG_LIB_DIR override"
+        shell: bash
+        continue-on-error: true
+        run: |
+          export ZIG_LIB_DIR="$(pwd -W)/.pixi/envs/default/Library/lib/zig"
+          echo "ZIG_LIB_DIR=$ZIG_LIB_DIR"
+          pixi run -- x86_64-w64-mingw32-zig cc -target x86_64-windows-gnu probe.c -lgdi32 -o probe-b.exe && echo "PROBE B OK"
+      - name: "probe C: minimal zig build graph linking gdi32 (matches real failure shape)"
+        shell: bash
+        continue-on-error: true
+        run: |
+          mkdir -p probe-build && cd probe-build
+          cat > build.zig <<'EOF'
+          const std = @import("std");
+          pub fn build(b: *std.Build) void {
+              const m = b.createModule(.{ .target = b.resolveTargetQuery(.{ .abi = .gnu, .cpu_model = .baseline }), .optimize = .ReleaseSafe, .link_libc = true });
+              m.addCSourceFile(.{ .file = b.addWriteFiles().add("p.c", "int main(void){return 0;}"), .flags = &.{} });
+              m.linkSystemLibrary("gdi32", .{ .use_pkg_config = .no });
+              const exe = b.addExecutable(.{ .name = "probe-c", .root_module = m });
+              b.installArtifact(exe);
+          }
+          EOF
+          pixi run -- x86_64-w64-mingw32-zig build && echo "PROBE C OK"
+
   # conda-forge-style package (rattler-build) — always the slim variant
   # regardless of matrix.env above, since recipe/build.sh never sets
   # R_BUILD_VARIANT. A from-scratch build in its own isolated sandbox, so
