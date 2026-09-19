@@ -14,7 +14,7 @@ by this document**.
 | Project | Role in the family | State |
 |---|---|---|
 | **flang-pixi** | Toolchain layer: `lld-zig`/`flang-zig`/`flang-rt-zig` 23.1.1, zig-built, published to `universe` for **six** subdirs (incl. win-arm64). Its MinGW-ABI Windows flang exists nowhere else. `llvm-zig` stays build-time-only (never published). | Shipping; Windows OpenMP leg (flang-rt build 4) just landed, uncommitted docs pending |
-| **r-zig-pixi** | Flagship consumer: R itself via pure `zig build`, vendored-configure. Proves the toolchain end-to-end (contract suite, `lapack.R`). Publishes `r-zig-slim` to `universe`. | PR #6 open (5-platform hosted CI); CI fully green 2026-09-19 (16/16 jobs); awaiting trusted-publisher registration + merge |
+| **r-zig-pixi** | Flagship consumer: R itself via pure `zig build`, vendored-configure. Proves the toolchain end-to-end (contract suite, `lapack.R`). Publishes `r-zig-slim` to `universe`. | PR #6 merged 2026-09-19; r-zig-slim 4.6.1 build 1 published to `universe` for all five subdirs via OIDC — Phase 0 done |
 | **r-zig-packages** | Downstream layer: `rz-*` R packages compiled against `r-zig-slim`. | POC done, linux-64 only, parked — unblocs as r-zig-slim's platform list grows |
 | **blast-zig-pixi** | Application template: foreign build system (NCBI autotools) + zig shims + `pixi-build-rattler-build`; distribution patterns (v3 flags/extras + repodata-v2 twin packages, microarch variants). | Shipping to `universe`, 5 platforms |
 | **zig-pixi-build-backend** | Future-facing: recipe-free `pixi_build_zig` backend (pixi fork), cross-first (~18 platforms). The bet on where the ecosystem goes. | Working PoC, unpublished, needs fork checkout |
@@ -171,9 +171,9 @@ maturing.
 
 ## Cross-project debts this plan creates/tracks
 
-- [x] r-zig-pixi PR #6: three CI failure classes — root-caused + fixed on the branch 2026-09-19; round 2 (glibc-ceiling tiers, osx-64 headerpad, aarch64 libmvec) also fixed; **CI fully green on run 35446891595 (all 16 jobs, 2026-09-19)** — remaining Phase 0 steps are trusted-publisher registration + merge (user).
+- [x] r-zig-pixi PR #6: three CI failure classes — root-caused + fixed on the branch 2026-09-19; round 2 (glibc-ceiling tiers, osx-64 headerpad, aarch64 libmvec) also fixed; **CI fully green on run 35446891595 (all 16 jobs, 2026-09-19)**; merged to main; first OIDC publish succeeded for all five subdirs (run 35465461827). **Phase 0 complete.**
 - [ ] r-zig-pixi: package-side libmvec exposure on gfortran platforms (Makeconf FFLAGS vs >= 2.30 sysroots) — see TODO.md round 2 item 6.
-- [ ] prefix.dev trusted-publisher registration (user; blocks publish-on-merge).
+- [x] prefix.dev trusted-publisher registration — done 2026-09-19; first OIDC publish of r-zig-slim for all five subdirs succeeded (run 35465461827, `workflow_dispatch` on main after the merge push's publish step failed with "GitHub publisher not found").
 - [ ] flang-pixi: contract-suite validation result drafted into docs/10 2026-09-19 (uncommitted, user's repo/commit).
 - [ ] flang-pixi: its own uncommitted Windows-OpenMP status/runbook entries (user's repo).
 - [x] Remove flang-zig-validation worktree + branch — done 2026-09-19 (uncommitted diff preserved at /data/gamma/luciorq/workspaces/temp/r-zig-validation-uncommitted.patch).
