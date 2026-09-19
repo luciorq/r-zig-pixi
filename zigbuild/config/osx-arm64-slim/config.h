@@ -35,7 +35,7 @@
 #define FC_LEN_T size_t
 
 /* Version of Fortran Compiler */
-#define FC_VER "GNU Fortran (conda-forge gcc 15.2.0-19) 15.2.0"
+#define FC_VER "flang version 23.1.1 (https://github.com/luciorq/flang-pixi cf4a479f72e76ddc962144a0bd6f20225e1996f5)"
 
 /* Define to 1 if you have the `access' function. */
 #define HAVE_ACCESS 1
@@ -1151,7 +1151,7 @@
 #define STDC_HEADERS 1
 
 /* Define if you have C/C++/Fortran OpenMP support for package code. */
-#define SUPPORT_OPENMP 1
+/* #undef SUPPORT_OPENMP */
 
 /* Define to enable provoking compile errors on write barrier violation. */
 /* #undef TESTING_WRITE_BARRIER */

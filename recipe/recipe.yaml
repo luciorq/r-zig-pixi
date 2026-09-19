@@ -105,15 +105,22 @@ build:
 requirements:
   build:
     - zig 0.16.*
-    # Fortran: flang where conda-forge ships a matching-ABI build
-    # (linux-64), explicit gfortran elsewhere — same split as pixi.toml
-    # (linux-aarch64 has no conda-forge flang, so it takes the gfortran
-    # path like macOS/Windows; see [target.linux-aarch64.dependencies]).
+    # Fortran — same per-platform split as pixi.toml: conda-forge flang on
+    # linux-64; flang-pixi's zig-built flang-zig (LLVM 23.1.1, `universe`
+    # channel — the conda-package task passes it) on osx-arm64, where
+    # gfortran silently miscompiles R's complex LAPACK at -O2; explicit
+    # gfortran everywhere else until each platform converges
+    # (consolidation/PLAN.md Phase 2). build.zig picks flang whenever the
+    # build env provides $CONDA/bin/flang.
     - if: linux64
       then:
         - flang
         - flang-rt_linux-64
-    - if: not linux64
+    - if: target_platform == "osx-arm64"
+      then:
+        - flang-zig
+        - flang-rt-zig
+    - if: not linux64 and target_platform != "osx-arm64"
       then:
         - gfortran
     - make >=4.4
@@ -198,12 +205,16 @@ requirements:
         - which
         - sed
         - grep
-    # Fortran runtime: linked into libR, must be in host too
-    # (linux-aarch64: gfortran, no conda-forge flang there)
+    # Fortran runtime: linked into libR (statically for flang's
+    # libflang_rt.runtime.a on every platform, see build.zig's
+    # linkFortranRt), must be in host too
     - if: linux64
       then:
         - flang-rt_linux-64
-    - if: not linux64
+    - if: target_platform == "osx-arm64"
+      then:
+        - flang-rt-zig
+    - if: not linux64 and target_platform != "osx-arm64"
       then:
         - gfortran
     - zlib
@@ -335,14 +346,22 @@ requirements:
         - m2-which
         - m2-findutils
     # package compilation works out of the box: Makeconf records the
-    # bundled zig shims; these provide the actual compilers
-    # (linux-aarch64: gfortran, no conda-forge flang there)
+    # bundled zig shims; these provide the actual compilers. The Fortran
+    # compiler must be the one R itself was built with (CRAN's own rule —
+    # module files and runtime ABI differ between flang and gfortran), so
+    # this mirrors the build: split exactly. osx-arm64's flang-zig closure
+    # is ~1.5 GiB (flang-zig + lld-zig + flang-rt-zig), the accepted cost
+    # of correct complex LAPACK at -O2 there (flang-pixi docs/11).
     - zig 0.16.*
     - if: linux64
       then:
         - flang
         - flang-rt_linux-64
-    - if: not linux64
+    - if: target_platform == "osx-arm64"
+      then:
+        - flang-zig
+        - flang-rt-zig
+    - if: not linux64 and target_platform != "osx-arm64"
       then:
         - gfortran
     - make >=4.4

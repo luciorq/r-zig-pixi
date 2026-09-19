@@ -1,6 +1,12 @@
 [workspace]
 authors = ["luciorq <luciorqueiroz@gmail.com>"]
-channels = ["conda-forge"]
+# `universe` (prefix.dev, public) carries flang-pixi's zig-built Fortran
+# toolchain (flang-zig / flang-rt-zig / lld-zig, LLVM 23.1.1) for every
+# subdir — the only Fortran compiler for R on osx-arm64 that gets complex
+# LAPACK right at -O2 (gfortran silently miscompiles zgesdd there) and the
+# only MinGW-ABI flang for win-64 at all. Listed after conda-forge: its
+# package names never collide with conda-forge's, so priority is moot.
+channels = ["conda-forge", "https://prefix.dev/universe"]
 name = "r-zig-pixi"
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
 version = "0.1.0"
@@ -8,8 +14,9 @@ version = "0.1.0"
 # Everything needed to build R comes from conda-forge through this manifest.
 # No system compilers, no system shells, no system libraries.
 # C/C++ toolchain: zig (zig cc / zig c++ / zig ar / zig ranlib) on every platform.
-# Fortran: LLVM flang where conda-forge ships it (linux-64, win-64),
-#          explicit gfortran elsewhere (osx-64, osx-arm64, linux-aarch64).
+# Fortran: LLVM flang — conda-forge's on linux-64, flang-pixi's zig-built
+#          flang-zig (universe channel) on osx-arm64; explicit gfortran
+#          elsewhere (osx-64, linux-aarch64, win-64) until each converges.
 #
 # Two build variants, mapped to pixi environments:
 #   default -> "slim": headless. cairo+png graphics, ICU, pcre2, libcurl,
@@ -156,8 +163,16 @@ m2-zip = "*"
 gfortran = "*"
 uutils-coreutils = "*"
 
+# osx-arm64 Fortran: flang-pixi's zig-built flang (LLVM 23.1.1) from the
+# `universe` channel — first platform converged under consolidation/
+# PLAN.md Phase 2. Replaces gfortran, which silently miscompiles R's
+# complex LAPACK (zgesdd) at -O2 on arm64-darwin and forced a global -O1
+# cap on every Fortran routine in R; flang builds at -O2. build.zig picks
+# flang automatically when $CONDA/bin/flang exists (see FortranCompiler).
+# ~1.5 GiB closure (flang-zig + lld-zig + flang-rt-zig).
 [target.osx-arm64.dependencies]
-gfortran = "*"
+flang-zig = "*"
+flang-rt-zig = "*"
 uutils-coreutils = "*"
 
 [target.linux-aarch64.dependencies]
@@ -213,7 +228,9 @@ python = ">=3.9"
 # combined length blew past Windows' 260-char MAX_PATH once nested under
 # the self-hosted runner's own _work directory. Harmless on linux/macOS
 # (never hit the bug there; just a slightly simpler directory name).
-conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id"
+# -c: rattler-build does not read the workspace channels; `universe` is
+# where flang-zig/flang-rt-zig (osx-arm64 Fortran) come from.
+conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id -c conda-forge -c https://prefix.dev/universe"
 
 # Channel administration: list/delete published package files. Neither
 # rattler-build nor pixi has CLI support for either operation (upload-
