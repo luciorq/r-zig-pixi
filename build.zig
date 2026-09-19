@@ -322,14 +322,24 @@ pub fn build(b: *std.Build) !void {
     // Fortran compiler = whatever the env provides, flang preferred (see
     // FortranCompiler). Probed on disk rather than via PATH so a stray host
     // flang can never be picked up; printed once so a build log always says
-    // which compiler R's Fortran was built with.
+    // which compiler R's Fortran was built with. In a rattler-build sandbox
+    // the *compilers* (build: deps) live in $BUILD_PREFIX while $CONDA_PREFIX
+    // is the host env that only holds the runtime (flang-rt) — found via a
+    // real conda-package failure on osx-arm64 ("gfortran gcc root not
+    // found"): probing the host prefix alone silently fell back to
+    // gfortran. Same split scripts/env.sh honours for PATH.
     const fc: FortranCompiler = blk: {
-        const flang_bin = switch (os) {
-            .windows => b.fmt("{s}/Library/bin/flang.exe", .{conda}),
-            else => b.fmt("{s}/bin/flang", .{conda}),
-        };
-        std.Io.Dir.cwd().access(io, flang_bin, .{}) catch break :blk .gfortran;
-        break :blk .flang;
+        const prefixes = [_]?[]const u8{ b.graph.environ_map.get("BUILD_PREFIX"), conda };
+        for (prefixes) |maybe| {
+            const pfx = maybe orelse continue;
+            const flang_bin = switch (os) {
+                .windows => b.fmt("{s}/Library/bin/flang.exe", .{pfx}),
+                else => b.fmt("{s}/bin/flang", .{pfx}),
+            };
+            std.Io.Dir.cwd().access(io, flang_bin, .{}) catch continue;
+            break :blk .flang;
+        }
+        break :blk .gfortran;
     };
     std.debug.print("r-zig: Fortran compiler = {s} ({s})\n", .{ @tagName(fc), platform });
 
