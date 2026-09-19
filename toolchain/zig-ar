@@ -1,3 +1,38 @@
 #!/usr/bin/env bash
 ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
+
+# macOS-only workaround for conda-forge's osx-64 zig 0.16.0: its `zig ar`
+# (llvm-ar) cannot CREATE an archive — `ar rcs new.a x.o` against a
+# non-existent new.a dies with "unable to open 'new.a': No such file or
+# directory", although ENOENT is exactly the case llvm-ar's create path
+# exists for (its `EC != errc::no_such_file_or_directory` guard misfires;
+# the feedstock links macOS zig against conda's *shared* libc++, the
+# classic setup for two error_category instances that compare unequal).
+# The osx-arm64 build of the very same version creates archives fine, and
+# osx-64 appends to an already-existing archive fine too — both reproduced
+# on omicron under Rosetta, 2026-09-19. Where it bit: jsonlite's bundled
+# yajl (`$(AR) rcs yajl/libstatyajl.a ...`) in the contract test on
+# macos-15-intel, deterministically. So on Darwin, when an insert-mode call
+# (r/q) targets a missing archive, seed it with the 8-byte empty-archive
+# header — `!<arch>\n` is a valid, format-neutral empty archive — and pin
+# --format=darwin so the now-pre-existing (GNU-defaulted) empty archive
+# doesn't make llvm-ar keep GNU layout for a Mach-O static library.
+if [ "$(uname -s)" = Darwin ]; then
+  ops= archive= have_format=0
+  for a in "$@"; do
+    case "$a" in
+      --format=*) have_format=1; continue ;;
+      --*) continue ;;
+    esac
+    if [ -z "$ops" ]; then ops="$a"; continue; fi
+    archive="$a"; break
+  done
+  case "$ops" in
+    *[rq]*)
+      if [ -n "$archive" ] && [ ! -e "$archive" ]; then
+        printf '!<arch>\n' > "$archive"
+        [ "$have_format" = 1 ] || set -- --format=darwin "$@"
+      fi ;;
+  esac
+fi
 exec "$ZIG" ar "$@"

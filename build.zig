@@ -103,7 +103,7 @@ const Ctx = struct {
     rhome: []const u8, // prefix ++ "/lib/R"
     config_dir: []const u8, // "zigbuild/config/<platform>-<variant>" — vendored config.h/Rconfig.h/subst.txt/(Makeconf.win on Windows)
     flangrt_dir: []const u8, // conda clang resource dir with libflang_rt (linux only)
-    gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran/libquadmath (windows only)
+    gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran (every gfortran platform: windows, macOS, linux-aarch64; "" on linux-64/flang)
     subst: std.StringHashMap([]const u8),
     geninc: std.Build.LazyPath, // generated headers dir (config.h, Rconfig.h, ...)
     libR: *std.Build.Step.Compile,
@@ -239,12 +239,24 @@ pub fn build(b: *std.Build) !void {
     // dependencies (conda libs, gfortran's own runtime) were already
     // compatible; only this project's own zig-compiled code defaulted to
     // the host's (much newer) native glibc before this.
+    // .cpu_model = .baseline everywhere (not native): these artifacts
+    // ship to arbitrary consumer machines through the conda channel, so
+    // native-CPU codegen was always wrong for them — same portability
+    // argument as the glibc floor above, and conda-forge's own packages
+    // are baseline-ISA for the same reason. (Introduced while chasing a
+    // SIGILL in R's bootstrap on GitHub's ubuntu-24.04-arm runners, which
+    // it did not fix — that crash was unrelated to codegen: gfortran's
+    // implicit search dirs put conda's aarch64 *sysroot* lib64, which
+    // ships its own libc.so.6/ld-linux, on R_LD_LIBRARY_PATH, so every
+    // R process loaded a foreign glibc under the host ld.so and died in
+    // startup with SIGILL or SIGSEGV. See gen-subst.sh's sysroot filter.
+    // Baseline stays on its own merits.)
     const target = if (os == .windows)
-        b.resolveTargetQuery(.{ .abi = .gnu })
+        b.resolveTargetQuery(.{ .abi = .gnu, .cpu_model = .baseline })
     else if (os == .linux)
-        b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = .{ .major = 2, .minor = 17, .patch = 0 } })
+        b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = .{ .major = 2, .minor = 17, .patch = 0 }, .cpu_model = .baseline })
     else
-        native;
+        b.resolveTargetQuery(.{ .cpu_model = .baseline });
     // gnuwin32 has no slim/full switch at all (jpeg/tiff/tcltk are always
     // on — "slim==full on Windows", a pre-existing project convention);
     // -Dvariant is meaningless there, force .full regardless of what was
@@ -313,29 +325,24 @@ pub fn build(b: *std.Build) !void {
             .windows => try findGfortranLibDir(b, io, b.fmt("{s}/Library/lib/gcc/x86_64-w64-mingw32", .{conda}), "libgfortran.dll.a"),
             .macos => switch (arch) {
                 .aarch64 => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/arm64-apple-darwin20.0.0", .{conda}), "libgfortran.a"),
-                // osx-64 (Intel Mac): no hardware to verify the real
-                // Darwin-triple gcc-root directory name against — see
-                // Phase 7 of feat-cross-platform-standardization/PLAN.md
-                // for the real-package-inspection procedure that
-                // resolves this without needing hardware. Fail loudly
-                // rather than guess (same discipline as every other
-                // ground-truth extraction in this project).
-                .x86_64 => {
-                    std.debug.print("error: osx-64 (Intel Mac) gfortran lib dir not yet verified — see Phase 7 of feat-cross-platform-standardization/PLAN.md\n", .{});
-                    return error.UnverifiedOsx64GfortranDir;
-                },
+                // osx-64 triple verified by real package inspection
+                // (gfortran_impl_osx-64-15.2.0's own lib/gcc/ layout, not
+                // guessed) — see feat-cross-platform-standardization/
+                // DRY_RUN_NEW_PLATFORMS.md §2. darwin13.4.0 is genuinely
+                // different from arm64's darwin20.0.0 above; both come
+                // straight from what conda-forge ships.
+                .x86_64 => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/x86_64-apple-darwin13.4.0", .{conda}), "libgfortran.a"),
             },
             .linux => switch (arch) {
                 .x86_64 => "", // flang's own clang-resource-dir search (flangrt_dir above) covers this instead
                 // linux-aarch64: conda-forge has no flang build there
                 // (pixi.toml's [target.linux-aarch64.dependencies] pins
-                // gfortran instead, matching macOS/Windows) — same
-                // "no hardware to confirm the real gcc-root triple"
-                // situation as osx-64 above; see Phase 7.
-                .aarch64 => {
-                    std.debug.print("error: linux-aarch64 gfortran lib dir not yet verified — see Phase 7 of feat-cross-platform-standardization/PLAN.md\n", .{});
-                    return error.UnverifiedLinuxAarch64GfortranDir;
-                },
+                // gfortran instead, matching macOS/Windows). Triple
+                // verified by real package inspection (gfortran_impl_
+                // linux-aarch64-15.2.0): conda-forge's own custom sysroot
+                // triple `aarch64-conda-linux-gnu`, NOT the generic
+                // aarch64-unknown-linux-gnu — see DRY_RUN_NEW_PLATFORMS.md §2.
+                .aarch64 => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/aarch64-conda-linux-gnu", .{conda}), "libgfortran.a"),
             },
         },
         .subst = std.StringHashMap([]const u8).init(arena),
@@ -462,6 +469,7 @@ pub fn build(b: *std.Build) !void {
     linkOmp(&ctx, rbin_mod);
     const rbin = b.addExecutable(.{ .name = "R.bin", .root_module = rbin_mod });
     rbin.rdynamic = true; // MAIN_LDFLAGS = -Wl,--export-dynamic
+    macHeaderpad(&ctx, rbin);
 
     const rscript_mod = newCMod(&ctx);
     rscript_mod.addIncludePath(ctx.geninc);
@@ -471,6 +479,7 @@ pub fn build(b: *std.Build) !void {
         .extra = &.{ctx.absSub("-DR_HOME=\"{s}\"", .{ctx.rhome})},
     });
     const rscript = b.addExecutable(.{ .name = "Rscript", .root_module = rscript_mod });
+    macHeaderpad(&ctx, rscript);
 
     // ------------------------------------------------------------------
     // Loadable modules: modules/lapack.so, modules/internet.so
@@ -1858,7 +1867,18 @@ fn findFlangRt(b: *std.Build, io: std.Io, conda: []const u8, arch: Arch) ![]cons
 /// used to confirm a given version subdirectory is the right one (differs
 /// by platform: Windows' import-lib naming vs macOS's static-lib naming).
 fn findGfortranLibDir(b: *std.Build, io: std.Io, gcc_root: []const u8, marker: []const u8) ![]const u8 {
+    // On failure, always print WHICH gcc_root was probed: the triple
+    // segment of that path is hardcoded per (os, arch) at the call
+    // sites, and conda-forge triples do move (the version segment one
+    // level down already broke once — F7.4, 15.2.0 → 16.1.0). A bare
+    // GfortranLibNotFound with no path forces rediscovery from scratch;
+    // naming the stale path makes the fix a one-line triple bump. The
+    // triples stay hardcoded deliberately (ground-truth pins from real
+    // package inspection, DRY_RUN_NEW_PLATFORMS.md §2) — a lib/gcc/*
+    // scan could silently pick the wrong triple when a cross toolchain
+    // coexists in the same env, since both would ship the marker file.
     var dir = std.Io.Dir.cwd().openDir(io, gcc_root, .{ .iterate = true }) catch {
+        std.debug.print("error: gfortran gcc root not found at '{s}' — conda-forge triple moved? (see findGfortranLibDir)\n", .{gcc_root});
         return error.GfortranLibNotFound;
     };
     defer dir.close(io);
@@ -1869,6 +1889,7 @@ fn findGfortranLibDir(b: *std.Build, io: std.Io, gcc_root: []const u8, marker: [
         std.Io.Dir.cwd().access(io, b.fmt("{s}/{s}", .{ cand, marker }), .{}) catch continue;
         return cand;
     }
+    std.debug.print("error: no versioned subdir of '{s}' contains '{s}' (see findGfortranLibDir)\n", .{ gcc_root, marker });
     return error.GfortranLibNotFound;
 }
 
@@ -1984,7 +2005,28 @@ fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, script_name: []const u8
 fn addSharedLib(ctx: *const Ctx, name: []const u8, mod: *std.Build.Module) *std.Build.Step.Compile {
     const lib = ctx.b.addLibrary(.{ .linkage = .dynamic, .name = name, .root_module = mod });
     if (ctx.os == .macos) lib.linker_allow_shlib_undefined = true;
+    macHeaderpad(ctx, lib);
     return lib;
+}
+
+/// macOS: reserve load-command headroom (`-headerpad_max_install_names`,
+/// what R's own Makeconf passes for every package .so and what every
+/// conda-forge macOS build does). Without it, zig's Mach-O linker on
+/// x86_64 starts the first __TEXT section at exactly mach_header +
+/// sizeofcmds — zero slack — so no `install_name_tool -add_rpath`/`-id`/
+/// `-change` can ever grow the load commands: Apple's tool says "larger
+/// updated load commands do not fit", conda's older cctools reports the
+/// same file as "malformed object (offset field of section 0 in
+/// LC_SEGMENT command 0 not past the headers)". That killed the osx-64
+/// conda package in rattler-build's relink pass on every zig-linked
+/// binary (lapack.so, stats.so, cairo.so, bin/exec/R, ...) and would kill
+/// stage.sh's own `-add_rpath` the same way. osx-arm64 never noticed: its
+/// 16 KiB page alignment leaves ~15 KiB of slack by accident. Reproduced
+/// and verified on omicron under Rosetta 2026-09-19 with conda's
+/// install_name_tool running rattler's exact delete/add/id/change
+/// sequence. No-op on the other OSes.
+fn macHeaderpad(ctx: *const Ctx, c: *std.Build.Step.Compile) void {
+    if (ctx.os == .macos) c.headerpad_max_install_names = true;
 }
 
 const CGroupOpts = struct {
@@ -2069,10 +2111,27 @@ fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {
 /// its embedded `-L` path.
 fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
     switch (ctx.os) {
-        .linux => {
-            mod.addLibraryPath(.{ .cwd_relative = ctx.flangrt_dir });
-            mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no });
-            mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
+        // Keyed on arch within linux, mirroring fortranOne's own (os,
+        // arch) compiler split: linux-64 compiles with flang → link
+        // flang_rt.runtime; linux-aarch64 has no conda-forge flang and
+        // compiles with gfortran → its objects reference _gfortran_*
+        // symbols, which flang's runtime does not provide (and
+        // flang_rt.runtime doesn't even exist in a linux-aarch64 conda
+        // env). Uses the same gfortran gcc-version-subdir mechanism as
+        // macOS below; without this branch, linux-aarch64 died at link
+        // time with 'unable to find library flang_rt.runtime' plus
+        // unresolved _gfortran_* symbols.
+        .linux => switch (ctx.arch) {
+            .x86_64 => {
+                mod.addLibraryPath(.{ .cwd_relative = ctx.flangrt_dir });
+                mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no });
+                mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
+            },
+            .aarch64 => {
+                mod.addLibraryPath(.{ .cwd_relative = ctx.gfortran_lib_dir });
+                mod.linkSystemLibrary("gfortran", .{ .use_pkg_config = .no });
+                mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
+            },
         },
         .macos => {
             mod.addLibraryPath(.{ .cwd_relative = ctx.gfortran_lib_dir });
@@ -2212,6 +2271,26 @@ fn fortranOne(ctx: *const Ctx, dir: []const u8, file: []const u8, mod_deps: []co
         .gfortran => "-J",
     };
     const run = b.addSystemCommand(&.{ compiler, "-fpic", opt, "-c" });
+    // gfortran on Linux: never emit glibc libmvec vector-math calls.
+    // gfortran's driver auto-adds `-fpre-include=<sysroot>/usr/include/
+    // finclude/math-vector-fortran.h` whenever the sysroot's glibc is new
+    // enough to ship it (>= 2.30 on x86_64; aarch64 libmvec exists only
+    // from glibc 2.38), and that header marks log/exp/sin/... as having
+    // SIMD variants — so -O2's loop vectoriser turns LAPACK's
+    // fixed-trip-count loops into calls to `_ZGVnN2v_log` & co. Those
+    // symbols live in libmvec.so.1, which zig's glibc-2.17 link stubs (the
+    // floor we ship against) do not have and cannot have, so the calls
+    // stay undefined and libRlapack.so refuses to load ("undefined symbol:
+    // _ZGVnN2v_log", found in the linux-aarch64 conda-package job: rattler-
+    // build solved sysroot 2.39 + gfortran 16 while the pixi lockfile's
+    // 2.28 + gfortran 15 had no such header, which is why `pixi run build`
+    // never showed it). `-fpre-include=/dev/null` does NOT override the
+    // driver's automatic one (both end up on the f951 line — verified),
+    // `-nostdinc` would also drop the intrinsic-module dir, so disable the
+    // one pass that creates the calls: loop vectorisation. Cost is
+    // negligible for reference BLAS/LAPACK at -O2's very-cheap cost model;
+    // the openblas variant exists for real performance.
+    if (fc == .gfortran and ctx.os == .linux) run.addArg("-fno-tree-loop-vectorize");
     run.setName(b.fmt("{s} {s}/{s}", .{ compiler, dir, file }));
     run.addFileArg(ctx.path(b.fmt("{s}/{s}", .{ dir, file })));
     run.addArg("-o");
@@ -2285,7 +2364,17 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
     const b = ctx.b;
     const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/subst.txt", .{config_dir})), b.allocator, .limited(4 * 1024 * 1024));
     var lines = std.mem.splitScalar(u8, raw, '\n');
-    while (lines.next()) |line| {
+    while (lines.next()) |raw_line| {
+        // Tolerate CRLF: a checkout with core.autocrlf=true (how GitHub's
+        // windows-latest runners ship Git) hands us `S["KEY"]="VALUE"\r`,
+        // and without this the trailing `"\r` survived into every value —
+        // WIN_RGRAPHAPP_LIBS's last token became `-lmsimg32"\r`, a name
+        // zig's mingw import-lib existence check could not even stat
+        // ("failed to check zig installation for DLL import libs:
+        // Unexpected" — Win32 ERROR_INVALID_NAME has no zig error mapping).
+        // .gitattributes now forces LF on checkout too; this is the belt
+        // to those braces, for any local clone with autocrlf on.
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
         // format: S["KEY"]="VALUE"
         if (!std.mem.startsWith(u8, line, "S[\"")) continue;
         const key_end = std.mem.indexOf(u8, line, "\"]=\"") orelse continue;

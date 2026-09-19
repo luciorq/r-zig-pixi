@@ -188,9 +188,14 @@ openblas = "*"
 [feature.openblas.activation.env]
 R_BLAS = "openblas"
 
-# conda packaging (rattler-build) lives in its own environment
+# conda packaging (rattler-build) lives in its own environment.
+# curl/python: used by the conda-channel-list/-delete admin scripts
+# (scripts/prefix-*.sh) — declared here so the pkg env is self-contained
+# rather than borrowing whatever the host machine happens to have.
 [feature.pkg.dependencies]
 rattler-build = ">=0.70"
+curl = "*"
+python = ">=3.9"
 
 [feature.pkg.tasks]
 # --no-build-id: drops the "_<timestamp>" suffix from rattler-build's own
@@ -237,11 +242,12 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 [feature.pkg.target.win-64.tasks]
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/win-64/*.conda"
 
-# No zigbuild/config/linux-aarch64-* dir exists yet (see
-# feat-cross-platform-standardization/PLAN.md Phase 7) — nothing to
-# publish through this task today. Added now purely so this block stays
-# consistent with the [target.linux-aarch64.dependencies] block above,
-# which already exists.
+# linux-aarch64 became a real platform when the repo went public
+# (GitHub-hosted ubuntu-24.04-arm runners): CI's conda-package-hosted
+# job builds and publishes through this task via OIDC trusted
+# publishing. Its vendored config lives at zigbuild/config/linux-arm64-*
+# ("arm64", not conda's "aarch64" — build.zig/gen-subst.sh's shared
+# pre-existing dir-naming convention, see Arch.condaForgeSuffix).
 [feature.pkg.target.linux-aarch64.tasks]
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/linux-aarch64/*.conda"
 

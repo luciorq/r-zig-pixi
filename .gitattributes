@@ -1,2 +1,14 @@
 # SCM syntax highlighting & preventing 3-way merges
 pixi.lock merge=binary linguist-language=YAML linguist-generated=true -diff
+# Force LF on checkout everywhere. GitHub's windows-latest runners ship
+# Git with core.autocrlf=true, which turned every vendored text file into
+# CRLF — zigbuild/config/win-x86_64-full/subst.txt in particular, whose
+# S-table parser then kept the trailing `"\r` on each value, producing a
+# link arg like `-lmsimg32"\r` that zig's mingw import-lib existence check
+# could not even stat (Win32 ERROR_INVALID_NAME -> zig error.Unexpected,
+# "failed to check zig installation for DLL import libs"). Self-hosted
+# kappa also has autocrlf=true yet never hit it — its checkout is gone,
+# so that difference stays unexplained (a locally-written LF subst.txt is
+# the likely reason). build.zig's parser now tolerates CRLF as well; this
+# keeps the checkout itself sane.
+* text=auto eol=lf

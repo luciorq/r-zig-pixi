@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
 
 # Cancel a still-running run for the same branch/PR the moment a newer
-# commit lands (or a second manual dispatch fires) — matters most on the
-# self-hosted matrix (gamma/omicron/kappa), where each label set is a
-# single physical machine, so a stale run would otherwise sit occupying
-# the runner queue behind/instead of the current commit.
+# commit lands (or a second manual dispatch fires) — keeps stale runs
+# from burning runner time behind the current commit. (Historically this
+# mattered most for the self-hosted gamma/omicron/kappa fleet, since
+# decommissioned — everything runs on GitHub-hosted runners now.)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,25 +25,32 @@ jobs:
   build:
     name: ${{ matrix.os }} / ${{ matrix.env }}
     # Gated behind ENABLE_HOSTED_JOBS (repo Settings > Actions > Variables)
-    # — off by default while out of GitHub Actions minutes. Toggle with
-    # `gh variable set ENABLE_HOSTED_JOBS --body true` when minutes are
-    # available again; conda-package below is unaffected (self-hosted).
+    # — an emergency kill switch more than a cost control now: the repo
+    # is public, so hosted standard runners are free with no minute caps
+    # (the gate's original reason, a private-repo minute budget, is gone).
+    # Toggle with `gh variable set ENABLE_HOSTED_JOBS --body false`.
     if: vars.ENABLE_HOSTED_JOBS == 'true'
     runs-on: ${{ matrix.os }}
-    # No arch dimension in this matrix at all today — one runner per OS
-    # (whatever GitHub-hosted x86_64 image), not per (OS, arch). Same for
-    # conda-package's self-hosted labels below (one machine per OS).
-    # Whenever real osx-64/linux-aarch64/win-arm64 hardware/CI arrives
-    # (see .github/devdocs/feat-cross-platform-standardization/PLAN.md),
-    # this matrix — not just build.zig — needs an arch axis added too.
+    # The arch axis arrived with the repo going public (2026-09-03):
+    # GitHub-hosted arm64-linux (ubuntu-24.04-arm) and Intel-macOS
+    # (macos-15-intel) runners are free for public repos, dissolving the
+    # "no hardware access" boundary feat-cross-platform-standardization/
+    # PLAN.md's Phase 7 was scoped around — linux-aarch64 and osx-64 are
+    # now first-class legs. Still absent: win-arm64 (a runner exists, but
+    # build.zig's Windows path is x86_64-only by explicit design — the
+    # MinGW prefix and R_ARCH="x64" convention need an upstream design
+    # decision first; see PLAN.md's Phase 2 non-goal).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
         env: [default, full]
         include:
-          # external optimized BLAS/LAPACK variant (linux only for now)
+          # external optimized BLAS/LAPACK variant (linux only for now,
+          # both linux archs)
           - os: ubuntu-latest
+            env: openblas
+          - os: ubuntu-24.04-arm
             env: openblas
     timeout-minutes: 180
     steps:
@@ -97,44 +104,44 @@ jobs:
   # conda-forge-style package (rattler-build) — always the slim variant
   # regardless of matrix.env above, since recipe/build.sh never sets
   # R_BUILD_VARIANT. A from-scratch build in its own isolated sandbox, so
-  # it can't reuse the `build`/`build-windows` jobs' prefixes; this roughly
-  # doubles total Windows CI time, which is the tradeoff for catching a
-  # recipe regression before a real release instead of relying on a manual
-  # omicron/kappa run. recipe/build.sh itself now drives zig-build.sh, not
-  # the legacy autoconf/gnuwin32 scripts.
+  # it can't reuse the `build`/`build-windows` jobs' prefixes; that
+  # roughly doubles per-platform CI time, which is the tradeoff for
+  # catching a recipe regression before a real release. All 5 platforms
+  # on GitHub-hosted runners — the self-hosted gamma/omicron/kappa fleet
+  # is decommissioned (2026-09-19; see CI_SELF_HOSTED_PLAN.md's closing
+  # note). Publishing uses prefix.dev trusted publishing (OIDC):
+  # `id-token: write` lets rattler-build mint a short-lived token, no
+  # stored credentials on any runner. Requires this repo+workflow to be
+  # registered as a Trusted Publisher in the `universe` channel's
+  # settings on prefix.dev.
   conda-package:
     name: conda-package / ${{ matrix.name }}
-    # Self-hosted runners on gamma/omicron/kappa — the same machines every
-    # zig-build fix in this project was verified against, with persistent
-    # caches and already-authenticated `rattler-build auth login` sessions
-    # (no GitHub secrets needed for the publish step below). See
-    # devdocs/feat-prefix-publish/CI_SELF_HOSTED_PLAN.md.
-    if: vars.ENABLE_SELFHOSTED_JOBS == 'true'
-    runs-on: ${{ matrix.labels }}
+    if: vars.ENABLE_HOSTED_JOBS == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
-      # One machine per OS, no arch axis — see the `build` job's own
-      # comment above (same gap, same pointer to
-      # feat-cross-platform-standardization/PLAN.md for when it's
-      # actually worth closing).
       matrix:
         include:
-          - name: linux
-            labels: [self-hosted, linux]
-          - name: macos
-            labels: [self-hosted, macos]
-          - name: windows
-            labels: [self-hosted, windows]
+          - name: linux-64
+            runner: ubuntu-latest
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - name: osx-arm64
+            runner: macos-latest
+          - name: osx-64
+            runner: macos-15-intel
+          - name: win-64
+            runner: windows-latest
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v6
-      # No setup-pixi action here: these machines already have pixi
-      # installed for interactive use, and the action errors out trying
-      # to (re)install over it ("Destination file path ... already
-      # exists" — hit for real on omicron). Each runner's own `.path`
-      # file (in the runner root, one entry per line, prepended to the
-      # job's PATH) points at the existing install instead — see
-      # devdocs/feat-prefix-publish/CI_SELF_HOSTED_PLAN.md.
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: pkg
+          cache: true
       - name: Build + test conda package
         run: pixi run -e pkg conda-package
       # rattler-build's own test phase runs with a literal unexpanded
@@ -143,24 +150,20 @@ jobs:
       # recipe/recipe.yaml's win test comment + scripts/stage.sh). This
       # is the regression check for that: a genuinely fresh pixi project
       # installing straight from the just-built local channel, invoking
-      # bare `Rscript` the same way a real user would.
-      # TODO: @luciorq - 2026-07-31 - This is failing on Windows local runner CI
-      # + because `shell: bash` tries to run WSL.exe that is the first bash.exe
-      # + on the CI environment Path for Kappa.
-      # + Needs to make this more reliable.
-      #
-      #- name: Fresh-env consume test (Windows PATH shim)
-      #  if: matrix.name == 'windows'
-      #  shell: bash
-      #  run: |
-      #    set -euo pipefail;
-      #    channel="$(cd dist/conda && pwd -W)";
-      #    consume_dir="$(mktemp -d)";
-      #    pixi init --channel "$channel" --channel conda-forge --platform win-64 "$consume_dir";
-      #    cd "$consume_dir";
-      #    pixi add r-zig-slim;
-      #    pixi run Rscript -e 'r_home <- R.home(); cat("R_HOME =", r_home, "\n"); stopifnot(grepl("Library", r_home, fixed = TRUE)); cat("consume test OK\n")';
-      - name: Publish to prefix.dev
+      # bare `Rscript` the same way a real user would. (Was disabled on
+      # the old self-hosted kappa runner, whose PATH put WSL's bash.exe
+      # first; hosted windows-latest has no WSL-bash-on-PATH problem.)
+      - name: Fresh-env consume test (Windows PATH shim)
+        if: matrix.name == 'win-64'
+        shell: bash
+        run: |
+          set -euo pipefail;
+          channel="$(cd dist/conda && pwd -W)";
+          consume_dir="$(mktemp -d)";
+          pixi init --channel "$channel" --channel conda-forge --platform win-64 "$consume_dir";
+          cd "$consume_dir";
+          pixi add r-zig-slim;
+          pixi run Rscript -e 'r_home <- R.home(); cat("R_HOME =", r_home, "\n"); stopifnot(grepl("Library", r_home, fixed = TRUE)); cat("consume test OK\n")';
+      - name: Publish to prefix.dev (OIDC trusted publishing)
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        run: pixi run -e pkg conda-publish;
-
+        run: pixi run -e pkg conda-publish

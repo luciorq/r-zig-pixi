@@ -44,6 +44,23 @@ mkdir -p "$OUT_DIR"
 # 1. Extract S["VAR"]="value" entries, joining continuation lines. A
 #    continued entry ends its physical line in `"\` and the next physical
 #    line starts with `"`; loop until a line ends in a bare `"`.
+#
+#    The last two sed expressions drop every conda cross-toolchain
+#    *sysroot* directory (`<conda>/<triple>/sysroot/{lib64,usr/lib64,...}`)
+#    from the captured values — both as `-L` link flags (FLIBS,
+#    FLIBS_IN_SO, FCLIBS) and as `:`-separated runtime entries
+#    (R_LD_LIBRARY_PATH). On gfortran platforms (linux-aarch64 today)
+#    autoconf's AC_FC_LIBRARY_LDFLAGS copies gfortran's implicit search
+#    dirs verbatim, and conda-forge's sysroot package ships a complete
+#    glibc runtime there (lib64/libc.so.6, ld-linux-*.so, libm.so.6, from
+#    the CentOS-era sysroot). R's etc/ldpaths exports R_LD_LIBRARY_PATH
+#    into LD_LIBRARY_PATH, so with those entries kept every R process
+#    loaded the sysroot's libc.so.6 under the host's ld.so and died in
+#    startup — the "SIGILL/SIGSEGV at 'R bootstrap: tools sysdata'"
+#    failure on ubuntu-24.04-arm. Those dirs are only meaningful to gcc's
+#    own --sysroot link step; zig cc brings its own libc, and libgfortran
+#    lives in the retained lib/gcc/<triple>/<ver> entry, so dropping them
+#    loses nothing at link time either. linux-64 (flang) never had them.
 awk '
   /^S\["/ {
     full = $0
@@ -64,7 +81,26 @@ awk '
       -e "s|$PREFIX|@ZR_PREFIX@|g" \
       -e "s|$TOOLCHAIN|@ZR_TOOLCHAIN@|g" \
       -e "s|$ROOT|@ZR_ROOT@|g" \
+      -e 's| -L[^ "]*/sysroot/[^ "]*||g' \
+      -e 's|:[^:"]*/sysroot/[^:"]*||g' \
   > "$OUT_DIR/subst.txt"
 
 echo "wrote $OUT_DIR/subst.txt ($(wc -l < "$OUT_DIR/subst.txt") entries)"
-echo "next: copy config.h/Rconfig.h and bump GENERATED_FROM — see PLAN.md"
+
+# Stage the other three files of a complete vendored config dir from the
+# same objdir, so one run of this script produces the whole thing (used
+# to be a manual "next: copy config.h/Rconfig.h and bump GENERATED_FROM"
+# step — folding it in here keeps R_VERSION/OBJ_DIR ownership in env.sh,
+# the single source of truth, instead of every caller re-deriving them;
+# gen-config.yaml's CI staging step hardcoded "4.6.1" twice before this).
+#
+# Rconfig.h is NOT configure-generated (only config.h is, via
+# AC_CONFIG_HEADERS) — a plain `make` derives it from config.h with
+# tools/GETCONFIG (src/include/Makefile.in's own rule, a grep-and-echo
+# script reading ./config.h from cwd). A configure-only objdir has no
+# Rconfig.h to copy (found via a real gen-config CI failure: `cp: cannot
+# stat .../Rconfig.h`), so run GETCONFIG here exactly as make would.
+cp "$OBJ_DIR/src/include/config.h" "$OUT_DIR/config.h"
+(cd "$OBJ_DIR/src/include" && sh "$SRC_DIR/tools/GETCONFIG" > "$OUT_DIR/Rconfig.h")
+echo "$R_VERSION" > "$OUT_DIR/GENERATED_FROM"
+echo "staged config.h + Rconfig.h + GENERATED_FROM ($R_VERSION) into $OUT_DIR"

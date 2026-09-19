@@ -285,3 +285,167 @@ file/line references per phase. This file tracks progress only.
       one genuinely hardware-gated remaining step (running real
       `configure` + `gen-subst.sh` on real hardware) — everything else
       in the procedure is confirmed mechanical.
+
+## 2026-09: the hardware arrived — linux-aarch64 and osx-64 made real (feat-hosted-ci-platforms)
+
+The repo going public (2026-09-03) made GitHub-hosted runners free with
+no minute caps, including `ubuntu-24.04-arm` (real linux-aarch64) and
+`macos-15-intel` (real osx-64) — dissolving the "no hardware access"
+boundary this whole milestone was scoped around. What Phase 7 proved
+mechanical on paper was then executed for real:
+
+- **Phase 7's reference diffs applied to build.zig**: the two
+  loud-failure placeholders replaced with the verified triples
+  (`aarch64-conda-linux-gnu`, `x86_64-apple-darwin13.4.0`).
+  `findGfortranLibDir` failures now print the probed gcc_root (review
+  finding — a bare GfortranLibNotFound named neither the path nor the
+  stale triple).
+- **One real gap Phase 7's dry run missed** (caught by code review, not
+  CI): `linkFortranRt`'s `.linux` branch unconditionally linked
+  `flang_rt.runtime` — right for linux-64/flang, nonexistent on
+  linux-aarch64/gfortran. Now keyed on `(os, arch)` like `fortranOne`.
+- **Vendored configs generated on real hardware via CI**: new
+  `gen-config.yaml` workflow (paths-triggered push + workflow_dispatch)
+  runs `pixi run configure` + `gen-subst.sh` on the new runner types;
+  gen-subst.sh now stages the complete config dir itself (subst.txt +
+  config.h + GETCONFIG-derived Rconfig.h + GENERATED_FROM). Verified
+  reproducible: on gamma the round-trip regenerates the vendored
+  linux-x86_64-slim config byte-identically.
+- **Two real bugs found by the first CI generation runs**: (1) Rconfig.h
+  is make-generated, not configure-generated — staging now runs
+  `tools/GETCONFIG` exactly as make's own src/include rule does; (2) the
+  macos-15-intel image returns "unknown" from `uname -p`, which R's
+  config.guess defaults to **powerpc** — configure detected
+  `powerpc64-apple-darwin24.6.0` on a genuine x86_64 runner and poisoned
+  R_PLATFORM in the generated headers. configure-only.sh now passes an
+  explicit `--build` when (and only when) that misdetection would occur.
+- **CI matrix**: `build` job gained the arch axis (ubuntu-24.04-arm,
+  macos-15-intel × default/full; openblas on both linux archs). The
+  self-hosted fleet (gamma/omicron/kappa) was decommissioned outright
+  (2026-09-19, see feat-prefix-publish/CI_SELF_HOSTED_PLAN.md's closing
+  note): one hosted `conda-package` job now builds + publishes ALL five
+  platforms to `universe` via prefix.dev OIDC trusted publishing (no
+  stored credentials anywhere), and the Windows fresh-env consume test
+  — disabled on kappa over its WSL-bash-on-PATH problem — is re-enabled
+  on hosted windows-latest.
+- **recipe.yaml**: Fortran selectors collapsed to `linux64 → flang`,
+  `not linux64 → gfortran` (render-verified for both linux archs).
+
+**Feature-parity statement**: linux-64, linux-aarch64, osx-arm64,
+osx-64, win-64 all get build/smoke/contract (+check on unix) CI legs and
+a conda-package publish path. **win-arm64 stays excluded** — a
+`windows-11-arm` runner exists, but build.zig's Windows path is
+x86_64-only by explicit design (pervasive MinGW-prefix/R_ARCH="x64"
+conventions needing an upstream R design decision — Phase 2's documented
+non-goal, unchanged by runner availability).
+
+### PR #6 CI: the three hosted-runner failure classes, root-caused (2026-09-19)
+
+All three were "unexplained" when the branch first ran on hosted
+runners. Each turned out to be an environment difference between the old
+self-hosted fleet and GitHub's runner images (or their conda packages),
+not a build.zig platform bug.
+
+1. **ubuntu-24.04-arm: `process terminated with signal ILL` (build job)
+   / `SEGV` (conda-package job) at "R bootstrap: tools sysdata", the very
+   first R invocation.** Not codegen. The vendored linux-arm64 subst.txt
+   carried gfortran's implicit search dirs verbatim in FLIBS/FLIBS_IN_SO/
+   FCLIBS **and R_LD_LIBRARY_PATH**, including
+   `<conda>/aarch64-conda-linux-gnu/sysroot/{lib64,usr/lib64}` — and
+   conda-forge's `sysroot_linux-aarch64` package ships a complete glibc
+   runtime there (`lib64/libc.so.6`, `ld-linux-aarch64.so.1`,
+   `libm.so.6`; verified by listing the 2.28 package from the lockfile).
+   `etc/ldpaths` exports R_LD_LIBRARY_PATH into LD_LIBRARY_PATH, so every
+   R process loaded the sysroot's libc.so.6 under the host's ld.so and
+   died in startup, the signal varying with layout. linux-64 (flang)
+   never had those dirs. The "~86 s is too fast for a real compile"
+   premise was wrong too: the leg had finished 120/169 steps, i.e. every
+   compile — Cobalt runners are simply fast (x86 build+bootstrap is
+   ~3.5 min). Fix: gen-subst.sh strips every `/sysroot/` entry (both the
+   `-L` and the `:`-separated form), applied to both vendored linux-arm64
+   configs. The earlier `.cpu_model = .baseline` commit was a misdiagnosis
+   of this crash but stays on its own portability merits (its comment now
+   says so).
+2. **macos-15-intel: contract test dies in jsonlite's bundled yajl at
+   `zig-ar rcs yajl/libstatyajl.a ...` — "unable to open ...: No such file
+   or directory".** conda-forge's osx-64 zig 0.16.0 `zig ar` (llvm-ar)
+   cannot *create* an archive: the ENOENT its create path is written for
+   fails the `EC != errc::no_such_file_or_directory` guard (macOS zig is
+   linked against conda's *shared* libc++, the classic two-error_category-
+   instances setup). Reproduced on omicron under Rosetta with a throwaway
+   `platforms = ["osx-64"]` pixi env: `zig ar rcs new.a x.o` fails
+   identically, the osx-arm64 zig succeeds, and osx-64 appends to an
+   already-existing archive fine. Fix: `toolchain/zig-ar` on Darwin seeds
+   a missing insert-mode target with the 8-byte `!<arch>\n` header and
+   pins `--format=darwin`. jsonlite's yajl is the only `$(AR)` user in the
+   whole CI; R itself archives through zig build's own writer.
+3. **windows-latest: "failed to check zig installation for DLL import
+   libs: Unexpected" at the first system-DLL link (Rgraphapp).** The
+   failing command line's last library was literally `"-lmsimg32\"\r"`.
+   GitHub's Windows runner images ship Git with `core.autocrlf=true`, so
+   checkout converted `zigbuild/config/win-x86_64-full/subst.txt` to CRLF
+   and `loadSubstFile` — which only strips a trailing `"` — kept `"\r` on
+   every value. zig's mingw `libExists` then tried to stat
+   `libmsimg32"\r.a`: Win32 ERROR_INVALID_NAME has no zig error mapping →
+   `error.Unexpected` (the same mechanism as ziglang/zig#25758, a lib name
+   the check cannot stat). The diagnostic probe job never reproduced it
+   because it never read subst.txt. Fix: `.gitattributes` `* text=auto
+   eol=lf` plus a CRLF-tolerant parser; the probe job is deleted. (kappa
+   also has autocrlf=true and never failed; its checkout is gone, so that
+   difference is unexplained — most likely a locally-written LF file.)
+
+Validation before the CI round-trip: linux-64 configure phase + `zig fmt`
+clean, full local build/smoke/contract on gamma; the macOS mechanism was
+reproduced and the workaround exercised on omicron. ARM and Windows fixes
+are validated by the next CI run only (omicron has no container runtime;
+kappa's workspace no longer exists).
+
+
+**Round 2 (same day, after the three fixes above went in — run
+35444873262).** Every ARM build leg passed build/smoke/contract/check for
+the first time, the win-64 conda package passed, and three *new* failures
+surfaced one layer deeper:
+
+4. **verify-package on both linux legs**: the new glibc-ceiling check's
+   first-ever CI run tripped on `lib/R/bin/toolchain/realpath`
+   (conda-forge coreutils, GLIBC_2.28) — the only file in the whole bundle
+   above 2.17; R's own code and every vendored *library* are clean. The
+   `exit 1` inside the `while read < <(find ...)` loop also fired the EXIT
+   trap mid-walk, burying the one real error under "cannot open" noise.
+   Now two tiers: runtime artifacts hard at 2.17, the compile-time helpers
+   under bin/toolchain bounded at conda-forge's 2.28 baseline (only used
+   by bin/libtool / javareconf, i.e. on a dev machine that needs zig
+   anyway); list collected before the loop.
+5. **osx-64 conda package: rattler-build's relink pass fails
+   `install_name_tool` on every zig-linked Mach-O** ("malformed object
+   (offset field of section 0 in LC_SEGMENT command 0 not past the
+   headers)"). zig's Mach-O linker on x86_64 starts the first __TEXT
+   section at exactly mach_header + sizeofcmds — zero headerpad — so no
+   tool can grow the load commands (Apple's says "larger updated load
+   commands do not fit"). osx-arm64 has ~15 KiB of accidental slack from
+   16 KiB page alignment. Fix: `headerpad_max_install_names` on every
+   macOS Compile step in build.zig (what R's Makeconf already passes for
+   package .so files). Verified on omicron under Rosetta: conda's
+   install_name_tool runs rattler's delete/add/id/change sequence on the
+   padded output; without the pad both Apple's and conda's tool fail.
+6. **linux-aarch64 conda package: `libRlapack.so: undefined symbol:
+   _ZGVnN2v_log`** (glibc libmvec's Advanced-SIMD `log`). rattler-build
+   solved gfortran 16.2 + sysroot 2.39 for its build env (the pixi
+   lockfile has 15.2 + 2.28); glibc >= 2.30 sysroots ship
+   `finclude/math-vector-fortran.h`, which gfortran's driver auto-adds as
+   `-fpre-include`, and -O2's loop vectoriser then emits libmvec calls
+   that zig's glibc-2.17 stubs can never provide. Verified locally with a
+   sysroot-2.39 gfortran env: `-fpre-include=/dev/null` does not override
+   the driver's automatic one, `-nostdinc` would drop the intrinsic-module
+   dir, `-fno-tree-loop-vectorize` is the targeted fix (build.zig, gfortran
+   on linux only). Package-side exposure remains: a user compiling a
+   Fortran package with a >= 2.30 sysroot gets the same undefined symbol,
+   since R's Makeconf FFLAGS are plain `-O2` and zig-cc links no libmvec —
+   noted, not fixed here.
+
+**Outcome**: with rounds 1 and 2 in, run 35446891595 (commit 8f2165b,
+2026-09-19) is the first fully green hosted-runner run — all 16 jobs:
+build × {ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel}
+× {default, full} + both linux openblas legs, windows-latest, and all five
+conda-package legs. The PR is mergeable pending prefix.dev
+trusted-publisher registration.
