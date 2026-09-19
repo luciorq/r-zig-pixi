@@ -243,10 +243,14 @@ pub fn build(b: *std.Build) !void {
     // ship to arbitrary consumer machines through the conda channel, so
     // native-CPU codegen was always wrong for them — same portability
     // argument as the glibc floor above, and conda-forge's own packages
-    // are baseline-ISA for the same reason. Found the hard way: zig's
-    // native CPU detection on GitHub's ubuntu-24.04-arm runners
-    // (Neoverse cores) produced binaries that died with SIGILL running
-    // R's own bootstrap on the very machine that built them.
+    // are baseline-ISA for the same reason. (Introduced while chasing a
+    // SIGILL in R's bootstrap on GitHub's ubuntu-24.04-arm runners, which
+    // it did not fix — that crash was unrelated to codegen: gfortran's
+    // implicit search dirs put conda's aarch64 *sysroot* lib64, which
+    // ships its own libc.so.6/ld-linux, on R_LD_LIBRARY_PATH, so every
+    // R process loaded a foreign glibc under the host ld.so and died in
+    // startup with SIGILL or SIGSEGV. See gen-subst.sh's sysroot filter.
+    // Baseline stays on its own merits.)
     const target = if (os == .windows)
         b.resolveTargetQuery(.{ .abi = .gnu, .cpu_model = .baseline })
     else if (os == .linux)
@@ -2317,7 +2321,17 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
     const b = ctx.b;
     const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/subst.txt", .{config_dir})), b.allocator, .limited(4 * 1024 * 1024));
     var lines = std.mem.splitScalar(u8, raw, '\n');
-    while (lines.next()) |line| {
+    while (lines.next()) |raw_line| {
+        // Tolerate CRLF: a checkout with core.autocrlf=true (how GitHub's
+        // windows-latest runners ship Git) hands us `S["KEY"]="VALUE"\r`,
+        // and without this the trailing `"\r` survived into every value —
+        // WIN_RGRAPHAPP_LIBS's last token became `-lmsimg32"\r`, a name
+        // zig's mingw import-lib existence check could not even stat
+        // ("failed to check zig installation for DLL import libs:
+        // Unexpected" — Win32 ERROR_INVALID_NAME has no zig error mapping).
+        // .gitattributes now forces LF on checkout too; this is the belt
+        // to those braces, for any local clone with autocrlf on.
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
         // format: S["KEY"]="VALUE"
         if (!std.mem.startsWith(u8, line, "S[\"")) continue;
         const key_end = std.mem.indexOf(u8, line, "\"]=\"") orelse continue;

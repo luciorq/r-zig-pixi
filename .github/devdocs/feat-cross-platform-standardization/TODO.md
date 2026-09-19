@@ -338,3 +338,64 @@ a conda-package publish path. **win-arm64 stays excluded** — a
 x86_64-only by explicit design (pervasive MinGW-prefix/R_ARCH="x64"
 conventions needing an upstream R design decision — Phase 2's documented
 non-goal, unchanged by runner availability).
+
+### PR #6 CI: the three hosted-runner failure classes, root-caused (2026-09-19)
+
+All three were "unexplained" when the branch first ran on hosted
+runners. Each turned out to be an environment difference between the old
+self-hosted fleet and GitHub's runner images (or their conda packages),
+not a build.zig platform bug.
+
+1. **ubuntu-24.04-arm: `process terminated with signal ILL` (build job)
+   / `SEGV` (conda-package job) at "R bootstrap: tools sysdata", the very
+   first R invocation.** Not codegen. The vendored linux-arm64 subst.txt
+   carried gfortran's implicit search dirs verbatim in FLIBS/FLIBS_IN_SO/
+   FCLIBS **and R_LD_LIBRARY_PATH**, including
+   `<conda>/aarch64-conda-linux-gnu/sysroot/{lib64,usr/lib64}` — and
+   conda-forge's `sysroot_linux-aarch64` package ships a complete glibc
+   runtime there (`lib64/libc.so.6`, `ld-linux-aarch64.so.1`,
+   `libm.so.6`; verified by listing the 2.28 package from the lockfile).
+   `etc/ldpaths` exports R_LD_LIBRARY_PATH into LD_LIBRARY_PATH, so every
+   R process loaded the sysroot's libc.so.6 under the host's ld.so and
+   died in startup, the signal varying with layout. linux-64 (flang)
+   never had those dirs. The "~86 s is too fast for a real compile"
+   premise was wrong too: the leg had finished 120/169 steps, i.e. every
+   compile — Cobalt runners are simply fast (x86 build+bootstrap is
+   ~3.5 min). Fix: gen-subst.sh strips every `/sysroot/` entry (both the
+   `-L` and the `:`-separated form), applied to both vendored linux-arm64
+   configs. The earlier `.cpu_model = .baseline` commit was a misdiagnosis
+   of this crash but stays on its own portability merits (its comment now
+   says so).
+2. **macos-15-intel: contract test dies in jsonlite's bundled yajl at
+   `zig-ar rcs yajl/libstatyajl.a ...` — "unable to open ...: No such file
+   or directory".** conda-forge's osx-64 zig 0.16.0 `zig ar` (llvm-ar)
+   cannot *create* an archive: the ENOENT its create path is written for
+   fails the `EC != errc::no_such_file_or_directory` guard (macOS zig is
+   linked against conda's *shared* libc++, the classic two-error_category-
+   instances setup). Reproduced on omicron under Rosetta with a throwaway
+   `platforms = ["osx-64"]` pixi env: `zig ar rcs new.a x.o` fails
+   identically, the osx-arm64 zig succeeds, and osx-64 appends to an
+   already-existing archive fine. Fix: `toolchain/zig-ar` on Darwin seeds
+   a missing insert-mode target with the 8-byte `!<arch>\n` header and
+   pins `--format=darwin`. jsonlite's yajl is the only `$(AR)` user in the
+   whole CI; R itself archives through zig build's own writer.
+3. **windows-latest: "failed to check zig installation for DLL import
+   libs: Unexpected" at the first system-DLL link (Rgraphapp).** The
+   failing command line's last library was literally `"-lmsimg32\"\r"`.
+   GitHub's Windows runner images ship Git with `core.autocrlf=true`, so
+   checkout converted `zigbuild/config/win-x86_64-full/subst.txt` to CRLF
+   and `loadSubstFile` — which only strips a trailing `"` — kept `"\r` on
+   every value. zig's mingw `libExists` then tried to stat
+   `libmsimg32"\r.a`: Win32 ERROR_INVALID_NAME has no zig error mapping →
+   `error.Unexpected` (the same mechanism as ziglang/zig#25758, a lib name
+   the check cannot stat). The diagnostic probe job never reproduced it
+   because it never read subst.txt. Fix: `.gitattributes` `* text=auto
+   eol=lf` plus a CRLF-tolerant parser; the probe job is deleted. (kappa
+   also has autocrlf=true and never failed; its checkout is gone, so that
+   difference is unexplained — most likely a locally-written LF file.)
+
+Validation before the CI round-trip: linux-64 configure phase + `zig fmt`
+clean, full local build/smoke/contract on gamma; the macOS mechanism was
+reproduced and the workaround exercised on omicron. ARM and Windows fixes
+are validated by the next CI run only (omicron has no container runtime;
+kappa's workspace no longer exists).

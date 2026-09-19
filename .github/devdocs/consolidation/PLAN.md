@@ -14,7 +14,7 @@ by this document**.
 | Project | Role in the family | State |
 |---|---|---|
 | **flang-pixi** | Toolchain layer: `lld-zig`/`flang-zig`/`flang-rt-zig` 23.1.1, zig-built, published to `universe` for **six** subdirs (incl. win-arm64). Its MinGW-ABI Windows flang exists nowhere else. `llvm-zig` stays build-time-only (never published). | Shipping; Windows OpenMP leg (flang-rt build 4) just landed, uncommitted docs pending |
-| **r-zig-pixi** | Flagship consumer: R itself via pure `zig build`, vendored-configure. Proves the toolchain end-to-end (contract suite, `lapack.R`). Publishes `r-zig-slim` to `universe`. | PR #6 open (5-platform hosted CI); 3 CI failure classes open |
+| **r-zig-pixi** | Flagship consumer: R itself via pure `zig build`, vendored-configure. Proves the toolchain end-to-end (contract suite, `lapack.R`). Publishes `r-zig-slim` to `universe`. | PR #6 open (5-platform hosted CI); its 3 CI failure classes root-caused + fixed on the branch 2026-09-19, CI confirmation pending |
 | **r-zig-packages** | Downstream layer: `rz-*` R packages compiled against `r-zig-slim`. | POC done, linux-64 only, parked — unblocs as r-zig-slim's platform list grows |
 | **blast-zig-pixi** | Application template: foreign build system (NCBI autotools) + zig shims + `pixi-build-rattler-build`; distribution patterns (v3 flags/extras + repodata-v2 twin packages, microarch variants). | Shipping to `universe`, 5 platforms |
 | **zig-pixi-build-backend** | Future-facing: recipe-free `pixi_build_zig` backend (pixi fork), cross-first (~18 platforms). The bet on where the ecosystem goes. | Working PoC, unpublished, needs fork checkout |
@@ -74,6 +74,13 @@ Every project in the family adopts, or already has, these:
    `repack_v2.py` twin pattern.
 9. **zig upstream lives on Codeberg** (moved 2025-11-26): issues get
    filed there, not github.com/ziglang.
+10. **conda's cross sysroot never reaches a runtime library path.** On
+    every gfortran platform, autoconf copies gfortran's implicit search
+    dirs into FLIBS — including `<conda>/<triple>/sysroot/lib64`, which
+    ships a full glibc (libc.so.6, ld-linux). Anything that turns those
+    into LD_LIBRARY_PATH (R's etc/ldpaths did) loads a foreign libc under
+    the host ld.so and dies at exec. Strip `/sysroot/` entries at capture
+    time (r-zig-pixi: gen-subst.sh); flang platforms never had them.
 
 ## The one big structural decision: Fortran
 
@@ -117,13 +124,18 @@ on the *interface contracts*, not on one provenance forever.
 ## Sequenced plan
 
 **Phase 0 — land what's open (r-zig-pixi PR #6).**
-Get PR #6 mergeable and merged: the three CI failure classes
-(linux-aarch64 ~86s SIGILL-before-compile mystery; osx-64 `zig-ar`
-archive failure in jsonlite/yajl; win-64 zig import-libs "Unexpected" —
-probes all pass, real build fails). These are prerequisites for
-everything downstream (r-zig-packages multi-platform, flang consumption
-CI). The consolidation docs (this directory) ride in the same PR.
-Trusted-publisher registration on prefix.dev before merge.
+Get PR #6 mergeable and merged. Its three CI failure classes were
+root-caused and fixed on the branch 2026-09-19 (record:
+`feat-cross-platform-standardization/TODO.md`, last section): linux-
+aarch64 = conda's cross **sysroot** lib dirs (which ship a glibc) leaking
+from gfortran's FLIBS into R_LD_LIBRARY_PATH → foreign libc.so.6 at
+startup; osx-64 = conda-forge's osx-64 `zig ar` cannot create a new
+archive (wrapper seeds an empty one); win-64 = `core.autocrlf=true` on
+hosted runners turning subst.txt into CRLF (`.gitattributes` + parser).
+These are prerequisites for everything downstream (r-zig-packages
+multi-platform, flang consumption CI). The consolidation docs (this
+directory) ride in the same PR. Trusted-publisher registration on
+prefix.dev before merge.
 
 **Phase 1 — absorb the validation branch, clean the tree.**
 verify-bundle glibc ceiling: already ported to the PR branch. Record
@@ -159,7 +171,7 @@ maturing.
 
 ## Cross-project debts this plan creates/tracks
 
-- [ ] r-zig-pixi PR #6: three CI failure classes (Phase 0).
+- [x] r-zig-pixi PR #6: three CI failure classes — root-caused + fixed on the branch 2026-09-19; CI confirmation pending (Phase 0).
 - [ ] prefix.dev trusted-publisher registration (user; blocks publish-on-merge).
 - [ ] flang-pixi: write the contract-suite validation result into docs/10 (user's repo).
 - [ ] flang-pixi: its own uncommitted Windows-OpenMP status/runbook entries (user's repo).
