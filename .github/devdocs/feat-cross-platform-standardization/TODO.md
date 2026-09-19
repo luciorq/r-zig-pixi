@@ -399,3 +399,46 @@ clean, full local build/smoke/contract on gamma; the macOS mechanism was
 reproduced and the workaround exercised on omicron. ARM and Windows fixes
 are validated by the next CI run only (omicron has no container runtime;
 kappa's workspace no longer exists).
+
+
+**Round 2 (same day, after the three fixes above went in — run
+35444873262).** Every ARM build leg passed build/smoke/contract/check for
+the first time, the win-64 conda package passed, and three *new* failures
+surfaced one layer deeper:
+
+4. **verify-package on both linux legs**: the new glibc-ceiling check's
+   first-ever CI run tripped on `lib/R/bin/toolchain/realpath`
+   (conda-forge coreutils, GLIBC_2.28) — the only file in the whole bundle
+   above 2.17; R's own code and every vendored *library* are clean. The
+   `exit 1` inside the `while read < <(find ...)` loop also fired the EXIT
+   trap mid-walk, burying the one real error under "cannot open" noise.
+   Now two tiers: runtime artifacts hard at 2.17, the compile-time helpers
+   under bin/toolchain bounded at conda-forge's 2.28 baseline (only used
+   by bin/libtool / javareconf, i.e. on a dev machine that needs zig
+   anyway); list collected before the loop.
+5. **osx-64 conda package: rattler-build's relink pass fails
+   `install_name_tool` on every zig-linked Mach-O** ("malformed object
+   (offset field of section 0 in LC_SEGMENT command 0 not past the
+   headers)"). zig's Mach-O linker on x86_64 starts the first __TEXT
+   section at exactly mach_header + sizeofcmds — zero headerpad — so no
+   tool can grow the load commands (Apple's says "larger updated load
+   commands do not fit"). osx-arm64 has ~15 KiB of accidental slack from
+   16 KiB page alignment. Fix: `headerpad_max_install_names` on every
+   macOS Compile step in build.zig (what R's Makeconf already passes for
+   package .so files). Verified on omicron under Rosetta: conda's
+   install_name_tool runs rattler's delete/add/id/change sequence on the
+   padded output; without the pad both Apple's and conda's tool fail.
+6. **linux-aarch64 conda package: `libRlapack.so: undefined symbol:
+   _ZGVnN2v_log`** (glibc libmvec's Advanced-SIMD `log`). rattler-build
+   solved gfortran 16.2 + sysroot 2.39 for its build env (the pixi
+   lockfile has 15.2 + 2.28); glibc >= 2.30 sysroots ship
+   `finclude/math-vector-fortran.h`, which gfortran's driver auto-adds as
+   `-fpre-include`, and -O2's loop vectoriser then emits libmvec calls
+   that zig's glibc-2.17 stubs can never provide. Verified locally with a
+   sysroot-2.39 gfortran env: `-fpre-include=/dev/null` does not override
+   the driver's automatic one, `-nostdinc` would drop the intrinsic-module
+   dir, `-fno-tree-loop-vectorize` is the targeted fix (build.zig, gfortran
+   on linux only). Package-side exposure remains: a user compiling a
+   Fortran package with a >= 2.30 sysroot gets the same undefined symbol,
+   since R's Makeconf FFLAGS are plain `-O2` and zig-cc links no libmvec —
+   noted, not fixed here.

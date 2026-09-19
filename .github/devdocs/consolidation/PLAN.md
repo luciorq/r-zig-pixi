@@ -171,7 +171,8 @@ maturing.
 
 ## Cross-project debts this plan creates/tracks
 
-- [x] r-zig-pixi PR #6: three CI failure classes — root-caused + fixed on the branch 2026-09-19; CI confirmation pending (Phase 0).
+- [x] r-zig-pixi PR #6: three CI failure classes — root-caused + fixed on the branch 2026-09-19; round 2 (glibc-ceiling tiers, osx-64 headerpad, aarch64 libmvec) also fixed; CI confirmation pending (Phase 0).
+- [ ] r-zig-pixi: package-side libmvec exposure on gfortran platforms (Makeconf FFLAGS vs >= 2.30 sysroots) — see TODO.md round 2 item 6.
 - [ ] prefix.dev trusted-publisher registration (user; blocks publish-on-merge).
 - [ ] flang-pixi: write the contract-suite validation result into docs/10 (user's repo).
 - [ ] flang-pixi: its own uncommitted Windows-OpenMP status/runbook entries (user's repo).

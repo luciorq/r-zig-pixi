@@ -469,6 +469,7 @@ pub fn build(b: *std.Build) !void {
     linkOmp(&ctx, rbin_mod);
     const rbin = b.addExecutable(.{ .name = "R.bin", .root_module = rbin_mod });
     rbin.rdynamic = true; // MAIN_LDFLAGS = -Wl,--export-dynamic
+    macHeaderpad(&ctx, rbin);
 
     const rscript_mod = newCMod(&ctx);
     rscript_mod.addIncludePath(ctx.geninc);
@@ -478,6 +479,7 @@ pub fn build(b: *std.Build) !void {
         .extra = &.{ctx.absSub("-DR_HOME=\"{s}\"", .{ctx.rhome})},
     });
     const rscript = b.addExecutable(.{ .name = "Rscript", .root_module = rscript_mod });
+    macHeaderpad(&ctx, rscript);
 
     // ------------------------------------------------------------------
     // Loadable modules: modules/lapack.so, modules/internet.so
@@ -2003,7 +2005,28 @@ fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, script_name: []const u8
 fn addSharedLib(ctx: *const Ctx, name: []const u8, mod: *std.Build.Module) *std.Build.Step.Compile {
     const lib = ctx.b.addLibrary(.{ .linkage = .dynamic, .name = name, .root_module = mod });
     if (ctx.os == .macos) lib.linker_allow_shlib_undefined = true;
+    macHeaderpad(ctx, lib);
     return lib;
+}
+
+/// macOS: reserve load-command headroom (`-headerpad_max_install_names`,
+/// what R's own Makeconf passes for every package .so and what every
+/// conda-forge macOS build does). Without it, zig's Mach-O linker on
+/// x86_64 starts the first __TEXT section at exactly mach_header +
+/// sizeofcmds — zero slack — so no `install_name_tool -add_rpath`/`-id`/
+/// `-change` can ever grow the load commands: Apple's tool says "larger
+/// updated load commands do not fit", conda's older cctools reports the
+/// same file as "malformed object (offset field of section 0 in
+/// LC_SEGMENT command 0 not past the headers)". That killed the osx-64
+/// conda package in rattler-build's relink pass on every zig-linked
+/// binary (lapack.so, stats.so, cairo.so, bin/exec/R, ...) and would kill
+/// stage.sh's own `-add_rpath` the same way. osx-arm64 never noticed: its
+/// 16 KiB page alignment leaves ~15 KiB of slack by accident. Reproduced
+/// and verified on omicron under Rosetta 2026-09-19 with conda's
+/// install_name_tool running rattler's exact delete/add/id/change
+/// sequence. No-op on the other OSes.
+fn macHeaderpad(ctx: *const Ctx, c: *std.Build.Step.Compile) void {
+    if (ctx.os == .macos) c.headerpad_max_install_names = true;
 }
 
 const CGroupOpts = struct {
@@ -2248,6 +2271,26 @@ fn fortranOne(ctx: *const Ctx, dir: []const u8, file: []const u8, mod_deps: []co
         .gfortran => "-J",
     };
     const run = b.addSystemCommand(&.{ compiler, "-fpic", opt, "-c" });
+    // gfortran on Linux: never emit glibc libmvec vector-math calls.
+    // gfortran's driver auto-adds `-fpre-include=<sysroot>/usr/include/
+    // finclude/math-vector-fortran.h` whenever the sysroot's glibc is new
+    // enough to ship it (>= 2.30 on x86_64; aarch64 libmvec exists only
+    // from glibc 2.38), and that header marks log/exp/sin/... as having
+    // SIMD variants — so -O2's loop vectoriser turns LAPACK's
+    // fixed-trip-count loops into calls to `_ZGVnN2v_log` & co. Those
+    // symbols live in libmvec.so.1, which zig's glibc-2.17 link stubs (the
+    // floor we ship against) do not have and cannot have, so the calls
+    // stay undefined and libRlapack.so refuses to load ("undefined symbol:
+    // _ZGVnN2v_log", found in the linux-aarch64 conda-package job: rattler-
+    // build solved sysroot 2.39 + gfortran 16 while the pixi lockfile's
+    // 2.28 + gfortran 15 had no such header, which is why `pixi run build`
+    // never showed it). `-fpre-include=/dev/null` does NOT override the
+    // driver's automatic one (both end up on the f951 line — verified),
+    // `-nostdinc` would also drop the intrinsic-module dir, so disable the
+    // one pass that creates the calls: loop vectorisation. Cost is
+    // negligible for reference BLAS/LAPACK at -O2's very-cheap cost model;
+    // the openblas variant exists for real performance.
+    if (fc == .gfortran and ctx.os == .linux) run.addArg("-fno-tree-loop-vectorize");
     run.setName(b.fmt("{s} {s}/{s}", .{ compiler, dir, file }));
     run.addFileArg(ctx.path(b.fmt("{s}/{s}", .{ dir, file })));
     run.addArg("-o");
