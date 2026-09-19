@@ -1,6 +1,19 @@
 # Plan: self-hosted CI for the conda-package build + publish pipeline (2026-07-30)
 
-**Status: planned, approved, not yet implemented.** Deliberately postponed
+**Status: DECOMMISSIONED (2026-09-19).** This fleet was implemented and
+ran real releases, but the repo going public (2026-09-03) made
+GitHub-hosted runners free with no minute caps — including the arm64
+Linux and Intel macOS types the fleet could never provide — so the
+entire self-hosted approach was retired: kappa's runner registration had
+already aged out (GitHub auto-removes runners offline >14 days), all
+conda-package legs moved to hosted runners on every platform, and
+publishing switched from per-machine `rattler-build auth login`
+sessions to prefix.dev OIDC trusted publishing (no stored credentials).
+Remaining teardown on the machines themselves (gamma's/omicron's
+`actions.runner.*` services) is the operator's own cleanup. The plan
+below is kept as the historical record of the implemented design.
+
+**Original status: planned, approved, not yet implemented.** Deliberately postponed
 until after the `worktree-feat-zig-build` branch merges back to `main` —
 a cleaner base for CI changes than an in-progress feature branch, and it
 lets the newly-added `pixi run contract` (`pak`) checks and the F7.6/F7.7/

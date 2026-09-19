@@ -320,11 +320,14 @@ mechanical on paper was then executed for real:
   R_PLATFORM in the generated headers. configure-only.sh now passes an
   explicit `--build` when (and only when) that misdetection would occur.
 - **CI matrix**: `build` job gained the arch axis (ubuntu-24.04-arm,
-  macos-15-intel × default/full; openblas on both linux archs); new
-  `conda-package-hosted` job builds + publishes linux-aarch64/osx-64 to
-  `universe` via prefix.dev OIDC trusted publishing (no stored
-  credentials — unlike the self-hosted legs' rattler-build auth
-  sessions).
+  macos-15-intel × default/full; openblas on both linux archs). The
+  self-hosted fleet (gamma/omicron/kappa) was decommissioned outright
+  (2026-09-19, see feat-prefix-publish/CI_SELF_HOSTED_PLAN.md's closing
+  note): one hosted `conda-package` job now builds + publishes ALL five
+  platforms to `universe` via prefix.dev OIDC trusted publishing (no
+  stored credentials anywhere), and the Windows fresh-env consume test
+  — disabled on kappa over its WSL-bash-on-PATH problem — is re-enabled
+  on hosted windows-latest.
 - **recipe.yaml**: Fortran selectors collapsed to `linux64 → flang`,
   `not linux64 → gfortran` (render-verified for both linux archs).
 
