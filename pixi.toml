@@ -86,7 +86,14 @@ llvm-openmp = "*"  # zig cc does -fopenmp codegen but ships no libomp/omp.h
 # --- headless graphics: cairo + png only in slim ---
 cairo = "*"
 expat = "*"
-pango = "*"
+# pango/harfbuzz pinned to the lockfile's current generation: a fresh solve
+# (flang-zig-validation worktree, 2026-09-19) pulled pango 1.58 + the split
+# libharfbuzz 14.3, which break R 4.6.1's cairo device compile (hb.h
+# include churn). Independent of any toolchain choice; lift the pin only
+# together with a fix on the R side (or a newer R). harfbuzz is not a
+# direct dependency otherwise — listed only to hold its version.
+pango = "1.56.*"
+harfbuzz = "14.2.*"
 fontconfig = "*"
 freetype = "*"
 libpng = "*"

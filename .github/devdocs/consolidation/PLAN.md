@@ -174,10 +174,10 @@ maturing.
 - [x] r-zig-pixi PR #6: three CI failure classes — root-caused + fixed on the branch 2026-09-19; round 2 (glibc-ceiling tiers, osx-64 headerpad, aarch64 libmvec) also fixed; **CI fully green on run 35446891595 (all 16 jobs, 2026-09-19)** — remaining Phase 0 steps are trusted-publisher registration + merge (user).
 - [ ] r-zig-pixi: package-side libmvec exposure on gfortran platforms (Makeconf FFLAGS vs >= 2.30 sysroots) — see TODO.md round 2 item 6.
 - [ ] prefix.dev trusted-publisher registration (user; blocks publish-on-merge).
-- [ ] flang-pixi: write the contract-suite validation result into docs/10 (user's repo).
+- [ ] flang-pixi: contract-suite validation result drafted into docs/10 2026-09-19 (uncommitted, user's repo/commit).
 - [ ] flang-pixi: its own uncommitted Windows-OpenMP status/runbook entries (user's repo).
-- [ ] Remove flang-zig-validation worktree + branch after Phase 1.
-- [ ] pango/harfbuzz pin ahead of next lockfile refresh (all R-building repos).
+- [x] Remove flang-zig-validation worktree + branch — done 2026-09-19 (uncommitted diff preserved at /data/gamma/luciorq/workspaces/temp/r-zig-validation-uncommitted.patch).
+- [x] pango/harfbuzz pin ahead of next lockfile refresh — r-zig-pixi pixi.toml pinned 2026-09-19 (pango 1.56.*, harfbuzz 14.2.*; lockfile unchanged). Still open for any other R-building repo.
 - [ ] universe channel hygiene: delete superseded flang-rt `_1.._3` + wrong-metadata pixi-built files (needs delete-scoped key).
 - [ ] gamma/omicron: stop + remove leftover `actions.runner.*` services (fleet decommissioned).
 - [ ] omicron/kappa: `r-zig-pixi-test` scratch dirs — keep or remove (user call).
