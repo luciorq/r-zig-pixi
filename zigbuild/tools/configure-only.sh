@@ -53,6 +53,19 @@ case "$FC" in
       exit 1
     fi
     FLIBS_ARGS+=("FLIBS=-L$(dirname "$rt") -lflang_rt.runtime -lm")
+    # macOS: the flang driver locates the SDK via SDKROOT (falling back to
+    # xcrun); without it every *link* it performs dies with "ld: library
+    # 'System' not found". R itself never links with flang (packages go
+    # through the zig-cc shim + FLIBS), but configure's Fortran probes do
+    # — the OpenMP one in particular — and a failed link there captured
+    # SHLIB_OPENMP_FFLAGS/R_OPENMP_FFLAGS/OPENMP_FCFLAGS as empty on the
+    # first flang-zig osx-arm64 capture (2026-09-19), silently dropping
+    # Fortran OpenMP for every user package on that platform. flang-pixi's
+    # own CI sets SDKROOT for the same reason (FLANG_PIXI_HANDOFF.md §2).
+    if [ "$OS" = macos ] && [ -z "${SDKROOT:-}" ] && command -v xcrun >/dev/null 2>&1; then
+      SDKROOT="$(xcrun --show-sdk-path 2>/dev/null || true)"
+      [ -n "$SDKROOT" ] && export SDKROOT && echo "SDKROOT=$SDKROOT (for flang's configure-time links)"
+    fi
     ;;
 esac
 

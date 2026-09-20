@@ -83,7 +83,9 @@ njobs() {
   nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4
 }
 
-# flang on linux-64/win-64, gfortran on osx-*/linux-aarch64 (see pixi.toml)
+# flang where the env provides it (conda-forge's on linux-64, flang-pixi's
+# flang-zig on osx-arm64 — see pixi.toml's per-target deps), gfortran
+# elsewhere. Same probe order as build.zig's FortranCompiler selection.
 fortran_compiler() {
   if command -v flang >/dev/null 2>&1; then echo flang
   elif command -v flang-new >/dev/null 2>&1; then echo flang-new

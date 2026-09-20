@@ -67,3 +67,14 @@ documented above plus the build artifacts' existence. After the
 verify-bundle.sh change is ported to a real branch and the rest is
 recorded here: `git worktree remove` the worktree and delete the
 branch.
+
+## Cleanup done (2026-09-19)
+
+Everything above was absorbed (verify-bundle glibc ceiling on `main` via
+PR #6; pango/harfbuzz pinned in the main `pixi.toml`; result recorded in
+flang-pixi's docs/10). The worktree and the `flang-zig-validation` branch
+were removed with `git worktree remove --force` + `git branch -D`. The
+three-file uncommitted diff (pixi.toml swap + pin, pixi.lock, the
+verify-bundle check) is preserved verbatim at
+`/data/gamma/luciorq/workspaces/temp/r-zig-validation-uncommitted.patch`
+for reference; the 1.1 GiB of build artifacts were not kept.
