@@ -40,6 +40,42 @@ platform table:
   OTOOL/LIPO capture Apple's `/usr/bin` tools and FOUNDATION_LIBS gains
   `-framework Foundation`; build.zig consumes none of those.
 
+## Follow-ups from the flang-pixi handoff review (same day)
+
+`FLANG_PIXI_HANDOFF.md` (written by the flang-pixi side) reviewed this
+wiring; three of its findings were acted on before merge:
+
+- **LLVM major no longer baked into Makeconf.** gen-subst.sh now turns
+  the captured runtime dir (`<conda>/lib/clang/<major>/lib/<subdir>`)
+  into `@ZR_FLANGRT_DIR@`, which build.zig fills from `findFlangRt` at
+  build time (and refuses a flang-captured config in a gfortran env).
+  Applied to the linux-x86_64 and osx-arm64 captures. Verified: the
+  linux-64 Makeconf resolves to the env's real `clang/22` dir and minqa
+  links through it (contract test).
+- **Fortran OpenMP restored on osx-arm64.** The first flang capture had
+  empty `SHLIB_OPENMP_FFLAGS`/`R_OPENMP_FFLAGS`/`OPENMP_FCFLAGS` and
+  `SUPPORT_OPENMP` undefined — not because the omp_lib module was
+  missing (flang-rt-zig build 4 ships it) but because configure's probe
+  *links* with flang, and on macOS the flang driver cannot find libSystem
+  without `SDKROOT` ("ld: library 'System' not found", reproduced on
+  omicron). configure-only.sh now exports `SDKROOT` from `xcrun` for
+  flang captures on macOS; the re-capture carries `-fopenmp` in all
+  three and `SUPPORT_OPENMP 1`, parity with the gfortran capture.
+  linux-64 (conda-forge flang) keeps them empty: its llvm-openmp ships
+  no `omp_lib.mod`.
+- **Windows import-stub step hardened** (`pipefail` + export-count
+  check) after an MSYS fork flake produced an empty stub and surfaced as
+  a link storm two jobs later — unrelated to flang, found by this PR's
+  CI.
+
+Noted, not acted on: package `.so`s linked via `$(FLIBS)` on macOS may
+pick `libflang_rt.runtime.dylib` (beside the `.a`) — fine in a pixi env
+(run dep), a relocatability caveat for user-built packages; the Windows
+consume test will need the universe channel once win-64 converges;
+`zig build` does not track the Fortran compiler binary in its cache, so
+every compiler swap starts with `rm -rf build/zig-cache` (all
+validations here did).
+
 ## osx-arm64 — DONE 2026-09-19 (omicron, macOS 26.4.1, native)
 
 | step | result |
@@ -63,3 +99,8 @@ same pair so users compile packages with the compiler R was built with
 
 **Still gfortran**: osx-64, linux-aarch64, win-64 — next in that order
 per PLAN.md (win-64 is the MinGW-ABI case only flang-pixi covers).
+
+Before the next platform read `FLANG_PIXI_HANDOFF.md` (2026-09-19, from the
+flang-pixi side): review of this wiring, the hard-coded `lib/clang/<major>`
+in FLIBS, the lost `SHLIB_OPENMP_FFLAGS`, the Windows/binutils/channel
+caveats and the win-arm64 CRT gaps.

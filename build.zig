@@ -1765,11 +1765,24 @@ fn winMakeImportLibFor(ctx: *const Ctx, dllname: []const u8, symbols: []const []
 /// generation (`nm | sed -n <SYMPAT> | sort -u`, then `dlltool`).
 fn winMakeImportStub(ctx: *const Ctx, obj: std.Build.LazyPath, dllname: []const u8, out_stem: []const u8) std.Build.LazyPath {
     const b = ctx.b;
+    // `pipefail` + the export-count check: MSYS's process spawning fails
+    // intermittently on GitHub's windows-latest ("child_info::sync: wait
+    // failed ... cygheap read copy failed, Win32 error 299" — the classic
+    // Cygwin fork flake). When that killed `nm`/`sed` mid-pipeline here
+    // (conda-package win-64, 2026-09-19), `set -e` alone saw only `sort`'s
+    // exit 0, the .def held a bare EXPORTS line, dlltool built an *empty*
+    // import lib, and the failure surfaced 80 steps later as "lld-link:
+    // undefined symbol: xerbla_" (Rblas) plus every R API symbol
+    // Rgraphapp uses — one flaky spawn disguised as a link regression.
+    // Now it dies here, at the cause, and a plain re-run fixes it.
     const run = b.addSystemCommand(&.{
         "sh",          "-c",
-        \\set -e
+        \\set -eu
+        \\set -o pipefail
         \\echo EXPORTS > "$2"
         \\x86_64-w64-mingw32-nm "$1" | sed -n 's/^[0-9a-fA-F]* [BCDRT] //p' | sort -u >> "$2"
+        \\n=$(wc -l < "$2")
+        \\if [ "$n" -le 1 ]; then echo "error: no exported symbols found in $1 (nm/sed pipeline broke?)" >&2; exit 1; fi
         \\x86_64-w64-mingw32-dlltool --dllname "$4" --input-def "$2" --output-lib "$3"
         ,
         "make-implib",
@@ -2426,6 +2439,18 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_PREFIX@", ctx.prefix);
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_TOOLCHAIN@", b.pathFromRoot("toolchain"));
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_ROOT@", b.pathFromRoot("."));
+        // flang's runtime dir (see gen-subst.sh): resolved by findFlangRt at
+        // build time so the LLVM major never gets baked into Makeconf. A
+        // vendored config captured with flang but built in a gfortran env
+        // (or vice versa) is a real mismatch — fail loudly, not with a
+        // silently empty `-L`.
+        if (std.mem.indexOf(u8, v, "@ZR_FLANGRT_DIR@") != null) {
+            if (ctx.flangrt_dir.len == 0) {
+                std.debug.print("error: {s}/subst.txt was captured with flang (S[\"{s}\"] uses @ZR_FLANGRT_DIR@) but this env selected {s} — regenerate the vendored config for this env's Fortran compiler (pixi run configure + gen-subst.sh)\n", .{ config_dir, key, @tagName(ctx.fc) });
+                return error.FortranConfigMismatch;
+            }
+            v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_FLANGRT_DIR@", ctx.flangrt_dir);
+        }
         // config.status escapes for awk: \$ → $ and \" → " (checked: no
         // vendored value contains a literal \\, so unescape order is safe)
         v = try std.mem.replaceOwned(u8, b.allocator, v, "\\$", "$");

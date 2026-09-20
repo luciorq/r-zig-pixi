@@ -1151,7 +1151,7 @@
 #define STDC_HEADERS 1
 
 /* Define if you have C/C++/Fortran OpenMP support for package code. */
-/* #undef SUPPORT_OPENMP */
+#define SUPPORT_OPENMP 1
 
 /* Define to enable provoking compile errors on write barrier violation. */
 /* #undef TESTING_WRITE_BARRIER */

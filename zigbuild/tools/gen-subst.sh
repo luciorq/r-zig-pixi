@@ -61,6 +61,19 @@ mkdir -p "$OUT_DIR"
 #    own --sysroot link step; zig cc brings its own libc, and libgfortran
 #    lives in the retained lib/gcc/<triple>/<ver> entry, so dropping them
 #    loses nothing at link time either. linux-64 (flang) never had them.
+#
+#    The final expression turns flang's runtime directory — the clang
+#    resource dir, `<conda>/lib/clang/<LLVM major>/lib/<subdir>` as it
+#    appears in FLIBS/FLIBS_IN_SO/R_LD_LIBRARY_PATH — into the
+#    `@ZR_FLANGRT_DIR@` placeholder, which build.zig fills from its own
+#    findFlangRt() search at build time. Captured verbatim, the LLVM
+#    major of whatever flang happened to be installed at capture time
+#    (22 on the linux-64 capture, 23 on osx-arm64's) landed in every
+#    user's Makeconf, and rattler-build always solves fresh — the moment
+#    conda-forge's or flang-pixi's flang moves a major, `-L` points at
+#    nothing and every Fortran package link loses `-lflang_rt.runtime`
+#    (flang-pixi handoff, FLANG_PIXI_HANDOFF.md §1.1; same bug class as
+#    the gfortran 15.2→16.1 path that broke macOS before).
 awk '
   /^S\["/ {
     full = $0
@@ -83,6 +96,7 @@ awk '
       -e "s|$ROOT|@ZR_ROOT@|g" \
       -e 's| -L[^ "]*/sysroot/[^ "]*||g' \
       -e 's|:[^:"]*/sysroot/[^:"]*||g' \
+      -e 's|@ZR_CONDA@/lib/clang/[0-9][0-9]*/lib/[^ ":]*|@ZR_FLANGRT_DIR@|g' \
   > "$OUT_DIR/subst.txt"
 
 echo "wrote $OUT_DIR/subst.txt ($(wc -l < "$OUT_DIR/subst.txt") entries)"
