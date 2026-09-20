@@ -1765,24 +1765,30 @@ fn winMakeImportLibFor(ctx: *const Ctx, dllname: []const u8, symbols: []const []
 /// generation (`nm | sed -n <SYMPAT> | sort -u`, then `dlltool`).
 fn winMakeImportStub(ctx: *const Ctx, obj: std.Build.LazyPath, dllname: []const u8, out_stem: []const u8) std.Build.LazyPath {
     const b = ctx.b;
-    // `pipefail` + the export-count check: MSYS's process spawning fails
-    // intermittently on GitHub's windows-latest ("child_info::sync: wait
-    // failed ... cygheap read copy failed, Win32 error 299" — the classic
-    // Cygwin fork flake). When that killed `nm`/`sed` mid-pipeline here
-    // (conda-package win-64, 2026-09-19), `set -e` alone saw only `sort`'s
-    // exit 0, the .def held a bare EXPORTS line, dlltool built an *empty*
-    // import lib, and the failure surfaced 80 steps later as "lld-link:
+    // No pipes, one command per line, plus an export-count check: MSYS's
+    // process spawning fails intermittently on GitHub's windows-latest
+    // ("child_info::sync: wait failed ... cygheap read copy failed, Win32
+    // error 299" — the classic Cygwin fork flake), and this step is where
+    // it lands. As a `nm | sed | sort` pipeline (conda-package win-64,
+    // 2026-09-19) a dead `sed` left `set -e` seeing only `sort`'s exit 0:
+    // the .def held a bare EXPORTS line, dlltool built an *empty* import
+    // lib, and the failure surfaced 80 steps later as "lld-link:
     // undefined symbol: xerbla_" (Rblas) plus every R API symbol
-    // Rgraphapp uses — one flaky spawn disguised as a link regression.
-    // Now it dies here, at the cause, and a plain re-run fixes it.
+    // Rgraphapp uses. With `pipefail` added, the next flake instead
+    // *hung* the job for the full timeout: `nm` blocked forever writing
+    // into a pipe whose reader had died (the runner reported it as the
+    // orphan process at cancel). Files between the stages make every
+    // failure its own command's non-zero exit — loud, at the cause, and
+    // fixed by a plain re-run.
     const run = b.addSystemCommand(&.{
         "sh",          "-c",
         \\set -eu
-        \\set -o pipefail
+        \\x86_64-w64-mingw32-nm "$1" > "$2.nm"
+        \\sed -n 's/^[0-9a-fA-F]* [BCDRT] //p' "$2.nm" > "$2.syms"
         \\echo EXPORTS > "$2"
-        \\x86_64-w64-mingw32-nm "$1" | sed -n 's/^[0-9a-fA-F]* [BCDRT] //p' | sort -u >> "$2"
+        \\sort -u "$2.syms" >> "$2"
         \\n=$(wc -l < "$2")
-        \\if [ "$n" -le 1 ]; then echo "error: no exported symbols found in $1 (nm/sed pipeline broke?)" >&2; exit 1; fi
+        \\if [ "$n" -le 1 ]; then echo "error: no exported symbols found in $1 (nm/sed step broke?)" >&2; exit 1; fi
         \\x86_64-w64-mingw32-dlltool --dllname "$4" --input-def "$2" --output-lib "$3"
         ,
         "make-implib",
