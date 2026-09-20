@@ -86,6 +86,7 @@ validations here did).
 | `pixi run check` (Examples/Specific/Reg) — **lapack.R at -O2** | PASS (the test that caught gfortran's zgesdd miscompile) |
 | `pixi run verify-package` (relocatable standalone bundle) | PASS |
 | full variant `-e full` build / smoke / contract (tcltk, readline, NLS, jpeg/tiff) | PASS |
+| hosted CI (PR #7, run 35511725052, 2026-09-20): macos-latest default + full legs, conda-package/osx-arm64 — all 16 jobs green | PASS |
 
 flang emits `-Wfolding-failure` warnings on loessf.f / cmplx.f /
 dlapack.f (`exp(real(kind=8)) cannot be folded on host`); zig prints a

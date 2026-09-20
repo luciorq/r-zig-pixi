@@ -145,7 +145,8 @@ FLANG_ZIG_VALIDATION.md). Watch item: pango 1.58 / harfbuzz 14.3 break
 R 4.6.1's cairo compile — pin before the next lockfile refresh.
 
 **Phase 2 — Fortran convergence, platform by platform.** *(progress:
-`PHASE2_FORTRAN.md` — osx-arm64 done 2026-09-19, full bar at -O2.)*
+`PHASE2_FORTRAN.md` — osx-arm64 done 2026-09-19, full bar at -O2; CI
+green on PR #7 2026-09-20. Next: win-64.)*
 Order by value: osx-arm64 first (kills the -O1 cap; CRAN's own
 experimental flang-23 build is the parity reference), then win-64
 (MinGW flang, unblocks dropping gfortran+gcc_impl there), then

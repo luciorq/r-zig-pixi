@@ -1,9 +1,22 @@
 name: build-r
 
+# Docs-only changes never touch the build: skip the whole matrix for
+# them (a full run is ~30 min of runner time across 16 jobs). Note the
+# consequence for branch protection: a docs-only PR reports no build-r
+# checks at all, so don't mark them "required" or such PRs can't merge.
+# `[skip ci]` in a commit message also works for a one-off.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - ".github/devdocs/**"
+      - "LICENSE"
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - ".github/devdocs/**"
+      - "LICENSE"
   workflow_dispatch:
 
 # Cancel a still-running run for the same branch/PR the moment a newer
