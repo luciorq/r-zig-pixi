@@ -163,10 +163,34 @@ re-capture them on real Intel hardware whenever wanted.
 | `pixi run check` incl. lapack.R | PASS |
 | `pixi run verify-package` | PASS |
 
-**Still gfortran**: linux-aarch64 only — hosted arm runner is the only
-hardware (flang-pixi's linux-aarch64 flang-zig is itself cross-built and
-smoke-tested on that runner); the capture has to come from
-gen-config.yaml's ubuntu-24.04-arm legs.
+(Re-captured on the real macos-15-intel runner via gen-config.yaml
+right after: identical apart from `R_PLATFORM`/`R_OS` = darwin24.6.0 and
+the runner's JDK path in JAVA_HOME, i.e. the pre-Phase-2 capture's own
+values — that runner capture is what is vendored now.)
+
+## linux-aarch64 — captured 2026-09-20, CI validation pending
+
+The last gfortran platform. No interactive hardware: flang-pixi's
+linux-aarch64 flang-zig is cross-built from linux-64 and smoke-tested
+on the hosted arm runner, and that runner is the only place r-zig-pixi
+can capture or validate. `[target.linux-aarch64.dependencies]` swapped
+to `flang-zig` + `flang-rt-zig` (build 5; runtime under
+`lib/clang/23/lib/aarch64-unknown-linux-gnu`, driver cfg with the conda
+sysroot), the whole gcc/gfortran/binutils closure leaves the lock, the
+recipe is now "conda-forge flang on linux-64, flang-zig on every other
+subdir" with no gfortran anywhere. Configs captured by dispatching
+gen-config.yaml on the branch (run 35529091202) and vendoring its
+`config-linux-arm64-{slim,full}` artifacts; the diff against the
+gfortran capture is the expected Fortran set only (FLIBS and
+R_LD_LIBRARY_PATH tokenised, R_SYSTEM_ABI ClassicFlang, OpenMP Fortran
+flags intact, the sysroot dirs gone, `LD` now /usr/bin/ld since conda's
+binutils left — unused by build.zig).
+
+Validation = the PR's ubuntu-24.04-arm legs (build / smoke / contract /
+check incl. lapack.R at -O2, verify-package) plus conda-package/
+linux-aarch64 and its glibc-2.17 ceiling check. Once green, Phase 2 is
+complete: every platform's R Fortran is LLVM flang, gfortran is gone
+from the project, and the macOS -O1 cap is history.
 
 Before the next platform read `FLANG_PIXI_HANDOFF.md` (2026-09-19, from the
 flang-pixi side): review of this wiring, the hard-coded `lib/clang/<major>`

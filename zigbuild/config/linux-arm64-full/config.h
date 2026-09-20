@@ -35,7 +35,7 @@
 #define FC_LEN_T size_t
 
 /* Version of Fortran Compiler */
-#define FC_VER "GNU Fortran (conda-forge gcc 15.2.0-19) 15.2.0"
+#define FC_VER "flang version 23.1.1"
 
 /* Define to 1 if you have the `access' function. */
 #define HAVE_ACCESS 1
