@@ -146,7 +146,9 @@ R 4.6.1's cairo compile — pin before the next lockfile refresh.
 
 **Phase 2 — Fortran convergence, platform by platform.** *(progress:
 `PHASE2_FORTRAN.md` — osx-arm64 done 2026-09-19, full bar at -O2; CI
-green on PR #7 2026-09-20. Next: win-64.)*
+green on PR #7 2026-09-20; win-64 done 2026-09-20 on kappa, full bar incl.
+lapack.R; osx-64 done 2026-09-20 under Rosetta on omicron, full bar. Next:
+linux-aarch64, the last gfortran platform.)*
 Order by value: osx-arm64 first (kills the -O1 cap; CRAN's own
 experimental flang-23 build is the parity reference), then win-64
 (MinGW flang, unblocks dropping gfortran+gcc_impl there), then

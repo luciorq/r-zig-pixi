@@ -107,20 +107,24 @@ requirements:
     - zig 0.16.*
     # Fortran — same per-platform split as pixi.toml: conda-forge flang on
     # linux-64; flang-pixi's zig-built flang-zig (LLVM 23.1.1, `universe`
-    # channel — the conda-package task passes it) on osx-arm64, where
-    # gfortran silently miscompiles R's complex LAPACK at -O2; explicit
-    # gfortran everywhere else until each platform converges
-    # (consolidation/PLAN.md Phase 2). build.zig picks flang whenever the
-    # build env provides $CONDA/bin/flang.
+    # channel — the conda-package task passes it) on macOS (gfortran
+    # silently miscompiles R's complex LAPACK at -O2 on arm64; conda-forge
+    # has no macOS flang) and win-64 (the only MinGW-ABI flang); gfortran
+    # only on linux-aarch64 until it converges (consolidation/PLAN.md
+    # Phase 2). build.zig picks flang whenever the build env provides
+    # $CONDA/bin/flang.
     - if: linux64
       then:
         - flang
         - flang-rt_linux-64
-    - if: target_platform == "osx-arm64"
+    - if: osx or win
       then:
         - flang-zig
         - flang-rt-zig
-    - if: not linux64 and target_platform != "osx-arm64"
+    - if: win
+      then:
+        - binutils_impl_win-64  # x86_64-w64-mingw32-nm/-dlltool for build.zig's import-stub steps
+    - if: target_platform == "linux-aarch64"
       then:
         - gfortran
     - make >=4.4
@@ -211,10 +215,19 @@ requirements:
     - if: linux64
       then:
         - flang-rt_linux-64
-    - if: target_platform == "osx-arm64"
+    - if: osx or win
       then:
         - flang-rt-zig
-    - if: not linux64 and target_platform != "osx-arm64"
+    # build.zig copies the binutils tools (windres/ld/nm/dlltool/...) from
+    # $PREFIX/Library/bin into lib/R/bin/toolchain for the package-
+    # compilation contract, so they must be in *host* too (gfortran used
+    # to drag them in here; conda-package win-64 failed with "unable to
+    # update file from ...x86_64-w64-mingw32-windres.exe: FileNotFound"
+    # the moment it left).
+    - if: win
+      then:
+        - binutils_impl_win-64
+    - if: target_platform == "linux-aarch64"
       then:
         - gfortran
     - zlib
@@ -357,11 +370,11 @@ requirements:
       then:
         - flang
         - flang-rt_linux-64
-    - if: target_platform == "osx-arm64"
+    - if: osx or win
       then:
         - flang-zig
         - flang-rt-zig
-    - if: not linux64 and target_platform != "osx-arm64"
+    - if: target_platform == "linux-aarch64"
       then:
         - gfortran
     - make >=4.4

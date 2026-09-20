@@ -173,7 +173,7 @@ jobs:
           set -euo pipefail;
           channel="$(cd dist/conda && pwd -W)";
           consume_dir="$(mktemp -d)";
-          pixi init --channel "$channel" --channel conda-forge --platform win-64 "$consume_dir";
+          pixi init --channel "$channel" --channel conda-forge --channel https://prefix.dev/universe --platform win-64 "$consume_dir";
           cd "$consume_dir";
           pixi add r-zig-slim;
           pixi run Rscript -e 'r_home <- R.home(); cat("R_HOME =", r_home, "\n"); stopifnot(grepl("Library", r_home, fixed = TRUE)); cat("consume test OK\n")';

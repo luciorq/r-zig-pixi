@@ -98,8 +98,75 @@ lld-zig + flang-rt-zig); the r-zig-slim package's run deps carry the
 same pair so users compile packages with the compiler R was built with
 (CRAN's rule). gfortran's cctools/tapi/sigtool deps drop out.
 
-**Still gfortran**: osx-64, linux-aarch64, win-64 — next in that order
-per PLAN.md (win-64 is the MinGW-ABI case only flang-pixi covers).
+## win-64 — DONE 2026-09-20 (kappa, Windows 11 22621, native)
+
+flang-pixi's MinGW-ABI flang-zig replaces conda-forge's MinGW gfortran
+(gcc_impl_win-64). Specific to Windows:
+
+- `[target.win-64.dependencies]`: `flang-zig`, `flang-rt-zig` with
+  `build-number >= 4` (the build that ships omp_lib.mod and the
+  libatomic/libomp driver shims; it requires llvm-openmp >= 23.1.1, which
+  an unconstrained re-solve dodged by keeping the locked 22.1.8 and
+  picking build 2), and `binutils_impl_win-64` kept explicitly — it used
+  to arrive through gfortran and provides the `x86_64-w64-mingw32-nm` /
+  `-dlltool` that build.zig's import-stub steps run.
+- build.zig's Windows path: `FC`/`FC_VER` substituted per `ctx.fc`
+  (flang.exe stays in its package dir — it reads flang.cfg relative to
+  itself); new `FLIBS` substitution for Makeconf.win = `-L<resource dir>
+  -lflang_rt.runtime -lc++` (R CMD SHLIB appends `$(FLIBS)` to every
+  package link with Fortran sources and links through SHLIB_LD, the
+  zig-cc shim, never the Fortran driver — so the runtime *and* libc++,
+  which the MinGW archive needs and PE cannot leave unresolved, must be
+  spelled out; gfortran kept the historical empty FLIBS). `link_libcpp`
+  on Windows too; `-fpic` dropped there (flang reports it unused).
+- recipe.yaml mirrors it (`win` selectors); the CI Windows consume test
+  now passes the universe channel to `pixi init`.
+
+| step | result |
+|---|---|
+| `pixi run build` (flang 23.1.1 MinGW, -O2) | PASS |
+| `pixi run smoke` | PASS |
+| `pixi run contract` (minqa's Fortran compiled by flang, linked via FLIBS through the zig-cc shim) | PASS |
+| lapack.R at -O2 (`Rterm --vanilla < tests/lapack.R`, `tools::Rdiff` vs lapack.Rout.save — Windows has no wired `check` step) | PASS, Rdiff status 0 |
+| `pixi run verify-package` (relocatable bundle) | PASS |
+| hosted CI (windows-latest + conda-package/win-64) | pending PR |
+
+Trap for the record: cleaning `build/zig-cache` on kappa *while* the
+install stage was still running raced zig's first compiler_rt build
+("sub-compilation of compiler_rt failed: UnableToWriteArchive"); a clean
+re-run passed. Not needed for this swap anyway — zig keys Run-step
+caches on argv, and `gfortran` → `flang` (plus the dropped `-fpic`)
+changes every Fortran command line.
+
+## osx-64 — DONE 2026-09-20 (omicron under Rosetta 2, x86_64 env)
+
+Same mechanism as osx-arm64, no new code: `[target.osx-64.dependencies]`
+swapped to `flang-zig` + `flang-rt-zig` (build 5; resource subdir is
+`darwin` here too), recipe selectors collapsed to `osx or win` (only
+linux-aarch64 keeps gfortran), vendored osx-x86_64 configs regenerated.
+The capture ran in a copy of the tree with `platforms = ["osx-64"]` so
+pixi installs the Intel packages under Rosetta (it warns, then falls
+back); `pixi install --frozen`, since the narrowed manifest no longer
+matches the lock's platform list. Everything in the chain ran as
+genuine x86_64 binaries (flang, zig, the built R). Diff vs the gfortran
+capture: the expected Fortran keys, the cctools tool paths that leave
+with gfortran, and `R_PLATFORM`/`R_OS` now reading darwin25.4.0
+(omicron's macOS 26) instead of the macos-15 runner's darwin24.6.0 —
+informational strings only; gen-config.yaml on macos-15-intel can
+re-capture them on real Intel hardware whenever wanted.
+
+| step (all -O2) | result |
+|---|---|
+| `pixi run build` (slim) | PASS |
+| `pixi run smoke` | PASS |
+| `pixi run contract` | PASS |
+| `pixi run check` incl. lapack.R | PASS |
+| `pixi run verify-package` | PASS |
+
+**Still gfortran**: linux-aarch64 only — hosted arm runner is the only
+hardware (flang-pixi's linux-aarch64 flang-zig is itself cross-built and
+smoke-tested on that runner); the capture has to come from
+gen-config.yaml's ubuntu-24.04-arm legs.
 
 Before the next platform read `FLANG_PIXI_HANDOFF.md` (2026-09-19, from the
 flang-pixi side): review of this wiring, the hard-coded `lib/clang/<major>`
