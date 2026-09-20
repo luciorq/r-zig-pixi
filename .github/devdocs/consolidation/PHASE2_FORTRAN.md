@@ -98,8 +98,49 @@ lld-zig + flang-rt-zig); the r-zig-slim package's run deps carry the
 same pair so users compile packages with the compiler R was built with
 (CRAN's rule). gfortran's cctools/tapi/sigtool deps drop out.
 
-**Still gfortran**: osx-64, linux-aarch64, win-64 — next in that order
-per PLAN.md (win-64 is the MinGW-ABI case only flang-pixi covers).
+## win-64 — DONE 2026-09-20 (kappa, Windows 11 22621, native)
+
+flang-pixi's MinGW-ABI flang-zig replaces conda-forge's MinGW gfortran
+(gcc_impl_win-64). Specific to Windows:
+
+- `[target.win-64.dependencies]`: `flang-zig`, `flang-rt-zig` with
+  `build-number >= 4` (the build that ships omp_lib.mod and the
+  libatomic/libomp driver shims; it requires llvm-openmp >= 23.1.1, which
+  an unconstrained re-solve dodged by keeping the locked 22.1.8 and
+  picking build 2), and `binutils_impl_win-64` kept explicitly — it used
+  to arrive through gfortran and provides the `x86_64-w64-mingw32-nm` /
+  `-dlltool` that build.zig's import-stub steps run.
+- build.zig's Windows path: `FC`/`FC_VER` substituted per `ctx.fc`
+  (flang.exe stays in its package dir — it reads flang.cfg relative to
+  itself); new `FLIBS` substitution for Makeconf.win = `-L<resource dir>
+  -lflang_rt.runtime -lc++` (R CMD SHLIB appends `$(FLIBS)` to every
+  package link with Fortran sources and links through SHLIB_LD, the
+  zig-cc shim, never the Fortran driver — so the runtime *and* libc++,
+  which the MinGW archive needs and PE cannot leave unresolved, must be
+  spelled out; gfortran kept the historical empty FLIBS). `link_libcpp`
+  on Windows too; `-fpic` dropped there (flang reports it unused).
+- recipe.yaml mirrors it (`win` selectors); the CI Windows consume test
+  now passes the universe channel to `pixi init`.
+
+| step | result |
+|---|---|
+| `pixi run build` (flang 23.1.1 MinGW, -O2) | PASS |
+| `pixi run smoke` | PASS |
+| `pixi run contract` (minqa's Fortran compiled by flang, linked via FLIBS through the zig-cc shim) | PASS |
+| lapack.R at -O2 (`Rterm --vanilla < tests/lapack.R`, `tools::Rdiff` vs lapack.Rout.save — Windows has no wired `check` step) | PASS, Rdiff status 0 |
+| `pixi run verify-package` (relocatable bundle) | PASS |
+| hosted CI (windows-latest + conda-package/win-64) | pending PR |
+
+Trap for the record: cleaning `build/zig-cache` on kappa *while* the
+install stage was still running raced zig's first compiler_rt build
+("sub-compilation of compiler_rt failed: UnableToWriteArchive"); a clean
+re-run passed. Not needed for this swap anyway — zig keys Run-step
+caches on argv, and `gfortran` → `flang` (plus the dropped `-fpic`)
+changes every Fortran command line.
+
+**Still gfortran**: osx-64, linux-aarch64 — osx-64 next (Rosetta on
+omicron), then linux-aarch64 (hosted arm runner only; flang-pixi's
+linux-aarch64 flang-zig is cross-built).
 
 Before the next platform read `FLANG_PIXI_HANDOFF.md` (2026-09-19, from the
 flang-pixi side): review of this wiring, the hard-coded `lib/clang/<major>`

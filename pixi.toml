@@ -15,8 +15,8 @@ version = "0.1.0"
 # No system compilers, no system shells, no system libraries.
 # C/C++ toolchain: zig (zig cc / zig c++ / zig ar / zig ranlib) on every platform.
 # Fortran: LLVM flang — conda-forge's on linux-64, flang-pixi's zig-built
-#          flang-zig (universe channel) on osx-arm64; explicit gfortran
-#          elsewhere (osx-64, linux-aarch64, win-64) until each converges.
+#          flang-zig (universe channel) on osx-arm64 + win-64; explicit
+#          gfortran on osx-64 and linux-aarch64 until they converge.
 #
 # Two build variants, mapped to pixi environments:
 #   default -> "slim": headless. cairo+png graphics, ICU, pcre2, libcurl,
@@ -131,11 +131,22 @@ flang-rt_linux-64 = "*"  # Fortran runtime lib is a separate package
 uutils-coreutils = "*"
 patchelf = "*"  # rpath rewriting for relocatable installs
 
-# win-64 Fortran: conda-forge's MinGW-w64 gfortran (gcc_impl_win-64), NOT
-# flang — conda-forge's win flang targets the MSVC ABI, while R's gnuwin32
-# build and zig cc's -windows-gnu target are MinGW. One ABI everywhere.
+# win-64 Fortran: flang-pixi's zig-built, MinGW-ABI flang (flang-zig,
+# LLVM 23.1.1, `universe` channel) — the only flang that emits objects
+# R's gnuwin32 build and zig cc's -windows-gnu target can link
+# (conda-forge's win flang targets MSVC; see FLANG_PIXI_HANDOFF.md).
+# Replaces conda-forge's MinGW gfortran (gcc_impl_win-64) — Phase 2,
+# platform 2. binutils_impl_win-64 used to arrive through gfortran and
+# is what provides the x86_64-w64-mingw32-nm/-dlltool that build.zig's
+# import-stub steps call; keep it explicitly.
 [target.win-64.dependencies]
-gfortran = "*"
+flang-zig = "*"
+# build >= 4: ships omp_lib.mod + the libatomic/libomp link shims flang's
+# MinGW driver needs for -fopenmp (flang-pixi handoff); it requires
+# llvm-openmp >= 23.1.1, which an unconstrained re-solve would otherwise
+# dodge by keeping the older locked llvm-openmp and picking build 2.
+flang-rt-zig = { version = "*", build-number = ">=4" }
+binutils_impl_win-64 = "*"
 uutils-coreutils = "*"
 # gnuwin32 has no slim switches: Windows R unconditionally builds the
 # bitmap devices (jpeg/tiff) and the tcltk package, so slim-on-Windows

@@ -116,11 +116,14 @@ requirements:
       then:
         - flang
         - flang-rt_linux-64
-    - if: target_platform == "osx-arm64"
+    - if: target_platform == "osx-arm64" or win
       then:
         - flang-zig
         - flang-rt-zig
-    - if: not linux64 and target_platform != "osx-arm64"
+    - if: win
+      then:
+        - binutils_impl_win-64  # x86_64-w64-mingw32-nm/-dlltool for build.zig's import-stub steps
+    - if: not linux64 and target_platform != "osx-arm64" and not win
       then:
         - gfortran
     - make >=4.4
@@ -211,10 +214,10 @@ requirements:
     - if: linux64
       then:
         - flang-rt_linux-64
-    - if: target_platform == "osx-arm64"
+    - if: target_platform == "osx-arm64" or win
       then:
         - flang-rt-zig
-    - if: not linux64 and target_platform != "osx-arm64"
+    - if: not linux64 and target_platform != "osx-arm64" and not win
       then:
         - gfortran
     - zlib
@@ -357,11 +360,11 @@ requirements:
       then:
         - flang
         - flang-rt_linux-64
-    - if: target_platform == "osx-arm64"
+    - if: target_platform == "osx-arm64" or win
       then:
         - flang-zig
         - flang-rt-zig
-    - if: not linux64 and target_platform != "osx-arm64"
+    - if: not linux64 and target_platform != "osx-arm64" and not win
       then:
         - gfortran
     - make >=4.4

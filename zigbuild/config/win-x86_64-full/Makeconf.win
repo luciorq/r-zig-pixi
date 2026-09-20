@@ -32,7 +32,7 @@ IMPDIR = @IMPDIR@
 M_ARCH =
 DT_ARCH =
 RC_ARCH =
-FLIBS =
+FLIBS = @FLIBS@
 # Used by packages tcltk and tkrplot
 TCL_HOME = $(R_HOME)/Tcl
 

@@ -742,7 +742,10 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     try ctx.subst.put("VERSION", r_version);
     try ctx.subst.put("PACKAGE_VERSION", r_version);
     try ctx.subst.put("CC_VER", "zig cc (LLVM/clang, MinGW target)");
-    try ctx.subst.put("FC_VER", "gfortran (conda-forge, MinGW target)");
+    try ctx.subst.put("FC_VER", switch (ctx.fc) {
+        .flang => "flang (flang-pixi flang-zig, MinGW target)",
+        .gfortran => "gfortran (conda-forge, MinGW target)",
+    });
     try ctx.subst.put("RMATH_HAVE_WORKING_LOG1P", "# define HAVE_WORKING_LOG1P 1");
     // libgnuintl.h.in's 4 tokens — gnuwin32's own Makefile.win generates
     // libgnuintl.h from this .in via the exact same 4 sed substitutions
@@ -1601,7 +1604,27 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     // the conda env's own gfortran.exe — the same absolute location
     // fortranOne's own bare "gfortran" PATH lookup already resolves
     // to successfully when building R itself.
-    try ctx.subst.put("FC", b.fmt("\"{s}/Library/bin/gfortran.exe\"", .{conda_fwd}));
+    // flang has the same "stays in its package dir" rule: the driver
+    // reads flang.cfg (intrinsic-module path, -fuse-ld=lld) relative to
+    // its own location — a copied flang.exe fails on every `use`.
+    try ctx.subst.put("FC", switch (ctx.fc) {
+        .flang => b.fmt("\"{s}/Library/bin/flang.exe\"", .{conda_fwd}),
+        .gfortran => b.fmt("\"{s}/Library/bin/gfortran.exe\"", .{conda_fwd}),
+    });
+    // FLIBS: what R CMD SHLIB appends to every package link that has
+    // Fortran sources (tools:::.SHLIB → shlib_libadd "$(FLIBS)"); the
+    // link itself goes through SHLIB_LD = the zig-cc shim, not the Fortran
+    // driver, so the runtime must be spelled out here. flang: its runtime
+    // archive from the clang resource dir (resolved at build time, same
+    // as unix's @ZR_FLANGRT_DIR@) plus zig's libc++ — libflang_rt.runtime
+    // is C++ and PE refuses unresolved symbols (flang-pixi handoff: only
+    // Linux's archive is libc++-free). gfortran: empty, as gnuwin32
+    // always had it — the zig-cc shim resolves -lgfortran/-lquadmath from
+    // gcc's private libdir when a package asks for them.
+    try ctx.subst.put("FLIBS", switch (ctx.fc) {
+        .flang => b.fmt("-L\"{s}\" -lflang_rt.runtime -lc++", .{std.mem.replaceOwned(u8, b.allocator, ctx.flangrt_dir, "\\", "/") catch @panic("OOM")}),
+        .gfortran => "",
+    });
     try ctx.subst.put("CSTD", "-std=gnu2x");
     try ctx.subst.put("EOPTS", "");
     try ctx.subst.put("SANOPTS", "");
@@ -2190,7 +2213,9 @@ fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
             mod.addLibraryPath(.{ .cwd_relative = ctx.flangrt_dir });
             mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no, .preferred_link_mode = .static });
             mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
-            if (ctx.os == .macos) mod.link_libcpp = true;
+            // flang-pixi's handoff measured it: only the Linux archives are
+            // libc++-free (their sole C++-runtime reference is __cxa_atexit).
+            if (ctx.os == .macos or ctx.os == .windows) mod.link_libcpp = true;
         },
         .gfortran => switch (ctx.os) {
             .linux => {
@@ -2328,7 +2353,10 @@ fn fortranOne(ctx: *const Ctx, dir: []const u8, file: []const u8, mod_deps: []co
         .flang => "-module-dir",
         .gfortran => "-J",
     };
-    const run = b.addSystemCommand(&.{ compiler, "-fpic", opt, "-c" });
+    // -fpic is meaningless on Windows (PE has no PIC distinction; flang
+    // reports it as an unused argument on every file) — omit it there.
+    const run = b.addSystemCommand(&.{ compiler, opt, "-c" });
+    if (ctx.os != .windows) run.addArg("-fpic");
     // gfortran on Linux: never emit glibc libmvec vector-math calls.
     // gfortran's driver auto-adds `-fpre-include=<sysroot>/usr/include/
     // finclude/math-vector-fortran.h` whenever the sysroot's glibc is new

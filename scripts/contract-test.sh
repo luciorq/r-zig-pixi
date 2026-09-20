@@ -47,9 +47,23 @@ echo "Contract test (variant: $VARIANT, os: $OS)"
 echo "Compiling Rcpp + data.table + minqa + pak + ps from source..."
 R_CONTRACT_LIB="$LIB" "$R_BIN" --vanilla -e '
   lib <- Sys.getenv("R_CONTRACT_LIB")
-  install.packages(c("Rcpp", "data.table", "minqa", "pak", "ps"),
-                   repos = "https://cloud.r-project.org",
-                   lib = lib, type = "source", Ncpus = 4)
+  pkgs <- c("Rcpp", "data.table", "minqa", "pak", "ps")
+  # CRAN mirror hiccups are real (main-branch openblas leg, 2026-09-20:
+  # "SSL connect error" downloading Rcpp, then minqa failed on the
+  # missing dependency): bounded retries, and fail *here* with a clear
+  # message rather than three packages later. install.packages() itself
+  # only warns on a failed download.
+  options(timeout = 300)
+  for (attempt in 1:3) {
+    install.packages(pkgs, repos = "https://cloud.r-project.org",
+                     lib = lib, type = "source", Ncpus = 4)
+    missing <- setdiff(pkgs, rownames(installed.packages(lib.loc = lib)))
+    if (!length(missing)) break
+    message("contract: attempt ", attempt, " left ", paste(missing, collapse = ", "),
+            " uninstalled", if (attempt < 3) "; retrying in 30 s" else "")
+    if (attempt < 3) Sys.sleep(30)
+  }
+  if (length(missing)) stop("contract: could not install ", paste(missing, collapse = ", "))
   .libPaths(lib)
   library(Rcpp); library(data.table); library(minqa); library(pak); library(ps)
   stopifnot(evalCpp("2 + 2") == 4)
