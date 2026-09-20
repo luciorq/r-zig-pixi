@@ -107,26 +107,23 @@ requirements:
     - zig 0.16.*
     # Fortran — same per-platform split as pixi.toml: conda-forge flang on
     # linux-64; flang-pixi's zig-built flang-zig (LLVM 23.1.1, `universe`
-    # channel — the conda-package task passes it) on macOS (gfortran
-    # silently miscompiles R's complex LAPACK at -O2 on arm64; conda-forge
-    # has no macOS flang) and win-64 (the only MinGW-ABI flang); gfortran
-    # only on linux-aarch64 until it converges (consolidation/PLAN.md
-    # Phase 2). build.zig picks flang whenever the build env provides
-    # $CONDA/bin/flang.
+    # channel — the conda-package task passes it) everywhere else: macOS
+    # (gfortran silently miscompiles R's complex LAPACK at -O2 on arm64;
+    # conda-forge has no macOS flang), win-64 (the only MinGW-ABI flang)
+    # and linux-aarch64 (no conda-forge flang). No gfortran anywhere
+    # (consolidation/PLAN.md Phase 2). build.zig picks flang whenever the
+    # build env provides $CONDA/bin/flang.
     - if: linux64
       then:
         - flang
         - flang-rt_linux-64
-    - if: osx or win
+    - if: not linux64
       then:
         - flang-zig
         - flang-rt-zig
     - if: win
       then:
         - binutils_impl_win-64  # x86_64-w64-mingw32-nm/-dlltool for build.zig's import-stub steps
-    - if: target_platform == "linux-aarch64"
-      then:
-        - gfortran
     - make >=4.4
     - pkg-config
     - if: linux
@@ -215,7 +212,7 @@ requirements:
     - if: linux64
       then:
         - flang-rt_linux-64
-    - if: osx or win
+    - if: not linux64
       then:
         - flang-rt-zig
     # build.zig copies the binutils tools (windres/ld/nm/dlltool/...) from
@@ -227,9 +224,6 @@ requirements:
     - if: win
       then:
         - binutils_impl_win-64
-    - if: target_platform == "linux-aarch64"
-      then:
-        - gfortran
     - zlib
     - bzip2
     - xz
@@ -370,13 +364,10 @@ requirements:
       then:
         - flang
         - flang-rt_linux-64
-    - if: osx or win
+    - if: not linux64
       then:
         - flang-zig
         - flang-rt-zig
-    - if: target_platform == "linux-aarch64"
-      then:
-        - gfortran
     - make >=4.4
 
 tests:
