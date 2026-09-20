@@ -15,8 +15,8 @@ version = "0.1.0"
 # No system compilers, no system shells, no system libraries.
 # C/C++ toolchain: zig (zig cc / zig c++ / zig ar / zig ranlib) on every platform.
 # Fortran: LLVM flang — conda-forge's on linux-64, flang-pixi's zig-built
-#          flang-zig (universe channel) on osx-arm64, osx-64 + win-64;
-#          explicit gfortran on linux-aarch64 until it converges.
+#          flang-zig (universe channel) everywhere else (osx-arm64,
+#          osx-64, win-64, linux-aarch64). No gfortran anywhere.
 #
 # Two build variants, mapped to pixi environments:
 #   default -> "slim": headless. cairo+png graphics, ICU, pcre2, libcurl,
@@ -189,8 +189,14 @@ flang-zig = "*"
 flang-rt-zig = "*"
 uutils-coreutils = "*"
 
+# linux-aarch64 Fortran: flang-zig (Phase 2, platform 4 — the last one);
+# conda-forge ships no flang for linux-aarch64. flang-pixi cross-builds
+# this one from linux-64 and smoke-tests it on the hosted arm runner —
+# which is also the only hardware r-zig-pixi has for it (configs captured
+# by gen-config.yaml's ubuntu-24.04-arm legs, validated by build-r's).
 [target.linux-aarch64.dependencies]
-gfortran = "*"
+flang-zig = "*"
+flang-rt-zig = "*"
 coreutils = "*"
 patchelf = "*"
 
