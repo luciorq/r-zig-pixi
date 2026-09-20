@@ -14,7 +14,7 @@ by this document**.
 | Project | Role in the family | State |
 |---|---|---|
 | **flang-pixi** | Toolchain layer: `lld-zig`/`flang-zig`/`flang-rt-zig` 23.1.1, zig-built, published to `universe` for **six** subdirs (incl. win-arm64). Its MinGW-ABI Windows flang exists nowhere else. `llvm-zig` stays build-time-only (never published). | Shipping; Windows OpenMP leg (flang-rt build 4) just landed, uncommitted docs pending |
-| **r-zig-pixi** | Flagship consumer: R itself via pure `zig build`, vendored-configure. Proves the toolchain end-to-end (contract suite, `lapack.R`). Publishes `r-zig-slim` to `universe`. | PR #6 merged 2026-09-19; r-zig-slim 4.6.1 build 1 published to `universe` for all five subdirs via OIDC — Phase 0 done |
+| **r-zig-pixi** | Flagship consumer: R itself via pure `zig build`, vendored-configure. Proves the toolchain end-to-end (contract suite, `lapack.R`). Publishes `r-zig-slim` to `universe`. | Phases 0–2 done 2026-09-20: 5-platform hosted CI, OIDC publishing, R's Fortran on LLVM flang everywhere (flang-zig on 4 subdirs); build 2 republish pending |
 | **r-zig-packages** | Downstream layer: `rz-*` R packages compiled against `r-zig-slim`. | POC done, linux-64 only, parked — unblocs as r-zig-slim's platform list grows |
 | **blast-zig-pixi** | Application template: foreign build system (NCBI autotools) + zig shims + `pixi-build-rattler-build`; distribution patterns (v3 flags/extras + repodata-v2 twin packages, microarch variants). | Shipping to `universe`, 5 platforms |
 | **zig-pixi-build-backend** | Future-facing: recipe-free `pixi_build_zig` backend (pixi fork), cross-first (~18 platforms). The bet on where the ecosystem goes. | Working PoC, unpublished, needs fork checkout |
@@ -148,7 +148,8 @@ R 4.6.1's cairo compile — pin before the next lockfile refresh.
 `PHASE2_FORTRAN.md` — osx-arm64 done 2026-09-19, full bar at -O2; CI
 green on PR #7 2026-09-20; win-64 done 2026-09-20 on kappa, full bar incl.
 lapack.R; osx-64 done 2026-09-20 under Rosetta on omicron, full bar;
-linux-aarch64 captured via gen-config 2026-09-20, CI validation pending.)*
+linux-aarch64 done 2026-09-20 via CI. **Phase 2 complete** — pending only
+the build-number bump so the channel actually carries the flang builds.)*
 Order by value: osx-arm64 first (kills the -O1 cap; CRAN's own
 experimental flang-23 build is the parity reference), then win-64
 (MinGW flang, unblocks dropping gfortran+gcc_impl there), then

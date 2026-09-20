@@ -98,15 +98,21 @@ jobs:
     # Gated behind ENABLE_HOSTED_JOBS — see `build` job above for details.
     if: vars.ENABLE_HOSTED_JOBS == 'true'
     runs-on: windows-latest
-    timeout-minutes: 180
+    # 60, not 180: this leg takes ~20 min when healthy, and windows-latest's
+    # MSYS process spawning flakes ("cygheap read copy failed") have twice
+    # turned a build into a silent hang (2026-09-20) — fail fast, re-run.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
       - uses: prefix-dev/setup-pixi@v0.10.0
         with:
           environments: default
           cache: true
+      # --verbose: zig build prints nothing until it finishes, so a hung
+      # step leaves an empty log; with it the last command started is the
+      # last line, which is the diagnosis.
       - name: Build R (zig build alone, no autoconf/make/gnuwin32)
-        run: pixi run build
+        run: pixi run build -- --verbose
       - name: Smoke test
         run: pixi run smoke
       - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
