@@ -138,9 +138,35 @@ re-run passed. Not needed for this swap anyway — zig keys Run-step
 caches on argv, and `gfortran` → `flang` (plus the dropped `-fpic`)
 changes every Fortran command line.
 
-**Still gfortran**: osx-64, linux-aarch64 — osx-64 next (Rosetta on
-omicron), then linux-aarch64 (hosted arm runner only; flang-pixi's
-linux-aarch64 flang-zig is cross-built).
+## osx-64 — DONE 2026-09-20 (omicron under Rosetta 2, x86_64 env)
+
+Same mechanism as osx-arm64, no new code: `[target.osx-64.dependencies]`
+swapped to `flang-zig` + `flang-rt-zig` (build 5; resource subdir is
+`darwin` here too), recipe selectors collapsed to `osx or win` (only
+linux-aarch64 keeps gfortran), vendored osx-x86_64 configs regenerated.
+The capture ran in a copy of the tree with `platforms = ["osx-64"]` so
+pixi installs the Intel packages under Rosetta (it warns, then falls
+back); `pixi install --frozen`, since the narrowed manifest no longer
+matches the lock's platform list. Everything in the chain ran as
+genuine x86_64 binaries (flang, zig, the built R). Diff vs the gfortran
+capture: the expected Fortran keys, the cctools tool paths that leave
+with gfortran, and `R_PLATFORM`/`R_OS` now reading darwin25.4.0
+(omicron's macOS 26) instead of the macos-15 runner's darwin24.6.0 —
+informational strings only; gen-config.yaml on macos-15-intel can
+re-capture them on real Intel hardware whenever wanted.
+
+| step (all -O2) | result |
+|---|---|
+| `pixi run build` (slim) | PASS |
+| `pixi run smoke` | PASS |
+| `pixi run contract` | PASS |
+| `pixi run check` incl. lapack.R | PASS |
+| `pixi run verify-package` | PASS |
+
+**Still gfortran**: linux-aarch64 only — hosted arm runner is the only
+hardware (flang-pixi's linux-aarch64 flang-zig is itself cross-built and
+smoke-tested on that runner); the capture has to come from
+gen-config.yaml's ubuntu-24.04-arm legs.
 
 Before the next platform read `FLANG_PIXI_HANDOFF.md` (2026-09-19, from the
 flang-pixi side): review of this wiring, the hard-coded `lib/clang/<major>`
