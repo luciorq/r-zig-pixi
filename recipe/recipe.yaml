@@ -99,7 +99,14 @@ build:
   # is a one-time reset tied to going public, not a new precedent — the
   # manual-bump policy above is unaffected and still governs every
   # future change.
-  number: 1
+  # 1 → 2 (2026-09-20): Phase 2 shipped LLVM flang for every platform's
+  # Fortran (flang-zig on osx-arm64/osx-64/win-64/linux-aarch64), but the
+  # build string did not change and `--skip-existing` silently kept the
+  # gfortran-built files on the channel through three "successful"
+  # publish runs — the channel's osx-arm64/win-64 files were still the
+  # 2026-08-15 uploads. A Fortran-runtime swap in run: deps is exactly
+  # the kind of change this policy says must bump.
+  number: 2
   script: build.sh
 
 requirements:

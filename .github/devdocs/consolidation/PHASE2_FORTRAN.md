@@ -168,7 +168,7 @@ right after: identical apart from `R_PLATFORM`/`R_OS` = darwin24.6.0 and
 the runner's JDK path in JAVA_HOME, i.e. the pre-Phase-2 capture's own
 values — that runner capture is what is vendored now.)
 
-## linux-aarch64 — captured 2026-09-20, CI validation pending
+## linux-aarch64 — DONE 2026-09-20 (PR #9, all 16 CI legs green)
 
 The last gfortran platform. No interactive hardware: flang-pixi's
 linux-aarch64 flang-zig is cross-built from linux-64 and smoke-tested
@@ -186,11 +186,31 @@ R_LD_LIBRARY_PATH tokenised, R_SYSTEM_ABI ClassicFlang, OpenMP Fortran
 flags intact, the sysroot dirs gone, `LD` now /usr/bin/ld since conda's
 binutils left — unused by build.zig).
 
-Validation = the PR's ubuntu-24.04-arm legs (build / smoke / contract /
-check incl. lapack.R at -O2, verify-package) plus conda-package/
-linux-aarch64 and its glibc-2.17 ceiling check. Once green, Phase 2 is
-complete: every platform's R Fortran is LLVM flang, gfortran is gone
-from the project, and the macOS -O1 cap is history.
+Validated by PR #9's ubuntu-24.04-arm legs (build / smoke / contract /
+check incl. lapack.R at -O2, verify-package with the glibc-2.17
+ceiling) and conda-package/linux-aarch64 — all green, merged.
+
+## Phase 2 complete (2026-09-20)
+
+Every platform's R Fortran is LLVM flang 23.1.1 — conda-forge's on
+linux-64, flang-pixi's zig-built flang-zig on the other four — at -O2.
+gfortran is gone from pixi.toml and recipe.yaml; the macOS -O1 cap is
+history. Per-platform bar (build, lapack.R, contract suite, all -O2)
+met on: linux-64 (validation worktree, 2026-09-19), osx-arm64 (omicron
+native), win-64 (kappa native), osx-64 (omicron Rosetta), linux-aarch64
+(hosted arm runner via CI). Hosted CI green on all 16 legs for every
+step.
+
+**Publishing caveat found at the end**: three merges' "publish =
+success" steps shipped nothing — the build string never changed and
+`--skip-existing` skipped every existing filename, so the channel kept
+the gfortran-built packages (osx-arm64/win-64 files dated 2026-08-15,
+osx-64/linux-aarch64 2026-09-19). Verified via repodata `depends`. Fix:
+recipe build number 1 → 2 (this commit); after its merge the publish
+run uploads `*_2.conda` for all five subdirs, and the `_1` files should
+be deleted from the channel (conda-channel-delete) so no solver picks
+the gfortran builds by build-number order confusion. Lesson for the
+policy comment in recipe.yaml: any change to run: deps is a bump.
 
 Before the next platform read `FLANG_PIXI_HANDOFF.md` (2026-09-19, from the
 flang-pixi side): review of this wiring, the hard-coded `lib/clang/<major>`
