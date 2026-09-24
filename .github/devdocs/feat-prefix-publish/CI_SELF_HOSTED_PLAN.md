@@ -9,9 +9,14 @@ already aged out (GitHub auto-removes runners offline >14 days), all
 conda-package legs moved to hosted runners on every platform, and
 publishing switched from per-machine `rattler-build auth login`
 sessions to prefix.dev OIDC trusted publishing (no stored credentials).
-Remaining teardown on the machines themselves (gamma's/omicron's
-`actions.runner.*` services) is the operator's own cleanup. The plan
-below is kept as the historical record of the implemented design.
+Machine teardown completed 2026-09-24: omicron's launchd runner
+service uninstalled, the runner deregistered from the repo and its
+directory and plist deleted; kappa's leftover `C:\actions-runner-kappa`
+deleted (its registration had already aged out); gamma's systemd unit
+stopped and uninstalled, the runner deregistered and
+`~/actions-runner-gamma` deleted. The repo lists no self-hosted
+runners. The plan below is kept as the historical record of the
+implemented design.
 
 **Original status: planned, approved, not yet implemented.** Deliberately postponed
 until after the `worktree-feat-zig-build` branch merges back to `main` —

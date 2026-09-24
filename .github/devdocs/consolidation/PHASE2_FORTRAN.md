@@ -206,8 +206,9 @@ success" steps shipped nothing — the build string never changed and
 `--skip-existing` skipped every existing filename, so the channel kept
 the gfortran-built packages (osx-arm64/win-64 files dated 2026-08-15,
 osx-64/linux-aarch64 2026-09-19). Verified via repodata `depends`. Fix:
-recipe build number 1 → 2 (this commit); after its merge the publish
-run uploads `*_2.conda` for all five subdirs, and the `_1` files should
+recipe build number 1 → 2 (PR #10); its merge publish uploaded
+`*_2.conda` for all five subdirs on 2026-09-24 (verified via repodata:
+flang-zig deps on the four, conda-forge flang on linux-64). The `_1` files should
 be deleted from the channel (conda-channel-delete) so no solver picks
 the gfortran builds by build-number order confusion. Lesson for the
 policy comment in recipe.yaml: any change to run: deps is a bump.

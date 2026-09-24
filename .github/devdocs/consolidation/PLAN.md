@@ -14,7 +14,7 @@ by this document**.
 | Project | Role in the family | State |
 |---|---|---|
 | **flang-pixi** | Toolchain layer: `lld-zig`/`flang-zig`/`flang-rt-zig` 23.1.1, zig-built, published to `universe` for **six** subdirs (incl. win-arm64). Its MinGW-ABI Windows flang exists nowhere else. `llvm-zig` stays build-time-only (never published). | Shipping; Windows OpenMP leg (flang-rt build 4) just landed, uncommitted docs pending |
-| **r-zig-pixi** | Flagship consumer: R itself via pure `zig build`, vendored-configure. Proves the toolchain end-to-end (contract suite, `lapack.R`). Publishes `r-zig-slim` to `universe`. | Phases 0–2 done 2026-09-20: 5-platform hosted CI, OIDC publishing, R's Fortran on LLVM flang everywhere (flang-zig on 4 subdirs); build 2 republish pending |
+| **r-zig-pixi** | Flagship consumer: R itself via pure `zig build`, vendored-configure. Proves the toolchain end-to-end (contract suite, `lapack.R`). Publishes `r-zig-slim` to `universe`. | Phases 0–2 done: 5-platform hosted CI, OIDC publishing, R's Fortran on LLVM flang everywhere; r-zig-slim 4.6.1 build 2 (flang) on `universe` for all five subdirs since 2026-09-24 |
 | **r-zig-packages** | Downstream layer: `rz-*` R packages compiled against `r-zig-slim`. | POC done, linux-64 only, parked — unblocs as r-zig-slim's platform list grows |
 | **blast-zig-pixi** | Application template: foreign build system (NCBI autotools) + zig shims + `pixi-build-rattler-build`; distribution patterns (v3 flags/extras + repodata-v2 twin packages, microarch variants). | Shipping to `universe`, 5 platforms |
 | **zig-pixi-build-backend** | Future-facing: recipe-free `pixi_build_zig` backend (pixi fork), cross-first (~18 platforms). The bet on where the ecosystem goes. | Working PoC, unpublished, needs fork checkout |
@@ -148,8 +148,8 @@ R 4.6.1's cairo compile — pin before the next lockfile refresh.
 `PHASE2_FORTRAN.md` — osx-arm64 done 2026-09-19, full bar at -O2; CI
 green on PR #7 2026-09-20; win-64 done 2026-09-20 on kappa, full bar incl.
 lapack.R; osx-64 done 2026-09-20 under Rosetta on omicron, full bar;
-linux-aarch64 done 2026-09-20 via CI. **Phase 2 complete** — pending only
-the build-number bump so the channel actually carries the flang builds.)*
+linux-aarch64 done 2026-09-20 via CI. **Phase 2 complete**; build 2 with the
+flang packages published to `universe` 2026-09-24.)*
 Order by value: osx-arm64 first (kills the -O1 cap; CRAN's own
 experimental flang-23 build is the parity reference), then win-64
 (MinGW flang, unblocks dropping gfortran+gcc_impl there), then
@@ -177,12 +177,12 @@ maturing.
 ## Cross-project debts this plan creates/tracks
 
 - [x] r-zig-pixi PR #6: three CI failure classes — root-caused + fixed on the branch 2026-09-19; round 2 (glibc-ceiling tiers, osx-64 headerpad, aarch64 libmvec) also fixed; **CI fully green on run 35446891595 (all 16 jobs, 2026-09-19)**; merged to main; first OIDC publish succeeded for all five subdirs (run 35465461827). **Phase 0 complete.**
-- [ ] r-zig-pixi: package-side libmvec exposure on gfortran platforms (Makeconf FFLAGS vs >= 2.30 sysroots) — see TODO.md round 2 item 6.
+- [x] r-zig-pixi: package-side libmvec exposure on gfortran platforms — moot since Phase 2: no gfortran platform remains (flang has no math-vector pre-include).
 - [x] prefix.dev trusted-publisher registration — done 2026-09-19; first OIDC publish of r-zig-slim for all five subdirs succeeded (run 35465461827, `workflow_dispatch` on main after the merge push's publish step failed with "GitHub publisher not found").
 - [ ] flang-pixi: contract-suite validation result drafted into docs/10 2026-09-19 (uncommitted, user's repo/commit).
 - [ ] flang-pixi: its own uncommitted Windows-OpenMP status/runbook entries (user's repo).
 - [x] Remove flang-zig-validation worktree + branch — done 2026-09-19 (uncommitted diff preserved at /data/gamma/luciorq/workspaces/temp/r-zig-validation-uncommitted.patch).
 - [x] pango/harfbuzz pin ahead of next lockfile refresh — r-zig-pixi pixi.toml pinned 2026-09-19 (pango 1.56.*, harfbuzz 14.2.*; lockfile unchanged). Still open for any other R-building repo.
-- [ ] universe channel hygiene: delete superseded flang-rt `_1.._3` + wrong-metadata pixi-built files (needs delete-scoped key).
-- [ ] gamma/omicron: stop + remove leftover `actions.runner.*` services (fleet decommissioned).
+- [ ] universe channel hygiene: delete superseded flang-rt `_1.._3` + wrong-metadata pixi-built files, **and r-zig-slim's five `_1` files (gfortran builds, superseded by the flang `_2` uploads of 2026-09-24)** — needs delete-scoped key (`pixi run -e pkg conda-channel-delete -- --yes universe <subdir> <file>`).
+- [x] gamma/omicron: leftover `actions.runner.*` services removed 2026-09-24 — omicron uninstalled/deregistered/deleted, kappa's stray runner dir deleted; gamma's systemd unit needs the user's sudo (`svc.sh stop/uninstall`), then deregistration.
 - [ ] omicron/kappa: `r-zig-pixi-test` scratch dirs — keep or remove (user call).

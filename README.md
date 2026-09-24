@@ -70,25 +70,26 @@ and the package-compilation toolchain it ships), so binaries — and any
 CRAN package compiled against them — run on considerably older
 distributions than the build machine, without a separate build variant.
 
-## Toggling the hosted-runner CI jobs
+## CI
 
-The GitHub-hosted matrix (`build`, `build-windows`) is gated behind a repo
-variable, off by default to avoid burning Actions minutes — only
-`conda-package` (self-hosted) runs unconditionally:
+Everything runs on GitHub-hosted runners: `build` (ubuntu-latest,
+ubuntu-24.04-arm, macos-latest, macos-15-intel × slim/full, plus the
+linux openblas variants), `build-windows`, and `conda-package` for all
+five subdirs (linux-64, linux-aarch64, osx-arm64, osx-64, win-64), which
+publishes to the `universe` channel on prefix.dev via OIDC trusted
+publishing on every push to `main`. There is no self-hosted fleet — the
+former gamma/omicron/kappa runners were decommissioned in September 2026
+and fully removed on 2026-09-24. Docs-only changes (`*.md`,
+`.github/devdocs/`) skip the workflow.
+
+The whole matrix is gated behind one repo variable, an emergency kill
+switch rather than a cost control (hosted runners are free for this
+public repo):
 
 ```bash
-gh variable set ENABLE_HOSTED_JOBS --body true   # turn hosted jobs on
-gh variable set ENABLE_HOSTED_JOBS --body false  # turn them back off
+gh variable set ENABLE_HOSTED_JOBS --body false  # pause all CI jobs
+gh variable set ENABLE_HOSTED_JOBS --body true   # resume
 ```
-
-Equally, the self hosted jobs have a separate flag for enabling it.
-
-```bash
-gh variable set ENABLE_SELFHOSTED_JOBS --body true
-gh variable set ENABLE_SELFHOSTED_JOBS --body false
-```
-
-
 
 No commit or workflow edit needed either way.
 
