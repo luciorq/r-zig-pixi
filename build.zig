@@ -1689,6 +1689,17 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
         .flang => b.fmt("-L\"{s}\" -lflang_rt.runtime -lc++", .{std.mem.replaceOwned(u8, b.allocator, ctx.flangrt_dir, "\\", "/") catch @panic("OOM")}),
         .gfortran => "",
     });
+    // SAFE_FFLAGS (what CRAN Fortran packages such as quadprog put in
+    // PKG_FFLAGS): gnuwin32 adds gfortran's x87-avoidance switches unless
+    // USE_LLVM, whose flang already defaults to SSE2 on x86_64 and rejects
+    // them ("flang: error: unknown argument: '-msse2'"). Our flang build
+    // is not USE_LLVM (that also switches CC to clang), so the vendored
+    // Makeconf.win's `-msse2 -mfpmath=sse` became @SAFE_FFLAGS_SSE@, keyed
+    // on the Fortran compiler actually in use.
+    try ctx.subst.put("SAFE_FFLAGS_SSE", switch (ctx.fc) {
+        .flang => "",
+        .gfortran => "-msse2 -mfpmath=sse",
+    });
     try ctx.subst.put("CSTD", "-std=gnu2x");
     try ctx.subst.put("EOPTS", "");
     try ctx.subst.put("SANOPTS", "");
@@ -1697,10 +1708,37 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     try ctx.subst.put("SYMPAT", "'s/^.* [BCDRT] / /p'");
 
     const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
-    const mkc = try substitute(ctx, raw);
+    const mkc = try gnuwin32O3ToO2(b, try substitute(ctx, raw));
     const mkc_wf = b.addWriteFiles();
     const mkc_out = mkc_wf.add("Makeconf", mkc);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(mkc_out, ctx.rhomeInstallDir("etc/x64"), "Makeconf").step);
+}
+
+/// gnuwin32's src/gnuwin32/fixed/Makefile installs etc/Makeconf through
+/// a sed that also runs `s/-O3/-O2/` — first match per line, no /g — so a
+/// real Windows R compiles packages at -O2, not the -O3 the Makeconf.win
+/// template spells out (its own header says so: "Things which are
+/// substituted by fixed/Makefile (and also -O3 -> -O2)"). Replaying only
+/// the @VAR@ substitutions left CFLAGS/C*FLAGS/FFLAGS/FCFLAGS at -O3 for
+/// every package built through this R; FFLAGS' -O3 even came last on the
+/// command line and overrode a package's `PKG_FFLAGS = $(SAFE_FFLAGS)`
+/// -O2 (quadprog). Same first-occurrence-per-line semantics as the sed.
+fn gnuwin32O3ToO2(b: *std.Build, text: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var first = true;
+    while (lines.next()) |line| {
+        if (!first) try out.append(b.allocator, '\n');
+        first = false;
+        if (std.mem.indexOf(u8, line, "-O3")) |i| {
+            try out.appendSlice(b.allocator, line[0..i]);
+            try out.appendSlice(b.allocator, "-O2");
+            try out.appendSlice(b.allocator, line[i + 3 ..]);
+        } else {
+            try out.appendSlice(b.allocator, line);
+        }
+    }
+    return out.items;
 }
 
 /// Windows equivalent of installStaticTree: stages library/ (via the shared
