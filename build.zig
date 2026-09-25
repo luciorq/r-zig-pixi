@@ -442,6 +442,19 @@ pub fn build(b: *std.Build) !void {
     if (os == .windows) return buildWindows(&ctx, io);
 
     try loadSubstTable(&ctx, io, config_dir);
+    // openblas has no vendored config of its own (F3.2: a link-time swap),
+    // so it inherits the internal-BLAS S-table — and with it a Makeconf
+    // telling packages `-lRblas`/`-lRlapack`, libraries this flavor never
+    // builds. Every package with CRAN's `PKG_LIBS = $(LAPACK_LIBS)
+    // $(BLAS_LIBS) $(FLIBS)` failed to link ("unable to find dynamic system
+    // library 'Rblas'", quadprog on the CI openblas legs). Replay what a
+    // real `configure --with-blas=-lopenblas --with-lapack=-lopenblas`
+    // writes (build/obj-*-slim-openblas/config.status): LAPACK is found
+    // inside openblas, so LAPACK_LIBS is empty and BLAS_LIBS carries both.
+    if (blas == .openblas) {
+        try ctx.subst.put("BLAS_LIBS", "-lopenblas");
+        try ctx.subst.put("LAPACK_LIBS", "");
+    }
     ctx.openmp = ctx.subst.get("R_OPENMP_CFLAGS").?.len > 0;
     ctx.devcairo = ctx.subst.get("BUILD_DEVCAIRO_TRUE").?.len == 0;
 
