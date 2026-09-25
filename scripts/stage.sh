@@ -73,6 +73,14 @@ for launcher in "$R_HOME_DIR/bin/R"; do
     -e 's|^R_INCLUDE_DIR=.*|R_INCLUDE_DIR="${R_HOME_DIR}/include"|' \
     -e 's|^R_DOC_DIR=.*|R_DOC_DIR="${R_HOME_DIR}/doc"|' \
     "$launcher"
+  # minimal: also drop R's lib64 multilib probe (`if test "${R_HOME_DIR}"
+  # = "<configure prefix>/lib/R"; then ... fi`). Once R_HOME_DIR is self-
+  # derived it can only match on the build machine itself, so it is dead
+  # code whose one effect is carrying build paths into the r-zig wheel
+  # (make-wheel.py refuses those in run-time files).
+  if [ "$VARIANT" = minimal ]; then
+    sed -i '/^if test "\${R_HOME_DIR}" = "/,/^fi$/d' "$launcher"
+  fi
 done
 cat > "$PREFIX/bin/R" << 'EOF'
 #!/bin/sh
@@ -175,6 +183,21 @@ sed -i 's|^SED=.*|SED="$R_HOME_DIR/bin/toolchain/sed"|' "$R_HOME_DIR/bin/R"
 # reference lives in compiled R data (base.rdb), not a script.
 command -v which >/dev/null 2>&1 && cp "$(command -v which)" "$R_HOME_DIR/bin/toolchain/which"
 
+# minimal (the tree the r-zig wheel wraps): bundle GNU make as well and
+# make it R's default MAKE. A conda env gets make from the package's run
+# dependencies and a dev machine usually has one; a pip-installed wheel
+# has neither guarantee (python:*-slim images ship no make), and R CMD
+# INSTALL needs it for any package with compiled code. conda-forge's make
+# links libc only, at GLIBC_2.17. Renviron expands a nested default only
+# when it is a whole ${...} term, hence the helper variable. Guarded so a
+# re-stage of the same tree doesn't stack a second copy of the lines.
+if [ "$VARIANT" = minimal ]; then
+  cp "$(command -v make)" "$R_HOME_DIR/bin/toolchain/make"
+  if ! grep -q '^R_ZIG_MAKE=' "$R_HOME_DIR/etc/Renviron"; then
+    sed -i 's|^MAKE=.*|R_ZIG_MAKE=${R_HOME}/bin/toolchain/make\nMAKE=${MAKE-${R_ZIG_MAKE}}|' "$R_HOME_DIR/etc/Renviron"
+  fi
+fi
+
 mapfile -t baked_files < <(grep -rlF "$CONDA/bin/" "$R_HOME_DIR/bin" "$R_HOME_DIR/etc" 2>/dev/null | grep -v '^'"$R_HOME_DIR/bin/R"'$')
 for f in "${baked_files[@]}"; do
   sed -i "s|$CONDA/bin/|\$R_HOME/bin/toolchain/|g" "$f"
@@ -183,6 +206,12 @@ mapfile -t refd_tools < <(grep -rhoE '\$(R_HOME|R_HOME_DIR)/bin/toolchain/[A-Za-
   "$R_HOME_DIR/bin" "$R_HOME_DIR/etc" 2>/dev/null | sed 's|.*/||' | sort -u)
 for t in "${refd_tools[@]}"; do
   [ -f "$R_HOME_DIR/bin/toolchain/$t" ] && continue
+  # minimal: realpath's only user is bin/javareconf (R is --disable-java,
+  # and javareconf guards the call with `if realpath ...`), and it is the
+  # one helper above the glibc 2.17 floor (coreutils' needs GLIBC_2.28,
+  # see verify-bundle.sh) — shipping it would make the whole r-zig wheel
+  # manylinux_2_28 instead of manylinux2014.
+  [ "$VARIANT" = minimal ] && [ "$t" = realpath ] && continue
   src="$(command -v "$t" 2>/dev/null)" || continue
   cp "$src" "$R_HOME_DIR/bin/toolchain/$t"
 done

@@ -65,12 +65,19 @@ jobs:
             env: openblas
           - os: ubuntu-24.04-arm
             env: openblas
+          # minimal: the r-zig Python wheel's variant (pixi.toml
+          # [feature.minimal]). linux-64 only until the other platforms'
+          # zigbuild/config/<plat>-minimal dirs are vendored — gen-config's
+          # minimal legs produce them; add each OS here once its dir lands.
+          - os: ubuntu-latest
+            env: minimal
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
       - uses: prefix-dev/setup-pixi@v0.10.0
         with:
-          environments: ${{ matrix.env }}
+          # minimal also needs the python-only `wheel` env for its last steps
+          environments: ${{ matrix.env == 'minimal' && 'minimal wheel' || matrix.env }}
           cache: true
       - name: Build R (zig build alone, no autoconf/make)
         run: pixi run -e ${{ matrix.env }} build
@@ -81,11 +88,28 @@ jobs:
       - name: Regression suite (Examples/Specific/Reg)
         run: pixi run -e ${{ matrix.env }} check
       # Standalone bundle: reuses this job's already-built prefix (cheap).
-      # Only the default (slim) variant is packaged in CI for now — full/
-      # openblas relocation is exercised manually, not automated yet.
+      # Only the default (slim) and minimal variants are packaged in CI for
+      # now — full/openblas relocation is exercised manually, not automated
+      # yet. minimal's bundle is the wheel's input, so it can't be skipped.
       - name: Package + verify standalone bundle
-        if: matrix.env == 'default'
+        if: matrix.env == 'default' || matrix.env == 'minimal'
         run: pixi run -e ${{ matrix.env }} verify-package
+      # The r-zig wheel: the tree verify-package just packaged, zipped with
+      # the r_zig Python package, then pip-installed into a fresh venv
+      # (ziglang from PyPI) and used with the pixi env scrubbed away —
+      # including R CMD INSTALL of a C/C++ package through ziglang.
+      - name: Build + test the r-zig wheel
+        if: matrix.env == 'minimal'
+        run: |
+          pixi run -e wheel wheel
+          pixi run -e wheel wheel-test
+      - name: Upload the r-zig wheel
+        if: matrix.env == 'minimal'
+        uses: actions/upload-artifact@v4
+        with:
+          name: r-zig-wheel-${{ matrix.os }}
+          path: dist/wheel/*.whl
+          if-no-files-found: error
 
   # `zig build` on Windows — no `check` step (make-check parity was never
   # in scope for Windows, see FINALIZATION.md F6: addCheckStep is only
@@ -154,7 +178,12 @@ jobs:
             runner: macos-15-intel
           - name: win-64
             runner: windows-latest
-    timeout-minutes: 300
+    # 90, not 300: the longest leg (win-64, from-scratch rattler-build
+    # sandbox) takes ~15 min when healthy; windows-latest's MSYS spawn
+    # flake has hung a build inside this sandbox before (2026-09-20),
+    # where build-windows's --verbose/60-min guard doesn't reach. Fail
+    # fast, re-run the leg.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
       - uses: prefix-dev/setup-pixi@v0.10.0

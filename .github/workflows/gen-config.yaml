@@ -53,6 +53,21 @@ jobs:
             platform: osx-x86_64
             env: full
             variant: full
+          # minimal (the r-zig wheel's variant): linux-x86_64 was captured
+          # locally; these are the other three. osx-arm64 has no leg above
+          # (its slim/full dirs came from omicron), hence macos-latest here.
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            env: minimal
+            variant: minimal
+          - runner: macos-15-intel
+            platform: osx-x86_64
+            env: minimal
+            variant: minimal
+          - runner: macos-latest
+            platform: osx-arm64
+            env: minimal
+            variant: minimal
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6

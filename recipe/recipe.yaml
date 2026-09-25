@@ -106,7 +106,13 @@ build:
   # publish runs — the channel's osx-arm64/win-64 files were still the
   # 2026-08-15 uploads. A Fortran-runtime swap in run: deps is exactly
   # the kind of change this policy says must bump.
-  number: 2
+  # 2 → 3 (2026-09-25): the zig-cc/zig-cxx shims shipped in R_HOME/bin/
+  # toolchain changed — macOS drops repeated -l<name> (quadprog's
+  # "duplicate linked dylib" on flang's runtime), and every shim now falls
+  # back to `python3 -m ziglang` — plus package-standalone.sh's whole-token
+  # Makeconf stripping. Package-compilation behavior on the channel only
+  # changes if these files are republished.
+  number: 3
   script: build.sh
 
 requirements:

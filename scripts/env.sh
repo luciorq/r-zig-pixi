@@ -11,8 +11,9 @@ if command -v cygpath >/dev/null 2>&1; then
   ROOT="$(cygpath -u "$ROOT")"
 fi
 
-# Build variant: "slim" (default env) or "full" (pixi run -e full ...).
-# Set through [feature.full-build.activation.env] in pixi.toml.
+# Build variant: "slim" (default env), "full" (pixi run -e full ...) or
+# "minimal" (pixi run -e minimal ..., the r-zig wheel's profile). Set
+# through the features' activation.env in pixi.toml.
 VARIANT="${R_BUILD_VARIANT:-slim}"
 
 # BLAS flavor: "internal" (R's reference BLAS) or "openblas"

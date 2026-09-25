@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # C++ compiler shim: zig c++ as a single-word $CXX for autoconf/make.
 # Same UBSan, SONAME, dll.a-search, and zig-name handling as zig-cc.
-ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
+# zig: $ZIG_BIN if executable, else PATH, else the ziglang package — see zig-cc.
+if [ -n "${ZIG_BIN:-}" ] && [ -x "$ZIG_BIN" ]; then
+  ZIG=("$ZIG_BIN")
+elif _zig="$(command -v zig || command -v x86_64-w64-mingw32-zig)"; then
+  ZIG=("$_zig")
+else
+  ZIG=(python3 -m ziglang)
+fi
 
 # Linux glibc floor: see zig-cc's own comment for the full rationale.
 target=()
@@ -86,4 +93,31 @@ if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
   fi
 fi
 
-exec "$ZIG" c++ -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}"
+# macOS: dyld (macOS 12+) refuses to load a Mach-O whose LC_LOAD_DYLIB
+# list names the same library twice — "duplicate linked dylib". R makes
+# that easy to trigger: R CMD SHLIB appends $(FLIBS) to every package link
+# that has Fortran sources, and CRAN's documented recipe for Fortran
+# packages using BLAS/LAPACK is `PKG_LIBS = $(BLAS_LIBS) $(FLIBS)` — so
+# FLIBS lands twice. Harmless while FLIBS carried gfortran's static
+# runtime; fatal since Phase 2, where it names libflang_rt.runtime.dylib
+# (quadprog, 2026-09-24: "duplicate linked dylib '@rpath/
+# libflang_rt.runtime.dylib'"). Same class as the data.table -lomp case
+# above, generalised: keep the first occurrence of every -l<name>, drop
+# repeats. Dylib link order is irrelevant and a repeated static archive
+# resolves nothing new on a Mach-O link, so this is safe for both kinds.
+# bash-3.2-safe on purpose (no associative arrays): the bundled copy of
+# this shim can run under macOS's system bash.
+case "$(uname -s 2>/dev/null)" in
+  Darwin)
+    _seen=" "; _dedup=()
+    for a in "$@"; do
+      case "$a" in
+        -l?*) case "$_seen" in *" $a "*) continue;; esac; _seen="$_seen$a ";;
+      esac
+      _dedup+=("$a")
+    done
+    set -- "${_dedup[@]}"
+    ;;
+esac
+
+exec "${ZIG[@]}" c++ -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}"

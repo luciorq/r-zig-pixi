@@ -44,10 +44,10 @@ LIB="$BUILD_DIR/testlib-$VARIANT"
 mkdir -p "$LIB"
 
 echo "Contract test (variant: $VARIANT, os: $OS)"
-echo "Compiling Rcpp + data.table + minqa + pak + ps from source..."
-R_CONTRACT_LIB="$LIB" "$R_BIN" --vanilla -e '
+echo "Compiling Rcpp + data.table + minqa + quadprog + pak + ps from source..."
+R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   lib <- Sys.getenv("R_CONTRACT_LIB")
-  pkgs <- c("Rcpp", "data.table", "minqa", "pak", "ps")
+  pkgs <- c("Rcpp", "data.table", "minqa", "quadprog", "pak", "ps")
   # CRAN mirror hiccups are real (main-branch openblas leg, 2026-09-20:
   # "SSL connect error" downloading Rcpp, then minqa failed on the
   # missing dependency): bounded retries, and fail *here* with a clear
@@ -65,18 +65,37 @@ R_CONTRACT_LIB="$LIB" "$R_BIN" --vanilla -e '
   }
   if (length(missing)) stop("contract: could not install ", paste(missing, collapse = ", "))
   .libPaths(lib)
-  library(Rcpp); library(data.table); library(minqa); library(pak); library(ps)
+  library(Rcpp); library(data.table); library(minqa); library(quadprog); library(pak); library(ps)
   stopifnot(evalCpp("2 + 2") == 4)
   dt <- data.table(g = rep(1:3, 4), x = 1:12)
   stopifnot(identical(dt[, sum(x), by = g][[2]], c(22L, 26L, 30L)))
   # OpenMP proof, machine-independent: data.table prints "OpenMP version"
   # only when compiled with OpenMP. (Do NOT assert getDTthreads() > 1 —
   # its default is 50% of cores, which is 1 on small CI runners.)
+  # minimal is built without OpenMP and its Makeconf offers none, so there
+  # the proof runs the other way: data.table must come out single-threaded.
   th_info <- capture.output(getDTthreads(verbose = TRUE))
   cat(th_info, sep = "\n")
-  stopifnot(any(grepl("OpenMP version", th_info)))
+  if (Sys.getenv("R_CONTRACT_VARIANT") == "minimal") {
+    stopifnot(!any(grepl("OpenMP version", th_info)))
+  } else {
+    stopifnot(any(grepl("OpenMP version", th_info)))
+  }
   fit <- bobyqa(c(1, 1), function(x) sum((x - 3)^2))
   stopifnot(max(abs(fit$par - c(3, 3))) < 1e-4)
+  # quadprog: a *pure-Fortran* package (no C/C++ sources at all) — the one
+  # shape minqa cannot cover, since its C++ sends the link through
+  # SHLIB_CXXLD. Here R CMD SHLIB compiles every file with $(FC) (flang on
+  # every platform since Phase 2) and links through SHLIB_LD, the zig-cc
+  # shim, with $(FLIBS) appended — the resolved-at-build-time flang
+  # runtime dir, the runtime archive/dylib, and on Windows libc++. (R
+  # only links via the Fortran driver itself when a package opts in with
+  # USE_FC_TO_LINK in Makevars; that path is not exercised here.)
+  # minimize (1/2) t(x) D x - t(d) x subject to x >= 0, with D = 2I and
+  # d = (2, 6): the solution is x = (1, 3). (No apostrophes in this R
+  # program: it sits inside a single-quoted shell string.)
+  qp <- solve.QP(Dmat = diag(2, 2), dvec = c(2, 6), Amat = diag(2), bvec = c(0, 0))
+  stopifnot(max(abs(qp$solution - c(1, 3))) < 1e-8)
   # pak: no network calls here (this test is about the compiled-code
   # toolchain contract, not pak own package-manager functionality) —
   # loading it successfully already proves its compiled sub-packages
@@ -97,6 +116,7 @@ R_CONTRACT_LIB="$LIB" "$R_BIN" --vanilla -e '
   cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
   cat("data.table grouped aggregation: OK\n")
   cat("minqa (Rcpp-dependent + package Fortran) bobyqa: OK\n")
+  cat("quadprog (pure Fortran: flang compile, FLIBS link through the zig-cc shim) solve.QP: OK\n")
   cat("pak (recursive R.exe invocation + mbedtls quoted -D flags): OK\n")
   cat("ps (process introspection", if (ps::ps_os_type()[["MACOS"]]) "+ apps.m Objective-C ps_apps()" else "", "): OK\n")
 '

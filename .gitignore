@@ -8,3 +8,10 @@ dist/
 .zig-cache/
 
 dockerfiles/
+
+# python leftovers (scripts/make-wheel.py, wheel/r_zig); wheels land in dist/
+__pycache__/
+*.py[cod]
+*.whl
+*.egg-info/
+.venv/

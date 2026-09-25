@@ -57,19 +57,29 @@ R_SMOKE_VARIANT="$VARIANT" R_SMOKE_BLAS="$BLAS" "$R_BIN" --vanilla --quiet -e '
   caps <- capabilities()
   print(caps)
 
-  # Both variants: headless cairo graphics, no X11/quartz, full i18n plumbing.
+  # Every variant: no X11/quartz, iconv + libcurl (configure requires it).
   # long.double is intentionally not asserted: on arm64 macOS long double
   # IS double (hardware fact; CRAN arm64 builds report FALSE too).
-  stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]],
-            caps[["libcurl"]],
-            !caps[["X11"]], !caps[["aqua"]])
+  stopifnot(caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]])
   cat("long.double:", caps[["long.double"]], "(informational)\n")
 
   variant <- Sys.getenv("R_SMOKE_VARIANT")
-  if (variant == "slim") {
-    stopifnot(!caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]])
+  if (variant == "minimal") {
+    # The wheel profile: no cairo, png or ICU either, and none of full extras.
+    stopifnot(!caps[["cairo"]], !caps[["png"]], !caps[["ICU"]],
+              !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]])
+    # pdf() is grDevices own C code, no cairo involved: it must still work.
+    f <- tempfile(fileext = ".pdf")
+    pdf(f); plot(1:10); invisible(dev.off())
+    stopifnot(file.size(f) > 1000)
   } else {
-    stopifnot(caps[["tcltk"]], caps[["jpeg"]], caps[["tiff"]], caps[["NLS"]])
+    # slim and full: headless cairo graphics, full i18n plumbing.
+    stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]])
+    if (variant == "slim") {
+      stopifnot(!caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]])
+    } else {
+      stopifnot(caps[["tcltk"]], caps[["jpeg"]], caps[["tiff"]], caps[["NLS"]])
+    }
   }
   cat("capability profile OK for variant:", variant, "\n")
 

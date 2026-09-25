@@ -50,11 +50,18 @@ fi
 # succeeded but the hardcoded BUNDLE_DIR guess didn't exist).
 BUNDLE_DIR="$VERIFY_DIR/$(basename "$PREFIX")"
 
-CHECK_R='
+# minimal (the wheel profile) has no cairo/png by design — assert that
+# instead, so a graphics stack creeping back in fails here too.
+if [ "$VARIANT" = minimal ]; then
+  CHECK_CAPS='stopifnot(!capabilities("cairo"), !capabilities("png"), !capabilities("ICU"))'
+else
+  CHECK_CAPS='stopifnot(capabilities("cairo"), capabilities("png"))'
+fi
+CHECK_R="
 stopifnot(max(abs(solve(matrix(c(2,0,0,2),2,2)) - matrix(c(.5,0,0,.5),2,2))) < 1e-9)
-stopifnot(capabilities("cairo"), capabilities("png"))
-cat("bundle OK\n")
-'
+$CHECK_CAPS
+cat('bundle OK\n')
+"
 
 if [ "$OS" = windows ]; then
   R_BIN="$BUNDLE_DIR/Library/lib/R/bin/x64/Rscript.exe"
@@ -67,6 +74,38 @@ else
     "$R_BIN" --vanilla --no-echo -e "$CHECK_R"
 fi
 echo "== standalone bundle verified relocatable ($OS/$FLAVOR)"
+
+# minimal: the point of the profile is what R does NOT link. No binary
+# of R's own (libR, modules, base-package .so, bin/exec/R) may name a
+# library from the graphics/ICU/OpenMP/libdeflate stacks. That is the
+# part the configure profile controls; what third-party libraries drag
+# in is reported, not failed: conda-forge's libcurl >= 8.21 links
+# libpsl, which links ICU (and so libstdc++), on every platform — see
+# pixi.toml's [feature.minimal] for the size cost and the pin that would
+# avoid it.
+if [ "$VARIANT" = minimal ] && [ "$OS" != windows ]; then
+  excluded_re='lib(cairo|pango|harfbuzz|fontconfig|freetype|glib|gobject|gio|pixman|png|jpeg|tiff|X11|xcb|icu|omp|iomp|gomp|deflate)'
+  r_bins="$VERIFY_DIR/r-bins.txt"
+  find "$BUNDLE_DIR/lib/R" -path "$BUNDLE_DIR/lib/R/bin/toolchain" -prune -o \
+    -type f \( -name '*.so' -o -name '*.dylib' -o -path '*/bin/exec/R' \) -print > "$r_bins"
+  bad=""
+  while IFS= read -r f; do
+    if [ "$OS" = linux ]; then
+      deps="$(patchelf --print-needed "$f" 2>/dev/null || true)"
+    else
+      deps="$(otool -L "$f" 2>/dev/null | tail -n +2 | awk '{print $1}' || true)"
+    fi
+    hit="$(printf '%s\n' "$deps" | grep -E "(^|/)$excluded_re" || true)"
+    [ -z "$hit" ] || bad="$bad ${f#$BUNDLE_DIR/}->$(echo $hit | tr ' ' ',')"
+  done < "$r_bins"
+  if [ -n "$bad" ]; then
+    echo "error: minimal R links libraries its profile excludes:$bad" >&2
+    exit 1
+  fi
+  echo "== minimal profile verified: $(wc -l < "$r_bins" | tr -d ' ') R binaries, none links graphics/ICU/OpenMP/libdeflate"
+  transitive="$(ls "$BUNDLE_DIR/lib" | grep -E "^$excluded_re" | tr '\n' ' ' || true)"
+  [ -z "$transitive" ] || echo "   note: vendored as dependencies of third-party libs (not of R): $transitive"
+fi
 
 # Old-server guarantee (Linux only): fail if any shipped ELF requires glibc
 # newer than the floor build.zig's target pin promises. This is the check
