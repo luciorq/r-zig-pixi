@@ -7,9 +7,11 @@ regression suite (`check`) and verify-package, and `pixi run -e wheel wheel` tur
 (49 MiB). That wheel pip-installs into a fresh venv next to PyPI
 `ziglang` 0.16.0 and compiles a C/C++ package outside pixi. It does so
 through three zig lookup paths (below). linux-aarch64, osx-64 and
-osx-arm64 are wired but not yet built: their vendored configs come from
-gen-config.yaml's new minimal legs. Windows is out: gnuwin32 has no
-switches for any of this.
+osx-arm64 configs were captured by gen-config.yaml's minimal legs (run
+36151245208, 2026-09-25: same profile as linux-x86_64, vendored as-is)
+and those three OSes have minimal legs in build.yaml, but they have only
+been built in CI, not locally. Windows is out: gnuwin32 has no switches
+for any of this.
 
 ## Goal
 
@@ -122,9 +124,9 @@ libdeflate libraries.
   (8.20.0 is from 2026-04-29) at the cost of shipping an older curl. Not
   done: that is a security-vs-size call for the maintainer.
   verify-bundle.sh reports these libraries and doesn't fail on them.
-- **Other platforms**: run gen-config (push to a branch, or dispatch on
-  main), vendor `zigbuild/config/{linux-arm64,osx-x86_64,osx-arm64}-minimal`,
-  then add each OS to build.yaml's `minimal` matrix include.
+- **Other platforms**: configs vendored and CI legs added (2026-09-25).
+  The first CI run on macOS is also the first real test of the 13.0
+  deployment target and of the macOS wheel tag.
 - **Third-party license texts** for the vendored libraries (OpenSSL,
   curl, krb5, ICU, ...) are not in the wheel yet. Needed before
   publishing to PyPI. The conda packages' `info/licenses` are the source.

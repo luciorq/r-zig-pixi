@@ -66,10 +66,16 @@ jobs:
           - os: ubuntu-24.04-arm
             env: openblas
           # minimal: the r-zig Python wheel's variant (pixi.toml
-          # [feature.minimal]). linux-64 only until the other platforms'
-          # zigbuild/config/<plat>-minimal dirs are vendored — gen-config's
-          # minimal legs produce them; add each OS here once its dir lands.
+          # [feature.minimal]); unix only. linux-x86_64's vendored config
+          # was captured locally, the other three by gen-config's minimal
+          # legs (run 36151245208, 2026-09-25).
           - os: ubuntu-latest
+            env: minimal
+          - os: ubuntu-24.04-arm
+            env: minimal
+          - os: macos-latest
+            env: minimal
+          - os: macos-15-intel
             env: minimal
     timeout-minutes: 180
     steps:

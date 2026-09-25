@@ -131,6 +131,16 @@ if [ "$BLAS" = openblas ]; then
   BLAS_ARGS+=("--with-blas=-lopenblas" "--with-lapack=-lopenblas")
 fi
 
+# JAVA_HOME is an autoconf "precious" variable: configure reads it from
+# the environment even with --disable-java, records it in config_opts/
+# R_CONFIG_ARGS and copies it into custom_JAVA_HOME — and from there it
+# lands in every installed etc/Makeconf, etc/javaconf and etc/ldpaths.
+# GitHub's runners export one (a hostedtoolcache/temurin JDK path), so
+# every gen-config capture used to vendor that runner path; dev-machine
+# captures, with no JAVA_HOME set, got "". Java is disabled in every
+# variant, so the build env's JAVA_HOME is never meaningful here.
+unset JAVA_HOME
+
 mkdir -p "$OBJ_DIR"
 cd "$OBJ_DIR"
 
