@@ -69,10 +69,32 @@ case "$FC" in
     ;;
 esac
 
-# Per-variant configure flags. Capabilities are compile-time, so slim
-# and full are distinct configure runs in distinct objdirs.
+# Per-variant configure flags. Capabilities are compile-time, so slim,
+# full and minimal are distinct configure runs in distinct objdirs.
+# GRAPHICS_ARGS sits where --with-cairo/--with-libpng always sat in the
+# configure line below, so slim/full captures stay byte-identical.
+GRAPHICS_ARGS=(--with-cairo --with-libpng)
 VARIANT_ARGS=()
 case "$VARIANT" in
+  minimal)
+    # The Python-wheel profile (pixi.toml's [feature.minimal]): everything
+    # optional is switched off explicitly, not left to "not found" —
+    # flang's LLVM closure puts icu and llvm-openmp in the env on
+    # linux-64, and configure would happily use them. OpenMP is off
+    # because an embedded R shares its process with whatever libgomp/
+    # libomp the Python side has loaded.
+    GRAPHICS_ARGS=(--without-cairo --without-libpng)
+    VARIANT_ARGS+=(
+      --without-tcltk
+      --without-readline
+      --disable-nls
+      --without-jpeglib
+      --without-libtiff
+      --without-ICU
+      --disable-openmp
+      --without-libdeflate-compression
+    )
+    ;;
   slim)
     VARIANT_ARGS+=(
       --without-tcltk
@@ -97,7 +119,7 @@ case "$VARIANT" in
     )
     ;;
   *)
-    echo "error: unknown R_BUILD_VARIANT '$VARIANT' (expected slim or full)" >&2
+    echo "error: unknown R_BUILD_VARIANT '$VARIANT' (expected slim, full or minimal)" >&2
     exit 1
     ;;
 esac
@@ -142,8 +164,7 @@ fi
   --enable-R-shlib \
   --with-x=no \
   --without-aqua \
-  --with-cairo \
-  --with-libpng \
+  "${GRAPHICS_ARGS[@]}" \
   --with-internal-tzcode \
   --without-recommended-packages \
   --disable-java \

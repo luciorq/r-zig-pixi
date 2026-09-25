@@ -18,9 +18,11 @@
 //! from the target (see `Os` below) — nothing here is hardcoded to linux.
 //!
 //! Two independent build options select the profile:
-//!   -Dvariant=slim|full  (default slim) — tcltk/readline/NLS/jpeg/tiff;
-//!      a real second configure profile (own vendored config dir), not a
-//!      flag toggle, since these are compile-time capabilities in R.
+//!   -Dvariant=slim|full|minimal  (default slim) — tcltk/readline/NLS/
+//!      jpeg/tiff for full; minimal (the Python-wheel profile, unix only)
+//!      additionally drops cairo/png, ICU, OpenMP and libdeflate. Each is
+//!      a real configure profile (own vendored config dir), not a flag
+//!      toggle, since these are compile-time capabilities in R.
 //!   -Dblas=internal|openblas  (default internal) — orthogonal to variant;
 //!      a pure link-time swap (R calls BLAS/LAPACK through a fixed
 //!      Fortran ABI either way), so no separate vendored config needed.
@@ -88,8 +90,13 @@ const Arch = enum {
 /// Capabilities (tcltk/readline/NLS/jpeg/tiff) are compile-time in R, so
 /// slim vs full is a genuine second configure profile — its own vendored
 /// config.h/Rconfig.h/subst.txt under zigbuild/config/<plat>-<variant>/,
-/// not a flag toggle (see FINALIZATION.md F3.1).
-const Variant = enum { slim, full };
+/// not a flag toggle (see FINALIZATION.md F3.1). `minimal` is smaller than
+/// slim (no cairo/png, ICU, OpenMP or libdeflate; pixi.toml's
+/// [feature.minimal] has the rationale) and is what the r-zig Python wheel
+/// wraps. Which pieces of the compile graph it drops is not decided here
+/// but read from its vendored config (Ctx.openmp/Ctx.devcairo), the same
+/// way configure's own Makefiles decide.
+const Variant = enum { slim, full, minimal };
 
 /// F3.2: orthogonal to Variant — a pure link-time swap, not a separate
 /// configure profile. R's own C code calls BLAS/LAPACK through a fixed
@@ -114,6 +121,13 @@ const Ctx = struct {
     prefix: []const u8, // absolute install prefix
     rhome: []const u8, // prefix ++ "/lib/R"
     config_dir: []const u8, // "zigbuild/config/<platform>-<variant>" — vendored config.h/Rconfig.h/subst.txt/(Makeconf.win on Windows)
+    // From the vendored S-table (unix; see build()): OpenMP compile/link
+    // flags only when configure found them (R_OPENMP_CFLAGS non-empty), and
+    // grDevices' cairo.so only when configure would have built it
+    // (BUILD_DEVCAIRO_TRUE is "" — src/library/grDevices/src/Makefile.in's
+    // `@BUILD_DEVCAIRO_TRUE@ cairodevice`). Both false for minimal only.
+    openmp: bool,
+    devcairo: bool,
     fc: FortranCompiler, // which Fortran compiler this build uses — decided by what the pixi env provides, see build()
     flangrt_dir: []const u8, // conda clang resource dir holding libflang_rt.runtime.a (fc == .flang; "" otherwise)
     gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran (fc == .gfortran; "" otherwise)
@@ -218,7 +232,7 @@ pub fn build(b: *std.Build) !void {
         return error.MissingRSource;
     };
 
-    var variant = b.option(Variant, "variant", "R build variant: slim (default) or full") orelse .slim;
+    var variant = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal (unix only)") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
 
     const native = b.resolveTargetQuery(.{});
@@ -264,17 +278,41 @@ pub fn build(b: *std.Build) !void {
     // R process loaded a foreign glibc under the host ld.so and died in
     // startup with SIGILL or SIGSEGV. See gen-subst.sh's sysroot filter.
     // Baseline stays on its own merits.)
+    //
+    // macOS + minimal: the same floor idea as glibc 2.17, as a deployment
+    // target. A native macOS query makes zig stamp every binary's
+    // LC_BUILD_VERSION minos with the *build host's* version (min = max =
+    // detected), so a wheel built on a macOS 15.x runner would claim to
+    // need 15.x — and make-wheel.py derives the wheel tag from exactly that.
+    // 13.0 is zig 0.16's own supported floor (std.Target's default macOS
+    // range); ziglang, the wheel's compiler dependency, needs 12. The
+    // price of a non-native OS query is building against zig's bundled
+    // Darwin headers/libSystem stubs instead of the SDK — fine for this
+    // profile: the only SDK-only headers R includes are under HAVE_AQUA
+    // (devQuartz.c), and without cairo no -framework is linked. slim/full
+    // keep the native query (their cairo stack links frameworks).
     const target = if (os == .windows)
         b.resolveTargetQuery(.{ .abi = .gnu, .cpu_model = .baseline })
     else if (os == .linux)
         b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = .{ .major = 2, .minor = 17, .patch = 0 }, .cpu_model = .baseline })
+    else if (variant == .minimal)
+        b.resolveTargetQuery(.{ .cpu_model = .baseline, .os_version_min = .{ .semver = .{ .major = 13, .minor = 0, .patch = 0 } } })
     else
         b.resolveTargetQuery(.{ .cpu_model = .baseline });
     // gnuwin32 has no slim/full switch at all (jpeg/tiff/tcltk are always
     // on — "slim==full on Windows", a pre-existing project convention);
     // -Dvariant is meaningless there, force .full regardless of what was
     // passed rather than silently building something that doesn't exist.
-    if (os == .windows) variant = .full;
+    // Except minimal: nobody asks for it by accident, and quietly handing
+    // back a full build (tcltk, jpeg, tiff, cairo) is the opposite of what
+    // was asked for.
+    if (os == .windows) {
+        if (variant == .minimal) {
+            std.debug.print("error: -Dvariant=minimal is not available on Windows (gnuwin32 has no switches to drop cairo/ICU/OpenMP; Windows always builds full)\n", .{});
+            return error.UnsupportedVariant;
+        }
+        variant = .full;
+    }
     const arch: Arch = switch (target.result.cpu.arch) {
         .x86_64 => .x86_64,
         .aarch64 => .aarch64,
@@ -357,6 +395,11 @@ pub fn build(b: *std.Build) !void {
         .prefix = install_prefix,
         .rhome = rhome,
         .config_dir = config_dir,
+        // Windows keeps these defaults (its compile graph never passes
+        // `.openmp = true` and builds its own cairo device); unix overwrites
+        // both from subst.txt right after loadSubstTable below.
+        .openmp = true,
+        .devcairo = true,
         .fc = fc,
         .flangrt_dir = if (fc == .flang) try findFlangRt(b, io, conda, os) else "",
         .gfortran_lib_dir = if (fc == .gfortran) switch (os) {
@@ -399,6 +442,8 @@ pub fn build(b: *std.Build) !void {
     if (os == .windows) return buildWindows(&ctx, io);
 
     try loadSubstTable(&ctx, io, config_dir);
+    ctx.openmp = ctx.subst.get("R_OPENMP_CFLAGS").?.len > 0;
+    ctx.devcairo = ctx.subst.get("BUILD_DEVCAIRO_TRUE").?.len == 0;
 
     // ------------------------------------------------------------------
     // Generated headers (what config.status + src/include/Makefile make)
@@ -636,39 +681,45 @@ pub fn build(b: *std.Build) !void {
 
     // grDevices cairo module (library/grDevices/libs/cairo.so): cairoBM.c +
     // rbitmap.o from src/modules/X11 (built there even with --with-x=no).
-    const cairo_mod = newCMod(&ctx);
-    cairo_mod.addIncludePath(ctx.geninc);
-    cairo_mod.addIncludePath(ctx.path("src/include"));
-    {
-        var flags = std.ArrayList([]const u8).empty;
-        try flags.appendSlice(arena, &.{ "-std=gnu23", "-fno-sanitize=undefined", "-O2", "-fopenmp", "-DHAVE_CONFIG_H" });
-        var it = std.mem.tokenizeScalar(u8, ctx.subst.get("CAIRO_CPPFLAGS").?, ' ');
-        while (it.next()) |tok| try flags.append(arena, tok);
-        try flags.append(arena, ctx.absSub("-I{s}/include/libpng16", .{conda}));
-        try flags.append(arena, ctx.absSub("-I{s}/src/modules/X11", .{src_abs}));
-        try flags.append(arena, ctx.absSub("-I{s}/src/library/grDevices/src/cairo", .{src_abs}));
-        try flags.append(arena, ctx.absSub("-I{s}/include", .{conda}));
-        cairo_mod.addCSourceFiles(.{
-            .root = ctx.path("src/library/grDevices/src/cairo"),
-            .files = &.{"cairoBM.c"},
-            .flags = flags.items,
-        });
-        cairo_mod.addCSourceFiles(.{
-            .root = ctx.path("src/modules/X11"),
-            .files = &.{"rbitmap.c"},
-            .flags = flags.items,
-        });
-    }
-    cairo_mod.linkLibrary(ctx.libR);
-    applyLinkFlags(&ctx, cairo_mod, ctx.subst.get("CAIRO_LIBS").?);
-    // full only: rbitmap.c's HAVE_JPEG/HAVE_TIFF branches (from the
-    // per-variant config.h) need libjpeg/libtiff — CAIRO_LIBS doesn't
-    // carry them (only -lpng16), BITMAP_LIBS does (slim's BITMAP_LIBS is
-    // just -lpng16 too, already covered via CAIRO_LIBS, so apply it only
-    // for full to avoid a harmless but pointless double -lpng16 on slim).
-    if (ctx.variant == .full) applyLinkFlags(&ctx, cairo_mod, ctx.subst.get("BITMAP_LIBS").?);
-    linkOmp(&ctx, cairo_mod);
-    const mod_cairo = addSharedLib(&ctx, "pkg_cairo", cairo_mod);
+    // Not built at all without cairo (minimal): devCairo.c, always in
+    // grDevices.so, then reports cairo as unavailable instead of trying
+    // to load it.
+    const mod_cairo: ?*std.Build.Step.Compile = if (ctx.devcairo) blk: {
+        const cairo_mod = newCMod(&ctx);
+        cairo_mod.addIncludePath(ctx.geninc);
+        cairo_mod.addIncludePath(ctx.path("src/include"));
+        {
+            var flags = std.ArrayList([]const u8).empty;
+            try flags.appendSlice(arena, &.{ "-std=gnu23", "-fno-sanitize=undefined", "-O2", "-DHAVE_CONFIG_H" });
+            if (ctx.openmp) try flags.append(arena, "-fopenmp");
+            var it = std.mem.tokenizeScalar(u8, ctx.subst.get("CAIRO_CPPFLAGS").?, ' ');
+            while (it.next()) |tok| try flags.append(arena, tok);
+            try flags.append(arena, ctx.absSub("-I{s}/include/libpng16", .{conda}));
+            try flags.append(arena, ctx.absSub("-I{s}/src/modules/X11", .{src_abs}));
+            try flags.append(arena, ctx.absSub("-I{s}/src/library/grDevices/src/cairo", .{src_abs}));
+            try flags.append(arena, ctx.absSub("-I{s}/include", .{conda}));
+            cairo_mod.addCSourceFiles(.{
+                .root = ctx.path("src/library/grDevices/src/cairo"),
+                .files = &.{"cairoBM.c"},
+                .flags = flags.items,
+            });
+            cairo_mod.addCSourceFiles(.{
+                .root = ctx.path("src/modules/X11"),
+                .files = &.{"rbitmap.c"},
+                .flags = flags.items,
+            });
+        }
+        cairo_mod.linkLibrary(ctx.libR);
+        applyLinkFlags(&ctx, cairo_mod, ctx.subst.get("CAIRO_LIBS").?);
+        // full only: rbitmap.c's HAVE_JPEG/HAVE_TIFF branches (from the
+        // per-variant config.h) need libjpeg/libtiff — CAIRO_LIBS doesn't
+        // carry them (only -lpng16), BITMAP_LIBS does (slim's BITMAP_LIBS is
+        // just -lpng16 too, already covered via CAIRO_LIBS, so apply it only
+        // for full to avoid a harmless but pointless double -lpng16 on slim).
+        if (ctx.variant == .full) applyLinkFlags(&ctx, cairo_mod, ctx.subst.get("BITMAP_LIBS").?);
+        linkOmp(&ctx, cairo_mod);
+        break :blk addSharedLib(&ctx, "pkg_cairo", cairo_mod);
+    } else null;
 
     // ------------------------------------------------------------------
     // Install: binaries into the R_HOME layout
@@ -698,7 +749,7 @@ pub fn build(b: *std.Build) !void {
     for (pkg_libs.items) |pl| {
         _ = libstage.addCopyFile(fixRpath(&ctx, pl.lib.getEmittedBin(), ctx.absSub("{s}.so", .{pl.pkg})), ctx.absSub("{s}/libs/{s}.so", .{ pl.pkg, pl.pkg }));
     }
-    _ = libstage.addCopyFile(fixRpath(&ctx, mod_cairo.getEmittedBin(), "cairo.so"), "grDevices/libs/cairo.so");
+    if (mod_cairo) |mc| _ = libstage.addCopyFile(fixRpath(&ctx, mc.getEmittedBin(), "cairo.so"), "grDevices/libs/cairo.so");
 
     // ------------------------------------------------------------------
     // Bootstrap: sequenced R runs (the R-level half make used to drive)
@@ -2015,6 +2066,11 @@ fn newCMod(ctx: *const Ctx) *std.Build.Module {
         .link_libc = true,
         .pic = true,
         .sanitize_c = .off,
+        // minimal ships inside a wheel, where size is the point: without
+        // this, ReleaseFast still carries full DWARF (libR.so 12.6 MiB).
+        // slim/full keep theirs — conda-forge's own libraries ship
+        // unstripped too, and a conda env is where debugging happens.
+        .strip = if (ctx.variant == .minimal) true else null,
     });
     // LDFLAGS from Makeconf: -L$CONDA/lib -Wl,-rpath,$CONDA/lib on every
     // link (addCondaLibPath skips the rpath half on Windows — see its
@@ -2126,7 +2182,7 @@ fn addCGroup(ctx: *const Ctx, mod: *std.Build.Module, dir: []const u8, files: []
     const b = ctx.b;
     var flags = std.ArrayList([]const u8).empty;
     flags.appendSlice(b.allocator, &.{ "-std=gnu23", "-fno-sanitize=undefined", "-O2", "-fpic", "-DHAVE_CONFIG_H" }) catch @panic("OOM");
-    if (opts.openmp) flags.append(b.allocator, "-fopenmp") catch @panic("OOM");
+    if (opts.openmp and ctx.openmp) flags.append(b.allocator, "-fopenmp") catch @panic("OOM");
     for (opts.extra) |f| {
         const f1 = std.mem.replaceOwned(u8, b.allocator, f, "%S", ctx.src_abs) catch @panic("OOM");
         const f2 = std.mem.replaceOwned(u8, b.allocator, f1, "%C", ctx.conda) catch @panic("OOM");
@@ -2180,6 +2236,9 @@ fn linkCoreLibs(ctx: *const Ctx, mod: *std.Build.Module) void {
 }
 
 fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {
+    // No OpenMP in this configure profile (minimal): nothing was compiled
+    // with -fopenmp (addCGroup), so there is nothing for libomp to satisfy.
+    if (!ctx.openmp) return;
     // zig cc does -fopenmp codegen but ships no libomp — conda-forge's.
     ctx.addCondaLibPath(mod);
     mod.linkSystemLibrary("omp", .{ .use_pkg_config = .no });
@@ -2410,6 +2469,13 @@ fn fortranGroup(ctx: *const Ctx, dir: []const u8, files: []const []const u8, mod
 fn checkConfigFreshness(b: *std.Build, io: std.Io, config_dir: []const u8) !void {
     const path = b.pathFromRoot(b.fmt("{s}/GENERATED_FROM", .{config_dir}));
     const raw = std.Io.Dir.cwd().readFileAlloc(io, path, b.allocator, .limited(256)) catch {
+        // No dir at all is the normal state of a (platform, variant) pair
+        // nobody has captured yet — e.g. minimal before its first
+        // gen-config.yaml run on that platform — not a corrupted checkout.
+        std.Io.Dir.cwd().access(io, b.pathFromRoot(config_dir), .{}) catch {
+            std.debug.print("error: no vendored config for this platform/variant yet ({s}) — capture one with `pixi run -e <env> configure` + `pixi run -e <env> bash zigbuild/tools/gen-subst.sh` on that platform (or the gen-config workflow), see PLAN.md's \"Regenerating the vendored config\"\n", .{config_dir});
+            return error.MissingVendoredConfig;
+        };
         std.debug.print("error: {s} not found — the vendored config dir is missing its GENERATED_FROM marker\n", .{path});
         return error.MissingGeneratedFromMarker;
     };
@@ -2421,10 +2487,10 @@ fn checkConfigFreshness(b: *std.Build, io: std.Io, config_dir: []const u8) !void
             \\function of (platform, variant, pixi.lock, R version) and must be
             \\regenerated:
             \\  1. pixi run configure   (writes build/obj-{s}-<variant>/config.status;
-            \\     use `pixi run -e full configure` for the full variant)
+            \\     use `pixi run -e full configure` / `-e minimal` for those variants)
             \\  2. cp build/obj-{s}-<variant>/src/include/{{config.h,Rconfig.h}} {s}/
             \\  3. pixi run bash zigbuild/tools/gen-subst.sh   (regenerates subst.txt;
-            \\     `pixi run -e full bash zigbuild/tools/gen-subst.sh` for full)
+            \\     `pixi run -e full|minimal bash zigbuild/tools/gen-subst.sh` for those)
             \\  4. update {s}/GENERATED_FROM to "{s}"
             \\See PLAN.md's "Regenerating the vendored config" section.
             \\
@@ -2674,8 +2740,8 @@ fn stageLibraryPayload(ctx: *const Ctx, io: std.Io, libstage: *std.Build.Step.Wr
         // R code concatenation (basepkg.mk mkR1/mkR2/mkRbase)
         if (std.mem.eql(u8, pkg, "datasets")) {
             // no R code, data only
-        } else if (std.mem.eql(u8, pkg, "tcltk") and ctx.variant == .slim) {
-            // slim: use_tcltk=no → stub only, none of the top-level R/*.R
+        } else if (std.mem.eql(u8, pkg, "tcltk") and ctx.variant != .full) {
+            // slim/minimal: use_tcltk=no → stub only, none of the top-level R/*.R
             // (dead branch on Windows: variant is always forced to .full there)
             _ = libstage.addCopyFile(ctx.path(b.fmt("{s}/R/{s}/zzzstub.R", .{ pkg_src, os_subdir })), b.fmt("{s}/R/{s}", .{ pkg, pkg }));
         } else if (std.mem.eql(u8, pkg, "tcltk")) {
@@ -2731,7 +2797,13 @@ fn stageLibraryPayload(ctx: *const Ctx, io: std.Io, libstage: *std.Build.Step.Wr
     _ = libstage.addCopyDirectory(ctx.path("src/library/parallel/inst/doc"), "parallel/doc", .{});
     _ = libstage.addCopyDirectory(ctx.path("src/library/datasets/data"), "datasets/data", .{});
     _ = libstage.addCopyDirectory(ctx.path("src/library/tcltk/exec"), "tcltk/exec", .{});
-    _ = libstage.addCopyDirectory(ctx.path("src/library/translations/inst"), "translations", .{});
+    // Translation catalogs: with NLS off (slim and minimal) R never opens
+    // them, but upstream's make install copies them regardless, and slim
+    // keeps that parity. minimal drops them (10 MiB): the wheel it feeds
+    // is size-driven. bootstrap() still creates the package dir itself.
+    if (ctx.variant != .minimal) {
+        _ = libstage.addCopyDirectory(ctx.path("src/library/translations/inst"), "translations", .{});
+    }
 }
 
 fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
@@ -2755,7 +2827,7 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
         pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rincludedir", b.fmt("{s}/include", .{ctx.rhome}));
         pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rarch", "");
         pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@libsprivate", "");
-        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@others", b.fmt("-Wl,--export-dynamic -fopenmp -L{s}/lib -Wl,-rpath,{s}/lib", .{ ctx.conda, ctx.conda }));
+        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@others", b.fmt("-Wl,--export-dynamic{s} -L{s}/lib -Wl,-rpath,{s}/lib", .{ if (ctx.openmp) " -fopenmp" else "", ctx.conda, ctx.conda }));
         pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@VERSION", r_version);
         const pc_wf = b.addWriteFiles();
         _ = pc_wf.add("libR.pc", pc);
@@ -3075,7 +3147,12 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
         run.setEnvironmentVariable("R_COMPILER_SUPPRESS_ALL", "1");
     }
 
-    // translations
+    // translations (minimal stages no catalogs, see stageLibraryPayload —
+    // but .install_package_description writes into the package dir, so
+    // it has to exist)
+    if (ctx.variant == .minimal) {
+        _ = boot.cmd("mkdir translations", &.{ "mkdir", "-p", b.fmt("{s}/translations", .{lib}) });
+    }
     try mkdesc(&boot, ctx, io, "translations");
 
     // base: makebasedb.R builds base.rdb/rdx, then baseloader takes over R/base
@@ -3154,7 +3231,7 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
                 "tools:::.install_package_demos('{s}/tcltk', '{s}/tcltk')",
                 .{ srclib, lib },
             ));
-            if (ctx.variant == .slim) continue; // stub: no real R code to lazycomp
+            if (ctx.variant != .full) continue; // stub: no real R code to lazycomp
         }
         if (std.mem.eql(u8, pkg, "datasets")) {
             _ = boot.r("datasets data db", "tools:::data2LazyLoadDB(\"datasets\", compress=3)");

@@ -100,6 +100,15 @@ if [ "$OS" = linux ]; then
         base="$(basename "$dep")"
         if [ ! -f "$PREFIX/lib/$base" ]; then
           cp -L "$dep" "$PREFIX/lib/$base"
+          # minimal (the wheel's tree): conda-forge ships these with full
+          # DWARF (libstdc++.so.6: 24 MiB, ~2 without). R's own binaries
+          # are already built stripped for minimal (build.zig newCMod).
+          # Before patchelf, not after: binutils strip and a patchelf-
+          # relocated .dynamic don't always get along.
+          if [ "$VARIANT" = minimal ]; then
+            chmod u+w "$PREFIX/lib/$base"
+            strip --strip-debug "$PREFIX/lib/$base"
+          fi
           patchelf --set-rpath '$ORIGIN' "$PREFIX/lib/$base" 2>/dev/null || true
           n_copied=$((n_copied + 1))
           elfs+=("$PREFIX/lib/$base")
@@ -153,11 +162,32 @@ fi
 
 # Standalone has no env: strip the build-env include/lib flags that
 # stage.sh keeps for conda-package use.
+# Whole-token matches only (the flag must end at a space, a quote or the
+# line end): as bare prefix matches these also ate the head of longer
+# paths — `-L$CONDA/lib/clang/23/lib/darwin` (flang's runtime dir in
+# FLIBS) became `/clang/23/lib/darwin`, so every Fortran package link
+# failed after packaging (found 2026-09-24 on omicron: minqa and quadprog
+# both broke in the contract test once verify-package had run on the same
+# tree). `-I$CONDA/include/libpng16` was one edit away from the same fate.
+# (Two expressions per flag rather than one `\(...\|$\)` alternation: `|`
+# is the s/// delimiter here, so `\|` cannot also mean "or".)
 sed -i \
-  -e "s|-I$CONDA/include||g" \
-  -e "s|-L$CONDA/lib||g" \
-  -e "s|-Wl,-rpath,$CONDA/lib||g" \
+  -e "s|-I$CONDA/include\([ \"]\)|\1|g" -e "s|-I$CONDA/include\$||" \
+  -e "s|-L$CONDA/lib\([ \"]\)|\1|g"         -e "s|-L$CONDA/lib\$||" \
+  -e "s|-Wl,-rpath,$CONDA/lib\([ \"]\)|\1|g" -e "s|-Wl,-rpath,$CONDA/lib\$||" \
   "$R_HOME_DIR/etc/Makeconf"
+
+# minimal (the r-zig wheel's tree): the flang runtime is linked statically
+# into libR/libRblas/libRlapack, and nothing this tree is used with
+# provides a Fortran compiler (the wheel's compiler is PyPI ziglang, which
+# has no Fortran frontend), so FLIBS has nothing left to name, and its
+# -L points into this build machine's pixi env. Empty it: C/C++ packages
+# using CRAN's usual `PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)`
+# then link cleanly. Packages with Fortran sources need a user-supplied
+# FC and its runtime, as documented for the wheel.
+if [ "$VARIANT" = minimal ]; then
+  sed -i 's|^FLIBS = .*|FLIBS = |' "$R_HOME_DIR/etc/Makeconf"
+fi
 
 if [ "$OS" = macos ]; then
   case "$(uname -m)" in

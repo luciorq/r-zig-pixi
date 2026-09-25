@@ -59,9 +59,28 @@ pixi run smoke   # quick sanity check
 pixi run check   # R's own regression suite (linux/macOS)
 ```
 
-Two variants are available as pixi environments: `default` (slim —
-headless, no X11/tcltk/NLS) and `full` (adds tcltk, readline, NLS, jpeg
-and tiff devices).
+Three variants are available as pixi environments: `default` (slim —
+headless, no X11/tcltk/NLS), `full` (adds tcltk, readline, NLS, jpeg
+and tiff devices), and `minimal` (smaller than slim: also no cairo/png,
+ICU, OpenMP or libdeflate; linux/macOS only). `minimal` is the variant
+the Python wheel wraps.
+
+### Build R as a Python wheel
+
+```bash
+pixi run -e minimal verify-package   # build, stage, vendor libs, verify
+pixi run -e wheel wheel              # -> dist/wheel/r_zig-4.6.1-py3-none-<platform>.whl
+pixi run -e wheel wheel-test         # pip-install it into a fresh venv and use it
+```
+
+The wheel (`r-zig`, import name `r_zig`) is the whole relocatable
+`minimal` tree plus console scripts `R`/`Rscript` and `r_zig.r_home()` for
+embedders such as rpy2. `install.packages()` compiles C/C++ packages with
+the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package, a wheel
+dependency, and GNU make is bundled, so no system compiler is needed. Linux
+wheels are `manylinux2014` (glibc 2.17). Packages with Fortran sources need
+a Fortran compiler, which neither the wheel nor ziglang provides.
+Details: `.github/devdocs/feat-wheel-minimal/PLAN.md`.
 
 ### Older Linux HPC servers
 

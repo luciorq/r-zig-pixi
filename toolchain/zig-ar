@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
+# zig: $ZIG_BIN if executable, else PATH, else the ziglang package — see zig-cc.
+if [ -n "${ZIG_BIN:-}" ] && [ -x "$ZIG_BIN" ]; then
+  ZIG=("$ZIG_BIN")
+elif _zig="$(command -v zig || command -v x86_64-w64-mingw32-zig)"; then
+  ZIG=("$_zig")
+else
+  ZIG=(python3 -m ziglang)
+fi
 
 # macOS-only workaround for conda-forge's osx-64 zig 0.16.0: its `zig ar`
 # (llvm-ar) cannot CREATE an archive — `ar rcs new.a x.o` against a
@@ -35,4 +42,4 @@ if [ "$(uname -s)" = Darwin ]; then
       fi ;;
   esac
 fi
-exec "$ZIG" ar "$@"
+exec "${ZIG[@]}" ar "$@"

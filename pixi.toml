@@ -29,7 +29,14 @@ version = "0.1.0"
 [activation.env]
 R_VERSION = "4.6.1"
 
-[tasks]
+# The R build pipeline. A feature of its own (not [tasks]) so the
+# no-default-feature `minimal` environment gets the very same tasks:
+# a copy defined in [feature.minimal.tasks] made bare `pixi run build`
+# ambiguous ("the task 'build' is ambiguous"), since pixi only
+# resolves a task to the default environment when every environment
+# offering it gets it from the same feature. Every build environment
+# lists this feature in [environments] below.
+[feature.pipeline.tasks]
 fetch = "bash scripts/fetch-r.sh"
 # Only build path: `zig build` alone (no autoconf, no make, no gnuwin32)
 # — see .github/devdocs/feat-zig-build/. The autoconf/gnuwin32 pipeline
@@ -61,6 +68,7 @@ clean = "bash scripts/clean.sh"
 # NOT apply the R-source patches scripts/zig-build.sh already owns.
 configure = { cmd = "bash zigbuild/tools/configure-only.sh", depends-on = ["fetch"] }
 
+[tasks]
 # --- CI (build-r.yml on GitHub Actions; needs `gh auth login`) ---
 # Full run on-demand (all jobs, same as a push to main — see
 # workflow_dispatch in .github/workflows/build.yaml).
@@ -230,6 +238,112 @@ openblas = "*"
 [feature.openblas.activation.env]
 R_BLAS = "openblas"
 
+# --- "minimal": the Python-wheel variant ------------------------------------
+# Smaller than slim: no cairo/png (so no pango/harfbuzz/fontconfig/freetype/
+# glib/X11 closure) and no ICU (collation falls back to the C library). It
+# also drops OpenMP, because libomp inside a Python process conflicts with
+# the libgomp/libomp that numpy/scipy/torch wheels bring. libdeflate is
+# dropped too (lazy-load compression falls back to zlib). What remains is
+# only what R's configure requires: pcre2, libcurl, zlib/bzip2/xz (plus
+# libiconv on linux-64, see below). pdf()/postscript() still work;
+# png()/svg()/cairo_pdf() do not.
+#
+# ICU still reaches the wheel, but only through libcurl: conda-forge's
+# libcurl >= 8.21 (2026-08-19) links libpsl, which is always built with
+# ICU, which needs libstdc++. That is 14 of the wheel's ~49 MiB. Pinning
+# `libcurl = "<8.21"` below would drop it, at the cost of an older curl
+# (8.20.0 is from 2026-04-29). Left unpinned on purpose: that is a
+# security-vs-size call. verify-bundle.sh reports these libraries and
+# fails only if R's own binaries link them.
+#
+# What guarantees the profile is configure-only.sh's explicit --without-*/
+# --disable-* switches: on linux-64, flang's own LLVM closure still drags
+# icu, llvm-openmp and libiconv (via libxml2) into this env. It is its
+# own environment with no-default-feature anyway, not a feature layered
+# on top of default, so the graphics stack is not even installed and the
+# CI download is smaller. The cost is that the toolchain lines below
+# duplicate [dependencies] and the per-target Fortran sections: keep
+# them in sync. (The tasks are shared through [feature.pipeline.tasks].)
+# Unix only: gnuwin32 has no switches for any of this (Windows is always
+# full, see build.zig).
+#
+# The wheel itself (r-zig, built by `pixi run -e wheel wheel`) wraps
+# this variant's standalone tree. Its runtime compiler for
+# install.packages() is the PyPI `ziglang` package (same zig version as
+# this env's, 0.16.0), declared as a wheel dependency.
+[feature.minimal]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
+
+[feature.minimal.activation.env]
+R_VERSION = "4.6.1"
+R_BUILD_VARIANT = "minimal"
+
+[feature.minimal.dependencies]
+zig = "0.16.*"
+make = ">=4.4"
+pkg-config = "*"
+curl = "*"
+zlib = "*"
+bzip2 = "*"
+xz = "*"
+liblzma-devel = "*"
+pcre2 = "*"
+libcurl = "*"
+bash = "*"
+which = "*"
+sed = "*"
+grep = "*"
+gawk = "*"
+tar = "*"
+gzip = "*"
+unzip = "*"
+zip = "*"
+
+[feature.minimal.target.linux-64.dependencies]
+flang = "*"
+flang-rt_linux-64 = "*"
+uutils-coreutils = "*"
+patchelf = "*"
+
+[feature.minimal.target.linux-aarch64.dependencies]
+flang-zig = "*"
+flang-rt-zig = "*"
+coreutils = "*"
+patchelf = "*"
+
+[feature.minimal.target.osx-64.dependencies]
+flang-zig = "*"
+flang-rt-zig = "*"
+uutils-coreutils = "*"
+
+[feature.minimal.target.osx-arm64.dependencies]
+flang-zig = "*"
+flang-rt-zig = "*"
+uutils-coreutils = "*"
+
+# Wheel assembly + test: only Python (stdlib zipfile/hashlib, venv, pip).
+# Not the build env: python's own closure (readline, tk, sqlite, ...)
+# has no business being visible to R's configure. The input is the
+# minimal build's staged, vendored tree (`pixi run -e minimal package`);
+# R_BUILD_VARIANT is set here too so env.sh derives the same
+# dist/R-<ver>-minimal-zig prefix.
+[feature.wheel]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
+
+[feature.wheel.activation.env]
+R_VERSION = "4.6.1"
+R_BUILD_VARIANT = "minimal"
+
+[feature.wheel.dependencies]
+python = ">=3.9"
+
+[feature.wheel.tasks]
+wheel = "python scripts/make-wheel.py"
+# Installs the wheel plus ziglang (from PyPI: needs network) into a
+# throwaway venv and runs it with the pixi env scrubbed from the
+# environment, including an R CMD INSTALL of a C package through ziglang.
+wheel-test = "bash scripts/wheel-test.sh"
+
 # conda packaging (rattler-build) lives in its own environment.
 # curl/python: used by the conda-channel-list/-delete admin scripts
 # (scripts/prefix-*.sh) — declared here so the pkg env is self-contained
@@ -296,8 +410,10 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/linux-aarch64/*.conda"
 
 [environments]
-pkg = ["pkg"]
-default = []
-full = ["tcltk", "img-formats", "repl", "nls", "full-build"]
-openblas = ["openblas"]
-full-openblas = ["tcltk", "img-formats", "repl", "nls", "full-build", "openblas"]
+pkg = ["pkg", "pipeline"]
+default = ["pipeline"]
+full = ["tcltk", "img-formats", "repl", "nls", "full-build", "pipeline"]
+openblas = ["openblas", "pipeline"]
+full-openblas = ["tcltk", "img-formats", "repl", "nls", "full-build", "openblas", "pipeline"]
+minimal = { features = ["minimal", "pipeline"], no-default-feature = true }
+wheel = { features = ["wheel"], no-default-feature = true }

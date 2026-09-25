@@ -217,3 +217,41 @@ Before the next platform read `FLANG_PIXI_HANDOFF.md` (2026-09-19, from the
 flang-pixi side): review of this wiring, the hard-coded `lib/clang/<major>`
 in FLIBS, the lost `SHLIB_OPENMP_FFLAGS`, the Windows/binutils/channel
 caveats and the win-arm64 CRT gaps.
+
+## Follow-ups (2026-09-24, PR after Phase 2)
+
+- **Pure-Fortran package in the contract suite**: `quadprog` (no C/C++
+  at all) joins Rcpp/data.table/minqa/pak/ps. R CMD SHLIB compiles it
+  with `$(FC)` = flang and links through `SHLIB_LD` (the zig-cc shim)
+  with `$(FLIBS)` — the path minqa never took (its C++ routes the link
+  through SHLIB_CXXLD). R links via the Fortran driver only for packages
+  opting in with `USE_FC_TO_LINK` in Makevars, so the macOS SDKROOT
+  concern is confined to that opt-in; not exercised here.
+- **Real bug found by adding it**: `package-standalone.sh`'s relocation
+  rewrite used bare prefix matches (`s|-L$CONDA/lib||g`), which ate the
+  head of `-L$CONDA/lib/clang/23/lib/darwin` in FLIBS and left
+  `/clang/23/lib/darwin` — every Fortran package link failed on a tree
+  after `verify-package` had run (the Phase 2 contract runs passed only
+  because they ran before packaging). Now whole-token matches. The
+  published conda packages were never affected: they don't pass through
+  this script and their Makeconf is prefix-replaced at install.
+- **Lesson on the contract script itself**: an apostrophe inside the
+  single-quoted R program silently truncated it at that line — R exited
+  0 on a program ending in a comment, and the trailing "Contract test
+  passed" banner printed with the quadprog/pak/ps assertions never run.
+  Caught only because macOS printed R's "unknown option '-'" warning.
+  The R program must contain no apostrophes; check for the per-package
+  `: OK` lines, not the banner.
+- **Second real bug, macOS only, and the more important one**: with
+  FLIBS fixed, quadprog built but failed to *load* — "duplicate linked
+  dylib '@rpath/libflang_rt.runtime.dylib'". Its Makevars uses CRAN's
+  documented `PKG_LIBS = $(BLAS_LIBS) $(FLIBS)`, and R CMD SHLIB appends
+  `$(FLIBS)` again, so `-lflang_rt.runtime` appears twice on the link
+  line; gfortran's static runtime made that harmless, flang's dylib makes
+  dyld reject the result. This would have hit a large share of CRAN's
+  Fortran packages on macOS. Fix in the zig-cc/zig-cxx shims: on Darwin,
+  drop repeated `-l<name>` tokens (keep the first) — the general form of
+  the existing data.table `-lomp` guard, bash-3.2-safe. Validated on
+  omicron (quadprog loads, full contract suite passes).
+- `conda-package` job capped at 90 minutes (was 300).
+
