@@ -106,6 +106,13 @@ run Rscript -e '
   cat("profile OK\n")
 '
 
+echo "== TLS trust (CA bundle shipped in the wheel, also under --vanilla)"
+# conda-forge's libcurl/OpenSSL in the wheel carry the build env's CA path
+# compiled in; the wheel ships etc/ca-bundle.crt and R's libcurl.c picks
+# the trust anchors itself (package-standalone.sh, zig-build.sh). Same
+# check as verify-bundle.sh: scripts/tls-check.R.
+run Rscript --vanilla "$(cd "$(dirname "$0")" && pwd)/tls-check.R"
+
 echo "== R CMD INSTALL via the console script (ZIG_BIN from import ziglang)"
 run R CMD INSTALL --preclean -l "$T/lib1" "$P"
 run Rscript -e "
@@ -113,6 +120,26 @@ run Rscript -e "
   stopifnot(dot(1:3, 4:6) == 32, cxx_sum(1:10) == 55)
   cat('compiled package OK (console script)\n')
 "
+
+# The wheel compiles with PyPI ziglang, an upstream zig build, which links
+# its own libc++ statically, so C++ packages carry no C++ runtime
+# dependency. conda-forge's zig is patched to link a shared libc++ when
+# one sits beside its install (always the case in a macOS conda env), so
+# a zig from a conda env on PATH would bring that dependency back.
+so="$T/lib1/rzigwheeltest/libs/rzigwheeltest.so"
+if command -v readelf > /dev/null 2>&1; then
+  cxx_deps="$(readelf -d "$so" | grep -E 'NEEDED.*lib(c\+\+|stdc\+\+)' || true)"
+elif command -v otool > /dev/null 2>&1; then
+  cxx_deps="$(otool -L "$so" | tail -n +2 | grep -E 'lib(c\+\+|stdc\+\+)' || true)"
+else
+  cxx_deps="unchecked"
+fi
+case "$cxx_deps" in
+  "") echo "== C++ runtime: static (no shared libc++/libstdc++ dependency)" ;;
+  unchecked) echo "note: neither readelf nor otool found; C++ runtime linkage not checked" ;;
+  *) echo "error: the C++ test package depends on a shared C++ runtime:" >&2
+     echo "$cxx_deps" >&2; exit 1 ;;
+esac
 
 echo "== R CMD INSTALL via bundled bin/R, ZIG_BIN unset (Renviron.site -> sibling ziglang)"
 run "$r_home/bin/R" CMD INSTALL --preclean -l "$T/lib2" "$P"

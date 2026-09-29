@@ -26,6 +26,23 @@ if [ -f "$OBJ_DIR/Makeconf" ]; then
 fi
 echo "Configuring R $R_VERSION, variant: $VARIANT (configure-only, for gen-subst.sh)"
 
+# Autoconf "precious" variables: configure reads each one from the
+# environment, records it in config_opts/R_CONFIG_ARGS and uses it, so
+# whatever the capturing machine exports ends up in the vendored config
+# and in every installed etc/Makeconf. JAVA_HOME did exactly that
+# (GitHub's runners export a hostedtoolcache JDK path, which reached
+# Makeconf, javaconf and ldpaths); R_PAPERSIZE, PKG_CONFIG_PATH, LIBS,
+# TAR, BLAS_LIBS and the rest would too. Unset every variable configure
+# --help lists as influential, before this script sets its own (FC is
+# one of them): what configure needs is passed on its command line below,
+# and shell variables set after the unset are not exported.
+mapfile -t precious < <("$SRC_DIR/configure" --help | awk '
+  /^Some influential environment variables:/ { on = 1; next }
+  /^Use these variables/ { on = 0 }
+  on && /^  [A-Za-z_][A-Za-z0-9_]*/ { print $1 }')
+test "${#precious[@]}" -gt 20 || { echo "error: could not read configure's precious variables" >&2; exit 1; }
+for v in "${precious[@]}"; do unset "$v"; done
+
 FC="$(fortran_compiler)"
 CONDA="${CONDA_PREFIX:?pixi should set CONDA_PREFIX}"
 
@@ -131,34 +148,29 @@ if [ "$BLAS" = openblas ]; then
   BLAS_ARGS+=("--with-blas=-lopenblas" "--with-lapack=-lopenblas")
 fi
 
-# JAVA_HOME is an autoconf "precious" variable: configure reads it from
-# the environment even with --disable-java, records it in config_opts/
-# R_CONFIG_ARGS and copies it into custom_JAVA_HOME — and from there it
-# lands in every installed etc/Makeconf, etc/javaconf and etc/ldpaths.
-# GitHub's runners export one (a hostedtoolcache/temurin JDK path), so
-# every gen-config capture used to vendor that runner path; dev-machine
-# captures, with no JAVA_HOME set, got "". Java is disabled in every
-# variant, so the build env's JAVA_HOME is never meaningful here.
-unset JAVA_HOME
 
 mkdir -p "$OBJ_DIR"
 cd "$OBJ_DIR"
 
-# GitHub's macos-15-intel runner image returns "unknown" from `uname -p`,
-# and R's bundled config.guess defaults an unknown Darwin processor to
-# powerpc — a real gen-config CI run detected build/host as
-# powerpc64-apple-darwin24.6.0 on a genuine x86_64 runner, silently
-# poisoning R_PLATFORM in every generated config header. Pass an explicit
-# --build (from `uname -m`, mapping Darwin's "arm64" to config.guess's
-# canonical "aarch64") only when the misdetection would happen; healthy
-# machines keep using config.guess untouched.
+# macOS: always pass --build, without a Darwin version. config.guess
+# appends the capturing machine's kernel release (`uname -r`), which then
+# lands in R_PLATFORM/R_OS: R.version$platform, and every package's
+# `Built:` field, said aarch64-apple-darwin25.6.0 for minimal and
+# darwin25.4.0 for slim/full on the same platform, depending on which
+# runner captured them. Every Darwin-version case in R's configure.ac and
+# libtool.m4 matches only macOS 10.x (darwin1*, darwin5-9, darwin1[0-8]),
+# so a version-less darwin takes the same branches as darwin24/25 did.
+# Also covers GitHub's macos-15-intel image, whose `uname -p` says
+# "unknown", which config.guess turned into powerpc64-apple-darwin24.6.0
+# on a genuine x86_64 runner. Darwin's "arm64" is config.guess's
+# canonical "aarch64".
 BUILD_ARGS=()
-if [ "$OS" = macos ] && [ "$(uname -p)" = unknown ]; then
+if [ "$OS" = macos ]; then
   case "$(uname -m)" in
-    x86_64) BUILD_ARGS+=("--build=x86_64-apple-darwin$(uname -r)") ;;
-    arm64) BUILD_ARGS+=("--build=aarch64-apple-darwin$(uname -r)") ;;
+    x86_64) BUILD_ARGS+=("--build=x86_64-apple-darwin") ;;
+    arm64) BUILD_ARGS+=("--build=aarch64-apple-darwin") ;;
+    *) echo "error: unexpected macOS machine '$(uname -m)'" >&2; exit 1 ;;
   esac
-  echo "note: uname -p is 'unknown' — overriding ${BUILD_ARGS[0]:-nothing} (config.guess would misdetect powerpc)"
 fi
 
 # OBJC/OBJCXX: without an explicit OBJC=, autoconf falls back to a bare

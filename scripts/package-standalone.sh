@@ -160,6 +160,36 @@ if [ -d "$CONDA/etc/fonts" ] && [ ! -d "$PREFIX/etc/fonts" ]; then
   echo "   vendored fontconfig configuration"
 fi
 
+# TLS trust. The vendored libcurl and OpenSSL are conda-forge's, built
+# with this env's paths compiled in (libcurl's default CA file is
+# $CONDA/ssl/cacert.pem, OpenSSL's directory $CONDA/ssl): outside this
+# machine every HTTPS request failed with "libcurl error code 77: error
+# adding trust anchors from file" (found 2026-09-28; the wheel, built
+# from this tree, had the same). Ship the env's Mozilla bundle and set
+# R_ZIG_CA_BUNDLE: R's libcurl.c, patched by zig-build.sh, then takes
+# CURL_CA_BUNDLE if the user set one, else SSL_CERT_FILE, else the
+# system's bundle, else this file, and passes it to curl as
+# CURLOPT_CAINFO, so the compiled-in path is never used. Not
+# CURL_CA_BUNDLE itself: Renviron exports to every program R starts, and
+# curl or Python's requests would drop their own trust for this frozen
+# copy. Interim fix: the per-platform curl in
+# .github/devdocs/feat-no-host-paths/PLAN.md ("libcurl") replaces it.
+# etc/Renviron, not Renviron.site: `R --vanilla`/`Rscript --vanilla` imply
+# --no-environ, which skips Renviron.site but still reads etc/Renviron.
+# Windows needs none of this: conda-forge's curl there uses Schannel,
+# the Windows certificate store.
+CA_SRC="$CONDA/ssl/cacert.pem"
+test -s "$CA_SRC" || { echo "error: $CA_SRC missing (ca-certificates not in the env?)" >&2; exit 1; }
+test -f "$R_HOME_DIR/etc/Renviron" || { echo "error: $R_HOME_DIR/etc/Renviron missing (not a staged tree?)" >&2; exit 1; }
+install -m 0644 "$CA_SRC" "$R_HOME_DIR/etc/ca-bundle.crt"
+if ! grep -q '^R_ZIG_CA_BUNDLE=' "$R_HOME_DIR/etc/Renviron"; then
+  {
+    echo '## r-zig: fallback trust anchors (read by the patched libcurl.c).'
+    echo 'R_ZIG_CA_BUNDLE=${R_HOME}/etc/ca-bundle.crt'
+  } >> "$R_HOME_DIR/etc/Renviron"
+fi
+echo "   vendored CA bundle ($(grep -c 'BEGIN CERTIFICATE' "$R_HOME_DIR/etc/ca-bundle.crt") certificates) as etc/ca-bundle.crt"
+
 # Standalone has no env: strip the build-env include/lib flags that
 # stage.sh keeps for conda-package use.
 # Whole-token matches only (the flag must end at a space, a quote or the

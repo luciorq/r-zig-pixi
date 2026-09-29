@@ -77,7 +77,10 @@ The wheel (`r-zig`, import name `r_zig`) is the whole relocatable
 `minimal` tree plus console scripts `R`/`Rscript` and `r_zig.r_home()` for
 embedders such as rpy2. `install.packages()` compiles C/C++ packages with
 the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package, a wheel
-dependency, and GNU make is bundled, so no system compiler is needed. Linux
+dependency, and GNU make is bundled, so no system compiler is needed.
+ziglang is an upstream zig build, which links its own libc++ statically,
+so compiled C++ packages need no C++ runtime; a zig from a conda
+environment on PATH links conda's shared libc++ on macOS instead. Linux
 wheels are `manylinux2014` (glibc 2.17). Packages with Fortran sources need
 a Fortran compiler, which neither the wheel nor ziglang provides.
 Details: `.github/devdocs/feat-wheel-minimal/PLAN.md`.

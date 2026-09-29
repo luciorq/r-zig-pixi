@@ -75,6 +75,58 @@ else
 fi
 echo "== standalone bundle verified relocatable ($OS/$FLAVOR)"
 
+# TLS trust (unix): the bundle must verify HTTPS without the build env's
+# trust anchors. conda-forge's libcurl/OpenSSL carry $CONDA/ssl compiled
+# in, which exists on this machine only, so "HTTPS works here" proves
+# nothing on its own. scripts/tls-check.R (shared with wheel-test.sh)
+# checks the wiring and makes real requests; here, where strace can
+# trace, the requests must also read no CA file from the build env. The
+# trace only counts when the requests ran: curl opens its CA file after
+# connecting, so an offline run would pass it vacuously. Windows uses
+# Schannel (the Windows store) and needs none of this.
+if [ "$OS" != windows ]; then
+  tls_r="$(cd "$(dirname "$0")" && pwd)/tls-check.R"
+  tls_out="$VERIFY_DIR/tls-check.out"
+  run_tls() {
+    env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
+      "$@" "$R_BIN" --vanilla --no-echo -f "$tls_r"
+  }
+  build_env="${CONDA_PREFIX:-}"
+  strace_bin=""
+  if [ "$OS" = linux ] && [ -n "$build_env" ] && command -v strace > /dev/null 2>&1; then
+    # `?`: skip syscalls this architecture lacks (aarch64 has no open(2)).
+    # Preflight: where ptrace is blocked (containers, Yama) the trace is
+    # skipped rather than failing a good bundle.
+    if strace -f -qq -e 'trace=?openat,?open' -o /dev/null /bin/true 2> /dev/null; then
+      strace_bin="$(command -v strace)"
+    else
+      echo "   note: strace cannot trace here; build-env CA check skipped"
+    fi
+  fi
+  if [ -n "$strace_bin" ]; then
+    trace="$VERIFY_DIR/tls-trace.txt"
+    run_tls "$strace_bin" -f -qq -e 'trace=?openat,?open' -o "$trace" | tee "$tls_out"
+  else
+    run_tls | tee "$tls_out"
+  fi
+  if grep -q '^TLS: requests OK' "$tls_out"; then
+    if [ -n "$strace_bin" ]; then
+      opened="$(grep -oE "\"$build_env/[^\"]*\"" "$trace" | tr -d '"' | sort -u || true)"
+      opened_ca="$(printf '%s\n' "$opened" | grep -E 'cacert|ca-bundle|cert\.pem|/certs(/|$)' || true)"
+      if [ -n "$opened_ca" ]; then
+        echo "error: HTTPS read trust anchors from the build env:" >&2
+        printf '  %s\n' $opened_ca >&2
+        exit 1
+      fi
+      other="$(printf '%s\n' "$opened" | grep -v '^$' | tr '\n' ' ' || true)"
+      [ -z "$other" ] || echo "   note: still opened from the build env (missing elsewhere, harmless): $other"
+    fi
+    echo "== TLS trust verified${strace_bin:+ (no CA file read from the build env)}"
+  else
+    echo "== TLS trust: wiring checked; requests skipped (offline)"
+  fi
+fi
+
 # minimal: the point of the profile is what R does NOT link. No binary
 # of R's own (libR, modules, base-package .so, bin/exec/R) may name a
 # library from the graphics/ICU/OpenMP/libdeflate stacks. That is the

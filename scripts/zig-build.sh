@@ -80,4 +80,66 @@ RCODE
   ' "$lu" > "$lu.tmp" && mv "$lu.tmp" "$lu"
 fi
 
+# CA trust for the standalone tree and the wheel. Their vendored libcurl
+# and OpenSSL are conda-forge's, with the build env's CA paths compiled
+# in, so package-standalone.sh ships a Mozilla bundle and sets
+# R_ZIG_CA_BUNDLE in etc/Renviron. Setting CURL_CA_BUNDLE there instead
+# would leak into every program R starts (curl, Python's requests, ...)
+# and override their own trust, so R's libcurl.c reads the r-zig
+# variable itself: CURL_CA_BUNDLE as upstream, then, only when
+# R_ZIG_CA_BUNDLE is set, SSL_CERT_FILE, the distribution bundles
+# (certificates added with update-ca-certificates, e.g. for TLS-
+# inspecting proxies, live there) and last the shipped file. Conda and
+# Windows builds don't set R_ZIG_CA_BUNDLE and behave as upstream.
+# Compiled into the internet module, so patched here like the R code
+# above; idempotent via the helper's name.
+lc="$SRC_DIR/src/modules/internet/libcurl.c"
+if [ -f "$lc" ] && ! grep -q 'R_zig_ca_bundle' "$lc"; then
+  ca_helper=$(cat <<'CCODE'
+/* r-zig: see scripts/zig-build.sh ("CA trust"). */
+static const char *R_zig_ca_bundle(void)
+{
+    const char *p = getenv("CURL_CA_BUNDLE");
+    if (p && p[0]) return p;
+#ifndef Win32
+    const char *shipped = getenv("R_ZIG_CA_BUNDLE");
+    if (!shipped || !shipped[0]) return p; /* conda: upstream behaviour */
+    const char *ssl = getenv("SSL_CERT_FILE");
+    if (ssl && ssl[0] && access(ssl, R_OK) == 0) return ssl;
+    static const char *const sys[] = {
+	"/etc/ssl/certs/ca-certificates.crt", /* Debian, Ubuntu, Arch */
+	"/etc/pki/tls/certs/ca-bundle.crt",   /* Fedora, RHEL */
+	"/etc/ssl/ca-bundle.pem",             /* openSUSE */
+	"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", /* RHEL 7+ */
+	"/etc/ssl/cert.pem",                  /* Alpine, macOS */
+	NULL
+    };
+    for (int i = 0; sys[i]; i++)
+	if (access(sys[i], R_OK) == 0) return sys[i];
+    return shipped;
+#else
+    return p;
+#endif
+}
+
+CCODE
+  )
+  awk -v helper="$ca_helper" '
+    $0 == "static" {
+      if ((getline nxt) > 0) {
+        if (nxt ~ /^void curlCommon\(CURL \*hnd/) print helper
+        print; line = nxt
+        if (line ~ /const char \*capath = getenv\("CURL_CA_BUNDLE"\);/)
+          sub(/getenv\("CURL_CA_BUNDLE"\)/, "R_zig_ca_bundle()", line)
+        print line; next
+      }
+    }
+    /const char \*capath = getenv\("CURL_CA_BUNDLE"\);/ {
+      sub(/getenv\("CURL_CA_BUNDLE"\)/, "R_zig_ca_bundle()")
+    }
+    { print }
+  ' "$lc" > "$lc.tmp" && mv "$lc.tmp" "$lc"
+  grep -q 'capath = R_zig_ca_bundle()' "$lc" || { echo "error: CA patch did not apply to $lc" >&2; exit 1; }
+fi
+
 exec "$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"
