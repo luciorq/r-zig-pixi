@@ -129,4 +129,22 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   cat("pak (recursive R.exe invocation + mbedtls quoted -D flags): OK\n")
   cat("ps (process introspection", if (ps::ps_os_type()[["MACOS"]]) "+ apps.m Objective-C ps_apps()" else "", "): OK\n")
 '
+# linux: zig links its own libc++ statically, but only while no libc++
+# package sits beside it: one `libcxx` in the env (conda-forge zig's
+# shared-libc++ probe, flang-pixi handoff section 6) silently turns every
+# C++ object into NEEDED libc++.so.1 with no rpath. None of the envs has
+# one today; fail the day that changes.
+if [ "$OS" = linux ]; then
+  shared_cxx=""
+  for so in "$LIB"/*/libs/*.so; do
+    needed="$(patchelf --print-needed "$so" 2>/dev/null || true)"
+    hit="$(printf '%s\n' "$needed" | grep -E '^lib(c\+\+|stdc\+\+)\.so' || true)"
+    [ -z "$hit" ] || shared_cxx="$shared_cxx ${so#$LIB/}->$hit"
+  done
+  if [ -n "$shared_cxx" ]; then
+    echo "error: compiled packages depend on a shared C++ runtime:$shared_cxx" >&2
+    exit 1
+  fi
+  echo "C++ runtime: static in every compiled package"
+fi
 echo "Contract test passed ($VARIANT/$OS)."

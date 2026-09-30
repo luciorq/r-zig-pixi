@@ -274,6 +274,15 @@ CPP
       echo "error: a package compiled with the bundle records rpaths: $pkg_rp" >&2
       exit 1
     fi
+    # linux: zig's own libc++ is static unless a libc++ package sits in
+    # the env (see contract-test.sh); the package must not need one.
+    if [ "$OS" = linux ]; then
+      cxx_dep="$(patchelf --print-needed "$pkg_dir/rp.so" | grep -E '^lib(c\+\+|stdc\+\+)\.so' || true)"
+      if [ -n "$cxx_dep" ]; then
+        echo "error: a C++ package compiled with the bundle needs a shared C++ runtime: $cxx_dep" >&2
+        exit 1
+      fi
+    fi
     (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
       "$R_BIN" --vanilla --no-echo -e 'dyn.load("rp.so"); stopifnot(.Call("rp") == 6L)')
     echo "== compiled package verified: no rpath, loads (C++)"

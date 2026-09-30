@@ -155,6 +155,8 @@ jobs:
         run: pixi run contract
       - name: Package + verify standalone bundle
         run: pixi run verify-package
+      - name: Hermetic tier 0/1 check
+        run: pixi run hermetic
 
   # conda-forge-style package (rattler-build) — always the slim variant
   # regardless of matrix.env above, since recipe/build.sh never sets

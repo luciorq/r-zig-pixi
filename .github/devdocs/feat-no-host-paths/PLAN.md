@@ -222,8 +222,15 @@ hermetic check); CI legs other than these run on the next push.
   This also fixed Makeconf's `NM`/`SED`, which read `$R_HOME/bin/...`,
   i.e. make's `$(R)_HOME/...`.
 - A6: `scripts/hermetic-check.sh` (`pixi run hermetic`, CI step after
-  verify-package on the unix default and minimal legs). Windows is not
-  covered yet.
+  verify-package on the unix default and minimal legs and on Windows).
+  Windows (tested on kappa, slim, 2026-09-30): environment reduced to
+  SYSTEMROOT/WINDIR/USERPROFILE/LOCALAPPDATA/TMP and PATH = R's
+  `bin\x64` plus System32; R-only source installs (Ncpus = 2), a CRAN
+  `win.binary` (jsonlite, which has a DLL) and R6 from source. The
+  binary comes from CRAN because `--build` needs an external zip there;
+  the DLL is unloaded before `remove.packages()`, since Windows cannot
+  delete a loaded DLL. No execve trace on macOS or Windows: the reduced
+  PATH is the check.
 - Measured after A2/A3 (linux, minimal): `R -e` starts `bin/R`,
   `lib/R/bin/R` and `bin/exec/R`, nothing else. The hermetic scenario
   (source, `Ncpus = 2` and binary installs, removal, R6 from CRAN) starts
@@ -637,6 +644,91 @@ security release: a CI check should flag new curl releases.
 Separate from all of this: P3M binaries need the `HTTPUserAgent` option
 (see "Binary packages"), whichever curl is used.
 
+## flang-pixi handoff §6, reconciled (2026-09-30)
+
+`consolidation/FLANG_PIXI_HANDOFF.md` section 6 (owned by the flang-pixi
+agent) against this branch's findings. Tested on omicron (macOS 26.4,
+arm64) with the minimal env's conda-forge zig (build `_19`), upstream
+zig 0.16.0 from PyPI `ziglang`, and the packaged minimal tree; on kappa
+with the default env's win-64 zig (build `_15`).
+
+**Agrees with this branch:**
+- conda-forge zig links shared `libc++.1.dylib` on macOS, no opt-out:
+  the 2026-09-29 decision (conda keeps it; wheel and standalone use
+  upstream zig).
+- `minos` follows the build host with a native target: already under
+  Open.
+- Linux gets static libc++ only while the env has no `libcxx`: none of
+  the lockfile's linux envs has one today. Adopted as a check (below).
+
+**`-target <arch>-macos.13.0` in the shims: not viable.**
+- It does build and link C++: that corrects this plan's 2026-09-29 note,
+  which read clang's warnings (the source file `error_category.cpp`)
+  as a failure. Without the `ZIG_LIB_DIR` mirror the result still links
+  shared `@rpath/libc++.1.dylib` (the probe applies to non-native
+  targets too); with the mirror it is static, `minos 13.0`, no rpath,
+  and loads. Upstream zig pinned: static, `minos 13.0`, loads.
+- It loses the SDK, with both zigs: `-framework X` is "unable to find
+  framework" with `--sysroot`, `-isysroot`, `-iframework`,
+  `-iframeworkwithsysroot` alike; `-F<sdk>` and linking the SDK's
+  `X.tbd` directly make conda-forge zig panic ("for loop over objects
+  with non-equal lengths") and upstream zig fail ("unable to resolve
+  dependency"). Native links the same `.tbd` fine.
+- pak's `ps` (CRAN 1.9.3) with pinned-target shims fails to compile:
+  `posix.c` includes `net/if_media.h`, an SDK header zig's bundled
+  Darwin headers lack; its configure also links `-framework AppKit`.
+  So the pin would break ps, and pak with it.
+- `minos` with a native target: `-mmacosx-version-min=13.0` compiles
+  but leaves `minos` at the host's (26.4.1); `-Wl,-platform_version` is
+  an unsupported linker arg. Zig 0.16 has no way to keep the SDK and
+  set the deployment target. What is left for r-zig-packages: build on
+  the oldest supported runner, or rewrite `LC_BUILD_VERSION` after the
+  link and re-sign ad hoc (`codesign` is always present).
+- The shims therefore keep the native target and the `-l`/`-L`
+  rewrite that removes zig's implicit rpaths.
+
+**Static libc++ for R itself on macOS (the mirror before `zig build`):
+works, with two conditions.**
+- Measured (minimal, clean zig cache): `libR.dylib`, `bin/exec/R` and
+  `libRlapack.dylib` link no libc++, the tree vendors none, verify-bundle's
+  relocation/TLS/rpath checks and the hermetic check pass.
+- The zig cache is not keyed on the probe: the first try, on a warm
+  cache, silently reused the shared-libc++ link outputs. The mirror
+  build needs its own `ZIG_LOCAL_CACHE_DIR` (or a clean one).
+- Packages compiled into such a tree must be static too, since libc++
+  is no longer in the process or the tree. True for the wheel (PyPI
+  zig) and for the standalone tree with the official zig, but not for
+  conda-forge zig: verify-bundle's C++ test package, compiled with the
+  env's zig, then fails `dyn.load` ("Library not loaded:
+  @rpath/libc++.1.dylib"). Adopting it means the verify step compiles
+  with the mirror (or upstream zig), and the C++ runtime check extends
+  to macOS. Not adopted yet: it is a build-layout decision (minimal
+  only, or slim standalone too, which is also the conda build's tree).
+
+**Windows zig.** Our shims find `x86_64-w64-mingw32-zig.exe` (MSYS bash
+cannot run the env's `zig.bat`). That is the real 170 MB zig binary
+(`zig_impl_win-64`), not one of `zig_win-64`'s flag-dropping cross
+wrappers (`x86_64-w64-mingw32-zig-cc.exe` and siblings, ~200 KB), and
+`zig.bat` only forwards to it. Its native target is
+`x86_64-windows.win11_ga...win11_ga-gnu`: the gnu ABI, not MSVC. The host
+Windows 11 version reaches neither the PE headers (OS and subsystem
+version 6.0 native and with `-target x86_64-windows-gnu`) nor
+`_WIN32_WINNT` (`0x0a00`, Windows 10, both ways). No change needed; an
+explicit `-target x86_64-windows-gnu` would only guard against a change
+of zig's default.
+
+**The two `libcxx` versions in the lockfile.** osx-64 and osx-arm64:
+`libcxx 21.1.8` in every R build env (default, full, full-openblas,
+minimal, openblas, pkg), `23.1.2` only in `wheel`, the Python-only env
+(`libpython` needs `libcxx >=20`; solved on its own). Nothing built or
+shipped comes from `wheel`, so it does not matter here. Also seen: the
+minimal env has conda-forge zig build `_19` (the build §6 measured),
+the others `_15`.
+
+**Adopted:** `contract-test.sh` fails on linux if any compiled package's
+`.so` has `NEEDED libc++.so*`/`libstdc++.so*`; `verify-bundle.sh` does
+the same for its C++ test package.
+
 ## Open
 
 - **Names** of the base and toolchain packages, on conda and PyPI.
@@ -661,9 +753,10 @@ Separate from all of this: P3M binaries need the `HTTPUserAgent` option
     LC_RPATH (`src/main.zig`: `each_lib_rpath orelse is_native_os`), so
     each package recorded `R_HOME/lib`. `zig cc` rejects
     `-fno-each-lib-rpath` ("Unknown Clang option"), and pinning
-    `-target <arch>-macos.13.0` loses the SDK (no `-framework`; `-F`
-    panics zig) and makes conda-forge zig build libc++ from source, which
-    fails. The shims now resolve `-l<name>` against the `-L` directories
+    `-target <arch>-macos.13.0` loses the SDK: no `-framework`, no SDK
+    headers (pak's `ps` stops compiling). C++ itself does work pinned;
+    an earlier note here said otherwise, from misread warnings (see
+    "flang-pixi handoff §6, reconciled"). The shims now resolve `-l<name>` against the `-L` directories
     themselves (ld64's order) and drop the `-L` flags. Packages with no
     rpath load: libR, libc++ and libomp are already in the process and
     match by install name (tested with C and C++ on omicron).
@@ -688,9 +781,9 @@ Separate from all of this: P3M binaries need the `HTTPUserAgent` option
   target, zig stamps `minos` with the build host's version (26.4.1 on
   omicron), and zig 0.16 ignores `MACOSX_DEPLOYMENT_TARGET`. R minimal
   targets 13.0. r-zig-packages binaries built on a newer runner would
-  claim that runner's macOS. Options: build them on the oldest runner,
-  patch `minos` after linking (vtool), or find a way to pass an OS
-  version to zig without losing the native SDK.
+  claim that runner's macOS. A pinned target is ruled out (see "flang-pixi
+  handoff §6, reconciled"); options: build them on the oldest runner, or
+  rewrite `LC_BUILD_VERSION` after linking and re-sign ad hoc.
 - **Load-time needs of compiled packages:** the flang runtime is linked
   statically on linux-64 and macOS (quadprog and minqa need none).
   libc++ is static on linux-64 and Windows, but C++ packages built on
