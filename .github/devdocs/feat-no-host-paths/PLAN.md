@@ -186,13 +186,22 @@ hermetic check); CI legs other than these run on the next push.
   configs re-captured with it (the full one also picked up `OBJC=zig-cc`
   and a different `LD` path, being older than the script), the other
   unix configs edited to match (`R_SHELL` and `'R_SHELL=/bin/sh'` in
-  `config_opts`/`R_CONFIG_ARGS`), to be confirmed by gen-config. Still
-  recorded from the capture machine, but no longer shipped (stage.sh
-  overrides them in Renviron): `PAGER`, `R_BROWSER`, `R_PDFVIEWER`,
-  `R_PRINTCMD`, `TEXI2DVI`. Not pinned yet: `LD`, `TEXI2ANY`,
-  `INSTALL_INFO`, `oldincludedir` (build tree only). Pinning the tool
-  variables in configure itself is riskier than it looks: `R_UNZIPCMD`
-  also unpacks zoneinfo at install, and `R_PRINTCMD` reaches config.h.
+  `config_opts`/`R_CONFIG_ARGS`), confirmed by gen-config on PR #12
+  (osx-arm64 slim/full are not in its matrix). The other capture-machine
+  values are normalized after capture rather than pinned in configure
+  (`zigbuild/tools/normalize-subst.sh`, run by gen-subst.sh and applied
+  to all 12 unix configs): `LD`, `TEXI2ANY(_VERSION_*)`, `INSTALL_INFO`
+  and `TEXI2DVI` blank (manuals and configure internals only; none
+  reaches an installed file); `NM` `nm -B` (it reached Makeconf as
+  `/usr/bin/nm` on arm64 and macOS), `TEXI2DVICMD`, `YACC`, the
+  autotools `missing` wrappers, `PAGER` less, `R_BROWSER`/`R_PDFVIEWER`
+  xdg-open or open. After it the linux-arm64 and linux-x86_64 configs
+  differ only by architecture (triples, `-fpic`) and flang's version
+  string. `oldincludedir` is autoconf's fixed default (`/usr/include`
+  everywhere): nothing to do. Pinning in configure itself is riskier
+  than it looks: `R_UNZIPCMD` also unpacks zoneinfo at install,
+  `R_PRINTCMD` reaches config.h, and an empty `TEXI2ANY` just makes
+  configure search again.
 - A2: all five patches in zig-build.sh (`Sys.which` replaced whole,
   `osVersion`, `R_CleanTempDir`, install.R's four `mv`/`cp` sites taking
   the `WINDOWS` branches with `patch_rpaths()` kept before the move,

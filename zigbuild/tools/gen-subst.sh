@@ -99,6 +99,11 @@ awk '
       -e 's|@ZR_CONDA@/lib/clang/[0-9][0-9]*/lib/[^ ":]*|@ZR_FLANGRT_DIR@|g' \
   > "$OUT_DIR/subst.txt"
 
+# Entries that record the capturing machine's installed tools (texinfo,
+# bison, conda's ld/nm, a browser) rather than R or the platform: fixed
+# values, so two captures of one platform/variant are identical anywhere.
+bash "$(dirname "$0")/normalize-subst.sh" "$OS" "$OUT_DIR/subst.txt"
+
 echo "wrote $OUT_DIR/subst.txt ($(wc -l < "$OUT_DIR/subst.txt") entries)"
 
 # Stage the other three files of a complete vendored config dir from the
