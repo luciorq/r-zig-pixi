@@ -1,9 +1,9 @@
 # feat-no-host-paths — no build-machine paths, and a base R that installs without a toolchain
 
-**Status (2026-09-25): design only.** Branch `feat-no-host-paths` has
-one commit on top of main (the `JAVA_HOME` cleanup of the vendored
-configs). Nothing below is implemented yet. R source references are to
-R 4.6.1 (`build/R-4.6.1/`).
+**Status (2026-09-29): phase A implemented on unix** (A1 partly, A2–A5,
+A6 without Windows; see "Progress" below), plus the interim libcurl CA
+fix and the compiled-package rpath fix. Phases T, B, C, D, S and P are
+design only. R source references are to R 4.6.1 (`build/R-4.6.1/`).
 
 ## Goal
 
@@ -178,6 +178,51 @@ A, then T, are sequential. B, C, D, S and P can run in parallel with them.
 - A7: libcurl (see "libcurl"): first the interim CA fix for the
   standalone tree and the wheel, then the CA rule and the per-platform
   curl.
+
+**Progress (2026-09-29).** Tested on linux-64 (minimal and slim) and on
+osx-arm64 (omicron: minimal verify-package, contract, wheel, wheel-test,
+hermetic check); CI legs other than these run on the next push.
+- A1: `R_SHELL=/bin/sh` pinned in configure-only.sh; the linux-x86_64
+  configs re-captured with it (the full one also picked up `OBJC=zig-cc`
+  and a different `LD` path, being older than the script), the other
+  unix configs edited to match (`R_SHELL` and `'R_SHELL=/bin/sh'` in
+  `config_opts`/`R_CONFIG_ARGS`), to be confirmed by gen-config. Still
+  recorded from the capture machine, but no longer shipped (stage.sh
+  overrides them in Renviron): `PAGER`, `R_BROWSER`, `R_PDFVIEWER`,
+  `R_PRINTCMD`, `TEXI2DVI`. Not pinned yet: `LD`, `TEXI2ANY`,
+  `INSTALL_INFO`, `oldincludedir` (build tree only). Pinning the tool
+  variables in configure itself is riskier than it looks: `R_UNZIPCMD`
+  also unpacks zoneinfo at install, and `R_PRINTCMD` reaches config.h.
+- A2: all five patches in zig-build.sh (`Sys.which` replaced whole,
+  `osVersion`, `R_CleanTempDir`, install.R's four `mv`/`cp` sites taking
+  the `WINDOWS` branches with `patch_rpaths()` kept before the move,
+  packages2.R). The old `bin/toolchain/which` is no longer used.
+- A3: `R.sh.in`'s argument loop replaced whole (parameter expansion, no
+  `echo`, whose backslash handling differs under dash), `R CMD` runs
+  `/bin/sh Rcmd` instead of a PATH lookup of `sh`, and `Rcmd.in`'s
+  `export \`sed ...\`` of Renviron's names became a `read` loop (found by
+  the hermetic check: every `R CMD`, INSTALL included, ran sed). The
+  lib64 probe is dropped for every variant. stage.sh's launchers and
+  Rscript emulator are POSIX sh, use `${_s%/*}` instead of `dirname`, and
+  Rscript prints usage without arguments (it used to wait on stdin).
+- A4: stage.sh rewrites Renviron: `TAR` and `R_UNZIPCMD` `internal`;
+  `PAGER` less, `R_BROWSER`/`R_PDFVIEWER` xdg-open (linux) or open
+  (macOS), `R_PRINTCMD` lpr, `R_TEXI2DVICMD` texi2dvi.
+- A5: stage.sh turns `$CONDA/bin/<tool>` into the bare name everywhere
+  and vendors nothing but the shims and, for minimal (the wheel), make.
+  This also fixed Makeconf's `NM`/`SED`, which read `$R_HOME/bin/...`,
+  i.e. make's `$(R)_HOME/...`.
+- A6: `scripts/hermetic-check.sh` (`pixi run hermetic`, CI step after
+  verify-package on the unix default and minimal legs). Windows is not
+  covered yet.
+- Measured after A2/A3 (linux, minimal): `R -e` starts `bin/R`,
+  `lib/R/bin/R` and `bin/exec/R`, nothing else. The hermetic scenario
+  (source, `Ncpus = 2` and binary installs, removal, R6 from CRAN) starts
+  only those and `/bin/sh` (R starting R, phase S).
+- Found on the way: `Sys.timezone()` runs `timedatectl` when it is on
+  PATH (seen during installs; optional, tier 0). The recipe's host
+  `which`/`sed` dependencies existed for the old `@WHICH@`/`@SED@` bakes
+  and can go in phase T.
 
 **T — split the toolchain out**, once A6 passes on every platform:
 the packaging above, the preflight, and `R CMD config` failing cleanly.
@@ -597,19 +642,41 @@ Separate from all of this: P3M binaries need the `HTTPUserAgent` option
   binary per BLAS flavor, or openblas builds ship a `libRblas.so` that
   forwards to openblas so packages always link `-lRblas` (R-admin's
   documented way to swap the BLAS).
-- **Compiled packages record absolute rpaths** (found 2026-09-29):
-  packages built through our shims carry the build machine's paths.
-  On linux (dev tree) Rcpp and quadprog have RUNPATH
-  `…/.pixi/envs/minimal/lib`; on macOS (packaged standalone tree, on
-  omicron) Rcpp has LC_RPATH `…/dist/R-4.6.1-minimal-zig/lib/R/lib`.
-  Likely cause: zig's `cc` defaults to `-feach-lib-rpath` for native
-  builds, adding an rpath for every directory a shared library came from.
-  For r-zig-packages binaries that is a build-path leak and a
-  relocation break. Candidate fix: `-fno-each-lib-rpath` in the zig-cc
-  and zig-cxx shims, relying on libR (and the libraries it loads) being
-  already in the process. On macOS, C++ packages also need
-  `@rpath/libc++.1.dylib` (the tree vendors conda's), so that path must
-  still resolve through R's own rpaths. Test on both before changing it.
+- **Absolute rpaths: fixed 2026-09-29.** What was found:
+  - linux: not zig. The dev tree's Makeconf carries conda's
+    `LDFLAGS = -L$CONDA/lib -Wl,-rpath,$CONDA/lib`; package-standalone.sh
+    strips it, so packages compiled with the shipped tree have no
+    RUNPATH. zig adds none there because the shim's `-target
+    <arch>-linux-gnu.2.17` is not a native target.
+  - macOS: zig. For a native target, every `-L` directory becomes an
+    LC_RPATH (`src/main.zig`: `each_lib_rpath orelse is_native_os`), so
+    each package recorded `R_HOME/lib`. `zig cc` rejects
+    `-fno-each-lib-rpath` ("Unknown Clang option"), and pinning
+    `-target <arch>-macos.13.0` loses the SDK (no `-framework`; `-F`
+    panics zig) and makes conda-forge zig build libc++ from source, which
+    fails. The shims now resolve `-l<name>` against the `-L` directories
+    themselves (ld64's order) and drop the `-L` flags. Packages with no
+    rpath load: libR, libc++ and libomp are already in the process and
+    match by install name (tested with C and C++ on omicron).
+  - R's own macOS binaries also carried build-machine rpaths (the conda
+    lib dir, absolute, and `build/zig-cache/...`, relative): stage.sh
+    only added its `@loader_path` pair. It now deletes every other
+    LC_RPATH, as patchelf `--set-rpath` does on linux.
+  - verify-bundle.sh fails on any RUNPATH/LC_RPATH not relative to the
+    file, and compiles a C++ SHLIB with the extracted tree that must have
+    no rpath and load.
+  - Side effect, intended: in a conda env, data.table's configure used to
+    load conda's libomp through that rpath and enable OpenMP on macOS
+    minimal, which has none (the first CI run of the macOS minimal legs,
+    2026-09-29, failed the contract test on it). It now behaves as on
+    linux.
+- **macOS deployment target of compiled packages.** With the native
+  target, zig stamps `minos` with the build host's version (26.4.1 on
+  omicron), and zig 0.16 ignores `MACOSX_DEPLOYMENT_TARGET`. R minimal
+  targets 13.0. r-zig-packages binaries built on a newer runner would
+  claim that runner's macOS. Options: build them on the oldest runner,
+  patch `minos` after linking (vtool), or find a way to pass an OS
+  version to zig without losing the native SDK.
 - **Load-time needs of compiled packages:** the flang runtime is linked
   statically on linux-64 and macOS (quadprog and minqa need none).
   libc++ is static on linux-64 and Windows, but C++ packages built on

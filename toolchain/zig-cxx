@@ -116,7 +116,32 @@ case "$(uname -s 2>/dev/null)" in
       esac
       _dedup+=("$a")
     done
-    set -- "${_dedup[@]}"
+    set -- "${_dedup[@]}" "${omp[@]}"
+    omp=()
+    # No implicit rpaths: resolve -l<name> against the -L directories and
+    # drop the -L flags, so zig's -feach-lib-rpath has nothing to record.
+    # See zig-cc for the rationale.
+    _link=true
+    for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) _link=false; break;; esac; done
+    if $_link; then
+      _ldirs=()
+      for a in "$@"; do case "$a" in -L?*) _ldirs+=("${a#-L}");; esac; done
+      _args=()
+      for a in "$@"; do
+        case "$a" in
+          -L?*) continue ;;
+          -l?*)
+            for d in "${_ldirs[@]}"; do
+              for f in "$d/lib${a#-l}.tbd" "$d/lib${a#-l}.dylib" "$d/lib${a#-l}.a"; do
+                if [ -f "$f" ]; then a="$f"; break 2; fi
+              done
+            done
+            ;;
+        esac
+        _args+=("$a")
+      done
+      set -- "${_args[@]}"
+    fi
     ;;
 esac
 

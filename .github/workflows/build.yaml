@@ -100,6 +100,12 @@ jobs:
       - name: Package + verify standalone bundle
         if: matrix.env == 'default' || matrix.env == 'minimal'
         run: pixi run -e ${{ matrix.env }} verify-package
+      # Tiers 0/1 (feat-no-host-paths): the packaged tree starts R and
+      # installs source R-only and binary packages with nothing but /bin/sh
+      # and its own bin/ on PATH; on linux, strace fails any other program.
+      - name: Hermetic tier 0/1 check
+        if: matrix.env == 'default' || matrix.env == 'minimal'
+        run: pixi run -e ${{ matrix.env }} hermetic
       # The r-zig wheel: the tree verify-package just packaged, zipped with
       # the r_zig Python package, then pip-installed into a fresh venv
       # (ziglang from PyPI) and used with the pixi env scrubbed away —

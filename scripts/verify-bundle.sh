@@ -213,3 +213,71 @@ if [ "$OS" = linux ]; then
   [ "$failed" = 0 ] || exit 1
   echo "== glibc ceiling verified: runtime worst $worst ($worst_file) <= floor $GLIBC_FLOOR; $tools_over toolchain helper(s) above the floor, all <= $GLIBC_TOOLS_CEILING"
 fi
+
+# No build-machine rpaths (unix). Every RUNPATH/LC_RPATH entry in the tree
+# must be relative to the file ($ORIGIN, @loader_path): zig records the
+# build env's lib dir and zig-cache dirs, and stage.sh/package-standalone.sh
+# replace them. Then a package compiled with this tree (C++, so libc++ is
+# involved on macOS) must record no rpath at all, and still load: libR and
+# the libraries it needs are already in the process. The shims make that
+# so (zig's -feach-lib-rpath on macOS; conda's -rpath in LDFLAGS is
+# stripped from Makeconf here). Skipped without zig, as on a user machine.
+if [ "$OS" != windows ]; then
+  bin_list="$VERIFY_DIR/bin-list.txt"
+  if [ "$OS" = linux ]; then
+    find "$BUNDLE_DIR" -type f \( -name '*.so*' -o -perm -u+x \) \
+      -exec sh -c 'head -c4 "$1" | od -An -tx1 | grep -q "7f 45 4c 46"' _ {} \; -print > "$bin_list"
+  else
+    find "$BUNDLE_DIR" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) \
+      -exec sh -c 'head -c4 "$1" | od -An -tx1 | grep -q "cf fa ed fe"' _ {} \; -print > "$bin_list"
+  fi
+  rpaths_of() {
+    if [ "$OS" = linux ]; then
+      patchelf --print-rpath "$1" 2>/dev/null | tr ':' '\n' | grep -v '^$' || true
+    else
+      otool -l "$1" | awk '/cmd LC_RPATH/ {r = 1} r && / path / {sub(/^ *path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print; r = 0}'
+    fi
+  }
+  bad=""
+  while IFS= read -r f; do
+    for rp in $(rpaths_of "$f"); do
+      case "$rp" in '$ORIGIN'|'$ORIGIN/'*|@loader_path|@loader_path/*) ;; *) bad="$bad
+  ${f#$BUNDLE_DIR/}: $rp" ;; esac
+    done
+  done < "$bin_list"
+  if [ -n "$bad" ]; then
+    echo "error: build-machine rpaths in the bundle:$bad" >&2
+    exit 1
+  fi
+  echo "== rpaths verified: $(wc -l < "$bin_list" | tr -d ' ') binaries, all relative"
+
+  zig_dir="$(dirname "$(command -v zig 2>/dev/null || echo /nonexistent/zig)")"
+  if [ -x "$zig_dir/zig" ]; then
+    pkg_dir="$VERIFY_DIR/shlib"
+    mkdir -p "$pkg_dir"
+    cat > "$pkg_dir/rp.cpp" <<'CPP'
+#include <R.h>
+#include <Rinternals.h>
+#include <stdexcept>
+#include <string>
+extern "C" SEXP rp(void)
+{
+    std::string s("r-zig");
+    try { throw std::runtime_error("!"); } catch (const std::exception &e) { s += e.what(); }
+    return ScalarInteger((int) s.size());
+}
+CPP
+    (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+      "$R_BIN" CMD SHLIB -o rp.so rp.cpp > shlib.log 2>&1) || { cat "$pkg_dir/shlib.log" >&2; echo "error: R CMD SHLIB failed with the bundle" >&2; exit 1; }
+    pkg_rp="$(rpaths_of "$pkg_dir/rp.so" | tr '\n' ' ')"
+    if [ -n "$pkg_rp" ]; then
+      echo "error: a package compiled with the bundle records rpaths: $pkg_rp" >&2
+      exit 1
+    fi
+    (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
+      "$R_BIN" --vanilla --no-echo -e 'dyn.load("rp.so"); stopifnot(.Call("rp") == 6L)')
+    echo "== compiled package verified: no rpath, loads (C++)"
+  else
+    echo "== compiled package rpath check skipped (no zig on PATH)"
+  fi
+fi

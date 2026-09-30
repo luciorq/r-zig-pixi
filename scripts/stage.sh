@@ -61,9 +61,11 @@ fi
 # does); found by running the staged launcher on real hardware outside
 # the pixi env, not by inspection. The parenthesized form sidesteps it
 # and is valid on every POSIX shell, so it's harmless everywhere else.
+# The directory of a path is "${_s%/*}" rather than `dirname` (phase A3:
+# starting R runs no external programs besides readlink for symlinks).
 for launcher in "$R_HOME_DIR/bin/R"; do
   [ -f "$launcher" ] || continue
-  sed -i 's|^R_HOME_DIR=.*|R_HOME_DIR=$(_s="$0"; while [ -h "$_s" ]; do _d=$(cd -P "$(dirname "$_s")" \&\& pwd); _s=$(readlink "$_s"); case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac; done; cd -P "$(dirname "$_s")/.." \&\& pwd)  # patched: relocatable|' "$launcher"
+  sed -i 's|^R_HOME_DIR=.*|R_HOME_DIR=$(_s="$0"; while [ -h "$_s" ]; do case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac; _d=$(cd -P "${_d:-/}" \&\& pwd); _s=$(readlink "$_s"); case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac; done; case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac; cd -P "${_d:-/}/.." \&\& pwd)  # patched: relocatable|' "$launcher"
   # configure also bakes R_SHARE_DIR/R_INCLUDE_DIR/R_DOC_DIR as literal
   # absolute paths (NOT derived from R_HOME_DIR above) — these feed
   # `R CMD SHLIB`/INSTALL's search for share/make/*.mk, so a stale value
@@ -73,24 +75,24 @@ for launcher in "$R_HOME_DIR/bin/R"; do
     -e 's|^R_INCLUDE_DIR=.*|R_INCLUDE_DIR="${R_HOME_DIR}/include"|' \
     -e 's|^R_DOC_DIR=.*|R_DOC_DIR="${R_HOME_DIR}/doc"|' \
     "$launcher"
-  # minimal: also drop R's lib64 multilib probe (`if test "${R_HOME_DIR}"
-  # = "<configure prefix>/lib/R"; then ... fi`). Once R_HOME_DIR is self-
-  # derived it can only match on the build machine itself, so it is dead
-  # code whose one effect is carrying build paths into the r-zig wheel
+  # Drop R's lib64 multilib probe (`if test "${R_HOME_DIR}" = "<configure
+  # prefix>/lib/R"; then ... fi`, which runs `uname -m`). Once R_HOME_DIR
+  # is self-derived it can only match on the build machine itself, so it
+  # is dead code whose one effect is carrying build paths into every tree
   # (make-wheel.py refuses those in run-time files).
-  if [ "$VARIANT" = minimal ]; then
-    sed -i '/^if test "\${R_HOME_DIR}" = "/,/^fi$/d' "$launcher"
-  fi
+  sed -i '/^if test "\${R_HOME_DIR}" = "/,/^fi$/d' "$launcher"
 done
 cat > "$PREFIX/bin/R" << 'EOF'
 #!/bin/sh
 _s="$0"
 while [ -h "$_s" ]; do
-  _d="$(cd -P "$(dirname "$_s")" && pwd)"
+  case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
+  _d="$(cd -P "${_d:-/}" && pwd)"
   _s="$(readlink "$_s")"
   case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac
 done
-here="$(cd -P "$(dirname "$_s")" && pwd)"
+case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
+here="$(cd -P "${_d:-/}" && pwd)"
 # standalone bundles carry fontconfig config; harmless if absent
 if [ -d "$here/../etc/fonts" ]; then
   FONTCONFIG_PATH="$here/../etc/fonts"; export FONTCONFIG_PATH
@@ -99,16 +101,24 @@ exec "$here/../lib/R/bin/R" "$@"
 EOF
 chmod +x "$PREFIX/bin/R"
 
+# Rscript: emulated in POSIX sh (the real one embeds the build path).
+# Arguments are rebuilt in "$@" itself, POSIX sh having no arrays: each
+# original argument is shifted off the front and its translation appended
+# at the end, so after the loop "$@" holds only the translations. As
+# Rscript does, with -e the first non-option starts the script's
+# arguments; without -e it is the file.
 for rs in "$PREFIX/bin/Rscript" "$R_HOME_DIR/bin/Rscript"; do
   cat > "$rs" << 'EOF'
-#!/bin/bash
+#!/bin/sh
 _s="$0"
 while [ -h "$_s" ]; do
-  _d="$(cd -P "$(dirname "$_s")" && pwd)"
+  case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
+  _d="$(cd -P "${_d:-/}" && pwd)"
   _s="$(readlink "$_s")"
   case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac
 done
-here="$(cd -P "$(dirname "$_s")" && pwd)"
+case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
+here="$(cd -P "${_d:-/}" && pwd)"
 case "$here" in
   */lib/R/bin) R_HOME="${here%/bin}" ;;
   *)           R_HOME="$(cd "$here/../lib/R" && pwd)" ;;
@@ -118,20 +128,35 @@ prefix="$(cd "$R_HOME/../.." && pwd)"
 if [ -d "$prefix/etc/fonts" ]; then
   FONTCONFIG_PATH="$prefix/etc/fonts"; export FONTCONFIG_PATH
 fi
-ropts=(--no-echo --no-restore)
-while (( $# )); do
-  case "$1" in
-    -e)                 ropts+=(-e "$2"); shift 2 ;;
-    --default-packages=*) export R_DEFAULT_PACKAGES="${1#*=}"; shift ;;
-    --version)          exec "$R_HOME/bin/R" --version ;;
-    -*)                 ropts+=("$1"); shift ;;
-    *)                  ropts+=(-f "$1"); shift; break ;;
+if [ $# -eq 0 ]; then
+  echo "Usage: Rscript [options] file [args]" >&2
+  echo "   or: Rscript [options] -e expr [-e expr2 ...] [args]" >&2
+  exit 1
+fi
+n=$#
+set -- "$@" --no-echo --no-restore
+opts=yes; expr=no
+while [ "$n" -gt 0 ]; do
+  a="$1"; shift; n=$((n - 1))
+  if [ "$opts" = no ]; then
+    set -- "$@" "$a"
+    continue
+  fi
+  case "$a" in
+    -e)
+      [ "$n" -gt 0 ] || { echo "Rscript: -e requires an expression" >&2; exit 1; }
+      set -- "$@" -e "$1"; shift; n=$((n - 1)); expr=yes ;;
+    --default-packages=*) R_DEFAULT_PACKAGES="${a#*=}"; export R_DEFAULT_PACKAGES ;;
+    --version) exec "$R_HOME/bin/R" --version ;;
+    -*) set -- "$@" "$a" ;;
+    *)
+      opts=no
+      if [ "$expr" = yes ]; then set -- "$@" --args "$a"
+      else set -- "$@" -f "$a"; [ "$n" -gt 0 ] && set -- "$@" --args
+      fi ;;
   esac
 done
-if (( $# )); then
-  exec "$R_HOME/bin/R" "${ropts[@]}" --args "$@"
-fi
-exec "$R_HOME/bin/R" "${ropts[@]}"
+exec "$R_HOME/bin/R" "$@"
 EOF
   chmod +x "$rs"
 done
@@ -163,25 +188,15 @@ fi
 mkdir -p "$R_HOME_DIR/bin/toolchain"
 cp "$TOOLCHAIN"/zig-* "$R_HOME_DIR/bin/toolchain/"
 
-# R's generated scripts (bin/R, bin/libtool, bin/javareconf, ...) bake in
-# absolute build-time paths to tools like sed/grep/nm/dd/realpath
-# (autoconf @SED@ etc. substitution). Those paths only exist in the SAME
-# pixi env the build ran in — breaks for a conda package (build_env is
-# torn down before the run/test env) and for a standalone bundle moved
-# to a machine without this pixi env. Bundle every referenced tool and
-# rewrite the reference:
-#   - bin/R itself self-computes R_HOME_DIR before SED= (see above), so
-#     it gets a direct rewrite to that shell variable.
-#   - every other generated script runs as a child of R (R CMD ..., R
-#     CMD SHLIB, etc.), which always exports R_HOME first — rewrite
-#     those to $R_HOME (the env var), no self-computation needed.
-cp "$(command -v sed)" "$R_HOME_DIR/bin/toolchain/sed"
-sed -i 's|^SED=.*|SED="$R_HOME_DIR/bin/toolchain/sed"|' "$R_HOME_DIR/bin/R"
-
-# base::Sys.which() looks for this exact path (see configure-r.sh patch
-# to system.unix.R) — not discoverable by the text-sweep below since the
-# reference lives in compiled R data (base.rdb), not a script.
-command -v which >/dev/null 2>&1 && cp "$(command -v which)" "$R_HOME_DIR/bin/toolchain/which"
+# R's generated files (etc/Renviron, etc/Makeconf, bin/javareconf, ...)
+# bake in absolute build-time paths to tools like sed/nm/tar/unzip/zip/
+# gzip/bzip2/realpath (autoconf @SED@ etc. substitution), which only exist
+# in the pixi env the build ran in. Phase A5 (feat-no-host-paths): they
+# become bare names, looked up on PATH when used, and nothing is vendored
+# for them. What R needs to run and to install packages without compiling
+# no longer reaches them: tar and unzip are R's own (Renviron below), and
+# bin/R uses no sed (zig-build.sh's R.sh.in patch). The rest is compiling
+# (tier 2: the toolchain's) or R CMD check/build (tier 3: optional).
 
 # minimal (the tree the r-zig wheel wraps): bundle GNU make as well and
 # make it R's default MAKE. A conda env gets make from the package's run
@@ -198,23 +213,28 @@ if [ "$VARIANT" = minimal ]; then
   fi
 fi
 
-mapfile -t baked_files < <(grep -rlF "$CONDA/bin/" "$R_HOME_DIR/bin" "$R_HOME_DIR/etc" 2>/dev/null | grep -v '^'"$R_HOME_DIR/bin/R"'$')
+mapfile -t baked_files < <(grep -rlF "$CONDA/bin/" "$R_HOME_DIR/bin" "$R_HOME_DIR/etc" 2>/dev/null)
 for f in "${baked_files[@]}"; do
-  sed -i "s|$CONDA/bin/|\$R_HOME/bin/toolchain/|g" "$f"
+  sed -i "s|$CONDA/bin/||g" "$f"
 done
-mapfile -t refd_tools < <(grep -rhoE '\$(R_HOME|R_HOME_DIR)/bin/toolchain/[A-Za-z0-9_.+-]+' \
-  "$R_HOME_DIR/bin" "$R_HOME_DIR/etc" 2>/dev/null | sed 's|.*/||' | sort -u)
-for t in "${refd_tools[@]}"; do
-  [ -f "$R_HOME_DIR/bin/toolchain/$t" ] && continue
-  # minimal: realpath's only user is bin/javareconf (R is --disable-java,
-  # and javareconf guards the call with `if realpath ...`), and it is the
-  # one helper above the glibc 2.17 floor (coreutils' needs GLIBC_2.28,
-  # see verify-bundle.sh) — shipping it would make the whole r-zig wheel
-  # manylinux_2_28 instead of manylinux2014.
-  [ "$VARIANT" = minimal ] && [ "$t" = realpath ] && continue
-  src="$(command -v "$t" 2>/dev/null)" || continue
-  cp "$src" "$R_HOME_DIR/bin/toolchain/$t"
-done
+
+# etc/Renviron (phase A4): untar() and unzip() use R's internal code, so
+# installing a package without compiling runs no tar or unzip. The rest
+# are optional tools found on PATH when used, not the capture machine's
+# paths (it recorded /usr/bin/open as the Linux browser, /usr/bin/less,
+# /usr/bin/texi2dvi on some runners and none on others). The browser and
+# PDF viewer are the desktop's opener. ${X-default} keeps a value the
+# user sets in the environment, as upstream's Renviron does.
+case "$OS" in macos) opener=open ;; *) opener=xdg-open ;; esac
+sed -i \
+  -e "s|^TAR=.*|TAR=\${TAR-'internal'}|" \
+  -e "s|^R_UNZIPCMD=.*|R_UNZIPCMD=\${R_UNZIPCMD-'internal'}|" \
+  -e "s|^PAGER=.*|PAGER=\${PAGER-'less'}|" \
+  -e "s|^R_BROWSER=.*|R_BROWSER=\${R_BROWSER-'$opener'}|" \
+  -e "s|^R_PDFVIEWER=.*|R_PDFVIEWER=\${R_PDFVIEWER-'$opener'}|" \
+  -e "s|^R_PRINTCMD=.*|R_PRINTCMD=\${R_PRINTCMD-'lpr'}|" \
+  -e "s|^R_TEXI2DVICMD=.*|R_TEXI2DVICMD=\${R_TEXI2DVICMD-\${TEXI2DVI-'texi2dvi'}}|" \
+  "$R_HOME_DIR/etc/Renviron"
 echo "   bundled tools: $(ls "$R_HOME_DIR/bin/toolchain")"
 
 mkc="$R_HOME_DIR/etc/Makeconf"
@@ -252,6 +272,14 @@ elif [ "$OS" = macos ]; then
     d="$(dirname "$f")"
     rel_rlib="$(realpath --relative-to="$d" "$R_HOME_DIR/lib")"
     rel_plib="$(realpath --relative-to="$d" "$PREFIX/lib")"
+    # Replace, as patchelf --set-rpath does on linux: zig records the
+    # build env's lib dir (absolute) and the zig-cache dirs of sibling
+    # artifacts (relative, build/zig-cache/...) on every link; both are
+    # build-machine paths (build.zig's fixRpath leaves macOS to this loop).
+    otool -l "$f" | awk '/cmd LC_RPATH/ {r = 1} r && / path / {sub(/^ *path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print; r = 0}' |
+      while IFS= read -r rp; do
+        case "$rp" in @loader_path/*) ;; *) install_name_tool -delete_rpath "$rp" "$f" 2>/dev/null || true ;; esac
+      done
     install_name_tool -add_rpath "@loader_path/$rel_rlib" "$f" 2>/dev/null || true
     install_name_tool -add_rpath "@loader_path/$rel_plib" "$f" 2>/dev/null || true
     codesign --force --sign - "$f" 2>/dev/null || true

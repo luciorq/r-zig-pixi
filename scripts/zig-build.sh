@@ -16,13 +16,130 @@ ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
 
 PREFIX_ZIG="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
 
-# The Sys.which source patch from configure-r.sh must be present in the
-# source tree for relocatable installs (see PLAN.md of feat-initial-setup).
+# --- R source patches (feat-no-host-paths PLAN.md, phase A2) ---------------
+# Each one keeps a tier-0/1 operation (start, exit, install without
+# compiling) from running an external program through /bin/sh. They are
+# compiled into base.rdb/tools.rdb/utils.rdb or libR, so they have to be
+# applied here, before bootstrap. Idempotent via an "r-zig" marker.
+
+# Sys.which(): scan PATH in R, as Windows' do_syswhich does in C, instead
+# of running `which` through /bin/sh once per name (upstream records the
+# capture machine's `which` path as @WHICH@). The first match that is
+# executable and not a directory, like `which`; a name containing "/" is
+# checked as given. Replaces the whole function, including the earlier
+# bin/toolchain/which patch in trees that already carry it.
 sw="$SRC_DIR/src/library/base/R/unix/system.unix.R"
-if [ -f "$sw" ] && ! grep -q 'bin/toolchain/which' "$sw"; then
+if [ -f "$sw" ] && ! grep -q 'r-zig: PATH scan' "$sw"; then
+  sys_which_repl=$(cat <<'RCODE'
+Sys.which <- function(names)
+{
+    ## r-zig: PATH scan in R (no /bin/sh, no `which`)
+    res <- character(length(names)); names(res) <- names
+    path <- Sys.getenv("PATH")
+    dirs <- if (nzchar(path)) strsplit(path, ":", fixed = TRUE)[[1L]] else character()
+    dirs[!nzchar(dirs)] <- "."
+    for(i in seq_along(names)) {
+        if(is.na(names[i])) {res[i] <- NA; next}
+        if(!nzchar(names[i])) next
+        cand <- if(grepl("/", names[i], fixed = TRUE)) names[i]
+                else file.path(dirs, names[i])
+        ok <- file.access(cand, 1L) == 0L & !dir.exists(cand)
+        if(any(ok)) res[i] <- cand[ok][1L]
+    }
+    res
+}
+RCODE
+  )
+  awk -v repl="$sys_which_repl" '
+    /^Sys\.which <- function\(names\)$/ { print repl; skip = 1; next }
+    skip && /^}$/ { skip = 0; next }
+    skip { next }
+    { print }
+  ' "$sw" > "$sw.tmp" && mv "$sw.tmp" "$sw"
+  grep -q 'r-zig: PATH scan' "$sw" || { echo "error: Sys.which patch did not apply to $sw" >&2; exit 1; }
+fi
+
+# osVersion: utils' .onLoad computes it at every start by running
+# Sys.which("uname") and system("uname -a") only to learn the OS name.
+# Sys.info() is the same uname(2) call, in-process (webR patches this
+# function too). The "uname -a" text stays the fallback for other OSes.
+si="$SRC_DIR/src/library/utils/R/sessionInfo.R"
+if [ -f "$si" ] && ! grep -q 'r-zig: uname(2)' "$si"; then
   sed -i \
-    's|which <- "@WHICH@"|which <- { w <- file.path(R.home(), "bin", "toolchain", "which"); if (file.exists(w)) w else "@WHICH@" }|' \
-    "$sw"
+    -e "s|} else if (nzchar(Sys.which('uname'))) { ## we could try /usr/bin/uname|} else if (!is.null(s <- Sys.info())) { ## r-zig: uname(2) in-process|" \
+    -e 's|uname <- system("uname -a", intern = TRUE)|uname <- paste(s[c("sysname", "nodename", "release", "version", "machine")], collapse = " ")|' \
+    "$si"
+  [ "$(grep -c 'r-zig: uname(2)\|uname <- paste(s\[' "$si")" = 2 ] || { echo "error: osVersion patch did not apply to $si" >&2; exit 1; }
+fi
+
+# Session temp directory: removed at exit with `rm -Rf` through
+# R_system(), so /bin/sh + rm on every exit. R_unlink() is already the
+# fallback for paths with shell-special characters and what Windows uses.
+pf="$SRC_DIR/src/main/platform.c"
+if [ -f "$pf" ] && ! grep -q 'r-zig: always R_unlink' "$pf"; then
+  sed -i 's|^\tif (!hasspecial) {$|\tif (0 \&\& !hasspecial) { /* r-zig: always R_unlink(), no rm through the shell */|' "$pf"
+  grep -q 'r-zig: always R_unlink' "$pf" || { echo "error: temp dir patch did not apply to $pf" >&2; exit 1; }
+fi
+
+# R CMD INSTALL (tools/R/install.R): on unix it moves the finished package
+# into place, backs up and restores the previous version with `mv -f`, and
+# installs binary packages with `cp -R .` (falling back to a tar pipe), all
+# through the shell. The WINDOWS branches already do the same with
+# file.rename()/file.copy()/unlink(); take them on every OS. The move keeps
+# unix's patch_rpaths() step before it.
+ir="$SRC_DIR/src/library/tools/R/install.R"
+if [ -f "$ir" ] && ! grep -q 'r-zig: no mv' "$ir"; then
+  awk '
+    function next_line() { if ((getline nxt) <= 0) nxt = ""; return nxt }
+    /^ *if ?\(WINDOWS\) \{$/ {
+      line = $0; n = next_line()
+      if (n ~ /file\.copy\(lp, dirname\(pkgdir\), recursive = TRUE,$/ ||
+          n ~ /file\.copy\(instdir, lockdir, recursive = TRUE,$/) {
+        sub(/WINDOWS/, "TRUE", line); line = line " # r-zig: no mv"
+      } else if (n ~ /unlink\(final_instdir, recursive = TRUE\) # needed for file\.rename$/) {
+        sub(/if ?\(WINDOWS\) \{$/, "if (!WINDOWS) patch_rpaths() # r-zig: no mv", line)
+        match($0, /^ */); line = line "\n" substr($0, 1, RLENGTH) "if (TRUE) {"
+      }
+      print line; print n; next
+    }
+    /^ *system\(paste\("mv -f", shQuote\(instdir\),$/ {
+      line = $0; n = next_line()
+      if (n ~ /^ *shQuote\(file\.path\(lockdir, pkg\)\)\)\)$/) {
+        match(line, /^ */)
+        print substr(line, 1, RLENGTH) "file.rename(instdir, file.path(lockdir, pkg)) # r-zig: no mv"
+      } else { print line; print n }
+      next
+    }
+    /^ *TAR <- Sys\.getenv\("TAR", .tar.\)$/ {
+      line = $0; n = next_line()
+      if (n ~ /^ *res <- system\(paste\("cp -R \.", shQuote\(instdir\),$/) {
+        while (n !~ /^ *\)\)$/ && n != "") n = next_line()
+        match(line, /^ */); ind = substr(line, 1, RLENGTH)
+        print ind "## r-zig: no cp/tar through the shell"
+        print ind "res <- !all(file.copy(list.files(\".\", all.files = TRUE, no.. = TRUE),"
+        print ind "                      instdir, overwrite = TRUE, recursive = TRUE,"
+        print ind "                      copy.date = TRUE))"
+      } else { print line; print n }
+      next
+    }
+    { print }
+  ' "$ir" > "$ir.tmp" && mv "$ir.tmp" "$ir"
+  [ "$(grep -c 'r-zig: no mv' "$ir")" = 4 ] && grep -q 'r-zig: no cp/tar' "$ir" ||
+    { echo "error: install.R patch did not apply to $ir" >&2; exit 1; }
+fi
+
+# install.packages(Ncpus > 1) writes a Makefile and runs `make -k -j`,
+# then `cat` to show a failed package's output. Without make (the base
+# package has no toolchain), install one at a time instead, as Ncpus = 1
+# does; show the output with readLines().
+p2="$SRC_DIR/src/library/utils/R/packages2.R"
+if [ -f "$p2" ] && ! grep -q 'r-zig: make optional' "$p2"; then
+  sed -i \
+    -e 's|^        if (Ncpus > 1L \&\& nrow(update) > 1L) {$|        if (Ncpus > 1L \&\& nrow(update) > 1L \&\& # r-zig: make optional\n            nzchar(Sys.which(strsplit(Sys.getenv("MAKE", "make"), " ", fixed = TRUE)[[1L]][1L]))) {|' \
+    -e 's|^\( *\)system2("cat", outfile)$|\1writeLines(readLines(outfile)) # r-zig: no cat|' \
+    "$p2"
+  grep -q 'r-zig: make optional' "$p2" && grep -q 'r-zig: no cat' "$p2" ||
+    { echo "error: packages2.R patch did not apply to $p2" >&2; exit 1; }
 fi
 
 # R_LIBS_USER_default() (library.R) is R core's own OS-aware default for
@@ -78,6 +195,189 @@ RCODE
     in_block { next }
     { print }
   ' "$lu" > "$lu.tmp" && mv "$lu.tmp" "$lu"
+fi
+
+# bin/R (src/scripts/R.sh.in), phase A3: parse arguments with POSIX
+# parameter expansion instead of `echo ... | sed`, so starting R runs no
+# sed (three times per `R -e`) and needs no bash: configure-only.sh pins
+# R_SHELL=/bin/sh, and `echo` is also gone from the -e/-f path because
+# dash's echo rewrites backslashes. The argument loop is replaced whole
+# (from "### Argument loop" to its "done"); cases other than the sed
+# ones are upstream's, except that `R CMD` runs Rcmd with /bin/sh rather
+# than a PATH lookup of `sh`. SED stays exported for rtags and
+# javareconf, as a bare name found on PATH (tier 3).
+rsh="$SRC_DIR/src/scripts/R.sh.in"
+if [ -f "$rsh" ] && ! grep -q 'r-zig: no sed' "$rsh"; then
+  r_args_repl=$(cat <<'SHCODE'
+### Argument loop
+## r-zig: no sed. has_value: the next word exists and isn't an option.
+## replace_all STRING FROM TO sets _r to STRING with every FROM replaced.
+has_value () { case "${1}" in ""|-*) return 1 ;; esac; }
+replace_all () {
+  _s="${1}"; _r=
+  while :; do
+    case "${_s}" in
+      *"${2}"*) _r="${_r}${_s%%"${2}"*}${3}"; _s="${_s#*"${2}"}" ;;
+      *) _r="${_r}${_s}"; return 0 ;;
+    esac
+  done
+}
+NL='
+'
+TAB='	'
+args=
+debugger=
+debugger_args=
+gui=
+while test -n "${1}"; do
+  case ${1} in
+    RHOME|--print-home)
+      printf '%s\n' "${R_HOME}"; exit 0 ;;
+    CMD)
+      shift;
+      export R_ARCH
+      . "${R_HOME}/etc${R_ARCH}/ldpaths"
+      exec /bin/sh "${R_HOME}/bin/Rcmd" "${@}" ;;
+    -g|--gui)
+      if has_value "${2}"; then
+	gui="${2}"
+        args="${args} ${1} ${2}"
+	shift
+      else
+	error "option '${1}' requires an argument"
+      fi
+      ;;
+    --gui=*)
+      gui="${1#*=}"
+      args="${args} ${1}"
+      ;;
+    -d|--debugger)
+      if has_value "${2}"; then
+	debugger="${2}"; shift
+      else
+	error "option '${1}' requires an argument"
+      fi
+      ;;
+    --debugger=*)
+      debugger="${1#*=}" ;;
+    --debugger-args=*)
+      debugger_args="${1#*=}" ;;
+    -h|--help)
+      printf '%s\n' "${usage}"; exit 0 ;;
+    --args)
+      break ;;
+    --arch)
+      if has_value "${2}"; then
+	R_ARCH="/${2}"
+        shift
+      else
+        error "option '${1}' requires an argument"
+      fi
+      ## check sub-architecture here for a better error message
+      if ! test -d ${R_HOME}/etc${R_ARCH}; then
+        error "sub-architecture '${1}' is not installed"
+      fi
+      ;;
+    --arch=*)
+      r_arch="${1#*=}"
+      R_ARCH="/${r_arch}"
+      ## check sub-architecture here for a better error message
+      if ! test -d ${R_HOME}/etc${R_ARCH}; then
+        error "sub-architecture '${r_arch}' is not installed"
+      fi
+      ;;
+    -e)
+      if has_value "${2}"; then
+        replace_all "${2}" "${NL}" "~n~"
+        replace_all "${_r}" " " "~+~"
+        replace_all "${_r}" "${TAB}" "~t~"
+        a="${_r}"
+        shift
+      else
+	error "option '${1}' requires a non-empty argument"
+      fi
+      args="${args} -e $a"
+      ;;
+    -f)
+      if has_value "${2}"; then
+	replace_all "${2}" " " "~+~"; a="${_r}"; shift
+      else
+	error "option '${1}' requires a filename argument"
+      fi
+      args="${args} -f $a"
+      ;;
+    --file=*)
+      replace_all "${1#*=}" " " "~+~"; a="${_r}"
+      args="${args} --file=$a"
+      ;;
+    --no-environ)
+      R_ENVIRON=''
+      export R_ENVIRON
+      R_ENVIRON_USER=''
+      export R_ENVIRON_USER
+      args="${args} ${1}"
+      ;;
+    --no-site-file)
+      R_PROFILE=''
+      export R_PROFILE
+      args="${args} ${1}"
+      ;;
+    --no-init-file)
+      R_PROFILE_USER=''
+      export R_PROFILE_USER
+      args="${args} ${1}"
+      ;;
+    --vanilla)
+      R_ENVIRON=''
+      export R_ENVIRON
+      R_ENVIRON_USER=''
+      export R_ENVIRON_USER
+      R_PROFILE=''
+      export R_PROFILE
+      R_PROFILE_USER=''
+      export R_PROFILE_USER
+      args="${args} ${1}"
+      ;;
+    *)
+      args="${args} ${1}" ;;
+  esac
+  shift
+done
+SHCODE
+  )
+  # ENVIRON, not -v: awk -v would turn the printf '%s\n' into a newline.
+  R_ARGS_REPL="$r_args_repl" awk '
+    /^SED=@SED@$/ { print "SED=sed # r-zig: bin/R itself uses no sed"; next }
+    /^### Argument loop$/ { print ENVIRON["R_ARGS_REPL"]; skip = 1; next }
+    skip && /^done$/ { skip = 0; next }
+    skip { next }
+    { print }
+  ' "$rsh" > "$rsh.tmp" && mv "$rsh.tmp" "$rsh"
+  grep -q 'r-zig: no sed' "$rsh" && grep -q 'r-zig: bin/R itself uses no sed' "$rsh" &&
+    ! grep -q '| \${SED}' "$rsh" || { echo "error: R.sh.in patch did not apply to $rsh" >&2; exit 1; }
+fi
+
+# bin/Rcmd (src/scripts/Rcmd.in), every `R CMD` (INSTALL included):
+# exports each variable etc/Renviron sets with `export \`sed ...\``. The
+# same with the shell's own read: the name before the first "=" on each
+# line that is an identifier (comment lines never are).
+rc="$SRC_DIR/src/scripts/Rcmd.in"
+if [ -f "$rc" ] && ! grep -q 'r-zig: no sed' "$rc"; then
+  rcmd_repl=$(cat <<'SHCODE'
+## r-zig: no sed
+while IFS= read -r _l || test -n "${_l}"; do
+  case "${_l}" in
+    *=*) _n="${_l%%=*}"
+         case "${_n}" in ''|[0-9]*|*[!A-Za-z0-9_]*) ;; *) export "${_n}" ;; esac ;;
+  esac
+done < "${R_HOME}/etc${R_ARCH}/Renviron"
+SHCODE
+  )
+  RCMD_REPL="$rcmd_repl" awk '
+    /^export `sed .*Renviron"`$/ { print ENVIRON["RCMD_REPL"]; next }
+    { print }
+  ' "$rc" > "$rc.tmp" && mv "$rc.tmp" "$rc"
+  grep -q 'r-zig: no sed' "$rc" || { echo "error: Rcmd.in patch did not apply to $rc" >&2; exit 1; }
 fi
 
 # CA trust for the standalone tree and the wheel. Their vendored libcurl

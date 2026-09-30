@@ -148,7 +148,42 @@ case "$(uname -s 2>/dev/null)" in
       esac
       _dedup+=("$a")
     done
-    set -- "${_dedup[@]}"
+    set -- "${_dedup[@]}" "${omp[@]}"
+    omp=()
+    # No implicit rpaths. For a native target zig defaults to
+    # -feach-lib-rpath: every -L directory becomes an LC_RPATH, so each
+    # package recorded R_HOME/lib (and any conda/Homebrew lib dir) as an
+    # absolute path from the machine that compiled it. `zig cc` rejects
+    # -fno-each-lib-rpath, and a pinned -target (what keeps Linux free of
+    # this) loses the SDK: no -framework, and conda-forge zig then fails
+    # to build libc++. Apple's ld adds no rpaths for -L, so do what it
+    # sees: resolve each -l<name> against the -L directories ourselves
+    # (ld64's order: per directory .tbd, .dylib, then .a), pass the file,
+    # and drop the -L flags. Names found in none of them stay -l<name>
+    # for zig's own search (the SDK). libR, libc++ and libomp are already
+    # loaded by R and match by install name; explicit -Wl,-rpath flags
+    # (conda's Makeconf LDFLAGS) are left alone. Links only.
+    _link=true
+    for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) _link=false; break;; esac; done
+    if $_link; then
+      _ldirs=()
+      for a in "$@"; do case "$a" in -L?*) _ldirs+=("${a#-L}");; esac; done
+      _args=()
+      for a in "$@"; do
+        case "$a" in
+          -L?*) continue ;;
+          -l?*)
+            for d in "${_ldirs[@]}"; do
+              for f in "$d/lib${a#-l}.tbd" "$d/lib${a#-l}.dylib" "$d/lib${a#-l}.a"; do
+                if [ -f "$f" ]; then a="$f"; break 2; fi
+              done
+            done
+            ;;
+        esac
+        _args+=("$a")
+      done
+      set -- "${_args[@]}"
+    fi
     ;;
 esac
 

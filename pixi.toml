@@ -60,6 +60,9 @@ contract = "bash scripts/zig-contract.sh"
 install = { cmd = "bash scripts/zig-stage.sh", depends-on = ["build"] }
 package = { cmd = "bash scripts/zig-package.sh", depends-on = ["install"] }
 verify-package = { cmd = "bash scripts/zig-verify-package.sh", depends-on = ["package"] }
+# Tier 0/1 with an empty environment and PATH=<tree>/bin (unix; strace on
+# linux): start R, install without compiling. Uses the packaged artifact.
+hermetic = "bash scripts/hermetic-check.sh"
 clean = "bash scripts/clean.sh"
 # Not part of the build path (zig-build.sh never calls this) — exists
 # solely so zigbuild/tools/gen-subst.sh has a config.status to replay

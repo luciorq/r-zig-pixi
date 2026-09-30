@@ -35,7 +35,11 @@ echo "Configuring R $R_VERSION, variant: $VARIANT (configure-only, for gen-subst
 # TAR, BLAS_LIBS and the rest would too. Unset every variable configure
 # --help lists as influential, before this script sets its own (FC is
 # one of them): what configure needs is passed on its command line below,
-# and shell variables set after the unset are not exported.
+# and shell variables set after the unset are not exported. R_SHELL is
+# pinned there: left unset it becomes configure's own $SHELL, /bin/bash on
+# Linux and /bin/sh on macOS, and it is bin/R's shebang. bin/R is POSIX sh
+# (see zig-build.sh's R.sh.in patch), as upstream R already runs it on
+# macOS.
 mapfile -t precious < <("$SRC_DIR/configure" --help | awk '
   /^Some influential environment variables:/ { on = 1; next }
   /^Use these variables/ { on = 0 }
@@ -198,6 +202,7 @@ fi
   FC="$FC" \
   AR="$TOOLCHAIN/zig-ar" \
   RANLIB="$TOOLCHAIN/zig-ranlib" \
+  R_SHELL=/bin/sh \
   CFLAGS="-O2" \
   CXXFLAGS="-O2" \
   FFLAGS="$FOPT" \
