@@ -665,11 +665,16 @@ Separate from all of this: P3M binaries need the `HTTPUserAgent` option
   - verify-bundle.sh fails on any RUNPATH/LC_RPATH not relative to the
     file, and compiles a C++ SHLIB with the extracted tree that must have
     no rpath and load.
-  - Side effect, intended: in a conda env, data.table's configure used to
-    load conda's libomp through that rpath and enable OpenMP on macOS
-    minimal, which has none (the first CI run of the macOS minimal legs,
-    2026-09-29, failed the contract test on it). It now behaves as on
-    linux.
+  - Not a fix for the macOS minimal contract failure (first CI run of
+    those legs, 2026-09-29, repeated on PR #12): on macOS data.table's
+    configure probes `-Xclang -fopenmp` itself and links `-lomp`, and CI's
+    contract step runs against the dev tree, whose Makeconf carries
+    conda's `-Wl,-rpath,$CONDA/lib`, so conda's llvm-openmp loads. On
+    linux data.table follows R's (empty) `SHLIB_OPENMP_*` flags. With the
+    packaged tree (no conda rpath) it builds without OpenMP on macOS too
+    (omicron). contract-test.sh now asserts minimal's actual property,
+    empty `SHLIB_OPENMP_{C,CXX,F}FLAGS` in Makeconf, and requires a
+    single-threaded data.table only off macOS.
 - **macOS deployment target of compiled packages.** With the native
   target, zig stamps `minos` with the build host's version (26.4.1 on
   omicron), and zig 0.16 ignores `MACOSX_DEPLOYMENT_TARGET`. R minimal

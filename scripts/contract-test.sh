@@ -73,11 +73,20 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   # only when compiled with OpenMP. (Do NOT assert getDTthreads() > 1 —
   # its default is 50% of cores, which is 1 on small CI runners.)
   # minimal is built without OpenMP and its Makeconf offers none, so there
-  # the proof runs the other way: data.table must come out single-threaded.
+  # the proof runs the other way: the profile property is the empty
+  # SHLIB_OPENMP_* flags. data.table follows them on linux, but on macOS
+  # its configure probes -Xclang -fopenmp itself and links -lomp, which
+  # succeeds wherever a libomp is reachable (conda llvm-openmp in the dev
+  # env, whose Makeconf carries -Wl,-rpath,$CONDA/lib). That is the
+  # package opting in, not R offering OpenMP, so there it is reported only.
   th_info <- capture.output(getDTthreads(verbose = TRUE))
   cat(th_info, sep = "\n")
   if (Sys.getenv("R_CONTRACT_VARIANT") == "minimal") {
-    stopifnot(!any(grepl("OpenMP version", th_info)))
+    mk <- readLines(file.path(R.home("etc"), "Makeconf"))
+    omp <- grep("^SHLIB_OPENMP_(C|CXX|F)FLAGS *=", mk, value = TRUE)
+    stopifnot(length(omp) == 3L, all(grepl("= *$", omp)))
+    if (Sys.info()[["sysname"]] != "Darwin")
+      stopifnot(!any(grepl("OpenMP version", th_info)))
   } else {
     stopifnot(any(grepl("OpenMP version", th_info)))
   }
