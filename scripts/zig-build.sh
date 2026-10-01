@@ -132,7 +132,9 @@ fi
 # package needs it when it has compiled code (src/) or a configure
 # script; without bin/toolchain/zig-cc (the toolchain package fills that
 # directory, Makeconf points at it, and a package manager can leave it
-# behind empty), stop with one message naming the package
+# behind empty) and without the compiler Makeconf's CC names (an unstaged
+# build tree, which CI's contract step uses, names the repo's
+# toolchain/zig-cc directly), stop with one message naming the package
 # to install, from R_ZIG_TOOLCHAIN_HINT, which each distribution sets in
 # etc/Renviron, instead of failing deep in configure or make. A user
 # Makevars (their own compiler) or R_ZIG_NO_PREFLIGHT skips the check.
@@ -147,6 +149,13 @@ if [ -f "$ir" ] && ! grep -q 'r-zig: compile preflight' "$ir"; then
                                 (WINDOWS && (file.exists("configure.win") ||
                                              file.exists("configure.ucrt")))))) &&
             !file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")) &&
+            ## the compiler Makeconf names, when it is a plain path (an
+            ## unstaged build tree names the repo's toolchain/zig-cc)
+            !tryCatch({
+                cc <- grep("^CC *=", readLines(file.path(R.home("etc"), "Makeconf")), value = TRUE)
+                cc <- strsplit(sub("^CC *= *", "", cc[1L]), " ", fixed = TRUE)[[1L]][1L]
+                file.exists(gsub("$(R_HOME)", R.home(), cc, fixed = TRUE))
+            }, error = function(e) FALSE) &&
             !length(makevars_user()) && !nzchar(Sys.getenv("R_ZIG_NO_PREFLIGHT")))
             pkgerrmsg(paste0("this package has compiled code, and the r-zig toolchain is not installed: ",
                              Sys.getenv("R_ZIG_TOOLCHAIN_HINT",

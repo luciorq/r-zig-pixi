@@ -1,9 +1,13 @@
 # feat-no-host-paths — no build-machine paths, and a base R that installs without a toolchain
 
-**Status (2026-09-29): phase A implemented on unix** (A1 partly, A2–A5,
-A6 without Windows; see "Progress" below), plus the interim libcurl CA
-fix and the compiled-package rpath fix. Phases T, B, C, D, S and P are
-design only. R source references are to R 4.6.1 (`build/R-4.6.1/`).
+**Status (2026-10-01).** Phase A done on all five platforms (the
+hermetic tier-0/1 check runs in CI everywhere). Phase T done for conda
+and pip (`r-zig-slim` + `r-zig-toolchain`, `r-zig` + `r-zig-toolchain`);
+the standalone tarball is not split yet. libc++ and the flang runtime are
+static everywhere. Next: phase F (see "Simplicity review and phase F"),
+which collapses the post-build tree surgery into `zig build` before T's
+standalone part, B (now F3), C, D, S and P. R source references are to R
+4.6.1 (`build/R-4.6.1/`).
 
 ## Goal
 
@@ -41,15 +45,20 @@ Agreed so far:
   command string written by the user contains shell syntax. POSIX
   guarantees it exists.
 - **Tiers are enforced by CI, not by documentation** (see Verification).
+- **One tree, built once, archived by every distribution** (added
+  2026-10-01, see "Simplicity review and phase F"): `zig build` installs
+  the tree that ships; conda, the standalone tarball and the wheel only
+  vendor libraries and wrap it. CI tests that tree, not an intermediate
+  one. No post-link binary surgery, no sed over generated files.
 
 ## Tiers
 
-| Tier | Covers | Needs today (unix) | Target | Ships in |
-|---|---|---|---|---|
-| 0 Run | `R`, `Rscript`, `library()` | bash (`#!/bin/bash` in `bin/R` and in the Rscript emulator), `sed`, `dirname`, `readlink`, `expr`; at every start `/bin/sh` running `which` and `uname`, at exit `/bin/sh` running `rm` | `/bin/sh` and its builtins for the launcher script; after phase C, nothing | base |
-| 1 Install without compiling | R-only source packages, binary packages, `remove.packages()` | `/bin/sh`, `mv`, `cp`, external `tar`; `make` and `cat` when `Ncpus > 1` | binary packages: nothing (in-process, see "Binary packages"); R-only source packages: nothing after phase S (`/bin/sh` on unix until then) | base |
-| 2 Compile | `src/`, `configure`, `R CMD SHLIB`, `R CMD config` | zig, flang, make, `sh` plus a POSIX userland, strip/otool/patchelf | unchanged | toolchain package |
-| 3 Develop | `R CMD build`/`check`, `Rd2pdf`, vignettes | TeX, qpdf, gs, pandoc, tidy, nm, zip, diff, patch | found when used, all optional | neither |
+| Tier | Covers | Needed before phase A (unix) | After phase A (2026-10-01) | Target | Ships in |
+|---|---|---|---|---|---|
+| 0 Run | `R`, `Rscript`, `library()` | bash (`#!/bin/bash` in `bin/R` and in the Rscript emulator), `sed`, `dirname`, `readlink`, `expr`; at every start `/bin/sh` running `which` and `uname`, at exit `/bin/sh` running `rm` | `/bin/sh` for the launcher scripts (and `readlink` when reached through a symlink); nothing else is started | after phase C, nothing | base |
+| 1 Install without compiling | R-only source packages, binary packages, `remove.packages()` | `/bin/sh`, `mv`, `cp`, external `tar`; `make` and `cat` when `Ncpus > 1` | `/bin/sh` only (R starting R, `R CMD` scripts); verified with strace on linux | binary packages: nothing (in-process, see "Binary packages"); R-only source packages: nothing after phase S | base |
+| 2 Compile | `src/`, `configure`, `R CMD SHLIB`, `R CMD config` | zig, flang, make, `sh` plus a POSIX userland, strip/otool/patchelf | the same, from the toolchain package; without it, the compile preflight and `R CMD config` say so | unchanged | toolchain package |
+| 3 Develop | `R CMD build`/`check`, `Rd2pdf`, vignettes | TeX, qpdf, gs, pandoc, tidy, nm, zip, diff, patch | found on PATH when used (bare names) | found when used, all optional | neither |
 
 A3 leaves `readlink` in tier 0 for launchers reached through a symlink,
 until the C front-end replaces the script.
@@ -182,9 +191,84 @@ T, the base vendors nothing; the wheel's toolchain package ships make
   names doesn't exist, stop with one message naming the package to
   install for this distribution.
 
+## Simplicity review and phase F (2026-10-01)
+
+The project's aim: **one build path that just works everywhere, with as
+little OS- or shell-specific trickery as possible, and one toolchain with
+which users build, compile and install packages.** Reviewed against what
+this branch has built so far.
+
+**On track:**
+- One build system on every OS: `zig build`, no autoconf, no make for R,
+  no gnuwin32.
+- One compiler family, zig and flang, for R and for packages; one
+  toolchain package for conda and for pip.
+- The tier boundary is enforced: the base needs `/bin/sh` and its own
+  binaries only, checked on all five platforms by the hermetic job.
+- libc++ and the flang runtime are static: compiled packages load
+  without the toolchain.
+
+**Drifting (measured 2026-10-01):**
+
+| Area | Today | What it costs |
+|---|---|---|
+| Compiler shims | bash: `zig-cc` 238 lines with 10 OS branches, `zig-cxx` 182 with 8, mostly duplicated. Each branch works around a zig or conda-forge quirk (see phase B's list) | Windows needs the m2 bash just to run the compiler wrapper; no unit tests; every fix lands twice |
+| Shipping tree made by post-processing | stage.sh (305 lines: rpath surgery with patchelf, install_name_tool and codesign; launchers; sed over Makeconf and Renviron; shim copies), package-standalone.sh (245: vendoring, Makeconf stripping), make-wheel.py (471: Renviron edits, the split), build.zig's `fixRpath`; 23 calls to patchelf/install_name_tool/codesign | CI tests the tree `zig build` installed, which no user receives (three bugs lived in that gap, see Verification); `install_name_tool` needs Xcode's tools; conda, standalone and wheel each get a slightly different tree |
+| R source patches | 34 `r-zig:` sites in zig-build.sh, applied with awk and sed, idempotent by marker | a changed patch does not re-apply over an old one (hit twice); hard to review or rebase onto a new R |
+| Two zigs | conda-forge's zig links a shared libc++ when it finds one, is dynamically linked to conda's LLVM, and differs from PyPI/upstream zig | the `ZIG_LIB_DIR` mirror in zig-build.sh and in both shims |
+| Verification | verify-bundle.sh 348 lines with 12 OS branches | grows with every workaround it has to check |
+
+**Phase F — `zig build` installs the final tree, then fold the
+workarounds into code.** In order:
+
+- **F1. The installed tree is the shipped tree.**
+  - rpaths set at link time, relative (`$ORIGIN/...` on ELF,
+    `@loader_path/...` on Mach-O), and the conda lib dir never added as
+    one (`addCondaLibPath`'s `addRPath`); `fixRpath` and stage.sh's rpath
+    surgery go. conda and the standalone tree share the layout
+    (`<prefix>/lib/R`, `<prefix>/lib`), so the same relative rpaths serve
+    both. To check: what rattler-build's relink pass does with them, and
+    whether vendored conda libraries still need package-standalone.sh's
+    `patchelf --set-rpath '$ORIGIN'`.
+  - `bin/R`, the Rscript emulator, `etc/ldpaths`, `etc/Renviron` (tool
+    defaults, `R_ZIG_TOOLCHAIN_HINT` from a build option) and
+    `etc/Makeconf` written with their final values by build.zig instead
+    of sed afterwards; the shims installed into `bin/toolchain` by
+    build.zig on every OS, as on Windows today (then the preflight's
+    Makeconf-`CC` fallback is unneeded).
+  - Makeconf's include and library flags for the environment: today the
+    absolute conda paths, kept for conda and stripped for the standalone
+    tree, which is why the packaged tree lost `omp.h`. Candidate:
+    `$(R_HOME)/../../include` and `$(R_HOME)/../../lib`, right in a conda
+    env and harmless (or the toolchain's place for headers) in the
+    standalone tree. FLIBS needs the same answer, together with the
+    standalone toolchain's Fortran story.
+  - What is left per distribution: conda, nothing after the build;
+    standalone, vendor conda's libraries and the CA bundle, then archive;
+    wheel, wrap and split. stage.sh retires.
+  - CI's smoke, contract and `check` then run on the tree that ships.
+- **F2. R's patches as a patch series**, one file per concern under
+  `zigbuild/patches/R-<version>/`, applied with `patch -p1` (conda-forge
+  has `patch` on every platform; rattler-build can also apply a recipe's
+  `source: patches:` itself). No awk, no markers; a new R version means
+  refreshing the series.
+- **F3. Phase B: one Zig binary for `cc`, `c++`, `ar`, `ranlib`** (and
+  the Windows `gcc.exe`/`g++.exe` forwarders), the same code on every OS
+  and unit-tested. Compiling then needs no bash on Windows; package
+  `configure` scripts still need `sh`, which is theirs, not ours.
+- **F4. One zig** (see Open): upstream zig everywhere, or a feedstock
+  opt-out; the mirror goes.
+
+Order: T's conda and wheel parts (done) → F1 → F2 → F3 → T's standalone
+split (it needs F1's layout and F3's binary) → P. F4 can be decided at
+any point. The decisions this branch made stay valid through F: tiers,
+the split by `bin/toolchain`, the preflight, static runtimes, the
+hermetic check.
+
 ## Phases
 
-A, then T, are sequential. B, C, D, S and P can run in parallel with them.
+A, then T, are sequential; F follows T's conda and wheel parts and comes
+before T's standalone part. B is F3. C, D, S and P can run in parallel.
 
 **A — host-path cleanup and tier-1 independence (this branch).**
 - A1: configure-only.sh pins every value in the tool table that comes
@@ -283,7 +367,12 @@ the packaging above, the preflight, and `R CMD config` failing cleanly.
   `R_HOME/bin/toolchain/zig-cc` is missing, stops with "this package has
   compiled code, and the r-zig toolchain is not installed: <hint>". The
   file, not the directory, because pip or conda can leave the emptied
-  directory behind. `R_ZIG_TOOLCHAIN_HINT` comes from etc/Renviron (read
+  directory behind. Also accepted: the compiler Makeconf's `CC` names,
+  when it exists (`$(R_HOME)` expanded). An unstaged build tree has no
+  `bin/toolchain` on unix (stage.sh makes it) and names the repo's
+  `toolchain/zig-cc` directly; CI's contract step runs there, and the
+  first push of the preflight refused every package on every unix leg
+  (2026-10-01; local runs had been after staging). `R_ZIG_TOOLCHAIN_HINT` comes from etc/Renviron (read
   even under `--vanilla`; Renviron.site on Windows): the conda build's
   stage.sh names `pixi add r-zig-toolchain`/`conda install
   r-zig-toolchain`, make-wheel.py `pip install r-zig-toolchain`. A user
@@ -312,13 +401,37 @@ the packaging above, the preflight, and `R CMD config` failing cleanly.
 - Hermetic check: removes the toolchain directory from the extracted
   tree (tiers 0/1 are the base), and adds the negative tests: a `src/`
   package stops with the preflight, `R CMD config CC` fails cleanly.
+- The toolchain package inherits the staging output with
+  `run_exports: false`: its run dependencies are only the exact base,
+  zig, flang, flang-rt and make (the inherited host run exports had added
+  cairo, icu, libcurl and the rest, which the base brings anyway).
+- Local pitfall: rattler-build restores the staging output from
+  `dist/conda/build_cache` under a key that does not hash the recipe's
+  `path:` sources, so a rebuild after editing scripts/ silently reused
+  the old R build. `pixi run -e pkg conda-package` now deletes that cache
+  first; CI runners start empty.
+- CI, first push (`fae15f7`, 2026-10-01): all five conda-package jobs
+  (both packages and their tests) and the Windows leg passed; every unix
+  build leg failed the contract step on the preflight (see the first
+  bullet: unstaged tree). Fixed by accepting Makeconf's `CC`.
 - Not split yet: the standalone tarball. Its toolchain download (the
   official zig, checksum-pinned; `omp.h` for OpenMP; a Fortran compiler
   or not) still needs designing. The recipe's host `which`/`sed`/`grep`
   (for the old `@WHICH@`/`@SED@` bakes) are also still there.
 
-**B — one Zig multi-call binary** that dispatches on its own name, like
-busybox:
+**F — `zig build` installs the final tree** (added 2026-10-01): see
+"Simplicity review and phase F" above for F1–F4.
+
+**B — one Zig multi-call binary** (now F3, moved up 2026-10-01) that
+dispatches on its own name, like busybox. It replaces the bash shims and
+has to carry everything they learned: Windows' `-l` lookup of
+`lib<n>.dll.a`/`lib<n>.lib`, the `-mwindows` link set, the macOS `-l`/`-L`
+rewrite (no implicit rpaths), `-l` de-duplication (dyld's "duplicate
+linked dylib"), the glibc 2.17 target pin, OpenMP wiring (`-I`/`-L` for
+`omp.h`/libomp, also when the caller links `-lomp`), the `ZIG_LIB_DIR`
+mirror against conda-forge zig's shared libc++ (until F4), the SONAME
+injection, `-fno-sanitize=undefined`, and the zig lookup (`ZIG_BIN`,
+PATH, `python3 -m ziglang`):
 - compiler shims: `zig-cc`, `zig-cxx`, `zig-ar`, `zig-ranlib` (bash
   today) and `win-exec-forward.c`. The Windows shims stop needing bash;
   the m2 userland stays in the toolchain for make recipes and
@@ -417,6 +530,15 @@ is what the phase-B binary uses.
   stdout; R's own regression tests cover the rest.
 - smoke, contract and `check` keep running with the toolchain installed
   (tier 2).
+- **Gap until F1: CI tests a tree no user receives.** smoke, contract and
+  `check` run on what `zig build` installed, before stage.sh and
+  package-standalone.sh change it; verify-package and the hermetic check
+  run on the packaged tree, but compile only one C++ and one Fortran
+  file. Bugs that lived in the gap (2026-09-30/10-01): Fortran packages
+  not loading on the staged macOS tree (FLIBS), data.table losing OpenMP
+  on the packaged tree (no `omp.h` on the include path), and the
+  preflight refusing everything on the unstaged tree. After F1 there is
+  one tree and every check runs on it.
 
 ## Zig 0.16 std (reference for B)
 
@@ -806,6 +928,12 @@ the same for its C++ test package.
 
 ## Open
 
+- **One zig (F4).** Upstream zig everywhere (for conda, a repackaging of
+  the official build in our channel), or an opt-out upstreamed to the
+  conda-forge feedstock for its shared-libc++ probe. Either retires the
+  `ZIG_LIB_DIR` mirror and makes conda, pip and standalone compile the
+  same way. conda-forge's zig is also dynamically linked to conda's LLVM
+  21, so shipping it means shipping that.
 - **Names** of the base and toolchain packages, on conda and PyPI.
   Decide together with the v3 naming question (consolidation/PLAN.md,
   Phase 3); `r-base` depends on the gate above.
