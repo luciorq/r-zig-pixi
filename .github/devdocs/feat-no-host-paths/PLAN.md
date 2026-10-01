@@ -249,9 +249,32 @@ workarounds into code.** In order:
   - CI's smoke, contract and `check` then run on the tree that ships.
 - **F2. R's patches as a patch series**, one file per concern under
   `zigbuild/patches/R-<version>/`, applied with `patch -p1` (conda-forge
-  has `patch` on every platform; rattler-build can also apply a recipe's
-  `source: patches:` itself). No awk, no markers; a new R version means
-  refreshing the series.
+  has `patch` on unix and `m2-patch` on win-64; rattler-build can also
+  apply a recipe's `source: patches:` itself). No awk, no markers; a new
+  R version means refreshing the series.
+  - **F2 done 2026-10-01**, tested on linux-64 (minimal and slim: build,
+    smoke, contract, verify-package, hermetic; the wheel and wheel-test;
+    the conda build and its tests), osx-arm64 on omicron (minimal and
+    slim: build, smoke, contract, verify-package, hermetic; the wheel)
+    and win-64 on kappa (slim: verify-package, contract, hermetic, with
+    `m2-patch`). `zigbuild/patches/R-4.6.1/` holds 11 patches (user
+    library, `Sys.which`, `osVersion`, temp dir, install.R's file
+    operations, `install.packages` without make, bin/R and Rcmd without
+    sed, the compile preflight, `R CMD config`'s make check, the CA
+    rule), each with a header saying what and why. Generated from the
+    old awk/sed blocks one at a time; the series applied to a pristine
+    source is byte-identical to the tree the old zig-build.sh produced.
+    zig-build.sh applies it with GNU patch (`-p1 -f -F0`: no fuzz, no
+    prompts, never reversed), and a stamp in the source,
+    `.r-zig-patches`, says what the tree carries: empty after extraction
+    (fetch-r.sh, recipe/build.sh), the series' sha256 list once applied.
+    Any other tree (no stamp, as in trees the old script patched; another
+    series; an interrupted run) is extracted again from the tarball
+    first, so a changed patch never meets an old one. `patch` comes from
+    conda-forge on unix and `m2-patch` on win-64 (conda-forge has no
+    win-64 `patch`), in pixi.toml and the recipe's build requirements.
+    One mechanism on every path: rattler-build's `source: patches:`
+    would cover the conda build only, with its own patch implementation.
 - **F3. Phase B: one Zig binary for `cc`, `c++`, `ar`, `ranlib`** (and
   the Windows `gcc.exe`/`g++.exe` forwarders), the same code on every OS
   and unit-tested. Compiling then needs no bash on Windows; package

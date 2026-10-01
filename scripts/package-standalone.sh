@@ -97,7 +97,7 @@ fi
 # machine every HTTPS request failed with "libcurl error code 77: error
 # adding trust anchors from file" (found 2026-09-28; the wheel, built
 # from this tree, had the same). Ship the env's Mozilla bundle and set
-# R_ZIG_CA_BUNDLE: R's libcurl.c, patched by zig-build.sh, then takes
+# R_ZIG_CA_BUNDLE: R's libcurl.c, patched (zigbuild/patches/), then takes
 # CURL_CA_BUNDLE if the user set one, else SSL_CERT_FILE, else the
 # system's bundle, else this file, and passes it to curl as
 # CURLOPT_CAINFO, so the compiled-in path is never used. Not

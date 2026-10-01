@@ -135,6 +135,7 @@ tar = "*"
 gzip = "*"
 unzip = "*"
 zip = "*"
+patch = "*"  # zig-build.sh applies zigbuild/patches/ (m2-patch on win-64)
 
 # Rust coreutils everywhere conda-forge ships them; GNU coreutils on linux-aarch64.
 # Fortran compiler per target: flang where available, gfortran otherwise.
@@ -182,6 +183,7 @@ m2-grep = "*"
 m2-gawk = "*"
 m2-unzip = "*"
 m2-zip = "*"
+m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no win-64 `patch`
 
 # osx-64 Fortran: flang-zig as well (Phase 2, platform 3) — conda-forge
 # ships no flang for macOS at all; validated under Rosetta on omicron.
@@ -303,6 +305,7 @@ tar = "*"
 gzip = "*"
 unzip = "*"
 zip = "*"
+patch = "*"
 
 [feature.minimal.target.linux-64.dependencies]
 flang = "*"

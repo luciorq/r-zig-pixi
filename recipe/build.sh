@@ -17,6 +17,10 @@ export CONDA_PREFIX="$PREFIX"
 
 mkdir -p build
 mv R-src "build/R-$R_VERSION"
+# rattler-build extracted a pristine source: mark it as such (empty patch
+# stamp, as fetch-r.sh does), so zig-build.sh applies zigbuild/patches/
+# to it instead of extracting it again from a tarball it doesn't have.
+: > "build/R-$R_VERSION/.r-zig-patches"
 chmod +x toolchain/zig-* scripts/*.sh
 
 # zig build alone (no autoconf, no make) — the default path since

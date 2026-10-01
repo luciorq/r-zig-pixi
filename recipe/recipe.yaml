@@ -123,7 +123,7 @@ outputs:
   # directory: the toolchain package owns R_HOME/bin/toolchain, which
   # Makeconf points at, and the compiler run dependencies; everything else
   # is R. Without the toolchain, installing a package that has compiled
-  # code stops with the preflight message (zig-build.sh) naming it.
+  # code stops with the preflight message (zigbuild/patches/) naming it.
   - staging:
       name: r-zig-build
     requirements:
@@ -173,6 +173,8 @@ outputs:
             - gzip
             - tar
             - zip
+            # zig-build.sh applies R's source patches (zigbuild/patches/)
+            - patch
         # gnuwin32 has no `configure`/autoconf step, so none of the unix
         # GNU-text-tool deps above apply — instead it needs the msys
         # userland to run at all (native make can't spawn the extensionless
@@ -196,6 +198,7 @@ outputs:
             - m2-gawk
             - m2-unzip
             - m2-zip
+            - m2-patch  # zigbuild/patches/; conda-forge has no win-64 `patch`
       host:
         # `which`: also needed here, not just build: — build.zig bakes an
         # absolute "$CONDA_PREFIX/bin/which" path into R's own Sys.which()

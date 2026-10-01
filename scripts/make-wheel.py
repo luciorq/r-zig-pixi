@@ -244,7 +244,7 @@ def renviron_site(existing: bytes | None) -> bytes:
 
 def renviron_hint(existing: bytes) -> bytes:
     # etc/Renviron, not Renviron.site: R reads it even under --vanilla, and
-    # R CMD INSTALL's compile preflight (zig-build.sh) names this package.
+    # R CMD INSTALL's compile preflight (zigbuild/patches/) names this package.
     line = f"R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{TOOLCHAIN_HINT}'}}\n".encode()
     if b"\nR_ZIG_TOOLCHAIN_HINT=" in b"\n" + existing:
         return existing

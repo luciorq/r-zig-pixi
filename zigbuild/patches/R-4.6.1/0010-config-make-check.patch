@@ -1,0 +1,21 @@
+R CMD config: say that make is missing
+
+src/scripts/config evaluates Makeconf through make, so without the
+toolchain it died with "make: not found"; pkgbuild and pak call it to
+detect a compiler. Check for make first and say where it comes from.
+feat-no-host-paths PLAN.md, phase T.
+
+--- a/src/scripts/config
++++ b/src/scripts/config
+@@ -175,6 +175,11 @@
+   R_SHARE_DIR=${R_HOME}/share
+ fi
+ 
++## r-zig: make check (make comes with the r-zig toolchain package)
++if ! command -v "${MAKE%% *}" > /dev/null 2>&1; then
++  echo "ERROR: 'R CMD config' needs make, which comes with the r-zig toolchain: ${R_ZIG_TOOLCHAIN_HINT:-install the r-zig toolchain package for this R}" >&2
++  exit 1
++fi
+ makefiles="-f ${R_HOME}/etc${R_ARCH}/Makeconf -f ${R_SHARE_DIR}/make/config.mk"
+ ## avoid passing down -jN
+ MAKEFLAGS=

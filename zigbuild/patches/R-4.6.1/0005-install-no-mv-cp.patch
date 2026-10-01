@@ -1,0 +1,59 @@
+R CMD INSTALL: R's own file operations instead of mv, cp and tar
+
+On unix install.R moves the finished package into place, backs up and
+restores the previous version with `mv -f`, and installs binary packages
+with `cp -R .` (falling back to a tar pipe), all through the shell. The
+WINDOWS branches already do the same with file.rename(), file.copy() and
+unlink(); take them on every OS. The move keeps unix's patch_rpaths()
+before it. feat-no-host-paths PLAN.md, phase A2.
+
+--- a/src/library/tools/R/install.R
++++ b/src/library/tools/R/install.R
+@@ -108,7 +108,7 @@
+                 dir.exists(lp <- file.path(lockdir, curPkg)) &&
+                 is_subdir(lp, lockdir)) {
+                 starsmsg(stars, "restoring previous ", sQuote(pkgdir))
+-                if (WINDOWS) {
++                if (TRUE) { # r-zig: no mv
+                     file.copy(lp, dirname(pkgdir), recursive = TRUE,
+                               copy.date = TRUE)
+                     unlink(lp, recursive = TRUE)
+@@ -527,14 +527,13 @@
+ 
+         if (file.exists(file.path(instdir, "DESCRIPTION"))) {
+             if (nzchar(lockdir))
+-                system(paste("mv -f", shQuote(instdir),
+-                             shQuote(file.path(lockdir, pkg))))
++                file.rename(instdir, file.path(lockdir, pkg)) # r-zig: no mv
+             dir.create(instdir, recursive = TRUE, showWarnings = FALSE)
+         }
+-        TAR <- Sys.getenv("TAR", 'tar')
+-        res <- system(paste("cp -R .", shQuote(instdir),
+-                            "|| (", TAR, "cd - .| (cd", shQuote(instdir), "&&", TAR, "-xf -))"
+-                            ))
++        ## r-zig: no cp/tar through the shell
++        res <- !all(file.copy(list.files(".", all.files = TRUE, no.. = TRUE),
++                              instdir, overwrite = TRUE, recursive = TRUE,
++                              copy.date = TRUE))
+         if (res) errmsg("installing binary package failed")
+ 
+         sig.ok <- FALSE
+@@ -1134,7 +1133,7 @@
+             ## Back up a previous version
+             if (nzchar(lockdir)) {
+                 if (debug) starsmsg(stars, "backing up earlier installation")
+-                if(WINDOWS) {
++                if(TRUE) { # r-zig: no mv
+                     file.copy(instdir, lockdir, recursive = TRUE,
+                               copy.date = TRUE)
+                     if (more_than_libs) unlink(instdir, recursive = TRUE)
+@@ -1970,7 +1969,8 @@
+         }
+ 
+         if (pkg_staged_install) {
+-            if (WINDOWS) {
++            if (!WINDOWS) patch_rpaths() # r-zig: no mv
++            if (TRUE) {
+                 unlink(final_instdir, recursive = TRUE) # needed for file.rename
+                 if (!file.rename(instdir, final_instdir)) {
+                     if (dir.exists(instdir) && !dir.exists(final_instdir)) {

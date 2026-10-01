@@ -5,13 +5,12 @@
 # PLAN.md's "Regenerating the vendored config" section). It does NOT
 # drive a full legacy build the way the old (Milestone 7-retired)
 # scripts/configure-r.sh + scripts/build-r.sh pair did — this project's
-# actual build path is `zig build` (scripts/zig-build.sh), which already
-# independently owns and applies the two R-source patches
-# (Sys.which/bin/toolchain/which and R_LIBS_USER_default's XDG/
-# LOCALAPPDATA scheme — see zig-build.sh's own comments) that the old
-# configure-r.sh also used to carry a duplicate copy of for the legacy
-# path's benefit. Only one script should own those patches now that the
-# legacy path is gone, so this one deliberately does not re-apply them.
+# actual build path is `zig build` (scripts/zig-build.sh), which owns and
+# applies the R-source patch series (zigbuild/patches/R-<version>/) that
+# the old configure-r.sh also used to carry a duplicate copy of (two of
+# them, back then) for the legacy path's benefit. Only one script should
+# own those patches now that the legacy path is gone, so this one
+# deliberately does not apply them.
 . "$(dirname "$0")/../../scripts/env.sh"
 
 if [ "$OS" = windows ]; then
@@ -38,7 +37,7 @@ echo "Configuring R $R_VERSION, variant: $VARIANT (configure-only, for gen-subst
 # and shell variables set after the unset are not exported. R_SHELL is
 # pinned there: left unset it becomes configure's own $SHELL, /bin/bash on
 # Linux and /bin/sh on macOS, and it is bin/R's shebang. bin/R is POSIX sh
-# (see zig-build.sh's R.sh.in patch), as upstream R already runs it on
+# (see zigbuild/patches/, bin-r-no-sed), as upstream R already runs it on
 # macOS.
 mapfile -t precious < <("$SRC_DIR/configure" --help | awk '
   /^Some influential environment variables:/ { on = 1; next }

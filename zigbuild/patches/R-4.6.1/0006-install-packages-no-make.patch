@@ -1,0 +1,29 @@
+install.packages(Ncpus > 1) without make
+
+With Ncpus > 1 install.packages() writes a Makefile and runs
+`make -k -j`, then `cat` to show a failed package's output. The base
+package has no toolchain, so no make: when make is not found, install
+one at a time as Ncpus = 1 does, and show the output with readLines().
+feat-no-host-paths PLAN.md, phase A2.
+
+--- a/src/library/utils/R/packages2.R
++++ b/src/library/utils/R/packages2.R
+@@ -824,7 +824,8 @@
+             update <- update[sort.list(match(pkgs, p0)), ]
+         }
+ 
+-        if (Ncpus > 1L && nrow(update) > 1L) {
++        if (Ncpus > 1L && nrow(update) > 1L && # r-zig: make optional
++            nzchar(Sys.which(strsplit(Sys.getenv("MAKE", "make"), " ", fixed = TRUE)[[1L]][1L]))) {
+             tlim_cmd <- character()
+             if(tlim > 0) {
+                 if(.Platform$OS.type == "windows" &&
+@@ -908,7 +909,7 @@
+                 for (pkg in failed) {
+                     ## targets with failed dependencies are not made (even with -k)
+                     if (file.exists(outfile <- paste0(pkg, ".out")))
+-                        system2("cat", outfile)
++                        writeLines(readLines(outfile)) # r-zig: no cat
+                     ##else cat("skipped installing package ", pkg, "\n", sep = "")
+                 }
+                 n <- length(failed)
