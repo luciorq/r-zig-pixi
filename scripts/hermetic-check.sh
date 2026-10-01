@@ -60,13 +60,19 @@ else
 fi
 test -x "${R_START[0]}" || { echo "error: ${R_START[0]} missing from the extracted tree" >&2; exit 1; }
 mkdir -p "$WORK/lib" "$WORK/tmp" "$WORK/pk"
+# Tiers 0/1 are the base package: no toolchain (phase T). Remove the
+# directory the toolchain package provides, so the scenario is exactly
+# what a base-only install has, and so the compile preflight fires.
+if [ "$OS" = windows ]; then rm -rf "$T/Library/lib/R/bin/toolchain"; else rm -rf "$T/lib/R/bin/toolchain"; fi
 
-for p in hermeticA hermeticB; do
+for p in hermeticA hermeticB hermeticSrc; do
   mkdir -p "$WORK/pk/$p/R"
   printf 'Package: %s\nVersion: 0.1\nTitle: Hermetic Check\nDescription: Tier-1 test package.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' "$p" > "$WORK/pk/$p/DESCRIPTION"
   echo 'export(hi)' > "$WORK/pk/$p/NAMESPACE"
   echo 'hi <- function() "hi"' > "$WORK/pk/$p/R/hi.R"
 done
+mkdir -p "$WORK/pk/hermeticSrc/src"
+echo 'int hermetic_one(void) { return 1; }' > "$WORK/pk/hermeticSrc/src/one.c"
 
 cat > "$WORK/check.R" <<'RCODE'
 stopifnot(!is.null(utils::osVersion), nzchar(utils::osVersion))
@@ -104,6 +110,22 @@ stopifnot(hermeticA::hi() == "hi", hermeticB::hi() == "hi")
 remove.packages(c("hermeticA", "hermeticB"), lib = lib)
 left <- list.files(lib)
 if (length(left)) stop("left in the library after removal: ", paste(left, collapse = ", "))
+## Negative test (phase T): compiled code without the toolchain stops with
+## the preflight message, and R CMD config says make is missing.
+out <- suppressWarnings(system2(file.path(R.home("bin"), "R"),
+                                c("CMD", "INSTALL", "-l", shQuote(lib), "pk/hermeticSrc"),
+                                stdout = TRUE, stderr = TRUE))
+if (!any(grepl("r-zig toolchain is not installed", out, fixed = TRUE)) ||
+    dir.exists(file.path(lib, "hermeticSrc")))
+    stop("no compile preflight:\n", paste(out, collapse = "\n"))
+cat("preflight: compiled package refused without the toolchain\n")
+if (!windows) {
+    cfg <- suppressWarnings(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "CC"),
+                                    stdout = TRUE, stderr = TRUE))
+    if (is.null(attr(cfg, "status")) || !any(grepl("needs make", cfg, fixed = TRUE)))
+        stop("R CMD config without make:\n", paste(cfg, collapse = "\n"))
+    cat("R CMD config: fails cleanly without make\n")
+}
 if (online) {
     install.packages("R6", repos = repo, lib = lib, type = "source")
     stopifnot(requireNamespace("R6", lib.loc = lib))

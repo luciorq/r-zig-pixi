@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble the r-zig wheel from the minimal variant's standalone tree.
+"""Assemble the r-zig wheels from the minimal variant's standalone tree.
 
 Input is what `pixi run -e minimal package` leaves in
 dist/R-<ver>-minimal-zig: staged by stage.sh (location-independent
@@ -7,10 +7,16 @@ launchers, $ORIGIN/@loader_path rpaths, zig shims + GNU make in
 lib/R/bin/toolchain) and made standalone by package-standalone.sh (conda
 libraries vendored into lib/, build-env flags stripped from Makeconf).
 That tree already runs from anywhere, so the wheel is that tree under
-`r_zig/R/` plus the small `r_zig` Python package (python/r_zig/), console
-scripts `R`/`Rscript`, and a dependency on PyPI `ziglang` as the compiler
-for install.packages(). No build backend: a wheel is a zip with a
-.dist-info directory (PEP 427), written here with the stdlib only.
+`r_zig/R/` plus the small `r_zig` Python package (python/r_zig/) and the
+console scripts `R`/`Rscript`. Two wheels come out of it (phase T of
+feat-no-host-paths, the toolchain as its own package): `r-zig` is R and
+installs packages that need no compiling; `r-zig-toolchain` holds
+R_HOME/bin/toolchain (the zig shims and GNU make, the directory Makeconf
+names) and requires PyPI `ziglang` as the compiler and exactly this
+`r-zig`. Both install into the same `r_zig/` directory without sharing a
+file, so each one's RECORD owns only its own. No build backend: a wheel is
+a zip with a .dist-info directory (PEP 427), written here with the stdlib
+only.
 
 The platform tag is computed from the binaries, not assumed: on Linux the
 highest GLIBC_x.y symbol version any ELF file references (manylinux_x_y;
@@ -40,6 +46,9 @@ import zipfile
 
 DIST_NAME = "r-zig"
 IMPORT_NAME = "r_zig"
+TOOLCHAIN_DIST = "r-zig-toolchain"
+TOOLCHAIN_PREFIX = "lib/R/bin/toolchain/"  # inside the tree; the toolchain wheel's files
+TOOLCHAIN_HINT = "pip install r-zig-toolchain (same Python environment as r-zig)"
 # The runtime compiler. Keep in step with pixi.toml's `zig = "0.16.*"`:
 # zig is pinned by exact version across this project family (consolidation
 # PLAN.md, convention 2); `<0.16.1` still admits ziglang's `.postN`
@@ -233,6 +242,15 @@ def renviron_site(existing: bytes | None) -> bytes:
     return (existing.rstrip(b"\n") + b"\n\n" + add) if existing else add
 
 
+def renviron_hint(existing: bytes) -> bytes:
+    # etc/Renviron, not Renviron.site: R reads it even under --vanilla, and
+    # R CMD INSTALL's compile preflight (zig-build.sh) names this package.
+    line = f"R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{TOOLCHAIN_HINT}'}}\n".encode()
+    if b"\nR_ZIG_TOOLCHAIN_HINT=" in b"\n" + existing:
+        return existing
+    return existing.rstrip(b"\n") + b"\n" + line
+
+
 def metadata(version: str, r_version: str) -> str:
     description = f"""\
 # r-zig
@@ -249,11 +267,17 @@ Rscript -e 'sessionInfo()'
 python -c 'import r_zig; print(r_zig.r_home())'   # R_HOME, e.g. for rpy2
 ```
 
-`install.packages()` compiles C/C++ packages with the PyPI
-[`ziglang`](https://pypi.org/project/ziglang/) package (a dependency), and
-GNU make is bundled, so no system compiler is needed. Packages with Fortran
-sources need a Fortran compiler, which neither this wheel nor ziglang
-provides.
+`install.packages()` installs packages that need no compiling with this
+wheel alone. For packages with C/C++ code, add the toolchain, which brings
+the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package as the
+compiler and GNU make, so no system compiler is needed:
+
+```sh
+pip install r-zig-toolchain
+```
+
+Packages with Fortran sources need a Fortran compiler, which neither the
+toolchain nor ziglang provides.
 
 The minimal profile has no cairo/png/svg devices (`pdf()` and
 `postscript()` work), no ICU (collation uses the C library), no OpenMP
@@ -265,7 +289,7 @@ wheels need glibc 2.17 or newer.
         "Metadata-Version: 2.1\n"
         f"Name: {DIST_NAME}\n"
         f"Version: {version}\n"
-        f"Summary: R {r_version} built with zig (minimal profile), relocatable, with ziglang as its compiler\n"
+        f"Summary: R {r_version} built with zig (minimal profile), relocatable\n"
         "Home-page: https://github.com/luciorq/r-zig-pixi\n"
         "License: GPL-2.0-only OR GPL-3.0-only\n"
         "Classifier: Programming Language :: R\n"
@@ -274,6 +298,40 @@ wheels need glibc 2.17 or newer.
         "Classifier: Operating System :: POSIX :: Linux\n"
         "Classifier: Operating System :: MacOS\n"
         "Requires-Python: >=3.8\n"
+        "Description-Content-Type: text/markdown\n"
+        "\n" + description
+    )
+
+
+def toolchain_metadata(version: str, r_version: str) -> str:
+    description = f"""\
+# r-zig-toolchain
+
+Compilers for the [`r-zig`](https://pypi.org/project/r-zig/) wheel (R
+{r_version}): R_HOME/bin/toolchain, the zig shims R's Makeconf names, and
+GNU make, with the PyPI [`ziglang`](https://pypi.org/project/ziglang/)
+package as the C/C++ compiler. Install it next to `r-zig` to compile
+packages from source:
+
+```sh
+pip install r-zig-toolchain
+```
+
+It requires exactly the `r-zig` it was built with. Packages with Fortran
+sources need a Fortran compiler, which this toolchain does not provide.
+"""
+    return (
+        "Metadata-Version: 2.1\n"
+        f"Name: {TOOLCHAIN_DIST}\n"
+        f"Version: {version}\n"
+        f"Summary: Compilers for r-zig (zig via ziglang, GNU make)\n"
+        "Home-page: https://github.com/luciorq/r-zig-pixi\n"
+        "License: GPL-2.0-only OR GPL-3.0-only\n"
+        "Classifier: Programming Language :: R\n"
+        "Classifier: Operating System :: POSIX :: Linux\n"
+        "Classifier: Operating System :: MacOS\n"
+        "Requires-Python: >=3.8\n"
+        f"Requires-Dist: {DIST_NAME}=={version}\n"
         f"Requires-Dist: {ZIGLANG_REQUIREMENT}\n"
         "Description-Content-Type: text/markdown\n"
         "\n" + description
@@ -332,12 +390,16 @@ def main() -> None:
     existing = dict(files).get(renv)
     files = [(r, d) for r, d in files if r != renv] + [(renv, renviron_site(existing))]
     modes.setdefault(renv, 0o644)
+    renv_main = "lib/R/etc/Renviron"
+    files = [(r, renviron_hint(d) if r == renv_main else d) for r, d in files]
 
-    tags = platform_tags(files)
-    plat = ".".join(tags)
+    toolchain_files = [(r, d) for r, d in files if r.startswith(TOOLCHAIN_PREFIX)]
+    files = [(r, d) for r, d in files if not r.startswith(TOOLCHAIN_PREFIX)]
+    if not toolchain_files:
+        die(f"nothing under {TOOLCHAIN_PREFIX} in {prefix}")
+
+    tags = platform_tags(files + toolchain_files)
     build = f"-{args.build_tag}" if args.build_tag else ""
-    dist_info = f"{IMPORT_NAME}-{args.version}.dist-info"
-    wheel_name = f"{IMPORT_NAME}-{args.version}{build}-py3-none-{plat}.whl"
 
     pkg_dir = os.path.join(ROOT, "python", IMPORT_NAME)
     entries: list[tuple[str, bytes, int]] = []
@@ -350,17 +412,31 @@ def main() -> None:
 
     with open(os.path.join(prefix, "lib", "R", "COPYING"), "rb") as f:
         copying = f.read()
+    entry_points = f"[console_scripts]\nR = {IMPORT_NAME}:main\nRscript = {IMPORT_NAME}:main_rscript\n"
+    write_wheel(args, IMPORT_NAME, tags, build, entries, metadata(args.version, r_version), entry_points, copying)
+
+    tc_entries = [(base + rel, data, modes[rel]) for rel, data in sorted(toolchain_files)]
+    write_wheel(args, TOOLCHAIN_DIST.replace("-", "_"), tags, build, tc_entries,
+                toolchain_metadata(args.version, r_version), None, copying)
+
+
+def write_wheel(args: argparse.Namespace, name: str, tags: list[str], build: str,
+                entries: list[tuple[str, bytes, int]], meta: str,
+                entry_points: str | None, copying: bytes) -> None:
+    plat = ".".join(tags)
+    dist_info = f"{name}-{args.version}.dist-info"
+    wheel_name = f"{name}-{args.version}{build}-py3-none-{plat}.whl"
     wheel_meta = "Wheel-Version: 1.0\nGenerator: r-zig-pixi scripts/make-wheel.py\nRoot-Is-Purelib: false\n"
     wheel_meta += "".join(f"Tag: py3-none-{t}\n" for t in tags)
     if args.build_tag:
         wheel_meta += f"Build: {args.build_tag}\n"
-    entries += [
-        (f"{dist_info}/METADATA", metadata(args.version, r_version).encode(), 0o644),
+    entries = entries + [
+        (f"{dist_info}/METADATA", meta.encode(), 0o644),
         (f"{dist_info}/WHEEL", wheel_meta.encode(), 0o644),
-        (f"{dist_info}/entry_points.txt",
-         f"[console_scripts]\nR = {IMPORT_NAME}:main\nRscript = {IMPORT_NAME}:main_rscript\n".encode(), 0o644),
         (f"{dist_info}/licenses/COPYING", copying, 0o644),
     ]
+    if entry_points:
+        entries.append((f"{dist_info}/entry_points.txt", entry_points.encode(), 0o644))
 
     # Reproducible when SOURCE_DATE_EPOCH is set (as build.zig honours it).
     epoch = int(os.environ.get("SOURCE_DATE_EPOCH", time.time()))
@@ -390,7 +466,6 @@ def main() -> None:
     print(f"make-wheel: {len(entries)} files, {raw / 2**20:.1f} MiB unpacked, {size / 2**20:.1f} MiB wheel")
     if size > 100 * 2**20:
         print("make-wheel: warning: over PyPI's default 100 MiB per-file limit")
-
 
 if __name__ == "__main__":
     main()

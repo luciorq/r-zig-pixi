@@ -4,7 +4,8 @@
 set -euxo pipefail
 
 export PIXI_PROJECT_ROOT="$PWD"
-export R_VERSION="$PKG_VERSION"
+# set by the recipe (a staging output has no PKG_VERSION)
+export R_VERSION="${R_VERSION:-${PKG_VERSION:?}}"
 # internal tzcode needs zoneinfo; host tzdata provides it. TZ pinned for
 # reproducible doc builds regardless of the build machine's zone.
 export TZDIR="$PREFIX/share/zoneinfo"

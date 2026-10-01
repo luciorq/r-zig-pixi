@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Install the r-zig wheel the way a pip user would and use it with the
+# Install the r-zig wheels the way a pip user would and use them with the
 # pixi env out of the picture: fresh venv, PATH scrubbed to the venv +
 # /usr/bin:/bin, no CONDA_PREFIX. Checks, in order:
-#   - the R/Rscript console scripts and `python -m r_zig` run R
-#   - the minimal capability profile, from inside the installed wheel
+#   - r-zig alone (no ziglang, no make): the R/Rscript console scripts and
+#     `python -m r_zig` run R, the minimal capability profile, TLS, and
+#     R CMD INSTALL of a package with compiled code stops with the compile
+#     preflight naming r-zig-toolchain (phase T of feat-no-host-paths)
+#   - then r-zig-toolchain (which brings ziglang and GNU make):
 #   - R CMD INSTALL of a small package with C and C++ sources that calls
 #     BLAS through CRAN's usual `$(BLAS_LIBS) $(FLIBS)` — compiled by the
 #     PyPI ziglang package and built by the bundled GNU make, three times:
@@ -11,6 +14,7 @@
 #     through the bundled bin/R directly with ZIG_BIN unset (the path an
 #     embedder such as rpy2 takes: Renviron.site finds ziglang next door),
 #     and once more with ZIG_BIN pointing nowhere (python3 -m ziglang)
+#   - uninstalling r-zig-toolchain removes only R_HOME/bin/toolchain
 # pip fetches ziglang (~100 MB) from PyPI, so this needs network; point
 # PIP_FIND_LINKS at a directory holding the ziglang wheel to avoid that.
 . "$(dirname "$0")/env.sh"
@@ -19,13 +23,20 @@ shopt -s nullglob
 wheels=("$ROOT"/dist/wheel/r_zig-"$R_VERSION"-*.whl)
 [ "${#wheels[@]}" = 1 ] || { echo "error: expected exactly one r_zig-$R_VERSION wheel in dist/wheel, found ${#wheels[@]} — run 'pixi run -e wheel wheel'" >&2; exit 1; }
 wheel="${wheels[0]}"
+tc_wheels=("$ROOT"/dist/wheel/r_zig_toolchain-"$R_VERSION"-*.whl)
+[ "${#tc_wheels[@]}" = 1 ] || { echo "error: expected exactly one r_zig_toolchain-$R_VERSION wheel in dist/wheel, found ${#tc_wheels[@]}" >&2; exit 1; }
+tc_wheel="${tc_wheels[0]}"
 
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
-echo "== installing $(basename "$wheel") (+ ziglang from PyPI) into a fresh venv"
+echo "== installing $(basename "$wheel") alone into a fresh venv"
 python -m venv "$T/venv"
-"$T/venv/bin/python" -m pip install --quiet --disable-pip-version-check "$wheel"
-"$T/venv/bin/python" -m pip list --disable-pip-version-check 2>/dev/null | grep -iE '^(r-zig|ziglang) '
+pip_() { "$T/venv/bin/python" -m pip --disable-pip-version-check "$@"; }
+pip_ install --quiet "$wheel"
+pip_ list 2>/dev/null | grep -iE '^(r-zig|r-zig-toolchain|ziglang) '
+if pip_ show ziglang > /dev/null 2>&1; then
+  echo "error: r-zig alone pulled in ziglang" >&2; exit 1
+fi
 
 # The package: C (registration + a BLAS ddot call) and C++ (via .Call).
 P="$T/src/rzigwheeltest"
@@ -98,9 +109,7 @@ run Rscript -e '
   caps <- capabilities()
   stopifnot(!caps[["cairo"]], !caps[["png"]], !caps[["ICU"]], caps[["libcurl"]], caps[["iconv"]])
   stopifnot(grepl("/r_zig/R/lib/R$", R.home()))
-  mk <- Sys.getenv("MAKE")
-  stopifnot(file.exists(mk), grepl("bin/toolchain/make$", mk))
-  cat("MAKE =", mk, "\n")
+  stopifnot(!file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")))
   set.seed(1); m <- matrix(rnorm(64), 8)
   stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9)
   cat("profile OK\n")
@@ -112,6 +121,23 @@ echo "== TLS trust (CA bundle shipped in the wheel, also under --vanilla)"
 # the trust anchors itself (package-standalone.sh, zig-build.sh). Same
 # check as verify-bundle.sh: scripts/tls-check.R.
 run Rscript --vanilla "$(cd "$(dirname "$0")" && pwd)/tls-check.R"
+
+echo "== r-zig alone: compiled code stops with the preflight"
+mkdir -p "$T/lib0"
+if run R CMD INSTALL -l "$T/lib0" "$P" > "$T/preflight.out" 2>&1; then
+  cat "$T/preflight.out" >&2; echo "error: R CMD INSTALL compiled without the toolchain" >&2; exit 1
+fi
+grep -F "r-zig toolchain is not installed" "$T/preflight.out" | grep -F "pip install r-zig-toolchain" ||
+  { cat "$T/preflight.out" >&2; echo "error: no preflight message naming r-zig-toolchain" >&2; exit 1; }
+
+echo "== installing $(basename "$tc_wheel") (+ ziglang from PyPI)"
+pip_ install --quiet "$tc_wheel"
+pip_ list 2>/dev/null | grep -iE '^(r-zig|r-zig-toolchain|ziglang) '
+run Rscript -e '
+  mk <- Sys.getenv("MAKE")
+  stopifnot(file.exists(mk), grepl("bin/toolchain/make$", mk))
+  cat("MAKE =", mk, "\n")
+'
 
 echo "== R CMD INSTALL via the console script (ZIG_BIN from import ziglang)"
 run R CMD INSTALL --preclean -l "$T/lib1" "$P"
@@ -158,4 +184,11 @@ run "$r_home/bin/Rscript" -e "
   stopifnot(dot(1:3, 4:6) == 32, cxx_sum(1:10) == 55)
   cat('compiled package OK (python3 -m ziglang fallback)\n')
 "
-echo "== wheel test passed ($(basename "$wheel"))"
+echo "== uninstalling r-zig-toolchain leaves r-zig whole"
+pip_ uninstall --quiet -y r-zig-toolchain
+run Rscript -e '
+  stopifnot(!file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")))
+  stopifnot(file.exists(file.path(R.home(), "etc", "Makeconf")))
+  cat("r-zig without the toolchain OK\n")
+'
+echo "== wheel test passed ($(basename "$wheel"), $(basename "$tc_wheel"))"

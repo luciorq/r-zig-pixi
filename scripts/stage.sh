@@ -36,6 +36,11 @@ if [ "$OS" = windows ]; then
     # falls back gracefully when running inside the pixi env
     sed -i "s|^TCL_HOME *=.*|TCL_HOME = \$(R_HOME)/Tcl|" "$mkc"
   fi
+  # Compile preflight hint (see the unix branch); Windows R reads
+  # etc/Renviron.site, not etc/Renviron.
+  if [ -n "${R_ZIG_CONDA_BUILD:-}" ] && ! grep -qs '^R_ZIG_TOOLCHAIN_HINT=' "$R_HOME_DIR/etc/Renviron.site"; then
+    echo "R_ZIG_TOOLCHAIN_HINT=\${R_ZIG_TOOLCHAIN_HINT-'add the r-zig-toolchain package to this environment (pixi add r-zig-toolchain, or conda install r-zig-toolchain)'}" >> "$R_HOME_DIR/etc/Renviron.site"
+  fi
   mkdir -p "$PREFIX/Library/bin"
   for exe in R Rscript; do
     cat > "$PREFIX/Library/bin/$exe.bat" << EOF
@@ -235,6 +240,14 @@ sed -i \
   -e "s|^R_PRINTCMD=.*|R_PRINTCMD=\${R_PRINTCMD-'lpr'}|" \
   -e "s|^R_TEXI2DVICMD=.*|R_TEXI2DVICMD=\${R_TEXI2DVICMD-\${TEXI2DVI-'texi2dvi'}}|" \
   "$R_HOME_DIR/etc/Renviron"
+
+# What the compile preflight (zig-build.sh) tells someone without the
+# toolchain to install. A conda build (recipe/recipe.yaml sets
+# R_ZIG_CONDA_BUILD) names the r-zig-toolchain package; the standalone tree and the wheel set their
+# own; without one R falls back to a generic message.
+if [ -n "${R_ZIG_CONDA_BUILD:-}" ] && ! grep -q '^R_ZIG_TOOLCHAIN_HINT=' "$R_HOME_DIR/etc/Renviron"; then
+  echo "R_ZIG_TOOLCHAIN_HINT=\${R_ZIG_TOOLCHAIN_HINT-'add the r-zig-toolchain package to this environment (pixi add r-zig-toolchain, or conda install r-zig-toolchain)'}" >> "$R_HOME_DIR/etc/Renviron"
+fi
 echo "   bundled tools: $(ls "$R_HOME_DIR/bin/toolchain")"
 
 mkc="$R_HOME_DIR/etc/Makeconf"

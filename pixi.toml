@@ -367,7 +367,11 @@ python = ">=3.9"
 # (never hit the bug there; just a slightly simpler directory name).
 # -c: rattler-build does not read the workspace channels; `universe` is
 # where flang-zig/flang-rt-zig (osx-arm64 Fortran) come from.
-conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id -c conda-forge -c https://prefix.dev/universe"
+# rm: rattler-build restores the staging output (the R build) from
+# dist/conda/build_cache under a key that does not hash the recipe's
+# `path:` sources (scripts/, toolchain/, build.zig), so a local rebuild
+# after editing them silently reused the old build (2026-09-30).
+conda-package = "rm -rf dist/conda/build_cache && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id -c conda-forge -c https://prefix.dev/universe"
 
 # Channel administration: list/delete published package files. Neither
 # rattler-build nor pixi has CLI support for either operation (upload-

@@ -5,14 +5,16 @@ build profile: no cairo/png devices, no ICU, no OpenMP, no X11/tcltk —
 under ``r_zig/R``. The ``R`` and ``Rscript`` console scripts run it, and
 ``r_home()``/``environ()`` hand it to embedders such as rpy2.
 
-Packages with C/C++ code compile with the PyPI ``ziglang`` package, a
-dependency of this wheel: R's Makeconf names small zig shims
-(``R_HOME/bin/toolchain/zig-cc`` and friends), which exec ``$ZIG_BIN``.
-The console scripts and ``environ()`` set ``ZIG_BIN`` from the importable
-``ziglang``. When R is started some other way, ``R_HOME/etc/Renviron.site``
-points it at a ``ziglang`` installed in the same site-packages directory.
-GNU make is bundled. Packages with Fortran sources need a Fortran compiler,
-which neither this wheel nor ziglang provides.
+Packages without compiled code install with this wheel alone. Packages
+with C/C++ code need the ``r-zig-toolchain`` wheel, which adds
+``R_HOME/bin/toolchain`` (the zig shims R's Makeconf names, and GNU make)
+and requires the PyPI ``ziglang`` package as the compiler; without it, R
+CMD INSTALL stops and says so. The shims exec ``$ZIG_BIN``: the console
+scripts and ``environ()`` set it from the importable ``ziglang``, and when
+R is started some other way ``R_HOME/etc/Renviron.site`` points it at a
+``ziglang`` installed in the same site-packages directory. Packages with
+Fortran sources need a Fortran compiler, which the toolchain does not
+provide.
 """
 
 from __future__ import annotations
