@@ -539,7 +539,14 @@ if [ -n "$zl" ]; then
   fi
 fi
 
-"$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"
+# The compile preflight's hint for a tree without the toolchain package:
+# the conda build names r-zig-toolchain (recipe/recipe.yaml sets
+# R_ZIG_CONDA_BUILD); the wheel sets its own; otherwise R's generic message.
+hint=()
+if [ -n "${R_ZIG_CONDA_BUILD:-}" ]; then
+  hint=("-Dtoolchain-hint=add the r-zig-toolchain package to this environment (pixi add r-zig-toolchain, or conda install r-zig-toolchain)")
+fi
+"$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "${hint[@]}" "$@"
 
 # The installed tree runs on its own (F1.3): R's rpaths are relative
 # (build.zig relRPaths), so the env's libraries it needs go into

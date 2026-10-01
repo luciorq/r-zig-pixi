@@ -119,7 +119,7 @@ build:
   number: 4
 
 outputs:
-  # One build (scripts/zig-build.sh + stage.sh), two packages split by
+  # One build (scripts/zig-build.sh), two packages split by
   # directory: the toolchain package owns R_HOME/bin/toolchain, which
   # Makeconf points at, and the compiler run dependencies; everything else
   # is R. Without the toolchain, installing a package that has compiled
@@ -306,7 +306,7 @@ outputs:
             - gettext
     build:
       # A staging output is not a package: rattler-build sets no PKG_NAME
-      # or PKG_VERSION for it, so pass what build.sh and stage.sh read.
+      # or PKG_VERSION for it, so pass what build.sh and zig-build.sh read.
       script:
         file: build.sh
         env:

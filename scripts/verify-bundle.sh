@@ -4,7 +4,7 @@
 # manually on omicron/kappa for every relocation fix this project has
 # shipped, automated so CI catches a regression instead of relying on a
 # human to re-run it. Windows binaries derive R_HOME natively (no PATH
-# tricks needed there, per stage.sh); unix binaries get a scrubbed PATH
+# tricks needed there); unix binaries get a scrubbed PATH
 # to prove they need nothing from the environment that built them.
 . "$(dirname "$0")/env.sh"
 
@@ -167,7 +167,7 @@ fi
 # Two tiers, learned from the first hosted-CI run of this check
 # (2026-09-19): everything R needs to *run* (R itself, its modules and
 # package .so files, every vendored library under lib/) must stay at the
-# 2.17 floor — and does. The compile-time helper tools stage.sh vendors
+# 2.17 floor — and does. The compile-time helper tools build.zig installs
 # into lib/R/bin/toolchain (nm/realpath/sed/... for bin/libtool and
 # javareconf) come from conda-forge, whose linux baseline is glibc 2.28
 # now: coreutils' `realpath` needs GLIBC_2.28, nothing else did. Those
@@ -216,8 +216,8 @@ fi
 
 # No build-machine rpaths (unix). Every RUNPATH/LC_RPATH entry in the tree
 # must be relative to the file ($ORIGIN, @loader_path): zig records the
-# build env's lib dir and zig-cache dirs, and stage.sh/package-standalone.sh
-# replace them. Then a package compiled with this tree (C++, so libc++ is
+# build env's lib dir and zig-cache dirs unless told not to, which build.zig
+# does (relRPaths, linkSibling). Then a package compiled with this tree (C++, so libc++ is
 # involved on macOS) must record no rpath at all, and still load: libR and
 # the libraries it needs are already in the process. The shims make that
 # so (zig's -feach-lib-rpath on macOS; conda's -rpath in LDFLAGS is

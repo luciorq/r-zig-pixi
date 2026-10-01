@@ -23,8 +23,7 @@ chmod +x toolchain/zig-* scripts/*.sh
 # Milestone 5's F1-F6 (see .github/devdocs/feat-zig-build/). $R_INSTALL_
 # PREFIX is already rattler's own $PREFIX (set above), so zig-build.sh's
 # PREFIX_ZIG resolves to it directly (no "-zig" suffix leaks into the
-# conda package). stage.sh normalizes the result for conda-package use
-# (dual rpath, launcher shims, etc) — same tail call install-r.sh used to
-# make for the legacy path.
+# conda package). zig build installs the final tree: relative rpaths,
+# relocatable launchers, the shims in lib/R/bin/toolchain (feat-no-host-
+# paths PLAN.md, F1); nothing runs after it.
 bash scripts/zig-build.sh
-bash scripts/stage.sh

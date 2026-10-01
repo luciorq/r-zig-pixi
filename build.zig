@@ -131,6 +131,7 @@ const Ctx = struct {
     fc: FortranCompiler, // which Fortran compiler this build uses — decided by what the pixi env provides, see build()
     flangrt_dir: []const u8, // conda clang resource dir holding libflang_rt.runtime.a (fc == .flang; "" otherwise)
     gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran (fc == .gfortran; "" otherwise)
+    toolchain_hint: []const u8, // -Dtoolchain-hint, "" when unset
     subst: std.StringHashMap([]const u8),
     geninc: std.Build.LazyPath, // generated headers dir (config.h, Rconfig.h, ...)
     libR: *std.Build.Step.Compile,
@@ -280,6 +281,12 @@ pub fn build(b: *std.Build) !void {
 
     var variant = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal (unix only)") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
+    // What the compile preflight (scripts/zig-build.sh's install.R patch)
+    // tells someone without the toolchain package to install: written into
+    // etc/Renviron (Windows: etc/Renviron.site). zig-build.sh passes the
+    // conda one for the conda build; the wheel sets its own; empty means R's
+    // generic message.
+    const toolchain_hint = b.option([]const u8, "toolchain-hint", "R_ZIG_TOOLCHAIN_HINT default written into etc/Renviron") orelse "";
 
     const native = b.resolveTargetQuery(.{});
     const os: Os = switch (native.result.os.tag) {
@@ -441,6 +448,7 @@ pub fn build(b: *std.Build) !void {
         .prefix = install_prefix,
         .rhome = rhome,
         .config_dir = config_dir,
+        .toolchain_hint = toolchain_hint,
         // Windows keeps these defaults (its compile graph never passes
         // `.openmp = true` and builds its own cairo device); unix overwrites
         // both from subst.txt right after loadSubstTable below.
@@ -613,17 +621,6 @@ pub fn build(b: *std.Build) !void {
     rbin.rdynamic = true; // MAIN_LDFLAGS = -Wl,--export-dynamic
     rbin.each_lib_rpath = false; // see addSharedLib
     macHeaderpad(&ctx, rbin);
-
-    const rscript_mod = newCMod(&ctx);
-    rscript_mod.addIncludePath(ctx.geninc);
-    rscript_mod.addIncludePath(ctx.path("src/include"));
-    // "we need to build at install time to capture the correct rhome"
-    addCGroup(&ctx, rscript_mod, "src/unix", &.{"Rscript.c"}, .{
-        .extra = &.{ctx.absSub("-DR_HOME=\"{s}\"", .{ctx.rhome})},
-    });
-    const rscript = b.addExecutable(.{ .name = "Rscript", .root_module = rscript_mod });
-    rscript.each_lib_rpath = false; // see addSharedLib
-    macHeaderpad(&ctx, rscript);
 
     // ------------------------------------------------------------------
     // Loadable modules: modules/lapack.so, modules/internet.so
@@ -806,9 +803,22 @@ pub fn build(b: *std.Build) !void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_lapack.getEmittedBin(), modules_dir, "lapack.so").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_internet.getEmittedBin(), modules_dir, "internet.so").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rbin.getEmittedBin(), .{ .custom = "lib/R/bin/exec" }, "R").step);
-    const rscript_bin = rscript.getEmittedBin();
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript_bin, .{ .custom = "lib/R/bin" }, "Rscript").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript_bin, .{ .custom = "bin" }, "Rscript").step);
+    // Rscript: the POSIX sh emulator, not the compiled Rscript, which
+    // embeds R_HOME as a build path (F1.4). bin/R likewise is a
+    // trampoline into lib/R/bin/R.
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/Rscript"), .{ .custom = "lib/R/bin" }, "Rscript").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/Rscript"), .{ .custom = "bin" }, "Rscript").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/R"), .{ .custom = "bin" }, "R").step);
+    // The compiler shims Makeconf names ($(R_HOME)/bin/toolchain), and for
+    // minimal (the wheel's tree) GNU make: a pip-installed R has no other
+    // make (python:*-slim images ship none); conda-forge's links libc only.
+    // The r-zig-toolchain packages own this directory.
+    for ([_][]const u8{ "zig-cc", "zig-cxx", "zig-ar", "zig-ranlib" }) |t| {
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path(b.fmt("toolchain/{s}", .{t})), .{ .custom = "lib/R/bin/toolchain" }, t).step);
+    }
+    if (ctx.variant == .minimal) {
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("bin/make") }, .{ .custom = "lib/R/bin/toolchain" }, "make").step);
+    }
     // ------------------------------------------------------------------
     // Static R_HOME payload: headers, etc/, bin scripts, share/, doc/,
     // and every base package's R code / DESCRIPTION / NAMESPACE / data.
@@ -1763,10 +1773,53 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     try ctx.subst.put("SYMPAT", "'s/^.* [BCDRT] / /p'");
 
     const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
-    const mkc = try gnuwin32O3ToO2(b, try substitute(ctx, raw));
+    var mkc = try gnuwin32O3ToO2(b, try substitute(ctx, raw));
+    // Tcl/Tk headers and libraries where the standalone tree vendors them
+    // (package-standalone.sh); inside a conda env this is unused.
+    mkc = try replaceLine(b, mkc, "TCL_HOME", "TCL_HOME = $(R_HOME)/Tcl");
     const mkc_wf = b.addWriteFiles();
     const mkc_out = mkc_wf.add("Makeconf", mkc);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(mkc_out, ctx.rhomeInstallDir("etc/x64"), "Makeconf").step);
+
+    // Library/bin/R.bat and Rscript.bat: a conda env's activation puts
+    // Library/bin on PATH, never Library/lib/R/bin/x64, so without these
+    // `R`/`Rscript` are not found in an installed env.
+    const bat_wf = b.addWriteFiles();
+    for ([_][]const u8{ "R", "Rscript" }) |exe| {
+        _ = bat_wf.add(b.fmt("{s}.bat", .{exe}), b.fmt("@echo off\r\n\"%~dp0..\\lib\\R\\bin\\x64\\{s}.exe\" %*\r\n", .{exe}));
+    }
+    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+        .source_dir = bat_wf.getDirectory(),
+        .install_dir = .{ .custom = "Library/bin" },
+        .install_subdir = "",
+    }).step);
+
+    // The compile preflight's hint: Windows R reads etc/Renviron.site, not
+    // etc/Renviron (see finalRenviron for unix).
+    if (ctx.toolchain_hint.len > 0) {
+        const site_wf = b.addWriteFiles();
+        const site = site_wf.add("Renviron.site", b.fmt("R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{s}'}}\n", .{ctx.toolchain_hint}));
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(site, ctx.rhomeInstallDir("etc"), "Renviron.site").step);
+    }
+}
+
+/// `text` with the line starting `key` (then spaces or `=`) replaced by
+/// `line`; unchanged when there is none.
+fn replaceLine(b: *std.Build, text: []const u8, key: []const u8, line: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    var first = true;
+    while (it.next()) |l| {
+        if (!first) try out.append(b.allocator, '\n');
+        first = false;
+        const rest = if (std.mem.startsWith(u8, l, key)) std.mem.trimStart(u8, l[key.len..], " ") else "";
+        if (std.mem.startsWith(u8, l, key) and std.mem.startsWith(u8, rest, "=")) {
+            try out.appendSlice(b.allocator, line);
+        } else {
+            try out.appendSlice(b.allocator, l);
+        }
+    }
+    return out.items;
 }
 
 /// gnuwin32's src/gnuwin32/fixed/Makefile installs etc/Makeconf through
@@ -2611,11 +2664,16 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
         const key = line[3..key_end];
         var val: []const u8 = line[key_end + 4 ..];
         if (val.len > 0 and val[val.len - 1] == '"') val = val[0 .. val.len - 1];
-        var v = try std.mem.replaceOwned(u8, b.allocator, val, "@ZR_CONDA@", ctx.conda);
+        // Tools configure found in the env become bare names, looked up on
+        // PATH when used (phase A5); the shims are R_HOME/bin/toolchain,
+        // where build.zig installs them (F1.4). Neither records a path of
+        // the build machine.
+        var v = try std.mem.replaceOwned(u8, b.allocator, val, "@ZR_CONDA@/bin/", "");
+        v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_CONDA@", ctx.conda);
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_SRC@", ctx.src_abs);
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_OBJ@", ctx.rhome);
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_PREFIX@", ctx.prefix);
-        v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_TOOLCHAIN@", b.pathFromRoot("toolchain"));
+        v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_TOOLCHAIN@", "$(R_HOME)/bin/toolchain");
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_ROOT@", b.pathFromRoot("."));
         // flang's runtime dir (see gen-subst.sh): resolved by findFlangRt at
         // build time so the LLVM major never gets baked into Makeconf. A
@@ -2927,8 +2985,8 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     _ = stage.addCopyFile(ctx.path("doc/html/index-default.html"), "doc/html/index.html");
 
     // --- etc/ ---
-    _ = stage.add("etc/Renviron", try substFile(ctx, io, "etc/Renviron.in"));
-    _ = stage.add("etc/ldpaths", try substFile(ctx, io, "etc/ldpaths.in"));
+    _ = stage.add("etc/Renviron", try finalRenviron(ctx, try substFile(ctx, io, "etc/Renviron.in")));
+    _ = stage.add("etc/ldpaths", ldpaths(ctx));
     _ = stage.add("etc/Makeconf", try substFile(ctx, io, "etc/Makeconf.in"));
     _ = stage.add("etc/javaconf", try substFile(ctx, io, "etc/javaconf.in"));
     _ = stage.addCopyFile(ctx.path("etc/repositories"), "etc/repositories");
@@ -2965,15 +3023,6 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     // share/ and doc/ wholesale from the source tree
     installCommonPayload(ctx);
 
-    // prefix/bin/R: same front script (make install copies Rexecbindir/R there)
-    const bin_wf = b.addWriteFiles();
-    _ = bin_wf.add("R", r_front);
-    inst.dependOn(&b.addInstallDirectory(.{
-        .source_dir = bin_wf.getDirectory(),
-        .install_dir = .{ .custom = "bin" },
-        .install_subdir = "",
-    }).step);
-
     // utils iconvlist (basepkg iconvlist target: `iconv -l`)
     const iconv_run = b.addSystemCommand(&.{ "iconv", "-l" });
     const iconv_out = iconv_run.captureStdOut(.{});
@@ -2982,30 +3031,106 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     return libstage;
 }
 
-/// bin/R: R.sh.in substituted, then the four install-time seds make applies
-/// (R_HOME_DIR first occurrence + R_SHARE_DIR/R_INCLUDE_DIR/R_DOC_DIR).
+/// bin/R: R.sh.in substituted, with the lines make install rewrites set
+/// to the values that ship (F1.4): R_HOME_DIR found from the script's own
+/// location (one symlink hop at a time with plain `readlink`, POSIX sh,
+/// see zigbuild/launchers/R), R_SHARE_DIR/R_INCLUDE_DIR/R_DOC_DIR under it,
+/// and R.sh.in's lib64 probe (`if test "${R_HOME_DIR}" = "<prefix>/lib/R"`,
+/// which runs `uname -m`) dropped: a self-located R_HOME_DIR matches it on
+/// the build machine only.
 fn makeRFrontScript(ctx: *const Ctx, io: std.Io) ![]u8 {
     const b = ctx.b;
     const raw = try substFile(ctx, io, "src/scripts/R.sh.in");
+    const home_line =
+        \\R_HOME_DIR=$(_s="$0"; while [ -h "$_s" ]; do case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac; _d=$(cd -P "${_d:-/}" && pwd); _s=$(readlink "$_s"); case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac; done; case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac; cd -P "${_d:-/}/.." && pwd)
+    ;
     var out = std.ArrayList(u8).empty;
     var lines = std.mem.splitScalar(u8, raw, '\n');
     var home_done = false;
+    var in_probe = false;
     var first = true;
     while (lines.next()) |line| {
+        if (in_probe) {
+            if (std.mem.eql(u8, line, "fi")) in_probe = false;
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "if test \"${R_HOME_DIR}\" = \"")) {
+            in_probe = true;
+            continue;
+        }
         if (!first) try out.append(b.allocator, '\n');
         first = false;
         if (!home_done and std.mem.indexOf(u8, line, "R_HOME_DIR=") != null) {
-            try out.appendSlice(b.allocator, b.fmt("R_HOME_DIR=\"{s}\"", .{ctx.rhome}));
+            try out.appendSlice(b.allocator, home_line);
             home_done = true;
         } else if (std.mem.startsWith(u8, line, "R_SHARE_DIR=")) {
-            try out.appendSlice(b.allocator, b.fmt("R_SHARE_DIR=\"{s}/share\"", .{ctx.rhome}));
+            try out.appendSlice(b.allocator, "R_SHARE_DIR=\"${R_HOME_DIR}/share\"");
         } else if (std.mem.startsWith(u8, line, "R_INCLUDE_DIR=")) {
-            try out.appendSlice(b.allocator, b.fmt("R_INCLUDE_DIR=\"{s}/include\"", .{ctx.rhome}));
+            try out.appendSlice(b.allocator, "R_INCLUDE_DIR=\"${R_HOME_DIR}/include\"");
         } else if (std.mem.startsWith(u8, line, "R_DOC_DIR=")) {
-            try out.appendSlice(b.allocator, b.fmt("R_DOC_DIR=\"{s}/doc\"", .{ctx.rhome}));
+            try out.appendSlice(b.allocator, "R_DOC_DIR=\"${R_HOME_DIR}/doc\"");
         } else {
             try out.appendSlice(b.allocator, line);
         }
+    }
+    return out.items;
+}
+
+/// etc/ldpaths: R_HOME/lib only (the env's or a vendored lib dir is found
+/// through the binaries' relative rpaths). DYLD_FALLBACK_LIBRARY_PATH on
+/// macOS, LD_LIBRARY_PATH elsewhere. R_LD_LIBRARY_PATH from the
+/// environment wins, which is how this build runs its own R
+/// (Ctx.buildLdPath).
+fn ldpaths(ctx: *const Ctx) []const u8 {
+    return switch (ctx.os) {
+        .macos =>
+        \\: "${R_LD_LIBRARY_PATH=${R_HOME}/lib}"
+        \\if [ -z "${DYLD_FALLBACK_LIBRARY_PATH}" ]; then
+        \\  DYLD_FALLBACK_LIBRARY_PATH="${R_LD_LIBRARY_PATH}"
+        \\else
+        \\  DYLD_FALLBACK_LIBRARY_PATH="${R_LD_LIBRARY_PATH}:${DYLD_FALLBACK_LIBRARY_PATH}"
+        \\fi
+        \\export DYLD_FALLBACK_LIBRARY_PATH
+        \\
+        ,
+        else =>
+        \\: "${R_LD_LIBRARY_PATH=${R_HOME}/lib}"
+        \\LD_LIBRARY_PATH="${R_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH}"
+        \\export LD_LIBRARY_PATH
+        \\
+        ,
+    };
+}
+
+/// etc/Renviron as it ships (phase A4, F1.4): untar() and unzip() use R's
+/// internal code (installing a package without compiling runs no tar or
+/// unzip), printing goes to a bare `lpr`, minimal's MAKE is the bundled
+/// GNU make, and the compile preflight's hint comes from -Dtoolchain-hint.
+/// `${X-default}` keeps a value set in the environment, as upstream's
+/// Renviron does. The tool defaults PAGER/R_BROWSER/... come from the
+/// normalized configure table (zigbuild/tools/normalize-subst.sh).
+fn finalRenviron(ctx: *const Ctx, raw: []const u8) ![]u8 {
+    const b = ctx.b;
+    var out = std.ArrayList(u8).empty;
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, raw, "\n"), '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "TAR=")) {
+            try out.appendSlice(b.allocator, "TAR=${TAR-'internal'}");
+        } else if (std.mem.startsWith(u8, line, "R_UNZIPCMD=")) {
+            try out.appendSlice(b.allocator, "R_UNZIPCMD=${R_UNZIPCMD-'internal'}");
+        } else if (std.mem.startsWith(u8, line, "R_PRINTCMD=")) {
+            try out.appendSlice(b.allocator, "R_PRINTCMD=${R_PRINTCMD-'lpr'}");
+        } else if (std.mem.startsWith(u8, line, "MAKE=") and ctx.variant == .minimal) {
+            // Renviron expands a nested default only when it is a whole
+            // ${...} term, hence the helper variable.
+            try out.appendSlice(b.allocator, "R_ZIG_MAKE=${R_HOME}/bin/toolchain/make\nMAKE=${MAKE-${R_ZIG_MAKE}}");
+        } else {
+            try out.appendSlice(b.allocator, line);
+        }
+        try out.append(b.allocator, '\n');
+    }
+    if (ctx.toolchain_hint.len > 0) {
+        try out.appendSlice(b.allocator, b.fmt("R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{s}'}}\n", .{ctx.toolchain_hint}));
     }
     return out.items;
 }
@@ -3185,7 +3310,9 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
         var argv = std.ArrayList([]const u8).empty;
         try argv.appendSlice(b.allocator, &.{ "chmod", "+x" });
         try argv.append(b.allocator, b.fmt("{s}/bin/R", .{ctx.prefix}));
+        try argv.append(b.allocator, b.fmt("{s}/bin/Rscript", .{ctx.prefix}));
         try argv.append(b.allocator, b.fmt("{s}/bin/R", .{rhome}));
+        try argv.append(b.allocator, b.fmt("{s}/bin/Rscript", .{rhome}));
         for (rspec.scripts_s) |s| try argv.append(b.allocator, b.fmt("{s}/bin/{s}", .{ rhome, s }));
         for (rspec.scripts_b) |s| try argv.append(b.allocator, b.fmt("{s}/bin/{s}", .{ rhome, s }));
         _ = boot.cmd("chmod scripts", argv.items);

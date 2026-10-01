@@ -11,8 +11,7 @@
 # A no-op when the prefix is the env itself (the conda build: the
 # libraries are already in <prefix>/lib, as run dependencies). Windows'
 # DLLs are copied by package-standalone.sh. Idempotent: zig-build.sh runs
-# it after every build, package-standalone.sh again (stage.sh adds tools
-# to bin/toolchain whose libraries it must also find).
+# it after every build, package-standalone.sh again.
 #
 # Expects R_INSTALL_PREFIX (zig-build.sh and zig-package.sh export it).
 . "$(dirname "$0")/env.sh"
@@ -26,7 +25,7 @@ fi
 mkdir -p "$PREFIX/lib"
 
 # Every binary under R_HOME (ELF or Mach-O magic, not name patterns: the
-# tools stage.sh bundles into bin/toolchain count too), then a fixed-point
+# tools in bin/toolchain count too, e.g. minimal's make), then a fixed-point
 # walk over the libraries copied so far.
 case "$OS" in
   linux) magic=$'\x7fELF' ;;

@@ -9,7 +9,7 @@
 # Linux, macOS, and Windows all implemented.
 . "$(dirname "$0")/env.sh"
 
-test -d "$R_HOME_DIR" || { echo "error: run 'pixi run install' first" >&2; exit 1; }
+test -d "$R_HOME_DIR" || { echo "error: run 'pixi run build' first" >&2; exit 1; }
 CONDA="${CONDA_PREFIX:?}"
 # Derive the archive's source-directory name from $PREFIX itself rather
 # than hardcoding "R-$R_VERSION-$FLAVOR" — the zig-built prefix carries a
@@ -82,7 +82,7 @@ if [ "$OS" != linux ] && [ "$OS" != macos ]; then
 fi
 
 # conda's libraries into <prefix>/lib (zig-build.sh already did this
-# after the build; again here for the tools stage.sh added since)
+# after the build; again here, idempotent)
 bash "$(dirname "$0")/vendor-libs.sh"
 
 if [ -d "$CONDA/etc/fonts" ] && [ ! -d "$PREFIX/etc/fonts" ]; then
@@ -122,7 +122,7 @@ fi
 echo "   vendored CA bundle ($(grep -c 'BEGIN CERTIFICATE' "$R_HOME_DIR/etc/ca-bundle.crt") certificates) as etc/ca-bundle.crt"
 
 # Standalone has no env: strip the build-env include/lib flags that
-# stage.sh keeps for conda-package use.
+# a conda env needs (F1.5 will make Makeconf right for both).
 # Whole-token matches only (the flag must end at a space, a quote or the
 # line end): as bare prefix matches these also ate the head of longer
 # paths — `-L$CONDA/lib/clang/23/lib/darwin` (flang's runtime dir in

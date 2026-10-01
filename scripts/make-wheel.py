@@ -2,7 +2,7 @@
 """Assemble the r-zig wheels from the minimal variant's standalone tree.
 
 Input is what `pixi run -e minimal package` leaves in
-dist/R-<ver>-minimal-zig: staged by stage.sh (location-independent
+dist/R-<ver>-minimal-zig: installed by zig build (location-independent
 launchers, $ORIGIN/@loader_path rpaths, zig shims + GNU make in
 lib/R/bin/toolchain) and made standalone by package-standalone.sh (conda
 libraries vendored into lib/, build-env flags stripped from Makeconf).
@@ -363,7 +363,7 @@ def main() -> None:
     if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "exec", "R")):
         die(f"no R build at {prefix} — run `pixi run -e minimal package` first")
     if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "toolchain", "zig-cc")):
-        die(f"{prefix} is not staged — run `pixi run -e minimal package` (stage.sh) first")
+        die(f"{prefix} has no R_HOME/bin/toolchain — run `pixi run -e minimal package` first")
     if not any(re.search(r"\.(so(\.\d+)*|dylib)$", f) for f in os.listdir(os.path.join(prefix, "lib"))):
         die(f"no vendored libraries in {prefix}/lib — run `pixi run -e minimal package` first")
     if args.build_tag and not args.build_tag[0].isdigit():

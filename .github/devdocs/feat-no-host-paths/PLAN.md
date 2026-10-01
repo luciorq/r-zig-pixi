@@ -310,6 +310,27 @@ zig 0.16's std.Build):
   - Result: every R binary carries exactly the relative pair, the
     installed tree runs with an empty environment on linux and macOS,
     and rattler-build's relink pass leaves the relative rpaths working.
+- **F1.4 done 2026-10-01**, tested on linux-64 (minimal and slim: build,
+  smoke, contract, `check`, verify-package, hermetic, both wheels, the
+  conda build with both packages' tests), osx-arm64 on omicron (minimal
+  and slim, the same chain and both wheels) and win-64 on kappa (verify,
+  contract, hermetic; `Library/bin/R.bat`/`Rscript.bat` and `TCL_HOME`
+  now from build.zig).
+  - build.zig: `makeRFrontScript` writes the self-locating `R_HOME_DIR`
+    line and `${R_HOME_DIR}`-relative share/include/doc, and drops the
+    lib64 probe; `ldpaths()` generates etc/ldpaths per OS;
+    `finalRenviron()` sets `TAR`/`R_UNZIPCMD` internal, `R_PRINTCMD` lpr,
+    minimal's bundled make and the `-Dtoolchain-hint` line; the configure
+    table maps `@ZR_CONDA@/bin/<tool>` to the bare name and `@ZR_TOOLCHAIN@`
+    to `$(R_HOME)/bin/toolchain`; the shims (and, for minimal, conda's
+    make) are installed into `lib/R/bin/toolchain`; `<prefix>/bin/R` and
+    both Rscripts come from `zigbuild/launchers/` (the compiled unix
+    Rscript, which embeds R_HOME, is no longer built); Windows gets
+    `TCL_HOME = $(R_HOME)/Tcl`, the `.bat` forwarders and `Renviron.site`
+    with the hint.
+  - stage.sh and zig-stage.sh are gone; `pixi run install` is an alias of
+    `build`; recipe/build.sh runs zig-build.sh only, which passes the
+    conda hint as `-Dtoolchain-hint` when `R_ZIG_CONDA_BUILD` is set.
 - F1.4 Launchers, `ldpaths`, Renviron and Makeconf written final by
   build.zig, the shims installed into `bin/toolchain` on every OS, the
   Windows `R.bat`/`Rscript.bat` shims too; stage.sh retires.
