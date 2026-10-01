@@ -539,4 +539,9 @@ if [ -n "$zl" ]; then
   fi
 fi
 
-exec "$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"
+"$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"
+
+# The installed tree runs on its own (F1.3): R's rpaths are relative
+# (build.zig relRPaths), so the env's libraries it needs go into
+# <prefix>/lib. A no-op for the conda build, whose prefix is the env.
+R_INSTALL_PREFIX="$PREFIX_ZIG" bash "$(dirname "$0")/vendor-libs.sh"

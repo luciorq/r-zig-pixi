@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Turn the staged install in $PREFIX into a self-contained standalone
 # bundle and tar it up:
-#   - vendor every conda-env shared library into <prefix>/lib (the same
-#     location the dual rpaths from stage.sh already search — in a conda
-#     env the solver provides these, standalone we copy them)
+#   - vendor every conda-env shared library into <prefix>/lib
+#     (vendor-libs.sh; the relative rpaths build.zig writes search there,
+#     and in a conda env the solver provides them)
 #   - vendor runtime data the libs need (fontconfig config)
 #   - emit dist/R-<ver>-<flavor>-<platform>.tar.gz + sha256
 # Linux, macOS, and Windows all implemented.
@@ -81,78 +81,9 @@ if [ "$OS" != linux ] && [ "$OS" != macos ]; then
   exit 1
 fi
 
-echo "== bundling dependencies into $PREFIX/lib"
-if [ "$OS" = linux ]; then
-  # ELF-magic scan (not name patterns): must also catch the tools bundled
-  # into bin/toolchain by stage.sh (nm/dd/realpath/grep — needed by
-  # libtool/javareconf), whose own conda-lib deps (libzstd, libpcre2-8,
-  # libgcc_s, ...) need vendoring exactly like R's own binaries.
-  elfs=()
-  while read -r f; do
-    head -c4 "$f" 2>/dev/null | grep -q $'\x7fELF' && elfs+=("$f")
-  done < <(find "$R_HOME_DIR" -type f)
-  n_copied=0
-  changed=1
-  while [ "$changed" = 1 ]; do
-    changed=0
-    for f in "${elfs[@]}"; do
-      while read -r dep; do
-        base="$(basename "$dep")"
-        if [ ! -f "$PREFIX/lib/$base" ]; then
-          cp -L "$dep" "$PREFIX/lib/$base"
-          # minimal (the wheel's tree): conda-forge ships these with full
-          # DWARF (libstdc++.so.6: 24 MiB, ~2 without). R's own binaries
-          # are already built stripped for minimal (build.zig newCMod).
-          # Before patchelf, not after: binutils strip and a patchelf-
-          # relocated .dynamic don't always get along.
-          if [ "$VARIANT" = minimal ]; then
-            chmod u+w "$PREFIX/lib/$base"
-            strip --strip-debug "$PREFIX/lib/$base"
-          fi
-          patchelf --set-rpath '$ORIGIN' "$PREFIX/lib/$base" 2>/dev/null || true
-          n_copied=$((n_copied + 1))
-          elfs+=("$PREFIX/lib/$base")
-          changed=1
-        fi
-      done < <(LD_LIBRARY_PATH="$CONDA/lib" ldd "$f" 2>/dev/null | awk -v p="$CONDA" '$3 ~ "^"p {print $3}')
-    done
-  done
-  echo "   vendored $n_copied conda libraries"
-else
-  # macOS: conda-forge dylibs record deps as bare "@rpath/<name>" — no
-  # absolute path to match against like ldd gives us, so resolve each
-  # @rpath/<name> against $CONDA/lib ourselves (that's the only place
-  # these came from; R's own libR.dylib/libRblas.dylib are bare names,
-  # already present in R_HOME/lib, and never need vendoring). Same
-  # Mach-O-magic scan + fixed-point loop shape as the Linux ELF walk,
-  # so newly-vendored tools' own deps (bin/toolchain/nm etc.) get caught.
-  machos=()
-  while read -r f; do
-    head -c4 "$f" 2>/dev/null | grep -q $'\xcf\xfa\xed\xfe' && machos+=("$f")
-  done < <(find "$R_HOME_DIR" -type f)
-  n_copied=0
-  changed=1
-  while [ "$changed" = 1 ]; do
-    changed=0
-    for f in "${machos[@]}"; do
-      while read -r dep; do
-        base="${dep#@rpath/}"
-        [ -f "$CONDA/lib/$base" ] || continue
-        if [ ! -f "$PREFIX/lib/$base" ]; then
-          cp -L "$CONDA/lib/$base" "$PREFIX/lib/$base"
-          # @loader_path (no traversal — the file lives in $PREFIX/lib
-          # itself) lets it resolve its own @rpath/ peers once vendored.
-          install_name_tool -add_rpath "@loader_path" "$PREFIX/lib/$base" 2>/dev/null || true
-          codesign --force --sign - "$PREFIX/lib/$base" 2>/dev/null || true
-          n_copied=$((n_copied + 1))
-          machos+=("$PREFIX/lib/$base")
-          changed=1
-        fi
-      done < <(otool -L "$f" 2>/dev/null | awk '/@rpath\// {print $1}')
-    done
-  done
-  echo "   vendored $n_copied conda libraries"
-fi
+# conda's libraries into <prefix>/lib (zig-build.sh already did this
+# after the build; again here for the tools stage.sh added since)
+bash "$(dirname "$0")/vendor-libs.sh"
 
 if [ -d "$CONDA/etc/fonts" ] && [ ! -d "$PREFIX/etc/fonts" ]; then
   mkdir -p "$PREFIX/etc"

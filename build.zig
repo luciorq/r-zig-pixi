@@ -137,12 +137,46 @@ const Ctx = struct {
     rblas: ?*std.Build.Step.Compile, // null when blas == .openblas
     rlapack: ?*std.Build.Step.Compile, // null when blas == .openblas
 
+    /// Link a library this build makes (libR, libRblas, libRlapack). Off
+    /// Windows by its file: `linkLibrary` would also add the library's
+    /// zig-cache directory as an rpath (std.Build does that for every
+    /// linked dynamic artifact), a build-machine path in what ships.
+    /// Windows links the import library and has no rpaths.
+    fn linkSibling(ctx: *const Ctx, mod: *std.Build.Module, lib: *std.Build.Step.Compile) void {
+        if (ctx.os == .windows) mod.linkLibrary(lib) else mod.addObjectFile(lib.getEmittedBin());
+    }
+
+    /// Where an artifact is installed, for its rpaths.
+    const RDir = enum { rlib, modules, exec, pkglibs };
+
+    /// The rpaths of an artifact: R_HOME/lib and <prefix>/lib, relative to
+    /// its own directory ($ORIGIN on ELF, @loader_path on Mach-O). conda
+    /// and the standalone tree share that layout (<prefix>/lib/R and
+    /// <prefix>/lib), so these are final: nothing rewrites them after the
+    /// build (feat-no-host-paths PLAN.md, F1.2). No absolute rpath is
+    /// added anywhere; the R this build runs finds the env's libraries
+    /// through buildLdPath. No-op on Windows.
+    fn relRPaths(ctx: *const Ctx, mod: *std.Build.Module, where: RDir) void {
+        const origin = switch (ctx.os) {
+            .linux => "$ORIGIN",
+            .macos => "@loader_path",
+            .windows => return,
+        };
+        const rel: [2][]const u8 = switch (where) {
+            .rlib => .{ "", "/../.." },
+            .modules => .{ "/../lib", "/../.." },
+            .exec => .{ "/../../lib", "/../../.." },
+            .pkglibs => .{ "/../../../lib", "/../../../.." },
+        };
+        for (rel) |r| mod.addRPathSpecial(ctx.b.fmt("{s}{s}", .{ origin, r }));
+    }
+
     /// Link the BLAS provider: internal libRblas.so or system openblas.
     fn linkBlas(ctx: *const Ctx, mod: *std.Build.Module) void {
         if (ctx.blas == .openblas) {
             mod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
         } else {
-            mod.linkLibrary(ctx.rblas.?);
+            ctx.linkSibling(mod, ctx.rblas.?);
         }
     }
     /// Link the LAPACK provider: internal libRlapack.so or system openblas
@@ -151,7 +185,7 @@ const Ctx = struct {
         if (ctx.blas == .openblas) {
             mod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
         } else {
-            mod.linkLibrary(ctx.rlapack.?);
+            ctx.linkSibling(mod, ctx.rlapack.?);
         }
     }
 
@@ -175,6 +209,19 @@ const Ctx = struct {
         };
     }
 
+    /// Library search path for the R this build runs (bootstrap, `verify
+    /// Rscript`, `zig build check`), set as R_LD_LIBRARY_PATH, which the
+    /// installed etc/ldpaths honours and turns into LD_LIBRARY_PATH or
+    /// DYLD_FALLBACK_LIBRARY_PATH inside bin/R (after macOS's SIP has
+    /// dropped DYLD_* from the environment of the /bin/sh it runs under).
+    /// The env's lib dir is a build-time need only: nothing installed
+    /// records it (feat-no-host-paths PLAN.md, F1.1). Null on Windows,
+    /// which finds DLLs through PATH and the exe's directory.
+    fn buildLdPath(ctx: *const Ctx) ?[]const u8 {
+        if (ctx.os == .windows) return null;
+        return ctx.absSub("{s}/lib:{s}", .{ ctx.rhome, ctx.condaDir("lib") });
+    }
+
     /// Add {conda}/lib (Library/lib on Windows) as a library search path
     /// and, on unix/macOS only — rpath is a real ELF/Mach-O concept with
     /// no Windows/PE analogue (PE's DLL search is PATH/same-directory
@@ -184,7 +231,6 @@ const Ctx = struct {
     fn addCondaLibPath(ctx: *const Ctx, mod: *std.Build.Module) void {
         const lib_dir = ctx.condaDir("lib");
         mod.addLibraryPath(.{ .cwd_relative = lib_dir });
-        if (ctx.os != .windows) mod.addRPath(.{ .cwd_relative = lib_dir });
     }
 
     /// R_HOME install-dir for `sub` — "Library/lib/R/<sub>" on Windows
@@ -507,12 +553,14 @@ pub fn build(b: *std.Build) !void {
         for (blas_fixed) |o| rblas_mod.addObjectFile(o);
         for (blas_free) |o| rblas_mod.addObjectFile(o);
         linkFortranRt(&ctx, rblas_mod);
+        ctx.relRPaths(rblas_mod, .rlib);
         ctx.rblas = addSharedLib(&ctx, "Rblas", rblas_mod);
 
         const rlapack_mod = newCMod(&ctx);
         for (lapack_objs.items) |o| rlapack_mod.addObjectFile(o);
-        rlapack_mod.linkLibrary(ctx.rblas.?);
+        ctx.linkSibling(rlapack_mod, ctx.rblas.?);
         linkFortranRt(&ctx, rlapack_mod);
+        ctx.relRPaths(rlapack_mod, .rlib);
         ctx.rlapack = addSharedLib(&ctx, "Rlapack", rlapack_mod);
     }
 
@@ -547,6 +595,7 @@ pub fn build(b: *std.Build) !void {
     ctx.linkBlas(libR_mod);
     linkFortranRt(&ctx, libR_mod);
     linkCoreLibs(&ctx, libR_mod);
+    ctx.relRPaths(libR_mod, .rlib);
     ctx.libR = addSharedLib(&ctx, "R", libR_mod);
 
     // ------------------------------------------------------------------
@@ -556,11 +605,13 @@ pub fn build(b: *std.Build) !void {
     rbin_mod.addIncludePath(ctx.geninc);
     rbin_mod.addIncludePath(ctx.path("src/include"));
     addCGroup(&ctx, rbin_mod, "src/main", &.{"Rmain.c"}, .{ .openmp = true });
-    rbin_mod.linkLibrary(ctx.libR);
+    ctx.linkSibling(rbin_mod, ctx.libR);
     ctx.linkBlas(rbin_mod);
     linkOmp(&ctx, rbin_mod);
+    ctx.relRPaths(rbin_mod, .exec);
     const rbin = b.addExecutable(.{ .name = "R.bin", .root_module = rbin_mod });
     rbin.rdynamic = true; // MAIN_LDFLAGS = -Wl,--export-dynamic
+    rbin.each_lib_rpath = false; // see addSharedLib
     macHeaderpad(&ctx, rbin);
 
     const rscript_mod = newCMod(&ctx);
@@ -571,6 +622,7 @@ pub fn build(b: *std.Build) !void {
         .extra = &.{ctx.absSub("-DR_HOME=\"{s}\"", .{ctx.rhome})},
     });
     const rscript = b.addExecutable(.{ .name = "Rscript", .root_module = rscript_mod });
+    rscript.each_lib_rpath = false; // see addSharedLib
     macHeaderpad(&ctx, rscript);
 
     // ------------------------------------------------------------------
@@ -584,20 +636,22 @@ pub fn build(b: *std.Build) !void {
     if (ctx.blas == .openblas) {
         lapmod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
     } else {
-        lapmod.linkLibrary(ctx.rlapack.?);
-        lapmod.linkLibrary(ctx.rblas.?);
+        ctx.linkSibling(lapmod, ctx.rlapack.?);
+        ctx.linkSibling(lapmod, ctx.rblas.?);
     }
-    lapmod.linkLibrary(ctx.libR);
+    ctx.linkSibling(lapmod, ctx.libR);
     linkFortranRt(&ctx, lapmod);
     linkOmp(&ctx, lapmod);
+    ctx.relRPaths(lapmod, .modules);
     const mod_lapack = addSharedLib(&ctx, "mod_lapack", lapmod);
 
     const inetmod = newCMod(&ctx);
     inetmod.addIncludePath(ctx.geninc);
     inetmod.addIncludePath(ctx.path("src/include"));
     addCGroup(&ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{ .openmp = true });
-    inetmod.linkLibrary(ctx.libR);
+    ctx.linkSibling(inetmod, ctx.libR);
     inetmod.linkSystemLibrary("curl", .{ .use_pkg_config = .no });
+    ctx.relRPaths(inetmod, .modules);
     const mod_internet = addSharedLib(&ctx, "mod_internet", inetmod);
 
     // ------------------------------------------------------------------
@@ -615,8 +669,8 @@ pub fn build(b: *std.Build) !void {
         if (ctx.blas == .openblas) {
             m.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
         } else {
-            m.linkLibrary(ctx.rlapack.?);
-            m.linkLibrary(ctx.rblas.?);
+            ctx.linkSibling(m, ctx.rlapack.?);
+            ctx.linkSibling(m, ctx.rblas.?);
         }
         linkFortranRt(&ctx, m);
         linkOmp(&ctx, m);
@@ -722,7 +776,8 @@ pub fn build(b: *std.Build) !void {
                 .flags = flags.items,
             });
         }
-        cairo_mod.linkLibrary(ctx.libR);
+        ctx.linkSibling(cairo_mod, ctx.libR);
+        ctx.relRPaths(cairo_mod, .pkglibs);
         applyLinkFlags(&ctx, cairo_mod, ctx.subst.get("CAIRO_LIBS").?);
         // full only: rbitmap.c's HAVE_JPEG/HAVE_TIFF branches (from the
         // per-variant config.h) need libjpeg/libtiff — CAIRO_LIBS doesn't
@@ -745,24 +800,24 @@ pub fn build(b: *std.Build) !void {
     const libR_name = ctx.absSub("libR{s}", .{ctx.dylib_ext});
     const libRblas_name = ctx.absSub("libRblas{s}", .{ctx.dylib_ext});
     const libRlapack_name = ctx.absSub("libRlapack{s}", .{ctx.dylib_ext});
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, ctx.libR.getEmittedBin(), libR_name), lib_dir, libR_name).step);
-    if (ctx.rblas) |rblas| b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rblas.getEmittedBin(), libRblas_name), lib_dir, libRblas_name).step);
-    if (ctx.rlapack) |rlapack| b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rlapack.getEmittedBin(), libRlapack_name), lib_dir, libRlapack_name).step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, mod_lapack.getEmittedBin(), "lapack.so"), modules_dir, "lapack.so").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, mod_internet.getEmittedBin(), "internet.so"), modules_dir, "internet.so").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rbin.getEmittedBin(), "R.bin"), .{ .custom = "lib/R/bin/exec" }, "R").step);
-    const rscript_fixed = fixRpath(&ctx, rscript.getEmittedBin(), "Rscript");
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript_fixed, .{ .custom = "lib/R/bin" }, "Rscript").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript_fixed, .{ .custom = "bin" }, "Rscript").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.libR.getEmittedBin(), lib_dir, libR_name).step);
+    if (ctx.rblas) |rblas| b.getInstallStep().dependOn(&b.addInstallFileWithDir(rblas.getEmittedBin(), lib_dir, libRblas_name).step);
+    if (ctx.rlapack) |rlapack| b.getInstallStep().dependOn(&b.addInstallFileWithDir(rlapack.getEmittedBin(), lib_dir, libRlapack_name).step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_lapack.getEmittedBin(), modules_dir, "lapack.so").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_internet.getEmittedBin(), modules_dir, "internet.so").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rbin.getEmittedBin(), .{ .custom = "lib/R/bin/exec" }, "R").step);
+    const rscript_bin = rscript.getEmittedBin();
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript_bin, .{ .custom = "lib/R/bin" }, "Rscript").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript_bin, .{ .custom = "bin" }, "Rscript").step);
     // ------------------------------------------------------------------
     // Static R_HOME payload: headers, etc/, bin scripts, share/, doc/,
     // and every base package's R code / DESCRIPTION / NAMESPACE / data.
     // ------------------------------------------------------------------
     const libstage = try installStaticTree(&ctx, io);
     for (pkg_libs.items) |pl| {
-        _ = libstage.addCopyFile(fixRpath(&ctx, pl.lib.getEmittedBin(), ctx.absSub("{s}.so", .{pl.pkg})), ctx.absSub("{s}/libs/{s}.so", .{ pl.pkg, pl.pkg }));
+        _ = libstage.addCopyFile(pl.lib.getEmittedBin(), ctx.absSub("{s}/libs/{s}.so", .{ pl.pkg, pl.pkg }));
     }
-    if (mod_cairo) |mc| _ = libstage.addCopyFile(fixRpath(&ctx, mc.getEmittedBin(), "cairo.so"), "grDevices/libs/cairo.so");
+    if (mod_cairo) |mc| _ = libstage.addCopyFile(mc.getEmittedBin(), "grDevices/libs/cairo.so");
 
     // ------------------------------------------------------------------
     // Bootstrap: sequenced R runs (the R-level half make used to drive)
@@ -1979,6 +2034,7 @@ fn addCheckStep(ctx: *Ctx, io: std.Io, r_top: *std.Build.Step) !void {
         run.addDirectoryArg(dir.path(b, "tests"));
         run.addArg(target);
         run.setEnvironmentVariable("TZ", "UTC");
+        if (ctx.buildLdPath()) |p| run.setEnvironmentVariable("R_LD_LIBRARY_PATH", p);
         run.has_side_effects = true;
         run.step.dependOn(&chmod_w.step);
         check.dependOn(&run.step);
@@ -2200,6 +2256,10 @@ fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, script_name: []const u8
 fn addSharedLib(ctx: *const Ctx, name: []const u8, mod: *std.Build.Module) *std.Build.Step.Compile {
     const lib = ctx.b.addLibrary(.{ .linkage = .dynamic, .name = name, .root_module = mod });
     if (ctx.os == .macos) lib.linker_allow_shlib_undefined = true;
+    // A native target (macOS) would otherwise turn every -L directory (the
+    // env's lib dir, flang's) into an absolute rpath; relRPaths sets the
+    // ones that ship.
+    lib.each_lib_rpath = false;
     macHeaderpad(ctx, lib);
     return lib;
 }
@@ -2247,6 +2307,7 @@ fn addCGroup(ctx: *const Ctx, mod: *std.Build.Module, dir: []const u8, files: []
 fn newPkgMod(ctx: *const Ctx, dir: []const u8, files: []const []const u8, opts: CGroupOpts) *std.Build.Module {
     const b = ctx.b;
     const m = newCMod(ctx);
+    ctx.relRPaths(m, .pkglibs); // library/<pkg>/libs/<pkg>.so
     m.addIncludePath(ctx.geninc);
     m.addIncludePath(ctx.path("src/include"));
     // Same psignal.h/trioremap.h need as r_core_mod/rscript_mod — any base
@@ -2391,7 +2452,6 @@ fn applyLinkFlags(ctx: *const Ctx, mod: *std.Build.Module, flags: []const u8) vo
     while (it.next()) |tok| {
         if (std.mem.startsWith(u8, tok, "-L")) {
             mod.addLibraryPath(.{ .cwd_relative = ctx.b.dupe(tok[2..]) });
-            mod.addRPath(.{ .cwd_relative = ctx.b.dupe(tok[2..]) });
         } else if (std.mem.startsWith(u8, tok, "-l")) {
             mod.linkSystemLibrary(ctx.b.dupe(tok[2..]), .{ .use_pkg_config = .no });
         } else if (std.mem.eql(u8, tok, "-framework")) {
@@ -2402,39 +2462,6 @@ fn applyLinkFlags(ctx: *const Ctx, mod: *std.Build.Module, flags: []const u8) vo
             if (it.next()) |name| mod.linkFramework(ctx.b.dupe(name), .{});
         }
     }
-}
-
-/// F2.3: zig's linker adds a RUNPATH entry for the build/zig-cache path of
-/// every sibling artifact a module links against (e.g. libR.so -> the
-/// zig-cache location it found libRblas.so at) — harmless in place (it's
-/// relative, so it only resolves if a process happens to run with that
-/// exact cwd, which never happens outside `zig build` itself) but it's
-/// grit the make build never had, and stage.sh's downstream rpath rewrite
-/// shouldn't have to clean up zig-specific debris it didn't create. Strip
-/// every non-absolute RUNPATH entry, keeping the real conda/flang-rt ones.
-fn fixRpath(ctx: *const Ctx, in: std.Build.LazyPath, out_name: []const u8) std.Build.LazyPath {
-    // macOS (F5.2): patchelf is ELF-only. Mach-O's equivalent grit (zig
-    // may add a load-command referencing the zig-cache path of a sibling
-    // artifact) is handled by stage.sh's existing install_name_tool +
-    // mandatory ad-hoc re-codesign pass instead of duplicating Mach-O
-    // surgery here — per FINALIZATION.md F5.2, leave it there.
-    if (ctx.os == .macos) return in;
-
-    const b = ctx.b;
-    const run = b.addSystemCommand(&.{
-        "sh",        "-c",
-        \\set -e
-        \\rp="$(patchelf --print-rpath "$1")"
-        \\newrp="$(printf '%s' "$rp" | tr ':' '\n' | grep '^/' | tr '\n' ':' | sed 's/:$//')"
-        \\cp "$1" "$2"
-        \\chmod u+w "$2"
-        \\patchelf --set-rpath "$newrp" "$2"
-        ,
-        "fix-rpath",
-    });
-    run.setName(b.fmt("fix-rpath {s}", .{out_name}));
-    run.addFileArg(in);
-    return run.addOutputFileArg(out_name);
 }
 
 const FortranOut = struct { obj: std.Build.LazyPath, mods: std.Build.LazyPath };
@@ -3113,6 +3140,7 @@ const Boot = struct {
         run.setEnvironmentVariable("LC_ALL", "C");
         run.setEnvironmentVariable("R_DEFAULT_PACKAGES", "NULL");
         run.setEnvironmentVariable("R_ENABLE_JIT", "0");
+        if (self.ctx.buildLdPath()) |p| run.setEnvironmentVariable("R_LD_LIBRARY_PATH", p);
         run.has_side_effects = true;
         run.step.dependOn(self.last);
         self.last = &run.step;
@@ -3398,6 +3426,7 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
             "set.seed(1); m <- matrix(rnorm(64), 8); s <- svd(m); stopifnot(max(abs(s$u %*% diag(s$d) %*% t(s$v) - m)) < 1e-9); cat('zig-built R OK:', R.version.string, '\\n')",
         });
         run.setEnvironmentVariable("TZ", "UTC");
+        if (ctx.buildLdPath()) |p| run.setEnvironmentVariable("R_LD_LIBRARY_PATH", p);
     }
 
     return boot.last;

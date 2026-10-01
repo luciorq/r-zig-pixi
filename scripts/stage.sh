@@ -4,14 +4,15 @@
 # from the enclosing env's $PREFIX/lib) and as a standalone bundle
 # (deps vendored into <bundle>/lib by package-standalone.sh).
 #
-#   1. dual-entry rpaths: R_HOME/lib AND <prefix>/lib ($ORIGIN on linux,
-#      @loader_path on macOS, plus mandatory ad-hoc re-codesigning there)
-#   2. launchers derive R_HOME from their own location (bin/R trampoline,
+#   1. launchers derive R_HOME from their own location (bin/R trampoline,
 #      Rscript CLI emulated — its binary hard-embeds the build path)
-#   3. etc/ldpaths reduced to R_HOME/lib
-#   4. zig shims bundled; Makeconf rewritten to $(R_HOME)-relative
+#   2. etc/ldpaths reduced to R_HOME/lib
+#   3. zig shims bundled; Makeconf rewritten to $(R_HOME)-relative;
+#      Renviron's tool defaults
 #
-# Linux and macOS implemented (patchelf / install_name_tool+codesign).
+# rpaths are no longer this script's: build.zig writes them, relative, at
+# link time. The rest moves into build.zig too (feat-no-host-paths
+# PLAN.md, F1.4), and this script retires.
 . "$(dirname "$0")/env.sh"
 
 test -d "$R_HOME_DIR" || { echo "error: $R_HOME_DIR missing — run 'pixi run install' first" >&2; exit 1; }
@@ -257,49 +258,8 @@ mkc="$R_HOME_DIR/etc/Makeconf"
 sed -i "s|$TOOLCHAIN/|\$(R_HOME)/bin/toolchain/|g" "$mkc"
 echo "   Makeconf uses \$(R_HOME)-relative shims"
 
-# --- rpaths (linux / macos) ------------------------------------------------
-if [ "$OS" = linux ]; then
-  find "$R_HOME_DIR" "$PREFIX/bin" -type f | while read -r f; do
-    head -c4 "$f" 2>/dev/null | grep -q $'\x7fELF' || continue
-    d="$(dirname "$f")"
-    rel_rlib="$(realpath --relative-to="$d" "$R_HOME_DIR/lib")"
-    rel_plib="$(realpath --relative-to="$d" "$PREFIX/lib")"
-    patchelf --set-rpath "\$ORIGIN/$rel_rlib:\$ORIGIN/$rel_plib" "$f" 2>/dev/null || true
-  done
-  echo "   dual \$ORIGIN rpaths set (R_HOME/lib + prefix/lib)"
-elif [ "$OS" = macos ]; then
-  # conda-forge's macOS dylibs record their deps as @rpath/<name> (never
-  # an absolute path), so — unlike libR.dylib/libRblas.dylib, which are
-  # bare names resolved through etc/ldpaths' DYLD_FALLBACK_LIBRARY_PATH —
-  # they need an actual LC_RPATH to resolve. Add @loader_path-relative
-  # entries mirroring Linux's dual $ORIGIN scheme (R_HOME/lib for the
-  # conda-package case, prefix/lib for package-standalone.sh's vendored
-  # copies), on every Mach-O file (dyld's rpath search is cumulative up
-  # the load chain, but staying uniform matches the ELF loop above and
-  # doesn't rely on that subtlety). install_name_tool invalidates any
-  # existing code signature — arm64 macOS refuses to exec an unsigned
-  # binary, so re-sign ad-hoc (`-`) after patching, matching the level of
-  # signing conda-forge's own unsigned/ad-hoc-signed dylibs already carry.
-  find "$R_HOME_DIR" "$PREFIX/bin" -type f | while read -r f; do
-    head -c4 "$f" 2>/dev/null | grep -q $'\xcf\xfa\xed\xfe' || continue
-    d="$(dirname "$f")"
-    rel_rlib="$(realpath --relative-to="$d" "$R_HOME_DIR/lib")"
-    rel_plib="$(realpath --relative-to="$d" "$PREFIX/lib")"
-    # Replace, as patchelf --set-rpath does on linux: zig records the
-    # build env's lib dir (absolute) and the zig-cache dirs of sibling
-    # artifacts (relative, build/zig-cache/...) on every link; both are
-    # build-machine paths (build.zig's fixRpath leaves macOS to this loop).
-    otool -l "$f" | awk '/cmd LC_RPATH/ {r = 1} r && / path / {sub(/^ *path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print; r = 0}' |
-      while IFS= read -r rp; do
-        case "$rp" in @loader_path/*) ;; *) install_name_tool -delete_rpath "$rp" "$f" 2>/dev/null || true ;; esac
-      done
-    install_name_tool -add_rpath "@loader_path/$rel_rlib" "$f" 2>/dev/null || true
-    install_name_tool -add_rpath "@loader_path/$rel_plib" "$f" 2>/dev/null || true
-    codesign --force --sign - "$f" 2>/dev/null || true
-  done
-  echo "   dual @loader_path rpaths set + ad-hoc codesigned (R_HOME/lib + prefix/lib)"
-else
-  echo "   rpath staging not implemented for $OS"
-fi
+# --- rpaths ------------------------------------------------------------------
+# None to do: build.zig writes the final, relative rpaths at link time
+# (relRPaths; feat-no-host-paths PLAN.md, F1.2).
 
 echo "== staging complete"

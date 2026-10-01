@@ -259,6 +259,66 @@ workarounds into code.** In order:
 - **F4. One zig** (see Open): upstream zig everywhere, or a feedstock
   opt-out; the mirror goes.
 
+**F1 implementation steps** (worked out 2026-10-01 from build.zig and
+zig 0.16's std.Build):
+- What ties the build tree to the pixi env today: `addCondaLibPath` adds
+  the env's lib dir as an absolute rpath to every artifact, and
+  std.Build adds the zig-cache directory of every sibling library a step
+  links (`linkLibrary(libR)` and the rest; Compile.zig, unconditionally
+  off Windows) as a further rpath. `fixRpath` strips the second kind on
+  linux with patchelf; stage.sh replaces all of them afterwards. The
+  bootstrap steps run the freshly installed R, which finds conda's
+  libraries only through the absolute rpath, and so do smoke and the
+  contract suite in CI.
+- F1.1 Bootstrap without baked rpaths: the bootstrap Run steps set
+  `R_LD_LIBRARY_PATH=<R_HOME>/lib:<env>/lib`, which R's `etc/ldpaths`
+  already honours and turns into `LD_LIBRARY_PATH` or
+  `DYLD_FALLBACK_LIBRARY_PATH` inside the launcher (after macOS's SIP has
+  dropped `DYLD_*` from the environment). Build time only, nothing baked.
+- F1.2 Relative rpaths at link time: `addRPathSpecial` with `$ORIGIN/...`
+  (ELF) or `@loader_path/...` (Mach-O) per install directory, the pair
+  stage.sh writes today (R_HOME/lib and `<prefix>/lib`); sibling libraries
+  linked by their file (`addObjectFile(lib.getEmittedBin())`) rather than
+  `linkLibrary`, which adds no zig-cache rpath; no rpath from
+  `addCondaLibPath`. `fixRpath` and stage.sh's rpath surgery retire.
+- F1.3 The dev tree is the standalone tree: when the install prefix is
+  not the env (every build but the conda one), the build vendors the
+  env's libraries into `<prefix>/lib` (package-standalone.sh's vendoring,
+  moved into the build), so the installed tree runs on its own and every
+  CI check runs on it. In the conda build the prefix is the env and the
+  libraries are already there. F1.2 and F1.3 land together: either one
+  alone leaves a tree that does not run.
+- **F1.1–F1.3 done 2026-10-01**, tested on linux-64 (minimal, slim, the
+  conda build with both packages' tests), osx-arm64 on omicron (minimal
+  and slim: build, an `env -i` run of the installed tree, smoke, contract,
+  verify-package, hermetic, both wheels) and win-64 on kappa (verify,
+  contract, hermetic; the build.zig changes are no-ops there).
+  - build.zig: `buildLdPath` (R_LD_LIBRARY_PATH on the bootstrap steps,
+    `verify Rscript` and `zig build check`); `linkSibling` (libR,
+    libRblas, libRlapack linked by file off Windows); `relRPaths` on
+    libR/libRblas/libRlapack, `bin/exec/R`, the modules and every base
+    package and cairo .so; `each_lib_rpath = false` on every library and
+    executable; no rpath from `addCondaLibPath` or `applyLinkFlags`;
+    `fixRpath` deleted.
+  - scripts/vendor-libs.sh (new): the dependency walk from
+    package-standalone.sh as a plain copy, run by zig-build.sh after
+    every build and by package-standalone.sh. conda-forge's libraries
+    already carry `$ORIGIN/.` (linux) or `@loader_path/` (macOS) rpaths,
+    so no patchelf and no install_name_tool: stage.sh and
+    package-standalone.sh have none left, and macOS binaries keep zig's
+    ad hoc signatures (`codesign -v` passes) without re-signing.
+  - Result: every R binary carries exactly the relative pair, the
+    installed tree runs with an empty environment on linux and macOS,
+    and rattler-build's relink pass leaves the relative rpaths working.
+- F1.4 Launchers, `ldpaths`, Renviron and Makeconf written final by
+  build.zig, the shims installed into `bin/toolchain` on every OS, the
+  Windows `R.bat`/`Rscript.bat` shims too; stage.sh retires.
+- F1.5 Makeconf's environment flags (`-I`/`-L`, FLIBS) in a form that is
+  right for conda and for the standalone tree (candidate:
+  `$(R_HOME)/../..`-relative), so package-standalone.sh strips nothing.
+- F1.6 CI: build (final tree), then smoke, contract, check, hermetic, then
+  archive; verify-package shrinks to the archive checks.
+
 Order: T's conda and wheel parts (done) → F1 → F2 → F3 → T's standalone
 split (it needs F1's layout and F3's binary) → P. F4 can be decided at
 any point. The decisions this branch made stay valid through F: tiers,
