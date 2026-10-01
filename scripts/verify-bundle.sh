@@ -251,6 +251,31 @@ if [ "$OS" != windows ]; then
   fi
   echo "== rpaths verified: $(wc -l < "$bin_list" | tr -d ' ') binaries, all relative"
 
+  # Static libc++ everywhere (decided 2026-09-30): none of R's own
+  # binaries may depend on a shared C++ runtime. The vendored conda
+  # libraries in lib/ may (ICU links libc++ on macOS, libstdc++ on linux);
+  # they are not ours to build.
+  cxx_deps() {
+    if [ "$OS" = linux ]; then
+      patchelf --print-needed "$1" 2>/dev/null | grep -E '^lib(c\+\+|stdc\+\+)\.so' || true
+    else
+      otool -L "$1" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -E '(^|/)lib(c\+\+|stdc\+\+)[.0-9]*\.dylib$' || true
+    fi
+  }
+  bad=""
+  n_r=0
+  while IFS= read -r f; do
+    case "$f" in "$BUNDLE_DIR"/lib/R/bin/toolchain/*) continue ;; "$BUNDLE_DIR"/lib/R/*) ;; *) continue ;; esac
+    n_r=$((n_r + 1))
+    hit="$(cxx_deps "$f")"
+    [ -z "$hit" ] || bad="$bad ${f#$BUNDLE_DIR/}->$(echo $hit | tr ' ' ',')"
+  done < "$bin_list"
+  if [ -n "$bad" ]; then
+    echo "error: R binaries depend on a shared C++ runtime:$bad" >&2
+    exit 1
+  fi
+  echo "== C++ runtime verified: $n_r R binaries, none needs a shared libc++/libstdc++"
+
   zig_dir="$(dirname "$(command -v zig 2>/dev/null || echo /nonexistent/zig)")"
   if [ -x "$zig_dir/zig" ]; then
     pkg_dir="$VERIFY_DIR/shlib"
@@ -274,18 +299,49 @@ CPP
       echo "error: a package compiled with the bundle records rpaths: $pkg_rp" >&2
       exit 1
     fi
-    # linux: zig's own libc++ is static unless a libc++ package sits in
-    # the env (see contract-test.sh); the package must not need one.
-    if [ "$OS" = linux ]; then
-      cxx_dep="$(patchelf --print-needed "$pkg_dir/rp.so" | grep -E '^lib(c\+\+|stdc\+\+)\.so' || true)"
-      if [ -n "$cxx_dep" ]; then
-        echo "error: a C++ package compiled with the bundle needs a shared C++ runtime: $cxx_dep" >&2
-        exit 1
-      fi
+    # zig's own libc++ is static, and the shims keep it so where
+    # conda-forge zig would pick a shared one (see toolchain/zig-cc).
+    cxx_dep="$(cxx_deps "$pkg_dir/rp.so")"
+    if [ -n "$cxx_dep" ]; then
+      echo "error: a C++ package compiled with the bundle needs a shared C++ runtime: $cxx_dep" >&2
+      exit 1
     fi
     (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
       "$R_BIN" --vanilla --no-echo -e 'dyn.load("rp.so"); stopifnot(.Call("rp") == 6L)')
-    echo "== compiled package verified: no rpath, loads (C++)"
+    echo "== compiled package verified: no rpath, static libc++, loads (C++)"
+
+    # Fortran: FLIBS names the static flang runtime (build.zig), so a
+    # Fortran package needs no shared runtime and no rpath into the build
+    # env. Checked here, on the relocated tree, because the contract suite
+    # runs before staging, while libR still carries build-env rpaths that
+    # hid the shared runtime once (2026-09-30, macOS slim). minimal empties
+    # FLIBS (no Fortran compiler with the wheel), so it is skipped there.
+    if grep -q '^FLIBS = .*flang_rt' "$BUNDLE_DIR/lib/R/etc/Makeconf" && [ -x "$zig_dir/flang" ]; then
+      cat > "$pkg_dir/fs.f" <<'FORTRAN'
+      subroutine fsum(n, x, s)
+      integer n, i
+      double precision x(n), s
+      s = 0d0
+      do 10 i = 1, n
+         s = s + x(i)
+   10 continue
+      end
+FORTRAN
+      (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+        "$R_BIN" CMD SHLIB -o fs.so fs.f > fshlib.log 2>&1) || { cat "$pkg_dir/fshlib.log" >&2; echo "error: R CMD SHLIB of a Fortran file failed with the bundle" >&2; exit 1; }
+      if [ "$OS" = linux ]; then
+        f_dep="$(patchelf --print-needed "$pkg_dir/fs.so" | grep flang_rt || true)"
+      else
+        f_dep="$(otool -L "$pkg_dir/fs.so" | grep flang_rt || true)"
+      fi
+      if [ -n "$f_dep" ]; then
+        echo "error: a Fortran package compiled with the bundle needs a shared flang runtime: $f_dep" >&2
+        exit 1
+      fi
+      (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
+        "$R_BIN" --vanilla --no-echo -e 'dyn.load("fs.so"); stopifnot(.Fortran("fsum", 3L, c(1, 2, 3), s = 0)$s == 6)')
+      echo "== compiled package verified: static flang runtime, loads (Fortran)"
+    fi
   else
     echo "== compiled package rpath check skipped (no zig on PATH)"
   fi

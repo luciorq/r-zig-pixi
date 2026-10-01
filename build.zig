@@ -2600,6 +2600,13 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
                 std.debug.print("error: {s}/subst.txt was captured with flang (S[\"{s}\"] uses @ZR_FLANGRT_DIR@) but this env selected {s} — regenerate the vendored config for this env's Fortran compiler (pixi run configure + gen-subst.sh)\n", .{ config_dir, key, @tagName(ctx.fc) });
                 return error.FortranConfigMismatch;
             }
+            // FLIBS/FLIBS_IN_SO name the static archive, not `-L<dir>
+            // -lflang_rt.runtime`: the dir also holds the shared runtime,
+            // which a native macOS link prefers (linux's pinned target
+            // already took the .a). libR links it statically too, and a
+            // compiled Fortran package has to load without the toolchain,
+            // so no rpath into it can be relied on (feat-no-host-paths).
+            v = try std.mem.replaceOwned(u8, b.allocator, v, "-L@ZR_FLANGRT_DIR@ -lflang_rt.runtime", "@ZR_FLANGRT_DIR@/libflang_rt.runtime.a");
             v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_FLANGRT_DIR@", ctx.flangrt_dir);
         }
         // config.status escapes for awk: \$ → $ and \" → " (checked: no

@@ -128,6 +128,62 @@ if [ -f "$ir" ] && ! grep -q 'r-zig: no mv' "$ir"; then
     { echo "error: install.R patch did not apply to $ir" >&2; exit 1; }
 fi
 
+# Compile preflight (phase T: the toolchain is a separate package). A
+# package needs it when it has compiled code (src/) or a configure
+# script; without bin/toolchain/zig-cc (the toolchain package fills that
+# directory, Makeconf points at it, and a package manager can leave it
+# behind empty), stop with one message naming the package
+# to install, from R_ZIG_TOOLCHAIN_HINT, which each distribution sets in
+# etc/Renviron, instead of failing deep in configure or make. A user
+# Makevars (their own compiler) or R_ZIG_NO_PREFLIGHT skips the check.
+# Inserted before the configure step; binary packages (no src/) never
+# reach it.
+if [ -f "$ir" ] && ! grep -q 'r-zig: compile preflight' "$ir"; then
+  preflight=$(cat <<'RCODE'
+        ## r-zig: compile preflight (the toolchain is a separate package)
+        if (((install_libs && dir.exists("src") &&
+              length(dir("src", all.files = TRUE)) > 2L) ||
+             (use_configure && (file.exists("configure") ||
+                                (WINDOWS && (file.exists("configure.win") ||
+                                             file.exists("configure.ucrt")))))) &&
+            !file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")) &&
+            !length(makevars_user()) && !nzchar(Sys.getenv("R_ZIG_NO_PREFLIGHT")))
+            pkgerrmsg(paste0("this package has compiled code, and the r-zig toolchain is not installed: ",
+                             Sys.getenv("R_ZIG_TOOLCHAIN_HINT",
+                                        "install the r-zig toolchain package for this R")),
+                      pkg_name)
+
+RCODE
+  )
+  PREFLIGHT="$preflight" awk '
+    /^        if \(use_configure\) \{$/ && !done { print ENVIRON["PREFLIGHT"]; done = 1 }
+    { print }
+  ' "$ir" > "$ir.tmp" && mv "$ir.tmp" "$ir"
+  grep -q 'r-zig: compile preflight' "$ir" || { echo "error: preflight patch did not apply to $ir" >&2; exit 1; }
+fi
+
+# R CMD config (src/scripts/config) evaluates Makeconf through make, so
+# without the toolchain it died with "make: not found"; pkgbuild and pak
+# call it to detect a compiler. Check for make first and say what is
+# missing.
+rcfg="$SRC_DIR/src/scripts/config"
+if [ -f "$rcfg" ] && ! grep -q 'r-zig: make check' "$rcfg"; then
+  cfg_check=$(cat <<'SHCODE'
+## r-zig: make check (make comes with the r-zig toolchain package)
+if ! command -v "${MAKE%% *}" > /dev/null 2>&1; then
+  echo "ERROR: 'R CMD config' needs make, which comes with the r-zig toolchain: ${R_ZIG_TOOLCHAIN_HINT:-install the r-zig toolchain package for this R}" >&2
+  exit 1
+fi
+
+SHCODE
+  )
+  CFG_CHECK="$cfg_check" awk '
+    /^makefiles="-f \$\{R_HOME\}\/etc\$\{R_ARCH\}\/Makeconf/ && !done { print ENVIRON["CFG_CHECK"]; done = 1 }
+    { print }
+  ' "$rcfg" > "$rcfg.tmp" && mv "$rcfg.tmp" "$rcfg"
+  grep -q 'r-zig: make check' "$rcfg" || { echo "error: config make-check patch did not apply to $rcfg" >&2; exit 1; }
+fi
+
 # install.packages(Ncpus > 1) writes a Makefile and runs `make -k -j`,
 # then `cat` to show a failed package's output. Without make (the base
 # package has no toolchain), install one at a time instead, as Ncpus = 1
@@ -440,6 +496,38 @@ CCODE
     { print }
   ' "$lc" > "$lc.tmp" && mv "$lc.tmp" "$lc"
   grep -q 'capath = R_zig_ca_bundle()' "$lc" || { echo "error: CA patch did not apply to $lc" >&2; exit 1; }
+fi
+
+# libc++ is linked statically, everywhere (decided 2026-09-30): R itself
+# (libR, bin/exec/R, the modules) and, through toolchain/zig-cc|zig-cxx,
+# every package compiled with it. Upstream zig does that on its own;
+# conda-forge's zig links a shared libc++ whenever one sits in
+# <zig lib dir>/../../lib (feedstock patch Lld.zig-prefer-shared-libcxx),
+# which a macOS conda env always has. A ZIG_LIB_DIR mirror without it
+# beside defeats the probe (flang-pixi handoff section 6). zig build's
+# cache is not keyed on the probe's result, so a warm cache would hand
+# back the shared-libc++ links: the mirror build gets its own local cache.
+zl="${ZIG_LIB_DIR:-}"
+[ -z "$zl" ] && [ -f "${ZIG%/*}/../lib/zig/std/std.zig" ] && zl="${ZIG%/*}/../lib/zig"
+if [ -n "$zl" ]; then
+  shared_cxx=""
+  for e in libc++.1.dylib libc++.dylib libc++.so.1 libc++.so libc++.dll.a; do
+    [ -e "$zl/../../lib/$e" ] && shared_cxx="$zl/../../lib/$e" && break
+  done
+  if [ -n "$shared_cxx" ] && [ "$OS" = windows ]; then
+    # MSYS's ln -s copies, so no mirror here; no win-64 env has one today.
+    echo "error: $shared_cxx would make zig link a shared libc++; remove the libcxx package from this env" >&2
+    exit 1
+  elif [ -n "$shared_cxx" ]; then
+    zl="$(cd "$zl" && pwd -P)"
+    mirror="$BUILD_DIR/zig-lib-static"
+    rm -rf "$mirror"
+    mkdir -p "$mirror/lib/zig"
+    for e in "$zl"/*; do ln -s "$e" "$mirror/lib/zig/"; done
+    export ZIG_LIB_DIR="$mirror/lib/zig"
+    export ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR-static-libcxx"
+    echo "r-zig: static libc++ (zig lib dir mirrored from $zl)"
+  fi
 fi
 
 exec "$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"

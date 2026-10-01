@@ -10,6 +10,38 @@ else
   ZIG=(python3 -m ziglang)
 fi
 
+# Static libc++ everywhere: defeat conda-forge zig's shared-libc++ probe
+# with a ZIG_LIB_DIR mirror. See zig-cc for the rationale.
+r_zig_static_libcxx() {
+  local zl="${ZIG_LIB_DIR:-}" d m key e i
+  if [ -z "$zl" ] && [ "${ZIG[0]}" != python3 ]; then
+    d="${ZIG[0]%/*}"; [ "$d" = "${ZIG[0]}" ] && d=.
+    [ -f "$d/../lib/zig/std/std.zig" ] && zl="$d/../lib/zig"
+  fi
+  [ -n "$zl" ] && [ -d "$zl" ] || return 0
+  for e in libc++.1.dylib libc++.dylib libc++.so.1 libc++.so; do
+    [ -e "$zl/../../lib/$e" ] && break
+    e=""
+  done
+  [ -n "$e" ] || return 0
+  zl="$(cd "$zl" && pwd -P)"
+  key="$( { echo "$zl"; ls "$zl"; } | cksum | cut -d' ' -f1)"
+  m="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/r-zig/zig-lib-$key"
+  if [ ! -e "$m/.complete" ]; then
+    if mkdir -p "${m%/*}" 2>/dev/null && mkdir "$m" 2>/dev/null; then
+      mkdir -p "$m/lib/zig" && for e in "$zl"/*; do ln -s "$e" "$m/lib/zig/"; done && : > "$m/.complete"
+    else
+      i=0; while [ ! -e "$m/.complete" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+    fi
+  fi
+  if [ -e "$m/.complete" ]; then
+    export ZIG_LIB_DIR="$m/lib/zig"
+  else
+    echo "zig-cxx: could not prepare $m; this link may use a shared libc++" >&2
+  fi
+}
+case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*) ;; *) r_zig_static_libcxx ;; esac
+
 # Linux glibc floor: see zig-cc's own comment for the full rationale.
 target=()
 if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
@@ -90,6 +122,8 @@ if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
     else
       omp+=(-L"$lib" -lomp)
     fi
+  elif $linking; then
+    omp+=(-L"$lib")   # the caller's -lomp still needs its directory (see zig-cc)
   fi
 fi
 

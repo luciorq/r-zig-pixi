@@ -128,10 +128,31 @@ T, the base vendors nothing; the wheel's toolchain package ships make
   directory. Two distributions can share a package directory, since
   each owns only the files in its RECORD; to prototype: whether pip and
   uv handle uninstall and upgrade cleanly.
+- **Static libc++ everywhere (decided 2026-09-30),** superseding the
+  2026-09-29 choice of conda's shared libc++ for the conda build: R
+  itself in every variant and distribution, and every package compiled
+  through the shims, link libc++ statically. Upstream zig does that by
+  itself. For conda-forge's zig, whose patch links a shared libc++
+  whenever `<zig lib dir>/../../lib` has one (always in a macOS conda
+  env, on linux with any `libcxx` package), `zig-build.sh` and the
+  zig-cc/zig-cxx shims point `ZIG_LIB_DIR` at a mirror of the lib dir
+  (a real directory of symlinks, nested as `<mirror>/lib/zig` so that
+  its `../../lib` is empty): `build/zig-lib-static` for R, and
+  `${XDG_CACHE_HOME:-~/.cache}/r-zig/zig-lib-<key>` for the shims (made
+  once per lib dir; `mkdir` is the lock for parallel make jobs).
+  `zig-build.sh` also moves zig build's local cache aside when the
+  mirror is on (`zig-cache/local-static-libcxx`): that cache is not
+  keyed on the probe, and a warm one hands back the shared links.
+  `zig cc` outside zig build follows `ZIG_LIB_DIR` on every call
+  (tested). On Windows MSYS cannot make the symlinks; no win-64 env has
+  `libc++.dll.a`, and `zig-build.sh` stops if one appears. Enforced by
+  verify-bundle.sh (R's own binaries and its C++ test package, linux and
+  macOS) and the contract suite (every compiled package). Conda's own C++
+  libraries (ICU on macOS) still bring the shared libc++ into the
+  process next to R's static one; macOS two-level namespaces keep their
+  symbol bindings apart.
 - **Which zig each toolchain uses (decided 2026-09-29):**
-  - conda: conda-forge's `zig`. Its patch links conda's shared libc++ on
-    macOS, which is right inside conda: a package that links other conda
-    C++ libraries must share one libc++ with them.
+  - conda: conda-forge's `zig`, made to link libc++ statically as above.
   - wheel: PyPI `ziglang` (upstream zig, static libc++), as today.
     `wheel-test.sh` fails if the C++ test package depends on a shared
     libc++ or libstdc++.
@@ -139,11 +160,23 @@ T, the base vendors nothing; the wheel's toolchain package ships make
     build as PyPI `ziglang`), checksum-pinned, in the standalone
     toolchain download.
   - r-zig-packages binaries: built with upstream zig for the standalone
-    tree and the wheel, and with conda-forge's zig for conda.
+    tree and the wheel, and with conda-forge's zig for conda; static
+    libc++ either way.
   - Optional, upstream: an opt-out in the conda-forge feedstock for its
-    shared-libc++ lookup, so conda users could choose static too.
+    shared-libc++ lookup, which would replace the mirror.
 - **Base keeps what compiling needs from R itself:** headers,
   `etc/Makeconf`, libR. Those are part of R, not of the toolchain.
+- **OpenMP headers come with the toolchain** (found 2026-09-30): the
+  shims add `-I$CONDA_PREFIX/include` only for `-fopenmp` compiles, and
+  a packaged tree's Makeconf has no conda include dir. data.table's
+  macOS probe passes `-Xclang -fopenmp` through the environment's
+  `CPPFLAGS`, which Makeconf's own `CPPFLAGS` overrides, so the probe
+  compiles `#include <omp.h>` with no OpenMP flag and only succeeds when
+  `omp.h` is already on the include path (the dev tree and the conda
+  package have it there; CRAN's macOS R does not either). The toolchain
+  package for the standalone tree and the wheel must ship `omp.h` and
+  put it on the include path; the shims also add `-L<omp lib dir>` when
+  the caller links `-lomp` itself.
 - **Preflight** (small `install.R` patch): before running `configure`
   or make, if the package needs compilation and the compiler Makeconf
   names doesn't exist, stop with one message naming the package to
@@ -242,6 +275,47 @@ hermetic check); CI legs other than these run on the next push.
 
 **T — split the toolchain out**, once A6 passes on every platform:
 the packaging above, the preflight, and `R CMD config` failing cleanly.
+
+**T progress (2026-09-30), working package names `r-zig-slim` (base),
+`r-zig-toolchain` (conda) and `r-zig`/`r-zig-toolchain` (PyPI):**
+- Preflight (zig-build.sh, install.R patch before the configure step):
+  a package with `src/` or a configure script, when
+  `R_HOME/bin/toolchain/zig-cc` is missing, stops with "this package has
+  compiled code, and the r-zig toolchain is not installed: <hint>". The
+  file, not the directory, because pip or conda can leave the emptied
+  directory behind. `R_ZIG_TOOLCHAIN_HINT` comes from etc/Renviron (read
+  even under `--vanilla`; Renviron.site on Windows): the conda build's
+  stage.sh names `pixi add r-zig-toolchain`/`conda install
+  r-zig-toolchain`, make-wheel.py `pip install r-zig-toolchain`. A user
+  Makevars (their own compiler) or `R_ZIG_NO_PREFLIGHT` skips it.
+- `R CMD config` (src/scripts/config): checks for make before evaluating
+  Makeconf and says it comes with the toolchain.
+- conda (recipe/recipe.yaml): one staging output (`r-zig-build`, the
+  build) and two packages split by directory. `r-zig-slim` excludes
+  `lib/R/bin/toolchain/**` (`Library/...` on Windows) and run-depends on
+  the runtime libraries only; `r-zig-toolchain` holds that directory and
+  run-depends on `pin_subpackage("r-zig-slim", exact=True)`, zig, flang,
+  flang-rt, make and, on Windows, the m2 userland. The staging script
+  gets `R_VERSION` and `R_ZIG_CONDA_BUILD` from the recipe (a staging
+  output has no `PKG_VERSION`). Tests: recipe/test-preflight.R (base:
+  an R-only package installs, one with `src/` stops with the hint) and
+  recipe/test-toolchain.R (a C and C++ package compiles and loads).
+  Build number 3 → 4.
+- wheel (scripts/make-wheel.py): two wheels from the minimal tree.
+  `r-zig` drops `Requires-Dist: ziglang` and `R_HOME/bin/toolchain`;
+  `r-zig-toolchain` holds only `r_zig/R/lib/R/bin/toolchain/*` (shims and
+  GNU make, 0.2 MiB) and requires `ziglang` and `r-zig==<same version>`.
+  Both share the `r_zig/` directory without a common file; wheel-test.sh
+  installs `r-zig` alone (no ziglang pulled in, preflight names `pip
+  install r-zig-toolchain`), then the toolchain (the existing compile
+  tests), then uninstalls the toolchain and checks R is whole.
+- Hermetic check: removes the toolchain directory from the extracted
+  tree (tiers 0/1 are the base), and adds the negative tests: a `src/`
+  package stops with the preflight, `R CMD config CC` fails cleanly.
+- Not split yet: the standalone tarball. Its toolchain download (the
+  official zig, checksum-pinned; `omp.h` for OpenMP; a Fortran compiler
+  or not) still needs designing. The recipe's host `which`/`sed`/`grep`
+  (for the old `@WHICH@`/`@SED@` bakes) are also still there.
 
 **B — one Zig multi-call binary** that dispatches on its own name, like
 busybox:
@@ -702,8 +776,9 @@ works, with two conditions.**
   env's zig, then fails `dyn.load` ("Library not loaded:
   @rpath/libc++.1.dylib"). Adopting it means the verify step compiles
   with the mirror (or upstream zig), and the C++ runtime check extends
-  to macOS. Not adopted yet: it is a build-layout decision (minimal
-  only, or slim standalone too, which is also the conda build's tree).
+  to macOS. Adopted for every build (2026-09-30, "Static libc++
+  everywhere" under Packaging): the shims now mirror the lib dir too, so
+  the verify step's package is static as well.
 
 **Windows zig.** Our shims find `x86_64-w64-mingw32-zig.exe` (MSYS bash
 cannot run the env's `zig.bat`). That is the real 170 MB zig binary
@@ -767,6 +842,22 @@ the same for its C++ test package.
   - verify-bundle.sh fails on any RUNPATH/LC_RPATH not relative to the
     file, and compiles a C++ SHLIB with the extracted tree that must have
     no rpath and load.
+  - Regression from removing those rpaths, found 2026-09-30 on omicron:
+    Fortran packages (quadprog, minqa) built against the staged macOS
+    slim tree failed `dyn.load` ("Library not loaded:
+    @rpath/libflang_rt.runtime.dylib"). `FLIBS` was `-L<clang resource
+    dir> -lflang_rt.runtime`; that dir holds the `.a` and the `.dylib`,
+    a native macOS link takes the `.dylib`, and only the build-env rpaths
+    (zig's implicit one, libR's absolute ones) had made it load. CI
+    missed it because the contract suite runs before staging; minimal
+    missed it because its `FLIBS` is emptied. Linux was never affected
+    (the pinned target takes the `.a`). Fix: build.zig writes `FLIBS`
+    and `FLIBS_IN_SO` as the archive's path, so every Fortran package
+    links the flang runtime statically, like libR, and loads without
+    the toolchain, as tier 1 requires. verify-bundle.sh now also
+    compiles a Fortran SHLIB with the relocated tree (where `FLIBS` is
+    set) and requires no shared flang runtime and a working `.Fortran`
+    call.
   - Not a fix for the macOS minimal contract failure (first CI run of
     those legs, 2026-09-29, repeated on PR #12): on macOS data.table's
     configure probes `-Xclang -fopenmp` itself and links `-lomp`, and CI's

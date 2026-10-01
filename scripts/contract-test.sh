@@ -129,16 +129,19 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   cat("pak (recursive R.exe invocation + mbedtls quoted -D flags): OK\n")
   cat("ps (process introspection", if (ps::ps_os_type()[["MACOS"]]) "+ apps.m Objective-C ps_apps()" else "", "): OK\n")
 '
-# linux: zig links its own libc++ statically, but only while no libc++
-# package sits beside it: one `libcxx` in the env (conda-forge zig's
-# shared-libc++ probe, flang-pixi handoff section 6) silently turns every
-# C++ object into NEEDED libc++.so.1 with no rpath. None of the envs has
-# one today; fail the day that changes.
-if [ "$OS" = linux ]; then
+# Static libc++ everywhere (decided 2026-09-30): no compiled package may
+# depend on a shared C++ runtime. zig links its own libc++ statically, but
+# conda-forge's zig switches to a shared one whenever a libc++ sits beside
+# it (always in a macOS conda env; on linux with any `libcxx` package);
+# toolchain/zig-cc|zig-cxx defeat that with a ZIG_LIB_DIR mirror.
+if [ "$OS" = linux ] || [ "$OS" = macos ]; then
   shared_cxx=""
   for so in "$LIB"/*/libs/*.so; do
-    needed="$(patchelf --print-needed "$so" 2>/dev/null || true)"
-    hit="$(printf '%s\n' "$needed" | grep -E '^lib(c\+\+|stdc\+\+)\.so' || true)"
+    if [ "$OS" = linux ]; then
+      hit="$(patchelf --print-needed "$so" 2>/dev/null | grep -E '^lib(c\+\+|stdc\+\+)\.so' || true)"
+    else
+      hit="$(otool -L "$so" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -E '(^|/)lib(c\+\+|stdc\+\+)[.0-9]*\.dylib$' || true)"
+    fi
     [ -z "$hit" ] || shared_cxx="$shared_cxx ${so#$LIB/}->$hit"
   done
   if [ -n "$shared_cxx" ]; then
