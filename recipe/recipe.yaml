@@ -6,15 +6,15 @@ recipe:
   version: ${{ version }}
 
 source:
-  # R sources from CRAN plus this repo's build scripts/toolchain shims —
-  # the recipe is a consumer of the same scripts pixi tasks use.
+  # R sources from CRAN plus this repo's build scripts — the recipe is a
+  # consumer of the same scripts pixi tasks use. The compilers in
+  # R_HOME/bin/toolchain are rzig (zigbuild/tools/rzig/), built by zig
+  # build; the bash shims in toolchain/ only serve configure-only.sh.
   - url: https://cran.r-project.org/src/base/R-4/R-${{ version }}.tar.gz
     sha256: 4da6e61d2c0aac5f14a2e7e432cb5fcc269efe83da4293050ba7f03dff4e2cf4
     target_directory: R-src
   - path: ../scripts
     target_directory: scripts
-  - path: ../toolchain
-    target_directory: toolchain
   # build.zig/zigbuild/: scripts/zig-build.sh's own build system (recipe/
   # build.sh drives it since Milestone 5's default-path swap). Without
   # these explicitly listed, a local `rattler-build build` still
@@ -447,14 +447,11 @@ outputs:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
         - if: win
           then:
-            # bash.exe: the native gcc.exe/g++.exe forwarder stubs (win-exec-
-            # forward.c) exec into toolchain/zig-cc(xx) via bash at runtime —
-            # m2-bash was build:-only until this was found via a real
-            # `install.packages()` failure (glue/cli probing `cc --version`):
-            # every package-compilation invocation was silently failing on a
-            # freshly `pixi add`-installed package because bash.exe simply
-            # didn't exist in the env at all, not just because the forwarder's
-            # old baked-in path was wrong (see build.zig's winCompilerWrapper).
+            # bash.exe: packages' own configure scripts and make's recipe
+            # shell. (Until rzig, gcc.exe/g++.exe also ran the zig-cc shim
+            # through it; m2-bash was build:-only until a real
+            # `install.packages()` failure, glue/cli probing `cc --version`,
+            # showed every compile failing in a freshly installed env.)
             - m2-bash
             # sed/grep/gawk/coreutils/make/which/find: real CRAN packages' own
             # `configure` scripts (autoconf-generated, arbitrary — not
@@ -482,7 +479,8 @@ outputs:
             - m2-which
             - m2-findutils
         # package compilation works out of the box: Makeconf records the
-        # bundled zig shims; these provide the actual compilers. The Fortran
+        # bundled compiler front (rzig, R_HOME/bin/toolchain); these provide
+        # the actual compilers. The Fortran
         # compiler must be the one R itself was built with (CRAN's own rule —
         # module files and runtime ABI differ between flang and gfortran), so
         # this mirrors the build: split exactly. osx-arm64's flang-zig closure
@@ -510,7 +508,7 @@ outputs:
           recipe:
             - test-toolchain.R
     about:
-      summary: Compilers for r-zig-slim (zig, flang, make and the R_HOME/bin/toolchain shims)
+      summary: Compilers for r-zig-slim (zig, flang, make and R_HOME/bin/toolchain's compiler front)
 
 about:
   homepage: https://www.r-project.org

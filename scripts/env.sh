@@ -27,6 +27,9 @@ SRC_DIR="$BUILD_DIR/R-$R_VERSION"
 OBJ_DIR="$BUILD_DIR/obj-$R_VERSION-$FLAVOR"
 # R_INSTALL_PREFIX override: the conda recipe installs into rattler's $PREFIX
 PREFIX="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR}"
+# The bash compiler shims, for configure-only.sh's capture (gen-subst.sh
+# turns this path into @ZR_TOOLCHAIN@). What gets installed is rzig
+# (zigbuild/tools/rzig/), which parity-test.sh holds to these.
 TOOLCHAIN="$ROOT/toolchain"
 TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
 CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"

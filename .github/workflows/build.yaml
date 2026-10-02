@@ -85,6 +85,11 @@ jobs:
           # minimal also needs the python-only `wheel` env for its last steps
           environments: ${{ matrix.env == 'minimal' && 'minimal wheel' || matrix.env }}
           cache: true
+      # rzig, the compilers zig build installs into R_HOME/bin/toolchain
+      # (feat-no-host-paths F3): unit tests on this OS; on linux also the
+      # parity test against the bash shims for every OS's command lines.
+      - name: rzig tests
+        run: pixi run -e ${{ matrix.env }} rzig-test
       - name: Build R (zig build alone, no autoconf/make)
         run: pixi run -e ${{ matrix.env }} build
       - name: Smoke test
@@ -127,7 +132,7 @@ jobs:
   # in scope for Windows, see FINALIZATION.md F6: addCheckStep is only
   # wired into the unix build() path). The package-compilation contract
   # (Makeconf.win wiring, a real R.exe CMD dispatcher, native gcc.exe/
-  # g++.exe wrappers) IS done — see FINALIZATION.md F7 — so `contract`
+  # g++.exe, now rzig) IS done — see FINALIZATION.md F7 — so `contract`
   # runs here same as linux/macOS.
   build-windows:
     name: windows-latest / default
@@ -144,6 +149,8 @@ jobs:
         with:
           environments: default
           cache: true
+      - name: rzig tests
+        run: pixi run rzig-test
       # --verbose: zig build prints nothing until it finishes, so a hung
       # step leaves an empty log; with it the last command started is the
       # last line, which is the diagnosis.

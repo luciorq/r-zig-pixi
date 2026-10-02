@@ -38,15 +38,19 @@
 
 const std = @import("std");
 const rspec = @import("zigbuild/rspec.zig");
+// rzig, the compiler front installed as R_HOME/bin/toolchain/zig-cc etc.
+// (feat-no-host-paths F3), and the floors it shares with R's own build.
+const rzig_build = @import("zigbuild/tools/rzig/build.zig");
+const floors = @import("zigbuild/tools/rzig/floors.zig");
 
 const r_version = "4.6.1";
 
 /// macOS deployment target of everything this build links, and of the
-/// packages compiled through toolchain/zig-cc and zig-cxx (which spell it
-/// "<arch>-native.13.0"; keep the two in sync). See the target comment in
-/// build().
-const macos_min: std.SemanticVersion = .{ .major = 13, .minor = 0, .patch = 0 };
-const macos_min_flag = "-mmacosx-version-min=13.0"; // flang's spelling of macos_min
+/// packages compiled through rzig (which spells it "<arch>-native.13.0"):
+/// one definition, zigbuild/tools/rzig/floors.zig. See the target comment
+/// in build().
+const macos_min: std.SemanticVersion = floors.macos;
+const macos_min_flag = "-mmacosx-version-min=" ++ floors.majorMinor(floors.macos); // flang's spelling of macos_min
 
 /// F5/F6: linux uses flang + ELF (.so/DT_NEEDED/RUNPATH); macOS uses
 /// gfortran + Mach-O (.dylib/install_name/@rpath — patchelf doesn't apply
@@ -150,6 +154,8 @@ const Ctx = struct {
     libR: *std.Build.Step.Compile,
     rblas: ?*std.Build.Step.Compile, // null when blas == .openblas
     rlapack: ?*std.Build.Step.Compile, // null when blas == .openblas
+    // rzig for R's target: the compilers Makeconf names (installRzig)
+    rzig: std.Build.LazyPath, // rzig_build.Artifacts.bin
 
     /// Link a library this build makes (libR, libRblas, libRlapack). Off
     /// Windows by its file: `linkLibrary` would also add the library's
@@ -333,8 +339,9 @@ pub fn build(b: *std.Build) !void {
     // On real Windows hardware, native target resolution defaults to the
     // MSVC ABI — this whole toolchain (conda-forge MinGW gfortran,
     // x86_64-w64-mingw32-* binutils, .dll.a import libraries) is built on
-    // the GNU/MinGW ABI instead (matches the existing toolchain/zig-cc
-    // shim's own `-target x86_64-windows-gnu`), so re-resolve explicitly.
+    // the GNU/MinGW ABI instead (what `zig cc` itself defaults to there,
+    // and so what rzig's gcc.exe compiles packages for), so re-resolve
+    // explicitly.
     //
     // On Linux, pin the glibc floor to 2.17 (RHEL/CentOS 7 era, ~2013) —
     // zig cross-links against its own bundled old-glibc stubs for this,
@@ -384,7 +391,7 @@ pub fn build(b: *std.Build) !void {
     const target = if (os == .windows)
         b.resolveTargetQuery(.{ .abi = .gnu, .cpu_model = .baseline })
     else if (os == .linux)
-        b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = .{ .major = 2, .minor = 17, .patch = 0 }, .cpu_model = .baseline })
+        b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = floors.glibc, .cpu_model = .baseline })
     else
         b.resolveTargetQuery(.{ .cpu_model = .baseline, .os_version_min = .{ .semver = macos_min } });
     // The installed SDK, asked the way zig itself asks
@@ -525,7 +532,22 @@ pub fn build(b: *std.Build) !void {
         .libR = undefined,
         .rblas = undefined,
         .rlapack = undefined,
+        .rzig = undefined,
     };
+
+    // rzig (zigbuild/tools/rzig/main.zig): the compiler front Makeconf
+    // names, for R's own target (glibc floor, deployment target,
+    // windows-gnu), installed under the toolchain names by installRzig.
+    // `zig build rzig-test` runs its unit tests on the build machine.
+    {
+        const rz = rzig_build.add(b, b.path("zigbuild/tools/rzig"), target, rzig_build.default_optimize);
+        ctx.addSdkPaths(rz.exe.root_module);
+        ctx.rzig = rz.bin;
+        const inst = installRzig(&ctx);
+        b.getInstallStep().dependOn(inst);
+        b.step("rzig", "Build rzig and install it as the compilers in R_HOME/bin/toolchain").dependOn(inst);
+        b.step("rzig-test", "Run rzig's unit tests").dependOn(&b.addRunArtifact(rz.tests).step);
+    }
 
     try checkConfigFreshness(b, io, config_dir);
 
@@ -861,13 +883,11 @@ pub fn build(b: *std.Build) !void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/Rscript"), .{ .custom = "lib/R/bin" }, "Rscript").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/Rscript"), .{ .custom = "bin" }, "Rscript").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/R"), .{ .custom = "bin" }, "R").step);
-    // The compiler shims Makeconf names ($(R_HOME)/bin/toolchain), and for
-    // minimal (the wheel's tree) GNU make: a pip-installed R has no other
-    // make (python:*-slim images ship none); conda-forge's links libc only.
-    // The r-zig-toolchain packages own this directory.
-    for ([_][]const u8{ "zig-cc", "zig-cxx", "zig-ar", "zig-ranlib" }) |t| {
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path(b.fmt("toolchain/{s}", .{t})), .{ .custom = "lib/R/bin/toolchain" }, t).step);
-    }
+    // Next to the compilers Makeconf names ($(R_HOME)/bin/toolchain, rzig:
+    // installRzig, from build()), for minimal (the wheel's tree) GNU make:
+    // a pip-installed R has no other make (python:*-slim images ship
+    // none); conda-forge's links libc only. The r-zig-toolchain packages
+    // own this directory.
     if (ctx.variant == .minimal) {
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("bin/make") }, .{ .custom = "lib/R/bin/toolchain" }, "make").step);
     }
@@ -1311,43 +1331,8 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     applyLinkFlags(ctx, inetmod, ctx.subst.get("WIN_INTERNET_LIBS").?);
     const mod_internet = addSharedLib(ctx, "mod_internet", inetmod);
 
-    // ------------------------------------------------------------------
-    // Package-compilation contract: native "gcc.exe"/"g++.exe" wrappers.
-    // R's own Windows system()/CreateProcess call (do_system in sys-
-    // win32.c -> runcmd_timeout -> pcreate -> CreateProcess with
-    // lpApplicationName=NULL) only ever auto-appends ".exe" when
-    // resolving a bare command name from the command line it's given —
-    // it does NOT consult PATHEXT the way cmd.exe does, so it can never
-    // find a bash-script "gcc"/"g++" shim (extensionless, or even a
-    // ".bat" wrapper around one), no matter where on PATH it sits or
-    // whether Makeconf's BINPREF points at it directly. Confirmed
-    // empirically on kappa: `system("gcc --version")` silently resolved
-    // to conda-forge's OWN real gcc.exe elsewhere on PATH instead of a
-    // prepended shim — meaning package compilation on Windows (both this
-    // build AND the legacy gnuwin32 one, which has the identical bare
-    // `CC = $(BINPREF)$(CCBASE)` line) never actually exercised zig at
-    // all. Fixed with a real PE executable: zigbuild/tools/win-exec-
-    // forward.c just re-execs the existing toolchain/zig-cc(xx) shim via
-    // bash, unmodified — every actual compiler-flag decision (SONAME
-    // injection, -fno-sanitize=undefined, MinGW -l search fixes, OpenMP
-    // wiring) stays in that one shared bash script, not duplicated here.
-    // BASH_PATH/SCRIPT_PATH are NOT baked in as compile-time absolute
-    // paths anymore (they used to be: ctx.conda-derived bash.exe path +
-    // a worktree-absolute toolchain/zig-cc path). A conda/pixi package
-    // builds inside a rattler-build sandbox (torn down right after) and
-    // installs into a completely different prefix on the end user's
-    // machine — any absolute path baked in at compile time is guaranteed
-    // wrong post-install (found via a real "had status 1" failure from
-    // glue/cli's own `cc --version` compiler probe on a real installed
-    // package; `strings` on the shipped gcc.exe showed the baked bash.exe/
-    // zig-cc paths literally pointing into the rattler-build sandbox's own
-    // temp directory, neither of which exists once the package lands
-    // anywhere else). win-exec-forward.c now resolves both at runtime
-    // instead: the script by its own install directory (GetModuleFileName),
-    // bash.exe via the *runtime* CONDA_PREFIX env var. Only the bare
-    // script filename is baked in here.
-    const win_gcc_exe = winCompilerWrapper(ctx, "gcc", "zig-cc");
-    const win_gxx_exe = winCompilerWrapper(ctx, "g++", "zig-cxx");
+    // (The package-compilation contract's gcc.exe and g++.exe are rzig,
+    // installed from build() by installRzig.)
 
     // ------------------------------------------------------------------
     // Rscript.exe — the ONLY front-end built (F6.0): same unix/Rscript.c
@@ -1513,7 +1498,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // string-concat: RHome + "/etc/Rcmd_environ").
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.path("src/gnuwin32/fixed/etc/Rcmd_environ"), ctx.rhomeInstallDir("etc"), "Rcmd_environ").step);
 
-    try installWindowsCompilerContract(ctx, io, win_gcc_exe, win_gxx_exe);
+    try installWindowsCompilerContract(ctx, io);
 
     // ------------------------------------------------------------------
     // Base-package shared libs (library/<pkg>/libs/x64/<pkg>.dll — R's
@@ -1706,9 +1691,9 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
 const WinPkgLib = struct { pkg: []const u8, lib: *std.Build.Step.Compile };
 
 /// Package-compilation contract on Windows: bundles a real toolchain into
-/// Library/lib/R/bin/toolchain/ (gcc.exe/g++.exe — the native forwarder
-/// wrappers built above; the MinGW binutils, plain copies from the conda
-/// env) and installs etc/x64/Makeconf (subst of the vendored gnuwin32
+/// Library/lib/R/bin/toolchain/ (gcc.exe/g++.exe — rzig, installed by
+/// installRzig; the MinGW binutils, plain copies from the conda env) and
+/// installs etc/x64/Makeconf (subst of the vendored gnuwin32
 /// Makeconf.win) with BINPREF pointed at that directory — so
 /// `$(BINPREF)$(CCBASE)` etc. resolve to real, absolute, working paths
 /// rather than a bare name that Windows would resolve to whatever
@@ -1717,21 +1702,9 @@ const WinPkgLib = struct { pkg: []const u8, lib: *std.Build.Step.Compile };
 /// backend relative to its own install location, so a standalone copy
 /// breaks it; FC points straight at the conda env's original gfortran.exe
 /// instead.
-fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build.Step.Compile, win_gxx_exe: *std.Build.Step.Compile) !void {
+fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     const b = ctx.b;
     const toolchain_dir: std.Build.InstallDir = ctx.rhomeInstallDir("bin/toolchain");
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_gcc_exe.getEmittedBin(), toolchain_dir, "gcc.exe").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_gxx_exe.getEmittedBin(), toolchain_dir, "g++.exe").step);
-    // zig-cc/zig-cxx installed directly alongside the forwarder stubs above
-    // (not left to scripts/stage.sh's later, separate copy) — win-exec-
-    // forward.c now resolves SCRIPT_NAME relative to its own install
-    // directory at runtime, so the script must already be co-located here
-    // right after `zig build install`, before stage.sh ever runs (the
-    // contract test exercises gcc.exe/g++.exe against exactly this state).
-    // stage.sh's own `cp "$TOOLCHAIN"/zig-*` copy becomes a harmless no-op
-    // overwrite for Windows once this runs first.
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("toolchain/zig-cc"), toolchain_dir, "zig-cc").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("toolchain/zig-cxx"), toolchain_dir, "zig-cxx").step);
 
     // Real conda-forge MinGW binutils — plain copies, no wrapper needed
     // (already real .exe files, and none of them have gfortran's own
@@ -1791,14 +1764,14 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     });
     // FLIBS: what R CMD SHLIB appends to every package link that has
     // Fortran sources (tools:::.SHLIB → shlib_libadd "$(FLIBS)"); the
-    // link itself goes through SHLIB_LD = the zig-cc shim, not the Fortran
+    // link itself goes through SHLIB_LD = gcc.exe (rzig), not the Fortran
     // driver, so the runtime must be spelled out here. flang: its runtime,
-    // which the shim resolves to the archive of the flang on PATH (as on
+    // which rzig resolves to the archive of the flang on PATH (as on
     // unix), plus zig's libc++ — libflang_rt.runtime is C++ and PE refuses
     // unresolved symbols (flang-pixi handoff: only Linux's archive is
-    // libc++-free). gfortran: empty, as gnuwin32 always had it — the
-    // zig-cc shim resolves -lgfortran/-lquadmath from gcc's private libdir
-    // when a package asks for them.
+    // libc++-free). gfortran: empty, as gnuwin32 always had it — rzig
+    // resolves -lgfortran/-lquadmath from gcc's private libdir when a
+    // package asks for them.
     try mk.put("FLIBS", switch (ctx.fc) {
         .flang => "-lflang_rt.runtime -lc++",
         .gfortran => "",
@@ -2321,29 +2294,33 @@ fn winCmdFrontend(ctx: *Ctx, libR: *std.Build.Step.Compile, rgraphapp: *std.Buil
     return b.addExecutable(.{ .name = name, .root_module = mod });
 }
 
-/// A minimal native PE wrapper (see zigbuild/tools/win-exec-forward.c) that
-/// re-execs `script_name` (a bare filename, resolved at runtime relative to
-/// this executable's own install directory) via bash.exe (resolved at
-/// runtime from the CONDA_PREFIX environment variable), forwarding argv
-/// unmodified — the real "gcc.exe"/"g++.exe" Makeconf.win's BINPREF points
-/// at (see the package-compilation-contract comment in buildWindows for why
-/// a bash script alone, even with an absolute path, can't be found by R's
-/// own system() call).
-fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, script_name: []const u8) *std.Build.Step.Compile {
+/// rzig into R_HOME/bin/toolchain under the names Makeconf uses
+/// (feat-no-host-paths F3): one binary, a copy per name, dispatching on
+/// the name it was started as. The r-zig-toolchain packages own this
+/// directory; the compile preflight (zigbuild/patches/, install.R) looks
+/// for its zig-cc on every OS.
+///   unix:    zig-cc, zig-cxx (CC/CXX/OBJC/OBJCXX), zig-ar, zig-ranlib
+///   Windows: gcc.exe, g++.exe (Makeconf.win's $(BINPREF)gcc and g++),
+///            and zig-cc, zig-cxx for the preflight. A real PE executable
+///            is what R's Windows system() can run: it resolves a bare
+///            command name by appending ".exe" only, never through
+///            PATHEXT (found on kappa: `system("gcc --version")` reached an
+///            unrelated gcc.exe on PATH). AR/RANLIB there are the MinGW
+///            binutils (installWindowsCompilerContract).
+/// Before rzig these were bash scripts (toolchain/), and on Windows a C
+/// forwarder that ran them through the env's bash; rzig needs neither
+/// bash nor CONDA_PREFIX to compile.
+fn installRzig(ctx: *const Ctx) *std.Build.Step {
     const b = ctx.b;
-    const m = b.createModule(.{
-        .target = ctx.target,
-        .optimize = .ReleaseFast,
-        .link_libc = true,
-    });
-    m.addCSourceFile(.{
-        .file = b.path("zigbuild/tools/win-exec-forward.c"),
-        .flags = &.{
-            "-std=gnu23",
-            b.fmt("-DSCRIPT_NAME=\"{s}\"", .{script_name}),
-        },
-    });
-    return b.addExecutable(.{ .name = name, .root_module = m });
+    const step = b.step("install-rzig", "Install rzig into R_HOME/bin/toolchain");
+    const names: []const []const u8 = switch (ctx.os) {
+        .windows => &.{ "gcc.exe", "g++.exe", "zig-cc", "zig-cxx" },
+        else => &.{ "zig-cc", "zig-cxx", "zig-ar", "zig-ranlib" },
+    };
+    for (names) |n| {
+        step.dependOn(&b.addInstallFileWithDir(ctx.rzig, ctx.rhomeInstallDir("bin/toolchain"), n).step);
+    }
+    return step;
 }
 
 /// Every shared lib/module/package .so in this build (base packages don't
@@ -2723,9 +2700,9 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
         var val: []const u8 = line[key_end + 4 ..];
         if (val.len > 0 and val[val.len - 1] == '"') val = val[0 .. val.len - 1];
         // Tools configure found in the env become bare names, looked up on
-        // PATH when used (phase A5); the shims are R_HOME/bin/toolchain,
-        // where build.zig installs them (F1.4). Neither records a path of
-        // the build machine.
+        // PATH when used (phase A5); the compilers (rzig) are
+        // R_HOME/bin/toolchain, where build.zig installs them (F1.4, F3).
+        // Neither records a path of the build machine.
         var v = try std.mem.replaceOwned(u8, b.allocator, val, "@ZR_CONDA@/bin/", "");
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_CONDA@", ctx.conda);
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_SRC@", ctx.src_abs);
@@ -2774,9 +2751,9 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
 /// environment is written $(R_HOME)/../.., which make expands where it
 /// runs: the conda env, the standalone prefix, the wheel's r_zig/R (on
 /// Windows R_HOME is <prefix>/Library/lib/R, so it is <prefix>/Library).
-/// The flang runtime is -lflang_rt.runtime, which toolchain/zig-cc and
-/// zig-cxx turn into the static archive of the flang on PATH, whatever its
-/// LLVM major. R's own build keeps the absolute values in ctx.subst.
+/// The flang runtime is -lflang_rt.runtime, which rzig (zig-cc and
+/// zig-cxx) turns into the static archive of the flang on PATH, whatever
+/// its LLVM major. R's own build keeps the absolute values in ctx.subst.
 fn makeconfValue(ctx: *const Ctx, raw: []const u8) ![]const u8 {
     const a = ctx.b.allocator;
     var v = try std.mem.replaceOwned(u8, a, raw, "@ZR_CONDA@/bin/", "");

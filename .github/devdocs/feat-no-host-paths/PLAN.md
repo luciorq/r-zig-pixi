@@ -290,6 +290,56 @@ workarounds into code.** In order:
     installs it as `bin/toolchain/{zig-cc,zig-cxx,zig-ar,zig-ranlib}`
     (and `gcc.exe`/`g++.exe` on Windows); the bash shims and
     win-exec-forward.c retire.
+    - **F3a done 2026-10-02** (a workflow: one implementer in a worktree
+      off 079076c, three review lenses, a skeptic each, a fix pass; then
+      the macOS and Windows runs here). rzig is
+      `zigbuild/tools/rzig/` (main, compiler, darwin, windows, flang_rt,
+      environment, floors, libcxx_mirror, find_zig, ar, cmdline): one
+      binary dispatching on argv[0] (zig-cc/gcc → cc, zig-cxx/g++ → c++,
+      zig-ar, zig-ranlib). build.zig builds it once for R's target
+      (glibc 2.17, macOS 13.0, windows-gnu; `floors.zig` is now the one
+      place those numbers live) and installs copies: unix
+      `zig-cc zig-cxx zig-ar zig-ranlib`; Windows `gcc.exe g++.exe` (what
+      Makeconf.win's BINPREF names) plus `zig-cc zig-cxx`, which the
+      compile preflight and the recipe test look for. Linux: a static
+      ELF, no interpreter, no GLIBC symbols. Makeconf is unchanged.
+      `environment.zig` is the one place that decides where the
+      environment is (F3b builds on it). The repo's toolchain/ bash shims
+      stay only for configure-only.sh (gen-config) and as the reference
+      of `zigbuild/tools/rzig/parity-test.sh` (78 cases identical, 7
+      deliberate differences); `pixi run rzig-test` runs the unit tests
+      (28; 9 skip on Windows) and, on linux, the parity test, also in CI.
+      Windows needs no bash to compile any more (packages' configure
+      scripts and make still do).
+    - Two macOS findings on omicron: (1) the x86_64 rzig disappeared
+      seconds after being written. omicron runs CrowdStrike Falcon
+      (managed by Jamf), whose static analysis quarantined it. zig only
+      writes a linker signature (`adhoc,linker-signed`), and only on
+      arm64; the x86_64 rzig was deleted unsigned and linker-signed
+      alike (an entitlements file makes zig linker-sign x86_64 too: still
+      deleted), while the same binary re-signed by `codesign --sign -`
+      (`adhoc`) was left alone. XProtect's YARA rules do not match it
+      (scanned). rzig/build.zig therefore re-signs rzig with
+      `/usr/bin/codesign` on a macOS host (always present, like xcrun;
+      a cross-build from linux keeps zig's signature): Intel Macs with
+      such an agent would otherwise lose the compiler. A post-link step
+      we would rather not have, the one place F3 keeps one; R's own
+      x86_64 binaries were not touched by the agent. (2) rattler-build's relink of the r-zig-toolchain
+      package failed on rzig ("larger updated load commands do not
+      fit"): rzig now gets `-headerpad_max_install_names`, as R's own
+      Mach-O files do.
+    - Tested 2026-10-02: linux-64 (rzig unit and parity tests, slim build,
+      smoke, contract, verify-package, hermetic, minimal build and
+      verify-package, the wheel and wheel-test, the conda package and its
+      tests); osx-arm64 on omicron (unit tests, slim build, smoke,
+      contract, verify-package, hermetic, minimal, the wheel, the conda
+      package and its tests); osx-64 under Rosetta (unit tests, build,
+      contract, verify-package; rzig signed `adhoc`, minos 13.0, not
+      quarantined); win-64 on kappa (unit tests 19 pass / 9 skip,
+      verify-package with the new "compilers are rzig" check, contract
+      incl. pak's quoted `-D` flags through rzig's own Windows quoting and
+      data.table's OpenMP, hermetic, the conda package and its tests).
+      linux-aarch64: CI.
   - **F3b. The toolchain owns the compile environment** (direction set
     2026-10-02, after F1.5): where the environment is (rzig's own
     location), its `-I`/`-L`, OpenMP, the flang runtime, the conda-only

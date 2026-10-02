@@ -86,7 +86,7 @@ The wheel (`r-zig`, import name `r_zig`) is the whole relocatable
 `minimal` tree plus console scripts `R`/`Rscript` and `r_zig.r_home()` for
 embedders such as rpy2; it installs packages that need no compiling. For
 packages with C/C++ code, `pip install r-zig-toolchain` adds the compiler
-shims and GNU make, with the PyPI
+front (rzig) and GNU make, with the PyPI
 [`ziglang`](https://pypi.org/project/ziglang/) package as the compiler, so
 no system compiler is needed.
 ziglang is an upstream zig build, which links its own libc++ statically,

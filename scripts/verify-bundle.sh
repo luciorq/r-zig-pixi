@@ -50,6 +50,22 @@ fi
 # succeeded but the hardcoded BUNDLE_DIR guess didn't exist).
 BUNDLE_DIR="$VERIFY_DIR/$(basename "$PREFIX")"
 
+# The compilers Makeconf names are rzig (feat-no-host-paths F3), one
+# binary under every name: compiling runs no shell script of ours.
+if [ "$OS" = windows ]; then
+  tc_dir="Library/lib/R/bin/toolchain"; tc_names="gcc.exe g++.exe zig-cc zig-cxx"
+else
+  tc_dir="lib/R/bin/toolchain"; tc_names="zig-cc zig-cxx zig-ar zig-ranlib"
+fi
+for t in $tc_names; do
+  f="$BUNDLE_DIR/$tc_dir/$t"
+  if [ ! -f "$f" ] || [ "$(head -c2 "$f")" = '#!' ] || ! cmp -s "$f" "$BUNDLE_DIR/$tc_dir/${tc_names%% *}"; then
+    echo "error: $tc_dir/$t is missing, a script, or not the same rzig as the rest" >&2
+    exit 1
+  fi
+done
+echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig"
+
 # minimal (the wheel profile) has no cairo/png by design — assert that
 # instead, so a graphics stack creeping back in fails here too.
 if [ "$VARIANT" = minimal ]; then
@@ -241,8 +257,8 @@ fi
 # build env's lib dir and zig-cache dirs unless told not to, which build.zig
 # does (relRPaths, linkSibling). Then a package compiled with this tree (C++, so libc++ is
 # involved on macOS) must record no rpath at all, and still load: libR and
-# the libraries it needs are already in the process. The shims make that
-# so (on macOS their deployment-target triple records no rpath for -L
+# the libraries it needs are already in the process. rzig makes that
+# so (on macOS its deployment-target triple records no rpath for -L
 # directories), and Makeconf's LDFLAGS has an rpath only in the conda
 # package. Skipped without zig, as on a user machine.
 if [ "$OS" != windows ]; then
@@ -374,8 +390,8 @@ CPP
       echo "error: a package compiled with the bundle records rpaths: $pkg_rp" >&2
       exit 1
     fi
-    # zig's own libc++ is static, and the shims keep it so where
-    # conda-forge zig would pick a shared one (see toolchain/zig-cc).
+    # zig's own libc++ is static, and rzig keeps it so where conda-forge
+    # zig would pick a shared one (zigbuild/tools/rzig/libcxx_mirror.zig).
     check_minos "$pkg_dir/rp.o" "$pkg_dir/rp.so"
     cxx_dep="$(cxx_deps "$pkg_dir/rp.so")"
     if [ -n "$cxx_dep" ]; then
@@ -430,7 +446,7 @@ FORTRAN
 
     # $(FLIBS) on a C package's link (CRAN's usual PKG_LIBS = $(LAPACK_LIBS)
     # $(BLAS_LIBS) $(FLIBS)) with no flang on PATH, as with the wheel: the
-    # shims drop -lflang_rt.runtime, since nothing was compiled by flang.
+    # compilers (rzig) drop -lflang_rt.runtime: nothing was compiled by flang.
     # PATH: the env's make alone (slim and full use make from PATH), no flang.
     mkdir -p "$pkg_dir/cf/bin"
     ln -sf "$(command -v make)" "$pkg_dir/cf/bin/make"
@@ -444,7 +460,7 @@ FORTRAN
 
     # OpenMP (slim, full): omp.h from the tree's own include/ (build.zig
     # installs it in a tree that is not a conda env; Makeconf's CPPFLAGS and
-    # the shims look there) and the vendored libomp, no rpath, nothing from
+    # rzig look there) and the vendored libomp, no rpath, nothing from
     # the build env. Both ways packages ask: R's SHLIB_OPENMP_CFLAGS, and
     # data.table's configure probe (omp.h included with no OpenMP flag).
     if grep -q '^SHLIB_OPENMP_CFLAGS = *-' "$BUNDLE_DIR/lib/R/etc/Makeconf"; then

@@ -30,8 +30,9 @@ if [ "$OS" = windows ]; then
   # prefix's) instead of the in-tree gnuwin32 default.
   R_BIN="${R_TEST_R_BIN:-$SRC_DIR/bin/x64/Rscript.exe}"
   test -x "$R_BIN" || R_BIN="$SRC_DIR/bin/Rscript.exe"
-  # package builds read CC=gcc etc from etc/x64/Makeconf — the zig shim
-  # names must be on PATH, as during the gnuwin32 build
+  # package builds read CC=$(BINPREF)gcc etc from etc/x64/Makeconf, and
+  # BINPREF names R_HOME/bin/toolchain/ (rzig's gcc.exe and g++.exe); the
+  # gnuwin32 build's win-toolchain dir below is a leftover, empty today
   export PATH="$BUILD_DIR/win-toolchain:$PATH"
 else
   # R_TEST_R_BIN: test a different build's Rscript (e.g. the zig-build
@@ -96,7 +97,7 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   # shape minqa cannot cover, since its C++ sends the link through
   # SHLIB_CXXLD. Here R CMD SHLIB compiles every file with $(FC) (flang on
   # every platform since Phase 2) and links through SHLIB_LD, the zig-cc
-  # shim, with $(FLIBS) appended — the resolved-at-build-time flang
+  # of rzig (gcc.exe on Windows), with $(FLIBS) appended — the resolved-at-build-time flang
   # runtime dir, the runtime archive/dylib, and on Windows libc++. (R
   # only links via the Fortran driver itself when a package opts in with
   # USE_FC_TO_LINK in Makevars; that path is not exercised here.)
@@ -123,7 +124,7 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
     stopifnot(is.data.frame(apps))
   }
   # Makeconf names no build path (feat-no-host-paths F1.5): FLIBS is the
-  # bare runtime the shims resolve, and LDFLAGS has no rpath outside the
+  # bare runtime rzig resolves, and LDFLAGS has no rpath outside the
   # conda package. --no-user-files: the pixi env points R_MAKEVARS_USER at
   # zigbuild/dev.Makevars, which adds the env -I/-L/-rpath on top.
   cfg <- function(v) tools::Rcmd(c("config", "--no-user-files", v), stdout = TRUE)
@@ -133,7 +134,7 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
   cat("data.table grouped aggregation: OK\n")
   cat("minqa (Rcpp-dependent + package Fortran) bobyqa: OK\n")
-  cat("quadprog (pure Fortran: flang compile, FLIBS link through the zig-cc shim) solve.QP: OK\n")
+  cat("quadprog (pure Fortran: flang compile, FLIBS link through rzig) solve.QP: OK\n")
   cat("pak (recursive R.exe invocation + mbedtls quoted -D flags): OK\n")
   cat("ps (process introspection", if (ps::ps_os_type()[["MACOS"]]) "+ apps.m Objective-C ps_apps()" else "", "): OK\n")
 '
@@ -141,7 +142,8 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
 # depend on a shared C++ runtime. zig links its own libc++ statically, but
 # conda-forge's zig switches to a shared one whenever a libc++ sits beside
 # it (always in a macOS conda env; on linux with any `libcxx` package);
-# toolchain/zig-cc|zig-cxx defeat that with a ZIG_LIB_DIR mirror.
+# rzig (R_HOME/bin/toolchain's zig-cc and zig-cxx) defeats that with a
+# ZIG_LIB_DIR mirror.
 if [ "$OS" = linux ] || [ "$OS" = macos ]; then
   shared_cxx=""
   for so in "$LIB"/*/libs/*.so; do
@@ -158,8 +160,8 @@ if [ "$OS" = linux ] || [ "$OS" = macos ]; then
   fi
   echo "C++ runtime: static in every compiled package"
 fi
-# macOS: every compiled package at or below the deployment target the
-# shims pass (MACOS_MIN), and the SDK's lib dir last on their link lines:
+# macOS: every compiled package at or below the deployment target rzig
+# passes (MACOS_MIN), and the SDK's lib dir last on its link lines:
 # data.table's zlib.h comes from the env, so its libz must too, not the
 # SDK's older stub in /usr/lib.
 if [ "$OS" = macos ]; then
@@ -173,7 +175,7 @@ if [ "$OS" = macos ]; then
     exit 1
   fi
   if otool -L "$LIB/data.table/libs/data_table.so" | grep -q '/usr/lib/libz\.'; then
-    echo "error: data.table linked the SDK's libz stub (the SDK -L is not last in the shims)" >&2
+    echo "error: data.table linked the SDK's libz stub (the SDK -L is not last on rzig's link line)" >&2
     exit 1
   fi
   echo "macOS floor: every compiled package at minos <= $MACOS_MIN"

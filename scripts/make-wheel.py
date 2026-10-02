@@ -3,7 +3,7 @@
 
 Input is what `pixi run -e minimal package` leaves in
 dist/R-<ver>-minimal-zig: installed by zig build (location-independent
-launchers, $ORIGIN/@loader_path rpaths, zig shims + GNU make in
+launchers, $ORIGIN/@loader_path rpaths, rzig + GNU make in
 lib/R/bin/toolchain, a Makeconf that names no build path) and made
 standalone by package-standalone.sh (conda libraries vendored into lib/,
 the CA bundle).
@@ -12,7 +12,7 @@ That tree already runs from anywhere, so the wheel is that tree under
 console scripts `R`/`Rscript`. Two wheels come out of it (phase T of
 feat-no-host-paths, the toolchain as its own package): `r-zig` is R and
 installs packages that need no compiling; `r-zig-toolchain` holds
-R_HOME/bin/toolchain (the zig shims and GNU make, the directory Makeconf
+R_HOME/bin/toolchain (rzig, the compilers, and GNU make: the directory Makeconf
 names) and requires PyPI `ziglang` as the compiler and exactly this
 `r-zig`. Both install into the same `r_zig/` directory without sharing a
 file, so each one's RECORD owns only its own. No build backend: a wheel is
@@ -228,7 +228,7 @@ def renviron_site(existing: bytes | None) -> bytes:
     # R_HOME is <site-packages>/r_zig/R/lib/R; ziglang installs its binary
     # as <site-packages>/ziglang/zig. Renviron expands a nested default
     # only when it is a whole ${...} term, hence the helper variable. When
-    # ziglang lives elsewhere this names a missing file and the zig shims
+    # ziglang lives elsewhere this names a missing file and rzig
     # fall back to PATH, then `python3 -m ziglang`.
     add = (
         "## r-zig wheel: compile packages with the PyPI ziglang package\n"
@@ -305,7 +305,7 @@ def toolchain_metadata(version: str, r_version: str) -> str:
 # r-zig-toolchain
 
 Compilers for the [`r-zig`](https://pypi.org/project/r-zig/) wheel (R
-{r_version}): R_HOME/bin/toolchain, the zig shims R's Makeconf names, and
+{r_version}): R_HOME/bin/toolchain, the compilers R's Makeconf names, and
 GNU make, with the PyPI [`ziglang`](https://pypi.org/project/ziglang/)
 package as the C/C++ compiler. Install it next to `r-zig` to compile
 packages from source:

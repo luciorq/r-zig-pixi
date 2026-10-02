@@ -11,7 +11,7 @@
 # Library/bin/zig.cmd|.bat — native cmd.exe/PowerShell resolve those via
 # PATHEXT automatically, but MSYS bash (what this script runs under) does
 # not, so a bare `zig` fails with "command not found" even though it's on
-# PATH. Same fallback toolchain/zig-cc already uses for the same reason.
+# PATH. Same fallback rzig (R_HOME/bin/toolchain's zig-cc) uses.
 ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
 
 PREFIX_ZIG="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
@@ -47,8 +47,9 @@ if [ "$applied" != "$series" ]; then
 fi
 
 # libc++ is linked statically, everywhere (decided 2026-09-30): R itself
-# (libR, bin/exec/R, the modules) and, through toolchain/zig-cc|zig-cxx,
-# every package compiled with it. Upstream zig does that on its own;
+# (libR, bin/exec/R, the modules) and, through rzig (R_HOME/bin/toolchain's
+# zig-cc and zig-cxx, zigbuild/tools/rzig/libcxx_mirror.zig), every
+# package compiled with it. Upstream zig does that on its own;
 # conda-forge's zig links a shared libc++ whenever one sits in
 # <zig lib dir>/../../lib (feedstock patch Lld.zig-prefer-shared-libcxx),
 # which a macOS conda env always has. A ZIG_LIB_DIR mirror without it

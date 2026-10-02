@@ -76,6 +76,10 @@ verify-package = { cmd = "bash scripts/zig-verify-package.sh", depends-on = ["pa
 # Tier 0/1 with an empty environment and PATH=<tree>/bin (unix; strace on
 # linux): start R, install without compiling. Uses the packaged artifact.
 hermetic = "bash scripts/hermetic-check.sh"
+# rzig, the compilers in R_HOME/bin/toolchain (zigbuild/tools/rzig/): its
+# unit tests here, and on linux the parity test against the bash shims in
+# toolchain/ for every OS's command lines. Needs no R build.
+rzig-test = "bash zigbuild/tools/rzig/test.sh"
 clean = "bash scripts/clean.sh"
 # Not part of the build path (zig-build.sh never calls this) — exists
 # solely so zigbuild/tools/gen-subst.sh has a config.status to replay
@@ -390,7 +394,7 @@ python = ">=3.9"
 # where flang-zig/flang-rt-zig (osx-arm64 Fortran) come from.
 # rm: rattler-build restores the staging output (the R build) from
 # dist/conda/build_cache under a key that does not hash the recipe's
-# `path:` sources (scripts/, toolchain/, build.zig), so a local rebuild
+# `path:` sources (scripts/, zigbuild/, build.zig), so a local rebuild
 # after editing them silently reused the old build (2026-09-30).
 conda-package = "rm -rf dist/conda/build_cache && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id -c conda-forge -c https://prefix.dev/universe"
 
