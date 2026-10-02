@@ -320,18 +320,18 @@ patchelf = "*"
 
 [feature.minimal.target.linux-aarch64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see osx-arm64
 coreutils = "*"
 patchelf = "*"
 
 [feature.minimal.target.osx-64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see osx-arm64
 uutils-coreutils = "*"
 
 [feature.minimal.target.osx-arm64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see osx-arm64
 uutils-coreutils = "*"
 
 # Wheel assembly + test: only Python (stdlib zipfile/hashlib, venv, pip).

@@ -364,8 +364,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-1.3.2-hbb4bfdb_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - conda: https://prefix.dev/universe/osx-64/flang-rt-zig-23.1.1-zig_79df4ff_9.conda
-      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_1.conda
-      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_0.conda
+      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_5.conda
+      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_4.conda
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.tar.bz2
@@ -454,8 +454,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - conda: https://prefix.dev/universe/osx-arm64/flang-rt-zig-23.1.1-zig_eb63498_9.conda
-      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_2.conda
-      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_1.conda
+      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_5.conda
+      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_4.conda
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-h4c7d964_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.tar.bz2
@@ -943,8 +943,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-1.3.2-hbb4bfdb_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - conda: https://prefix.dev/universe/osx-64/flang-rt-zig-23.1.1-zig_79df4ff_9.conda
-      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_1.conda
-      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_0.conda
+      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_5.conda
+      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_4.conda
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.tar.bz2
@@ -1041,8 +1041,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - conda: https://prefix.dev/universe/osx-arm64/flang-rt-zig-23.1.1-zig_eb63498_9.conda
-      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_2.conda
-      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_1.conda
+      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_5.conda
+      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_4.conda
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-h4c7d964_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.tar.bz2
@@ -1544,8 +1544,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-1.3.2-hbb4bfdb_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - conda: https://prefix.dev/universe/osx-64/flang-rt-zig-23.1.1-zig_79df4ff_9.conda
-      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_1.conda
-      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_0.conda
+      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_5.conda
+      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_4.conda
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.tar.bz2
@@ -1648,8 +1648,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - conda: https://prefix.dev/universe/osx-arm64/flang-rt-zig-23.1.1-zig_eb63498_9.conda
-      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_2.conda
-      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_1.conda
+      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_5.conda
+      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_4.conda
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-h4c7d964_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.tar.bz2
@@ -1934,7 +1934,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/kernel-headers_linux-aarch64-4.18.0-h05a177a_9.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-aarch64-2.28-h585391f_9.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
-      - conda: https://prefix.dev/universe/linux-aarch64/flang-rt-zig-23.1.1-zig_852aba2_5.conda
+      - conda: https://prefix.dev/universe/linux-aarch64/flang-rt-zig-23.1.1-zig_852aba2_9.conda
       - conda: https://prefix.dev/universe/linux-aarch64/flang-zig-23.1.1-zig_8408465_1.conda
       - conda: https://prefix.dev/universe/linux-aarch64/lld-zig-23.1.1-zig_852aba2_0.conda
       osx-64:
@@ -1990,9 +1990,9 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zip-3.0-ha1e9b39_4.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-1.3.2-hbb4bfdb_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
-      - conda: https://prefix.dev/universe/osx-64/flang-rt-zig-23.1.1-zig_79df4ff_5.conda
-      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_1.conda
-      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_0.conda
+      - conda: https://prefix.dev/universe/osx-64/flang-rt-zig-23.1.1-zig_79df4ff_9.conda
+      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_5.conda
+      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_4.conda
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bash-5.2.37-h5b2bd6a_0.conda
@@ -2046,9 +2046,9 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zip-3.0-h84a0fba_4.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
-      - conda: https://prefix.dev/universe/osx-arm64/flang-rt-zig-23.1.1-zig_eb63498_4.conda
-      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_2.conda
-      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_1.conda
+      - conda: https://prefix.dev/universe/osx-arm64/flang-rt-zig-23.1.1-zig_eb63498_9.conda
+      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_5.conda
+      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_4.conda
   openblas:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -2400,8 +2400,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-1.3.2-hbb4bfdb_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - conda: https://prefix.dev/universe/osx-64/flang-rt-zig-23.1.1-zig_79df4ff_9.conda
-      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_1.conda
-      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_0.conda
+      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_5.conda
+      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_4.conda
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.tar.bz2
@@ -2496,8 +2496,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - conda: https://prefix.dev/universe/osx-arm64/flang-rt-zig-23.1.1-zig_eb63498_9.conda
-      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_2.conda
-      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_1.conda
+      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_5.conda
+      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_4.conda
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-h4c7d964_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.tar.bz2
@@ -2966,8 +2966,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-1.3.2-hbb4bfdb_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - conda: https://prefix.dev/universe/osx-64/flang-rt-zig-23.1.1-zig_79df4ff_9.conda
-      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_1.conda
-      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_0.conda
+      - conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_5.conda
+      - conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_4.conda
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.tar.bz2
@@ -3057,8 +3057,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - conda: https://prefix.dev/universe/osx-arm64/flang-rt-zig-23.1.1-zig_eb63498_9.conda
-      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_2.conda
-      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_1.conda
+      - conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_5.conda
+      - conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_4.conda
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-h4c7d964_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/font-ttf-dejavu-sans-mono-2.37-hab24e00_0.tar.bz2
@@ -14220,18 +14220,6 @@ packages:
     - zstd >=1.5.7,<1.6.0a0
   size: 388453
   timestamp: 1764777142545
-- conda: https://prefix.dev/universe/linux-aarch64/flang-rt-zig-23.1.1-zig_852aba2_5.conda
-  sha256: 20efaa7a19f3b7bdc83a70cc32a1b30dbbbb5b7a2a4820ec2802934ac0aa122f
-  md5: 6e26e6d578c339accd8cf85eb52207f8
-  depends:
-  - llvm-openmp
-  constrains:
-  - libflang <0.0a0
-  - libflang-rt <0.0a0
-  license: Apache-2.0 WITH LLVM-exception
-  run_exports: {}
-  size: 1935746
-  timestamp: 1789821733537
 - conda: https://prefix.dev/universe/linux-aarch64/flang-rt-zig-23.1.1-zig_852aba2_9.conda
   sha256: 8e0ae68027f4797935eff35e3af138c9420c6113d4fa5f201921cf1cfea48c46
   md5: 696dff67772e70fd56d6cb12264c49c1
@@ -14265,20 +14253,6 @@ packages:
     - lld-zig >=23.1.1,<23.2.0a0
   size: 20507084
   timestamp: 1789681612448
-- conda: https://prefix.dev/universe/osx-64/flang-rt-zig-23.1.1-zig_79df4ff_5.conda
-  sha256: 31c1c4ee4b35b3881a520ad4632663aec31582e4d28125817ae172ca18640140
-  md5: b6adabde7e7a2bd6184e34087eeb7f6b
-  depends:
-  - libcxx >=21
-  - llvm-openmp
-  - __osx >=11.0
-  constrains:
-  - libflang <0.0a0
-  - libflang-rt <0.0a0
-  license: Apache-2.0 WITH LLVM-exception
-  run_exports: {}
-  size: 2243383
-  timestamp: 1789821748412
 - conda: https://prefix.dev/universe/osx-64/flang-rt-zig-23.1.1-zig_79df4ff_9.conda
   sha256: 1b382bf6d5b045ebb100c57cfba4bad435a364f88fb08a1e4b1d499fbbcdfe97
   md5: f6d518b611ab1c0aae5aa68698b7f950
@@ -14292,45 +14266,29 @@ packages:
   run_exports: {}
   size: 1235380
   timestamp: 1790900804987
-- conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_1.conda
-  sha256: b6a959877d3ce13ac0e5b96db83efdf23c74d3b0e5b284aadbc7c7248f29c6e8
-  md5: 2196001697781bf8d9957cef6e1847ea
+- conda: https://prefix.dev/universe/osx-64/flang-zig-23.1.1-zig_705a114_5.conda
+  sha256: bf19cd2433a739fc3dc7e235809871d8fac7f7f57cdb09efd9d3d95a702e7e84
+  md5: 16111e61eb937d119347cf0db8fa958c
   depends:
   - lld-zig ==23.1.1
-  - libcxx >=21
   - __osx >=11.0
   license: Apache-2.0 WITH LLVM-exception
   run_exports:
     weak:
     - flang-zig >=23.1.1,<23.2.0a0
-  size: 106077602
-  timestamp: 1789682808282
-- conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_0.conda
-  sha256: 9cb1c308d98353a4b583794cdcdddaf9d45a8ce03f057310acf5c4e04bbd20c1
-  md5: 36f8803143067318761d67895425376b
+  size: 106426721
+  timestamp: 1790782673648
+- conda: https://prefix.dev/universe/osx-64/lld-zig-23.1.1-zig_5732dad_4.conda
+  sha256: 8ecb864e02985b0ce9f918f47476a016c46a8ff8ef85fa34c4d7e552e4bf223e
+  md5: db916554548c1fc78fe83655a1886b42
   depends:
-  - libcxx >=21
   - __osx >=11.0
   license: Apache-2.0 WITH LLVM-exception
   run_exports:
     weak:
     - lld-zig >=23.1.1,<23.2.0a0
-  size: 19146256
-  timestamp: 1789682582401
-- conda: https://prefix.dev/universe/osx-arm64/flang-rt-zig-23.1.1-zig_eb63498_4.conda
-  sha256: a751609b310a93093acc68754505afdd18a5e42208762a34811d67f6d38d60e0
-  md5: a99b48d661a9d6fd5f3aec4add60e122
-  depends:
-  - libcxx >=21
-  - llvm-openmp
-  - __osx >=11.0
-  constrains:
-  - libflang <0.0a0
-  - libflang-rt <0.0a0
-  license: Apache-2.0 WITH LLVM-exception
-  run_exports: {}
-  size: 1591377
-  timestamp: 1789769508784
+  size: 19223164
+  timestamp: 1790782430909
 - conda: https://prefix.dev/universe/osx-arm64/flang-rt-zig-23.1.1-zig_eb63498_9.conda
   sha256: 958da2be166e1ea5ac4b4e0f5f868ad0f5d6fe41b848d65c091db43dc63f42bf
   md5: abb47e67ea625617fb0aaafca72df843
@@ -14344,31 +14302,29 @@ packages:
   run_exports: {}
   size: 956239
   timestamp: 1790900577742
-- conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_2.conda
-  sha256: 02ab408fdc1ae19cd2371b9d0e0aa39ef6f7be0216b5491ee76466222389c807
-  md5: d9779178c11f301738ea242464cdb581
+- conda: https://prefix.dev/universe/osx-arm64/flang-zig-23.1.1-zig_e52f94e_5.conda
+  sha256: 05c6192c5ae6793a83b1c17a3b305e26e5a9643403e975080e73342d801d8508
+  md5: d4b08ee0fea5c68508432d50d1e8e47d
   depends:
   - lld-zig ==23.1.1
-  - libcxx >=21
   - __osx >=11.0
   license: Apache-2.0 WITH LLVM-exception
   run_exports:
     weak:
     - flang-zig >=23.1.1,<23.2.0a0
-  size: 98348457
-  timestamp: 1789743959924
-- conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_1.conda
-  sha256: 795fac069ddcb2554cbede9dfa815f9b875be58ccd67bdc9441274f0ee64f44e
-  md5: eb97452a82edaab60a7acccc49fe9199
+  size: 98705830
+  timestamp: 1790778175630
+- conda: https://prefix.dev/universe/osx-arm64/lld-zig-23.1.1-zig_a177b76_4.conda
+  sha256: 944184db931549b6785bc26322754b8e328a09bc5cb9d612e408ef7a82239b43
+  md5: 06c598ef6e9576b167cf4ede85c7f879
   depends:
-  - libcxx >=21
   - __osx >=11.0
   license: Apache-2.0 WITH LLVM-exception
   run_exports:
     weak:
     - lld-zig >=23.1.1,<23.2.0a0
-  size: 16998734
-  timestamp: 1789743636113
+  size: 17078943
+  timestamp: 1790777949469
 - conda: https://prefix.dev/universe/win-64/flang-rt-zig-23.1.1-zig_03d85fb_4.conda
   sha256: cd8c59281ba20c5f2b26a895b44dbc53b5371f07b8590997bd1d6be5a23417b5
   md5: febbe7d6b9edafaaade9997313d71abc

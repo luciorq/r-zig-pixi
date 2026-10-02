@@ -1159,6 +1159,34 @@ the same for its C++ test package.
     compiles a Fortran SHLIB with the relocated tree (where `FLIBS` is
     set) and requires no shared flang runtime and a working `.Fortran`
     call.
+  - flang-rt-zig build 9 (flang-pixi, 2026-10-01), locked on osx-arm64,
+    osx-64 and linux-aarch64 (`build-number >= 9` in pixi.toml): static
+    only, no `.dylib`/`.so`, and built with hidden visibility. So
+    `-lflang_rt.runtime` can only mean the archive, and a Fortran package
+    no longer re-exports the runtime: on omicron with build 9, quadprog
+    exports 8 symbols and minqa 41, none of them `_Fortran*`, where the
+    probe counted 871 per Fortran `.so` with build 4; libR and
+    libRlapack export no `_Fortran*` either. Slim on osx-arm64 (build,
+    smoke, contract, verify-package) and osx-64 (build, verify-package)
+    pass with it. The archive-path `FLIBS` stays: linux-64 uses
+    conda-forge's flang-rt, which still ships the shared library, and
+    win-64 (build 4, no build 9) was always static only. No version
+    script or export list is needed.
+  - The same day flang-pixi pruned universe to its live files, and the
+    lock still named deleted builds: flang-zig `_1`/`_2` and lld-zig
+    `_0`/`_1` on macOS, and flang-rt-zig `_4`/`_5` in the minimal env
+    (its own `[feature.minimal.target.*]` entries had missed the `>= 9`
+    pin). Every macOS CI job, the osx conda packages, gen-config and
+    ubuntu-arm minimal failed with HTTP 404; omicron had them cached and
+    never noticed. Re-locked (`pixi update flang-zig lld-zig
+    flang-rt-zig`, nothing else changed) to flang-zig `_5` and lld-zig
+    `_4` on macOS (flang-pixi's static-libc++ rebuilds) and flang-rt-zig
+    `_9` everywhere it exists; every universe URL in the lock now
+    resolves. Tested on omicron from a cold zig cache: osx-arm64 slim
+    and minimal (build, smoke, contract, verify-package), osx-64 slim
+    (same). A cold cache matters: zig's cache keys a Fortran compile on
+    its command line and inputs, not on the flang binary, so a warm
+    cache keeps objects from the previous flang (CI always starts cold).
   - Not a fix for the macOS minimal contract failure (first CI run of
     those legs, 2026-09-29, repeated on PR #12): on macOS data.table's
     configure probes `-Xclang -fopenmp` itself and links `-lomp`, and CI's
