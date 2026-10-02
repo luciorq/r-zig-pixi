@@ -135,11 +135,16 @@ Two traps, both measured:
   and under zig's own linker. If your Fortran packages currently link, check
   which linker and search path they really use; the robust fix is on the
   flang-pixi side (next bullet).
-- Decision on the flang-pixi side: **flang-rt build 9 = static-only
-  (no `.so`/`.dylib` in any subdir) and hidden visibility** for the runtime
-  objects, all six subdirs, pending the maintainer's go-ahead. After it,
-  `-lflang_rt.runtime` resolves to the archive, the driver trap disappears,
-  and a package `.so` no longer re-exports the runtime.
+- **Done 2026-10-01 (evening): flang-rt build 9** — static-only (no
+  `.so`/`.dylib` on any subdir) with hidden visibility, on universe as
+  linux-64 `zig_501841f_9`, linux-aarch64 `zig_852aba2_9`, osx-arm64
+  `zig_eb63498_9`, osx-64 `zig_79df4ff_9` (Windows unchanged: `_4` win-64,
+  `_7` win-arm64, always static-only). Verified from universe: on osx-arm64
+  the flang driver through Apple's `ld` links the archive path and
+  `-lflang_rt.runtime` alike, results depend on `libSystem` only, and a
+  Fortran dylib exports 2–4 symbols (was 828); on linux-64 a Fortran `.so`
+  exports 2 (was 1,238). Re-lock with `build-number >= 9` and drop any
+  version-script workaround; `FLIBS` may keep the archive path.
 - Your `_4` numbers: the 88 members at 13.0 are flang-rt `_4`; `_8` (on
   universe since 2026-09-30) is 11.0 throughout — re-lock to see it. The
   macOS dylib depends on `libSystem` only (no libc++).
@@ -156,10 +161,9 @@ zig); macOS: zig's Mach-O linker *accepts and ignores*
 `-hidden-l`, so nothing at link time works under zig there. flang-rt has no
 visibility option of its own (hidden only for CUDA offload objects), so
 build 9 compiles the runtime with `-fvisibility=hidden
--fvisibility-inlines-hidden`; consumers then export nothing of it without
-doing anything. Until then, the Linux version script is safe to use; on
-macOS, accept the re-export (two-level namespaces keep each `.so`'s copy
-private, so there is no interposition, only size).
+-fvisibility-inlines-hidden`; consumers export nothing of it without doing
+anything (measured above). Code that wants the runtime's C API (`CFI_*`)
+must link the archive itself.
 
 **macOS deployment target and flang — closed (2026-10-01, both sides).**
 - A flang-compiled object carries `minos` = the host SDK's version (26.0 on

@@ -1033,6 +1033,25 @@ going last.
     compiled package and that data.table's libz is not the SDK's.
   - recipe: `__osx >=13.0` in r-zig-slim's osx run requirements
     (r-zig-toolchain inherits it through its exact pin).
+- Tested after adoption (omicron, 2026-10-01): osx-arm64 minimal, slim
+  and full (build, smoke, contract, verify-package, hermetic), the wheel
+  (`macosx_13_0_arm64`, wheel-test), and osx-64 slim under Rosetta
+  (build, smoke, contract, verify-package). Every Mach-O in each tree and
+  every compiled package at `minos 13.0` or below; 1316 objects compiled
+  by the build at 13.0, Fortran included (the only other one is the build
+  runner's own object, which zig compiles natively and nothing ships).
+  R's own binaries take only libSystem, libresolv and libobjc from
+  `/usr/lib`.
+- The load-command check found an older bug (the full variant, before
+  this branch too): conda-forge's `libncurses.6.dylib` re-exports
+  `libtinfo.6.dylib` by the env's absolute path (conda's prefix
+  replacement fixes it at install time), and vendor-libs.sh, like
+  package-standalone.sh before it, followed only `@rpath/` names. The
+  relocated full tree (libR → libreadline → libncurses) therefore needed
+  the build machine's env. vendor-libs.sh now follows absolute env paths
+  too, vendors their targets, points the reference at `@loader_path/`
+  and re-signs; it scans all of `<prefix>/lib`, so a re-run over an
+  existing tree sees what an earlier run copied.
 - Not tested: loading on macOS 13 (no machine); R-level installs with
   upstream zig.
 

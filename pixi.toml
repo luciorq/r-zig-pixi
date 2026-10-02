@@ -189,7 +189,7 @@ m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no win
 # ships no flang for macOS at all; validated under Rosetta on omicron.
 [target.osx-64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see osx-arm64
 uutils-coreutils = "*"
 
 # osx-arm64 Fortran: flang-pixi's zig-built flang (LLVM 23.1.1) from the
@@ -201,7 +201,12 @@ uutils-coreutils = "*"
 # ~1.5 GiB closure (flang-zig + lld-zig + flang-rt-zig).
 [target.osx-arm64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+# flang-rt-zig build >= 9 (flang-pixi, 2026-10-01): static-only (no
+# .dylib/.so) and built with hidden visibility, so a Fortran package
+# exports 2-4 symbols instead of re-exporting the whole runtime (~830)
+# and -lflang_rt.runtime can only mean the archive. win-64 has no build 9:
+# its runtime was always static-only.
+flang-rt-zig = { version = "*", build-number = ">=9" }
 uutils-coreutils = "*"
 
 # linux-aarch64 Fortran: flang-zig (Phase 2, platform 4 — the last one);
@@ -211,7 +216,7 @@ uutils-coreutils = "*"
 # by gen-config.yaml's ubuntu-24.04-arm legs, validated by build-r's).
 [target.linux-aarch64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see osx-arm64
 coreutils = "*"
 patchelf = "*"
 
