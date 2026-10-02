@@ -140,7 +140,12 @@ const Ctx = struct {
     gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran (fc == .gfortran; "" otherwise)
     toolchain_hint: []const u8, // -Dtoolchain-hint, "" when unset
     sdk: []const u8, // macOS: the installed SDK's root (xcrun); "" elsewhere
+    conda_env: bool, // -Dconda-env: the install prefix is the conda env R is built in
     subst: std.StringHashMap([]const u8),
+    // Makeconf's own values for the keys that name the build environment
+    // (loadSubstFile, makeconfValue): substituted over `subst` into
+    // etc/Makeconf only.
+    mk_subst: std.StringHashMap([]const u8),
     geninc: std.Build.LazyPath, // generated headers dir (config.h, Rconfig.h, ...)
     libR: *std.Build.Step.Compile,
     rblas: ?*std.Build.Step.Compile, // null when blas == .openblas
@@ -309,6 +314,11 @@ pub fn build(b: *std.Build) !void {
     // conda one for the conda build; the wheel sets its own; empty means R's
     // generic message.
     const toolchain_hint = b.option([]const u8, "toolchain-hint", "R_ZIG_TOOLCHAIN_HINT default written into etc/Renviron") orelse "";
+    // The conda build: the install prefix is the environment R is built in
+    // (recipe/build.sh; zig-build.sh passes it when R_ZIG_CONDA_BUILD is
+    // set). The one difference it makes to the tree: Makeconf's LDFLAGS
+    // keeps an rpath into the environment's lib dir (makeconfValue).
+    const conda_env = b.option(bool, "conda-env", "the install prefix is the conda env R is built in (the conda package)") orelse false;
 
     const native = b.resolveTargetQuery(.{});
     const os: Os = switch (native.result.os.tag) {
@@ -481,6 +491,7 @@ pub fn build(b: *std.Build) !void {
         .config_dir = config_dir,
         .toolchain_hint = toolchain_hint,
         .sdk = sdk,
+        .conda_env = conda_env,
         // Windows keeps these defaults (its compile graph never passes
         // `.openmp = true` and builds its own cairo device); unix overwrites
         // both from subst.txt right after loadSubstTable below.
@@ -509,6 +520,7 @@ pub fn build(b: *std.Build) !void {
             },
         } else "",
         .subst = std.StringHashMap([]const u8).init(arena),
+        .mk_subst = std.StringHashMap([]const u8).init(arena),
         .geninc = undefined,
         .libR = undefined,
         .rblas = undefined,
@@ -858,6 +870,18 @@ pub fn build(b: *std.Build) !void {
     }
     if (ctx.variant == .minimal) {
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("bin/make") }, .{ .custom = "lib/R/bin/toolchain" }, "make").step);
+    }
+    // OpenMP's headers where Makeconf's CPPFLAGS looks,
+    // $(R_HOME)/../../include, for a tree that is not the conda env (the
+    // standalone archive; libomp itself is vendored into <prefix>/lib):
+    // packages' OpenMP probes (data.table's includes omp.h with no flag)
+    // and -fopenmp compiles find them there. A conda env has them from
+    // llvm-openmp, which owns that path. Phase T's standalone toolchain
+    // archive takes them over.
+    if (ctx.openmp and !ctx.conda_env) {
+        inline for (.{ "omp.h", "ompx.h", "omp-tools.h", "ompt.h" }) |h| {
+            b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("include/" ++ h) }, .{ .custom = "include" }, h).step);
+        }
     }
     // ------------------------------------------------------------------
     // Static R_HOME payload: headers, etc/, bin scripts, share/, doc/,
@@ -1731,14 +1755,13 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     // its own templates, not a bespoke replaceOwned loop — the same
     // unification Phase 4 already did for this file's link-flag
     // siblings (CAIRO_LIBS etc., loaded via loadSubstFile above).
-    const toolchain_abs = ctx.absSub("{s}/Library/lib/R/bin/toolchain", .{ctx.prefix});
-    // ctx.conda may carry native backslash separators — this ends up
-    // embedded in a Makefile variable, not a C string literal, so it
-    // wouldn't break the *build* the same way,
-    // but normalize anyway for consistency with every other path this
-    // build.zig bakes in.
-    const conda_fwd = std.mem.replaceOwned(u8, b.allocator, ctx.conda, "\\", "/") catch @panic("OOM");
-    try ctx.subst.put("BINPREF", b.fmt("{s}/", .{toolchain_abs}));
+    // The four values that name a place (feat-no-host-paths F1.5), as
+    // unix's Makeconf writes them (makeconfValue): R_HOME-relative or bare,
+    // never the build machine's paths, so the Windows zip and the conda
+    // package carry the same file. They go into etc/x64/Makeconf only
+    // (`mk`), not ctx.subst.
+    var mk = std.StringHashMap([]const u8).init(b.allocator);
+    try mk.put("BINPREF", "$(R_HOME)/bin/toolchain/");
     // IMPDIR = bin/x64, not the vendored template's bare "bin" — real
     // gnuwin32 value (`bin$(R_ARCH)`, confirmed against a real generated
     // Makeconf on kappa) — LIBR/BLAS_LIBS/LAPACK_LIBS all key off it to
@@ -1751,47 +1774,33 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     // MkRules.local's LOCAL_SOFT, sourced only at R's OWN build time —
     // nothing sources it for package builds afterward). CRAN packages
     // routinely link bare "-lz"/"-lpng" etc. expecting *some* global
-    // search path to exist; point it at the conda env directly (found
-    // via a real "unable to find dynamic system library 'z'" link error
-    // compiling data.table). Previously applied via a bare
-    // `"LDFLAGS ="` substring replace, which also silently matched
-    // (and corrupted) 12 unrelated variables whose names happen to END
-    // in "LDFLAGS =" too (DYLIB_LDFLAGS, SHLIB_CXXLDFLAGS,
-    // SHLIB_CXX17LDFLAGS, SHLIB_FCLDFLAGS, SHLIB_LDFLAGS, ...) — confirmed
-    // by simulating the old replace against the real vendored file. Never
-    // caused an observed failure (an extra, unused `-L` flag on a
-    // shared-lib link line is harmless to zig cc/lld), but a real latent
-    // bug this token-anchored substitution fixes as a side effect, not
-    // just a mechanism cleanup.
-    try ctx.subst.put("LDFLAGS", b.fmt("-L\"{s}/Library/lib\"", .{conda_fwd}));
-    // FC: NOT routed through BINPREF/toolchain like CC/CXX — gfortran
-    // internally locates its own backend (f951) relative to its OWN
-    // install location (a libexec/gcc/... tree alongside the real
-    // binary), so a standalone copy elsewhere breaks it ("cannot
-    // execute 'f951': CreateProcess: No such file or directory",
-    // found via a real minqa compile failure). Point FC straight at
-    // the conda env's own gfortran.exe — the same absolute location
-    // fortranOne's own bare "gfortran" PATH lookup already resolves
-    // to successfully when building R itself.
-    // flang has the same "stays in its package dir" rule: the driver
-    // reads flang.cfg (intrinsic-module path, -fuse-ld=lld) relative to
-    // its own location — a copied flang.exe fails on every `use`.
-    try ctx.subst.put("FC", switch (ctx.fc) {
-        .flang => b.fmt("\"{s}/Library/bin/flang.exe\"", .{conda_fwd}),
-        .gfortran => b.fmt("\"{s}/Library/bin/gfortran.exe\"", .{conda_fwd}),
+    // search path to exist; point it at the environment's Library/lib,
+    // $(R_HOME)/../../lib (found via a real "unable to find dynamic
+    // system library 'z'" link error compiling data.table). Token-anchored
+    // (@LDFLAGS@), unlike an earlier bare "LDFLAGS =" substring replace
+    // that also matched DYLIB_LDFLAGS, SHLIB_LDFLAGS and ten more.
+    try mk.put("LDFLAGS", "-L\"$(R_HOME)/../../lib\"");
+    // FC: the bare name, found on PATH like every other tool (an activated
+    // env has Library/bin there; compiling needs one anyway). Not a copy
+    // into bin/toolchain: the flang and gfortran drivers find their own
+    // pieces (flang.cfg and its intrinsic modules; gfortran's f951)
+    // relative to where they are installed.
+    try mk.put("FC", switch (ctx.fc) {
+        .flang => "flang",
+        .gfortran => "gfortran",
     });
     // FLIBS: what R CMD SHLIB appends to every package link that has
     // Fortran sources (tools:::.SHLIB → shlib_libadd "$(FLIBS)"); the
     // link itself goes through SHLIB_LD = the zig-cc shim, not the Fortran
-    // driver, so the runtime must be spelled out here. flang: its runtime
-    // archive from the clang resource dir (resolved at build time, same
-    // as unix's @ZR_FLANGRT_DIR@) plus zig's libc++ — libflang_rt.runtime
-    // is C++ and PE refuses unresolved symbols (flang-pixi handoff: only
-    // Linux's archive is libc++-free). gfortran: empty, as gnuwin32
-    // always had it — the zig-cc shim resolves -lgfortran/-lquadmath from
-    // gcc's private libdir when a package asks for them.
-    try ctx.subst.put("FLIBS", switch (ctx.fc) {
-        .flang => b.fmt("-L\"{s}\" -lflang_rt.runtime -lc++", .{std.mem.replaceOwned(u8, b.allocator, ctx.flangrt_dir, "\\", "/") catch @panic("OOM")}),
+    // driver, so the runtime must be spelled out here. flang: its runtime,
+    // which the shim resolves to the archive of the flang on PATH (as on
+    // unix), plus zig's libc++ — libflang_rt.runtime is C++ and PE refuses
+    // unresolved symbols (flang-pixi handoff: only Linux's archive is
+    // libc++-free). gfortran: empty, as gnuwin32 always had it — the
+    // zig-cc shim resolves -lgfortran/-lquadmath from gcc's private libdir
+    // when a package asks for them.
+    try mk.put("FLIBS", switch (ctx.fc) {
+        .flang => "-lflang_rt.runtime -lc++",
         .gfortran => "",
     });
     // SAFE_FFLAGS (what CRAN Fortran packages such as quadprog put in
@@ -1813,10 +1822,11 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     try ctx.subst.put("SYMPAT", "'s/^.* [BCDRT] / /p'");
 
     const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
-    var mkc = try gnuwin32O3ToO2(b, try substitute(ctx, raw));
+    var mkc = try gnuwin32O3ToO2(b, try substituteWith(ctx, raw, &mk));
     // Tcl/Tk headers and libraries where the standalone tree vendors them
     // (package-standalone.sh); inside a conda env this is unused.
     mkc = try replaceLine(b, mkc, "TCL_HOME", "TCL_HOME = $(R_HOME)/Tcl");
+    try assertNoBuildPath(ctx, "etc/x64/Makeconf", raw, mkc);
     const mkc_wf = b.addWriteFiles();
     const mkc_out = mkc_wf.add("Makeconf", mkc);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(mkc_out, ctx.rhomeInstallDir("etc/x64"), "Makeconf").step);
@@ -2747,6 +2757,75 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
         v = try std.mem.replaceOwned(u8, b.allocator, v, "\\$", "$");
         v = try std.mem.replaceOwned(u8, b.allocator, v, "\\\"", "\"");
         try ctx.subst.put(try b.allocator.dupe(u8, key), v);
+        // Makeconf's form of a value that names the build environment
+        // (CPPFLAGS, LDFLAGS, LIBS_PKGS, FLIBS_IN_SO, TCLTK_*, the
+        // R_CONFIG_ARGS comment): see makeconfValue.
+        for ([_][]const u8{ "@ZR_CONDA@", "@ZR_PREFIX@", "@ZR_FLANGRT_DIR@" }) |ph| {
+            if (std.mem.indexOf(u8, val, ph) != null) {
+                try ctx.mk_subst.put(try b.allocator.dupe(u8, key), try makeconfValue(ctx, val));
+                break;
+            }
+        }
+    }
+}
+
+/// etc/Makeconf's form of a subst.txt value (feat-no-host-paths F1.5): the
+/// tree that ships carries no path of the machine that built it. The
+/// environment is written $(R_HOME)/../.., which make expands where it
+/// runs: the conda env, the standalone prefix, the wheel's r_zig/R (on
+/// Windows R_HOME is <prefix>/Library/lib/R, so it is <prefix>/Library).
+/// The flang runtime is -lflang_rt.runtime, which toolchain/zig-cc and
+/// zig-cxx turn into the static archive of the flang on PATH, whatever its
+/// LLVM major. R's own build keeps the absolute values in ctx.subst.
+fn makeconfValue(ctx: *const Ctx, raw: []const u8) ![]const u8 {
+    const a = ctx.b.allocator;
+    var v = try std.mem.replaceOwned(u8, a, raw, "@ZR_CONDA@/bin/", "");
+    // An rpath into the environment only where the environment is the
+    // install prefix (the conda package): a package linking an env library
+    // (libz, libcurl, libomp) then finds it at load time in any process.
+    // glibc looks only at the executable's DT_RPATH for a dlopened
+    // library's dependencies, so exec/R's own would not help an embedding
+    // process (rpy2). abspath: no lib/R/../.. baked into binaries. The
+    // standalone tree and the wheel get none (verify-bundle.sh).
+    v = try std.mem.replaceOwned(u8, a, v, " -Wl,-rpath,@ZR_CONDA@/lib", if (ctx.conda_env) " -Wl,-rpath,$(abspath $(R_HOME)/../../lib)" else "");
+    v = try std.mem.replaceOwned(u8, a, v, "-L@ZR_FLANGRT_DIR@ -lflang_rt.runtime", "-lflang_rt.runtime");
+    v = try std.mem.replaceOwned(u8, a, v, "@ZR_CONDA@", "$(R_HOME)/../..");
+    v = try std.mem.replaceOwned(u8, a, v, "@ZR_PREFIX@", "$(R_HOME)/../..");
+    v = try std.mem.replaceOwned(u8, a, v, "@ZR_TOOLCHAIN@", "$(R_HOME)/bin/toolchain");
+    v = try std.mem.replaceOwned(u8, a, v, "\\$", "$");
+    v = try std.mem.replaceOwned(u8, a, v, "\\\"", "\"");
+    return v;
+}
+
+/// Fail the build when an installed text file (etc/Makeconf, libR.pc)
+/// names the machine that built it: the conda env, the install prefix,
+/// the R source, this checkout, rattler-build's build prefix, or a
+/// subst.txt placeholder nothing replaced. Comment lines count: R CMD
+/// config and humans read them too. Measured against the template the
+/// text came from: only what substitution added counts, so a prefix of
+/// /usr/local does not trip over Makeconf.in's own "/usr/local/lib"
+/// comment (no rule about the characters around a match could tell that
+/// from a leaked <prefix>/lib).
+fn assertNoBuildPath(ctx: *const Ctx, name: []const u8, template: []const u8, text: []const u8) !void {
+    const b = ctx.b;
+    var needles = std.ArrayList([]const u8).empty;
+    for ([_][]const u8{ ctx.conda, ctx.prefix, ctx.src_abs, b.pathFromRoot("."), b.graph.environ_map.get("BUILD_PREFIX") orelse "" }) |p| {
+        if (p.len == 0) continue;
+        try needles.append(b.allocator, p);
+        // Windows paths appear with either separator
+        try needles.append(b.allocator, try std.mem.replaceOwned(u8, b.allocator, p, "\\", "/"));
+    }
+    try needles.append(b.allocator, "@ZR_");
+    for (needles.items) |n| {
+        if (std.mem.count(u8, text, n) <= std.mem.count(u8, template, n)) continue;
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |line| {
+            if (std.mem.indexOf(u8, line, n) != null) {
+                std.debug.print("error: {s} names a build path ({s}):\n  {s}\n", .{ name, n, line });
+                break;
+            }
+        }
+        return error.BuildPathInInstalledFile;
     }
 }
 
@@ -2792,6 +2871,11 @@ fn loadSubstTable(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
 /// config.status-style substitution: replace @KEY@ tokens found in the map,
 /// leave unknown tokens untouched.
 fn substitute(ctx: *const Ctx, content: []const u8) ![]u8 {
+    return substituteWith(ctx, content, null);
+}
+
+/// substitute(), looking keys up in `overlay` first (etc/Makeconf: ctx.mk_subst).
+fn substituteWith(ctx: *const Ctx, content: []const u8, overlay: ?*const std.StringHashMap([]const u8)) ![]u8 {
     const b = ctx.b;
     var out = std.ArrayList(u8).empty;
     var i: usize = 0;
@@ -2800,7 +2884,7 @@ fn substitute(ctx: *const Ctx, content: []const u8) ![]u8 {
             if (std.mem.indexOfScalarPos(u8, content, i + 1, '@')) |j| {
                 const key = content[i + 1 .. j];
                 if (key.len > 0 and key.len < 64 and isVarName(key)) {
-                    if (ctx.subst.get(key)) |val| {
+                    if ((if (overlay) |o| o.get(key) else null) orelse ctx.subst.get(key)) |val| {
                         try out.appendSlice(b.allocator, val);
                         i = j + 1;
                         continue;
@@ -3013,13 +3097,20 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     // lib/pkgconfig/libR.pc (src/unix/Makefile.in install-pc; sed-style
     // tokens, not @VAR@ substitution)
     {
-        var pc = try readSrcFile(ctx, io, "src/unix/libR.pc.in");
-        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rhome", ctx.rhome);
-        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rincludedir", b.fmt("{s}/include", .{ctx.rhome}));
+        // Relative to the .pc file (pkg-config's ${pcfiledir}), as
+        // Makeconf is to R_HOME: <prefix>/lib/pkgconfig/../R is R_HOME.
+        // @others is upstream's $(MAIN_LDFLAGS) $(LDFLAGS) minus LDFLAGS,
+        // the build env's -L/-rpath (libR is in ${rlibdir}, which no env
+        // rpath ever covered).
+        const pc_in = try readSrcFile(ctx, io, "src/unix/libR.pc.in");
+        var pc = pc_in;
+        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rhome", "${pcfiledir}/../R");
+        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rincludedir", "${rhome}/include");
         pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rarch", "");
         pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@libsprivate", "");
-        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@others", b.fmt("-Wl,--export-dynamic{s} -L{s}/lib -Wl,-rpath,{s}/lib", .{ if (ctx.openmp) " -fopenmp" else "", ctx.conda, ctx.conda }));
+        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@others", std.mem.trim(u8, ctx.subst.get("MAIN_LDFLAGS") orelse "", " "));
         pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@VERSION", r_version);
+        try assertNoBuildPath(ctx, "lib/pkgconfig/libR.pc", pc_in, pc);
         const pc_wf = b.addWriteFiles();
         _ = pc_wf.add("libR.pc", pc);
         inst.dependOn(&b.addInstallDirectory(.{
@@ -3035,7 +3126,10 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     // --- etc/ ---
     _ = stage.add("etc/Renviron", try finalRenviron(ctx, try substFile(ctx, io, "etc/Renviron.in")));
     _ = stage.add("etc/ldpaths", ldpaths(ctx));
-    _ = stage.add("etc/Makeconf", try substFile(ctx, io, "etc/Makeconf.in"));
+    const makeconf_in = try readSrcFile(ctx, io, "etc/Makeconf.in");
+    const makeconf = try substituteWith(ctx, makeconf_in, &ctx.mk_subst);
+    try assertNoBuildPath(ctx, "etc/Makeconf", makeconf_in, makeconf);
+    _ = stage.add("etc/Makeconf", makeconf);
     _ = stage.add("etc/javaconf", try substFile(ctx, io, "etc/javaconf.in"));
     _ = stage.addCopyFile(ctx.path("etc/repositories"), "etc/repositories");
 

@@ -4,8 +4,9 @@
 Input is what `pixi run -e minimal package` leaves in
 dist/R-<ver>-minimal-zig: installed by zig build (location-independent
 launchers, $ORIGIN/@loader_path rpaths, zig shims + GNU make in
-lib/R/bin/toolchain) and made standalone by package-standalone.sh (conda
-libraries vendored into lib/, build-env flags stripped from Makeconf).
+lib/R/bin/toolchain, a Makeconf that names no build path) and made
+standalone by package-standalone.sh (conda libraries vendored into lib/,
+the CA bundle).
 That tree already runs from anywhere, so the wheel is that tree under
 `r_zig/R/` plus the small `r_zig` Python package (python/r_zig/) and the
 console scripts `R`/`Rscript`. Two wheels come out of it (phase T of
@@ -210,13 +211,9 @@ def leak_scan(files: list[tuple[str, bytes]], needles: list[bytes]) -> None:
         if not any(n in data for n in needles):
             continue
         runtime = b"\0" not in data[:8192] and rel.startswith(("lib/R/etc/", "bin/", "lib/R/bin/"))
-        # Comment lines don't count: Makeconf's header records the whole
-        # configure command line, build paths included, and nothing reads it.
-        if runtime and any(
-            any(n in line for n in needles)
-            for line in data.splitlines()
-            if not line.lstrip().startswith(b"#")
-        ):
+        # Comment lines count too: build.zig writes Makeconf's configure
+        # line without build paths as well (feat-no-host-paths F1.5).
+        if runtime:
             fatal.append(rel)
         else:
             other.append(rel)
@@ -366,6 +363,10 @@ def main() -> None:
         die(f"{prefix} has no R_HOME/bin/toolchain — run `pixi run -e minimal package` first")
     if not any(re.search(r"\.(so(\.\d+)*|dylib)$", f) for f in os.listdir(os.path.join(prefix, "lib"))):
         die(f"no vendored libraries in {prefix}/lib — run `pixi run -e minimal package` first")
+    with open(os.path.join(prefix, "lib", "R", "etc", "Renviron"), "rb") as f:
+        has_ca = b"\nR_ZIG_CA_BUNDLE=" in b"\n" + f.read()
+    if not (has_ca and os.path.isfile(os.path.join(prefix, "lib", "R", "etc", "ca-bundle.crt"))):
+        die(f"{prefix} has no CA bundle (etc/ca-bundle.crt, R_ZIG_CA_BUNDLE) — run `pixi run -e minimal package` first")
     if args.build_tag and not args.build_tag[0].isdigit():
         die("--build-tag must start with a digit (PEP 427)")
 

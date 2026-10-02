@@ -100,6 +100,40 @@ if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
   fi
 fi
 
+# Fortran runtime: Makeconf's FLIBS says -lflang_rt.runtime (feat-no-
+# host-paths F1.5). Link the static archive of the flang on PATH, the
+# compiler FC runs, wherever its LLVM keeps it (<resource dir>/lib/
+# <triple>/): never a shared runtime, which would need an rpath into the
+# environment at load time (conda-forge's linux-64 flang-rt ships one next
+# to the archive), and not tied to the LLVM major R was built with. Once:
+# R CMD SHLIB repeats $(FLIBS). No flang on PATH: nothing this link has
+# was compiled by it, so the flag goes (CRAN's usual `PKG_LIBS =
+# $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)` puts it on C and C++ links too). A
+# flang without the archive: dropped with a warning, so only a Fortran
+# package fails, at its load test.
+case " $* " in
+  *" -lflang_rt.runtime "*)
+    _frt=""
+    if _rd="$(flang -print-resource-dir 2>/dev/null)" && [ -n "$_rd" ]; then
+      _rd="${_rd%$'\r'}"; _rd="${_rd//\\//}"
+      for _c in "$_rd"/lib/*/libflang_rt.runtime.a; do
+        if [ -f "$_c" ]; then _frt="$_c"; break; fi
+      done
+      [ -n "$_frt" ] || echo "${0##*/}: warning: no libflang_rt.runtime.a under $_rd/lib/*/; dropping -lflang_rt.runtime" >&2
+    fi
+    _a=()
+    for a in "$@"; do
+      if [ "$a" = -lflang_rt.runtime ]; then
+        [ -n "$_frt" ] && _a+=("$_frt")
+        _frt=""
+        continue
+      fi
+      _a+=("$a")
+    done
+    set -- "${_a[@]}"
+    ;;
+esac
+
 # Windows: zig's MinGW -l search tries only <n>.dll, <n>.lib, lib<n>.a —
 # missing lib<n>.dll.a (MinGW import libs, what GNU ld searches first)
 # and lib<n>.lib (conda-forge MSVC naming, e.g. libbz2.lib, libcurl.lib).
@@ -163,13 +197,26 @@ if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
   done
 fi
 # OpenMP: zig cc performs -fopenmp codegen but bundles neither omp.h nor
-# libomp and won't auto-link it — wire in conda-forge's llvm-openmp.
+# libomp and won't auto-link it — wire in llvm-openmp's. They are in the
+# environment R lives in, the one Makeconf calls $(R_HOME)/../..: four
+# levels above this script in R_HOME/bin/toolchain (on Windows that is
+# <prefix>/Library), a conda env or the standalone prefix (build.zig
+# installs omp.h there, libomp is vendored). CONDA_PREFIX when the script
+# runs from anywhere else (the repo's toolchain/, for configure-only.sh).
 omp=()
-if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
-  case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*) inc="$CONDA_PREFIX/Library/include"; lib="$CONDA_PREFIX/Library/lib";;
-    *)            inc="$CONDA_PREFIX/include";         lib="$CONDA_PREFIX/lib";;
-  esac
+_ob=""
+if [[ " $* " == *"-fopenmp"* ]]; then
+  _s="${BASH_SOURCE[0]//\\//}"   # the Windows forwarder passes C:\...\zig-cc
+  _ob="${_s%/*}/../../../.."
+  if [ ! -f "$_ob/include/omp.h" ]; then
+    case "$(uname -s 2>/dev/null)" in
+      MINGW*|MSYS*) _ob="${CONDA_PREFIX:+$CONDA_PREFIX/Library}" ;;
+      *)            _ob="${CONDA_PREFIX:-}" ;;
+    esac
+  fi
+fi
+if [ -n "$_ob" ]; then
+  inc="$_ob/include"; lib="$_ob/lib"
   omp+=(-I"$inc")
   linking=true
   for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) linking=false; break;; esac; done
@@ -186,11 +233,11 @@ if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
       omp+=(-L"$lib" -lomp)
     fi
   elif $linking; then
-    # The caller's own -lomp still needs the directory to find it in: the
-    # dev tree's Makeconf has -L$CONDA_PREFIX/lib in LDFLAGS, a packaged
-    # tree does not (package-standalone.sh strips it), and data.table's
-    # macOS probe (PKG_LIBS=-lomp) then failed to link and built without
-    # OpenMP (found 2026-09-30 on a staged slim tree).
+    # The caller's own -lomp still needs the directory to find it in:
+    # Makeconf's LDFLAGS has it, but a probe that calls $CC directly does
+    # not, and data.table's macOS probe (PKG_LIBS=-lomp) then failed to
+    # link and built without OpenMP (found 2026-09-30 on a staged slim
+    # tree, before Makeconf named the environment at all).
     omp+=(-L"$lib")
   fi
 fi

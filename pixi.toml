@@ -36,6 +36,17 @@ R_VERSION = "4.6.1"
 # resolves a task to the default environment when every environment
 # offering it gets it from the same feature. Every build environment
 # lists this feature in [environments] below.
+# Dev and test runs compile packages against the dev tree, which is the
+# tree that ships: its Makeconf names the environment only as
+# $(R_HOME)/../.. (feat-no-host-paths F1.5), so this adds the pixi env's
+# headers and libraries (zigbuild/dev.Makevars). Checks of the shipped
+# Makeconf alone run under env -i or with R CMD config --no-user-files.
+[feature.pipeline.activation.env]
+R_MAKEVARS_USER = "$PIXI_PROJECT_ROOT/zigbuild/dev.Makevars"
+
+[feature.pipeline.target.win-64.activation.env]
+R_MAKEVARS_USER = "%PIXI_PROJECT_ROOT%\\zigbuild\\dev.Makevars"
+
 [feature.pipeline.tasks]
 fetch = "bash scripts/fetch-r.sh"
 # Only build path: `zig build` alone (no autoconf, no make, no gnuwin32)

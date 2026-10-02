@@ -121,34 +121,10 @@ if ! grep -q '^R_ZIG_CA_BUNDLE=' "$R_HOME_DIR/etc/Renviron"; then
 fi
 echo "   vendored CA bundle ($(grep -c 'BEGIN CERTIFICATE' "$R_HOME_DIR/etc/ca-bundle.crt") certificates) as etc/ca-bundle.crt"
 
-# Standalone has no env: strip the build-env include/lib flags that
-# a conda env needs (F1.5 will make Makeconf right for both).
-# Whole-token matches only (the flag must end at a space, a quote or the
-# line end): as bare prefix matches these also ate the head of longer
-# paths — `-L$CONDA/lib/clang/23/lib/darwin` (flang's runtime dir in
-# FLIBS) became `/clang/23/lib/darwin`, so every Fortran package link
-# failed after packaging (found 2026-09-24 on omicron: minqa and quadprog
-# both broke in the contract test once verify-package had run on the same
-# tree). `-I$CONDA/include/libpng16` was one edit away from the same fate.
-# (Two expressions per flag rather than one `\(...\|$\)` alternation: `|`
-# is the s/// delimiter here, so `\|` cannot also mean "or".)
-sed -i \
-  -e "s|-I$CONDA/include\([ \"]\)|\1|g" -e "s|-I$CONDA/include\$||" \
-  -e "s|-L$CONDA/lib\([ \"]\)|\1|g"         -e "s|-L$CONDA/lib\$||" \
-  -e "s|-Wl,-rpath,$CONDA/lib\([ \"]\)|\1|g" -e "s|-Wl,-rpath,$CONDA/lib\$||" \
-  "$R_HOME_DIR/etc/Makeconf"
-
-# minimal (the r-zig wheel's tree): the flang runtime is linked statically
-# into libR/libRblas/libRlapack, and nothing this tree is used with
-# provides a Fortran compiler (the wheel's compiler is PyPI ziglang, which
-# has no Fortran frontend), so FLIBS has nothing left to name, and its
-# -L points into this build machine's pixi env. Empty it: C/C++ packages
-# using CRAN's usual `PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)`
-# then link cleanly. Packages with Fortran sources need a user-supplied
-# FC and its runtime, as documented for the wheel.
-if [ "$VARIANT" = minimal ]; then
-  sed -i 's|^FLIBS = .*|FLIBS = |' "$R_HOME_DIR/etc/Makeconf"
-fi
+# etc/Makeconf needs no edit: build.zig writes it with $(R_HOME)/../..
+# for the environment and a bare -lflang_rt.runtime (feat-no-host-paths
+# F1.5), right in a conda env and here alike, and fails the build if it
+# names a build path.
 
 if [ "$OS" = macos ]; then
   case "$(uname -m)" in

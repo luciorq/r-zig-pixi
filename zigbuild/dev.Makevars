@@ -1,0 +1,27 @@
+# Dev and test runs only: pixi.toml's [feature.pipeline.activation.env]
+# points R_MAKEVARS_USER here. The tree `pixi run build` installs
+# (dist/R-*-zig) is the tree that ships, and its Makeconf names the
+# environment only as $(R_HOME)/../.. (feat-no-host-paths PLAN.md, F1.5),
+# which there is that prefix, not this pixi env. This adds the env's
+# headers and libraries, as R installed into a conda env has them in its
+# own Makeconf, so packages that link env libraries (data.table's zlib,
+# libomp on macOS) compile against the dev tree as they did before.
+# CONDA_PREFIX is the activated env (make imports the environment).
+# Checks that must see the shipped Makeconf alone run under env -i
+# (verify-bundle.sh, hermetic-check.sh) or with R CMD config
+# --no-user-files. Windows is told apart by Makeconf's own SHLIB_EXT (R
+# reads Makeconf before a user Makevars); OS=Windows_NT does not reach
+# make under pixi.
+#
+# Windows adds LDFLAGS only, as its Makeconf always had (CPPFLAGS stays
+# empty there, PLAN.md F1.5): with all of CC, CFLAGS, CXX, CXXFLAGS,
+# CPPFLAGS, LDFLAGS, FC and FCFLAGS non-empty in `R CMD config`, R's
+# installer, running a configure.win inside another one's (pak builds
+# its embedded curl that way), ends with do.call(Sys.setenv, list()):
+# "all arguments must be named" (install.R, the configure.win branch).
+ifeq ($(SHLIB_EXT),.dll)
+LDFLAGS += -L$(subst \,/,$(CONDA_PREFIX))/Library/lib
+else
+CPPFLAGS += -I$(CONDA_PREFIX)/include
+LDFLAGS += -L$(CONDA_PREFIX)/lib -Wl,-rpath,$(CONDA_PREFIX)/lib
+endif

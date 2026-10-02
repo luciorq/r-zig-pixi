@@ -75,6 +75,28 @@ else
 fi
 echo "== standalone bundle verified relocatable ($OS/$FLAVOR)"
 
+# Makeconf names no build path (feat-no-host-paths F1.5): build.zig writes
+# the environment as $(R_HOME)/../.., FLIBS as -lflang_rt.runtime and no
+# rpath for a tree that is not a conda env, and nothing edits the file
+# afterwards. Comment lines count.
+if [ "$OS" = windows ]; then mk="$BUNDLE_DIR/Library/lib/R/etc/x64/Makeconf"; else mk="$BUNDLE_DIR/lib/R/etc/Makeconf"; fi
+bad=""
+# Windows: ROOT is env.sh's /c/... form; PIXI_PROJECT_ROOT is the native
+# one, and a leak is written C:\... or C:/... (any drive-letter case).
+for p in "$ROOT" "${PIXI_PROJECT_ROOT:-}" "${CONDA_PREFIX:-}"; do
+  [ -n "$p" ] || continue
+  for q in "$p" "$(printf '%s' "$p" | tr '\\' /)"; do
+    if grep -qiF -- "$q" "$mk"; then bad="$bad $q"; fi
+  done
+done
+if grep -q -- '-rpath' "$mk"; then bad="$bad -rpath"; fi
+grep -q '^FLIBS = .*-lflang_rt\.runtime' "$mk" || bad="$bad FLIBS"
+if [ -n "$bad" ]; then
+  echo "error: ${mk#$BUNDLE_DIR/} names build paths or lacks the relative forms:$bad" >&2
+  exit 1
+fi
+echo "== Makeconf verified: no build path, no rpath, FLIBS = -lflang_rt.runtime"
+
 # TLS trust (unix): the bundle must verify HTTPS without the build env's
 # trust anchors. conda-forge's libcurl/OpenSSL carry $CONDA/ssl compiled
 # in, which exists on this machine only, so "HTTPS works here" proves
@@ -221,8 +243,8 @@ fi
 # involved on macOS) must record no rpath at all, and still load: libR and
 # the libraries it needs are already in the process. The shims make that
 # so (on macOS their deployment-target triple records no rpath for -L
-# directories; conda's -rpath in LDFLAGS is stripped from Makeconf here).
-# Skipped without zig, as on a user machine.
+# directories), and Makeconf's LDFLAGS has an rpath only in the conda
+# package. Skipped without zig, as on a user machine.
 if [ "$OS" != windows ]; then
   bin_list="$VERIFY_DIR/bin-list.txt"
   if [ "$OS" = linux ]; then
@@ -371,6 +393,8 @@ CPP
     # hid the shared runtime once (2026-09-30, macOS slim). minimal empties
     # FLIBS (no Fortran compiler with the wheel), so it is skipped there.
     if grep -q '^FLIBS = .*flang_rt' "$BUNDLE_DIR/lib/R/etc/Makeconf" && [ -x "$zig_dir/flang" ]; then
+      # fw needs the runtime (internal formatted I/O: _FortranAio*), so a
+      # dropped -lflang_rt.runtime fails the dyn.load; fsum alone would not.
       cat > "$pkg_dir/fs.f" <<'FORTRAN'
       subroutine fsum(n, x, s)
       integer n, i
@@ -379,6 +403,12 @@ CPP
       do 10 i = 1, n
          s = s + x(i)
    10 continue
+      end
+      subroutine fw(n, r)
+      integer n, r
+      character(len=12) buf
+      write(buf,'(i0)') n
+      read(buf,'(i12)') r
       end
 FORTRAN
       (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
@@ -394,8 +424,47 @@ FORTRAN
         exit 1
       fi
       (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
-        "$R_BIN" --vanilla --no-echo -e 'dyn.load("fs.so"); stopifnot(.Fortran("fsum", 3L, c(1, 2, 3), s = 0)$s == 6)')
+        "$R_BIN" --vanilla --no-echo -e 'dyn.load("fs.so"); stopifnot(.Fortran("fsum", 3L, c(1, 2, 3), s = 0)$s == 6, .Fortran("fw", 42L, r = 0L)$r == 42L)')
       echo "== compiled package verified: static flang runtime, loads (Fortran)"
+    fi
+
+    # $(FLIBS) on a C package's link (CRAN's usual PKG_LIBS = $(LAPACK_LIBS)
+    # $(BLAS_LIBS) $(FLIBS)) with no flang on PATH, as with the wheel: the
+    # shims drop -lflang_rt.runtime, since nothing was compiled by flang.
+    # PATH: the env's make alone (slim and full use make from PATH), no flang.
+    mkdir -p "$pkg_dir/cf/bin"
+    ln -sf "$(command -v make)" "$pkg_dir/cf/bin/make"
+    printf '%s\n' '#include <R.h>' 'void cfl(int *n) { *n = 7; }' > "$pkg_dir/cf/cf.c"
+    printf '%s\n' 'PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)' > "$pkg_dir/cf/Makevars"
+    (cd "$pkg_dir/cf" && env -i HOME="$HOME" PATH="$pkg_dir/cf/bin:/usr/bin:/bin" ZIG_BIN="$zig_dir/zig" TMPDIR="${TMPDIR:-/tmp}" \
+      "$R_BIN" CMD SHLIB -o cf.so cf.c > shlib.log 2>&1) || { cat "$pkg_dir/cf/shlib.log" >&2; echo "error: a C package using \$(FLIBS) failed to link with no flang on PATH" >&2; exit 1; }
+    (cd "$pkg_dir/cf" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
+      "$R_BIN" --vanilla --no-echo -e 'dyn.load("cf.so"); stopifnot(.C("cfl", n = 0L)$n == 7L)')
+    echo "== compiled package verified: \$(FLIBS) links with no Fortran compiler (C)"
+
+    # OpenMP (slim, full): omp.h from the tree's own include/ (build.zig
+    # installs it in a tree that is not a conda env; Makeconf's CPPFLAGS and
+    # the shims look there) and the vendored libomp, no rpath, nothing from
+    # the build env. Both ways packages ask: R's SHLIB_OPENMP_CFLAGS, and
+    # data.table's configure probe (omp.h included with no OpenMP flag).
+    if grep -q '^SHLIB_OPENMP_CFLAGS = *-' "$BUNDLE_DIR/lib/R/etc/Makeconf"; then
+      mkdir -p "$pkg_dir/omp"
+      printf '%s\n' '#include <omp.h>' '#include <R.h>' 'void ompn(int *n) { *n = omp_get_max_threads(); }' > "$pkg_dir/omp/omp.c"
+      printf '%s\n' 'PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$pkg_dir/omp/Makevars"
+      printf '%s\n' '#include <omp.h>' 'int ompprobe(void) { return 0; }' > "$pkg_dir/omp/probe.c"
+      (cd "$pkg_dir/omp" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+        "$R_BIN" CMD SHLIB -o omp.so omp.c > shlib.log 2>&1 && rm Makevars &&
+        env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+        "$R_BIN" CMD SHLIB -o probe.so probe.c >> shlib.log 2>&1) || { cat "$pkg_dir/omp/shlib.log" >&2; echo "error: an OpenMP package failed to build with the bundle" >&2; exit 1; }
+      check_minos "$pkg_dir/omp/omp.so"
+      omp_rp="$(rpaths_of "$pkg_dir/omp/omp.so" | tr '\n' ' ')"
+      if [ -n "$omp_rp" ]; then
+        echo "error: an OpenMP package compiled with the bundle records rpaths: $omp_rp" >&2
+        exit 1
+      fi
+      (cd "$pkg_dir/omp" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
+        "$R_BIN" --vanilla --no-echo -e 'dyn.load("omp.so"); stopifnot(.C("ompn", n = 0L)$n >= 1L)')
+      echo "== compiled package verified: OpenMP from the tree's own omp.h and libomp, no rpath, loads"
     fi
   else
     echo "== compiled package rpath check skipped (no zig on PATH)"

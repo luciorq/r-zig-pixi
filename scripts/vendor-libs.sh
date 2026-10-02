@@ -82,6 +82,21 @@ while [ "$i" -lt "${#bins[@]}" ]; do
 done
 echo "== vendored $n conda libraries into $PREFIX/lib"
 
+# openblas flavour: Makeconf's BLAS_LIBS is a bare -lopenblas, which needs
+# the unversioned link name beside the vendored copy (binaries reference,
+# and so vendoring copies, only libopenblas.so.0 / libopenblas.0.dylib).
+# A package linked through it records the soname, which libR already has
+# loaded.
+if [ "$BLAS" = openblas ]; then
+  case "$OS" in
+    linux) v=libopenblas.so.0;    l=libopenblas.so ;;
+    macos) v=libopenblas.0.dylib; l=libopenblas.dylib ;;
+  esac
+  if [ -e "$PREFIX/lib/$v" ] && [ ! -e "$PREFIX/lib/$l" ]; then
+    ln -s "$v" "$PREFIX/lib/$l"
+  fi
+fi
+
 # macOS: an absolute reference into the env would load from this machine's
 # env, or nowhere once the tree moves (the full variant's libR ->
 # libreadline -> libncurses -> libtinfo, found 2026-10-01 by

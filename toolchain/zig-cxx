@@ -60,6 +60,31 @@ if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
   fi
 fi
 
+# Fortran runtime (-lflang_rt.runtime in Makeconf's FLIBS): the static
+# archive of the flang on PATH, once; dropped without one. See zig-cc.
+case " $* " in
+  *" -lflang_rt.runtime "*)
+    _frt=""
+    if _rd="$(flang -print-resource-dir 2>/dev/null)" && [ -n "$_rd" ]; then
+      _rd="${_rd%$'\r'}"; _rd="${_rd//\\//}"
+      for _c in "$_rd"/lib/*/libflang_rt.runtime.a; do
+        if [ -f "$_c" ]; then _frt="$_c"; break; fi
+      done
+      [ -n "$_frt" ] || echo "${0##*/}: warning: no libflang_rt.runtime.a under $_rd/lib/*/; dropping -lflang_rt.runtime" >&2
+    fi
+    _a=()
+    for a in "$@"; do
+      if [ "$a" = -lflang_rt.runtime ]; then
+        [ -n "$_frt" ] && _a+=("$_frt")
+        _frt=""
+        continue
+      fi
+      _a+=("$a")
+    done
+    set -- "${_a[@]}"
+    ;;
+esac
+
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*)
     libdirs=()
@@ -116,11 +141,19 @@ if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
 fi
 # OpenMP: see zig-cc for rationale.
 omp=()
-if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
-  case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*) inc="$CONDA_PREFIX/Library/include"; lib="$CONDA_PREFIX/Library/lib";;
-    *)            inc="$CONDA_PREFIX/include";         lib="$CONDA_PREFIX/lib";;
-  esac
+_ob=""
+if [[ " $* " == *"-fopenmp"* ]]; then
+  _s="${BASH_SOURCE[0]//\\//}"   # the Windows forwarder passes C:\...\zig-cc
+  _ob="${_s%/*}/../../../.."
+  if [ ! -f "$_ob/include/omp.h" ]; then
+    case "$(uname -s 2>/dev/null)" in
+      MINGW*|MSYS*) _ob="${CONDA_PREFIX:+$CONDA_PREFIX/Library}" ;;
+      *)            _ob="${CONDA_PREFIX:-}" ;;
+    esac
+  fi
+fi
+if [ -n "$_ob" ]; then
+  inc="$_ob/include"; lib="$_ob/lib"
   omp+=(-I"$inc")
   linking=true
   for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) linking=false; break;; esac; done

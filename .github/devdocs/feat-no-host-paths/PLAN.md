@@ -185,7 +185,10 @@ T, the base vendors nothing; the wheel's toolchain package ships make
   package have it there; CRAN's macOS R does not either). The toolchain
   package for the standalone tree and the wheel must ship `omp.h` and
   put it on the include path; the shims also add `-L<omp lib dir>` when
-  the caller links `-lomp` itself.
+  the caller links `-lomp` itself. Since F1.5 (2026-10-02) Makeconf's
+  CPPFLAGS is `-I$(R_HOME)/../../include` and build.zig installs the
+  OpenMP headers there for a non-conda tree, until phase T's standalone
+  toolchain archive takes them over.
 - **Preflight** (small `install.R` patch): before running `configure`
   or make, if the package needs compilation and the compiler Makeconf
   names doesn't exist, stop with one message naming the package to
@@ -360,6 +363,114 @@ zig 0.16's std.Build):
 - F1.5 Makeconf's environment flags (`-I`/`-L`, FLIBS) in a form that is
   right for conda and for the standalone tree (candidate:
   `$(R_HOME)/../..`-relative), so package-standalone.sh strips nothing.
+  - **F1.5 done 2026-10-02.** Designed by a workflow (four read-only
+    maps, three designs, a judge, an adversarial critique; scratch under
+    the session's `f15/`), decided by the user, then built:
+    - **The rule.** Inside an installed Makeconf the environment is
+      `$(R_HOME)/../..`, which make expands where it runs: the conda
+      env, the standalone prefix, the wheel's `r_zig/R` (Windows:
+      `<prefix>/Library`). build.zig computes these values from the raw
+      subst.txt entries (`makeconfValue`, a Makeconf-only overlay
+      `ctx.mk_subst`); R's own build keeps the absolute ones. Seven keys
+      carry it: CPPFLAGS, LDFLAGS, LIBS_PKGS, FLIBS_IN_SO, TCLTK_*, and
+      the `R_CONFIG_ARGS` comment line. Windows: BINPREF
+      `$(R_HOME)/bin/toolchain/`, LDFLAGS `-L"$(R_HOME)/../../lib"`, FC
+      bare `flang`, FLIBS `-lflang_rt.runtime -lc++` (the Windows zip
+      had never had these four corrected). `libR.pc` is relative to
+      `${pcfiledir}` and drops the env `-L`/rpath.
+    - **One difference by distribution, decided:** the conda build
+      (`-Dconda-env`, which zig-build.sh passes when `R_ZIG_CONDA_BUILD`
+      is set) keeps `-Wl,-rpath,$(abspath $(R_HOME)/../../lib)` in
+      LDFLAGS. Reason, measured: glibc consults only the *executable's*
+      DT_RPATH for a dlopened library's dependencies, so a package that
+      links an env library loads in exec/R but not in an embedding
+      process (rpy2, RInside). Revisit with data: recipe/test-toolchain.R
+      builds a package linking fontconfig (an env library R does not load
+      at startup) without the rpath and reports, never fails, whether it
+      loads in a fresh R. That measures R's own process only, where
+      exec/R's rpath into the env covers it (linux-64: TRUE); an embedder
+      needs its own probe before the rpath can go.
+    - **FLIBS is `-lflang_rt.runtime -lm`** (decided). toolchain/zig-cc
+      and zig-cxx replace it with the static archive of the flang on PATH
+      (`flang -print-resource-dir`/lib/<triple>/, checked for flang-zig on
+      osx-arm64, osx-64, win-64 and conda-forge flang 22/23 on linux-64),
+      once; with no flang on PATH they drop it (nothing was compiled by
+      it; CRAN's `$(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)` is on C links
+      too); a flang without the archive drops it with a warning. Not tied
+      to the LLVM major R was built with. Moves into rzig at F3.
+    - **omp.h** (decided): build.zig installs `omp.h`, `ompx.h`,
+      `omp-tools.h`, `ompt.h` into `<prefix>/include` for a non-conda
+      OpenMP build (llvm-openmp owns that path in a conda env); phase T's
+      standalone toolchain archive takes them over. The shims' OpenMP
+      block now finds the environment four levels above the script
+      (R_HOME/bin/toolchain → `$(R_HOME)/../..`), falling back to
+      CONDA_PREFIX.
+    - **The dev tree** (decided): it is the shipped tree, so its Makeconf
+      no longer names the pixi env. pixi.toml's
+      `[feature.pipeline.activation.env]` points `R_MAKEVARS_USER` at
+      `zigbuild/dev.Makevars`, which adds the env's `-I`/`-L` (and the
+      rpath on unix) from `$(CONDA_PREFIX)` (Windows: `-L` only, and the
+      OS is told apart by Makeconf's `SHLIB_EXT`, since `OS=Windows_NT`
+      does not reach make under pixi). A Windows CPPFLAGS there tripped an
+      R bug found on kappa: with all eight of CC, CFLAGS, CXX, CXXFLAGS,
+      CPPFLAGS, LDFLAGS, FC, FCFLAGS non-empty in `R CMD config`, a
+      configure.win run inside another one's (pak's embedded curl) ends in
+      `do.call(Sys.setenv, list())`, "all arguments must be named". The
+      variable overrides a user's own `R_MAKEVARS_USER` inside the
+      pipeline envs only. `pixi run contract` and
+      interactive use behave as before; `env -i` checks and `R CMD config
+      --no-user-files` see the shipped Makeconf alone. A user Makevars
+      also switches the compile preflight off, so pixi runs skip it; the
+      hermetic check (`env -i`) still exercises it.
+    - **Guards:** build.zig fails the build if etc/Makeconf,
+      etc/x64/Makeconf or libR.pc names the env, the prefix, the R
+      source, the checkout, `$BUILD_PREFIX` (either slash) or a leftover
+      `@ZR_` placeholder, comment lines included, counted against the
+      template the file came from: only what substitution added counts
+      (a `/usr/local` prefix would otherwise trip over Makeconf.in's own
+      "/usr/local/lib" comment; checked both ways). verify-bundle.sh
+      checks the extracted Makeconf (no build path in any slash or drive
+      case, no rpath, the bare FLIBS), its Fortran package now does
+      internal formatted I/O, which needs the runtime (a dropped
+      `-lflang_rt.runtime` fails the load), it links a C package with
+      `$(FLIBS)` and no flang on PATH (the env's make alone on PATH),
+      and (slim, full) builds an OpenMP package from the tree's own
+      omp.h and libomp, no rpath, plus data.table's probe shape (omp.h
+      with no flag). contract-test.sh checks `R CMD config
+      --no-user-files` FLIBS and LDFLAGS. recipe/test-toolchain.R checks
+      the conda Makeconf's rpath and CPPFLAGS and builds a zlib and a
+      Fortran package with no flags of their own (unix).
+    - **Review:** an adversarial review of the diff (three lenses, one
+      skeptic per finding) confirmed eight defects, all fixed before
+      commit: the recipe test's `^` under `fixed = TRUE`; the guard's
+      false positive above; Fortran tests that needed no runtime; an
+      informational test that reused the rpath'd `.so` (make: nothing to
+      do); the shims' OpenMP lookup on Windows, where the gcc.exe
+      forwarder passes a backslash path; verify-bundle's Windows leak
+      check, which searched only the `/c/...` form; the openblas
+      standalone tree, which had no unversioned `libopenblas` for
+      Makeconf's bare `-lopenblas` (vendor-libs.sh now adds the link
+      name; the gap predates F1.5); and the no-flang test's reliance on a
+      host make.
+    - **Tested 2026-10-02** (all after the review's fixes unless noted):
+      linux-64 slim and minimal (build, smoke, contract, verify-package,
+      hermetic; minimal before the fixes), openblas (build,
+      verify-package), the wheel and wheel-test, the conda package and its
+      recipe tests; osx-arm64 on omicron slim (build, verify-package, the
+      conda package and its tests), minimal, the wheel and osx-64 slim
+      (before the fixes: build, smoke, contract, verify-package, hermetic);
+      win-64 on kappa slim (verify-package, contract with dev.Makevars incl.
+      pak and data.table's OpenMP, hermetic). linux-aarch64 and the
+      Windows conda package: CI.
+    - **What stopped:** package-standalone.sh no longer edits Makeconf
+      (the whole-token sed and minimal's emptied FLIBS are gone);
+      make-wheel.py's leak scan counts comment lines and it checks for
+      the CA bundle itself; conda's prefix replacement no longer touches
+      Makeconf or libR.pc.
+    - Not done here: Windows CPPFLAGS stays empty (a later, kappa-tested
+      `LOCAL_SOFT ?= $(R_HOME)/../..`); USE_FC_TO_LINK packages
+      (`SHLIB_FCLD = $(FC)`) link through the flang driver, which cannot
+      find its runtime in a conda env today either.
 - F1.6 CI: build (final tree), then smoke, contract, check, hermetic, then
   archive; verify-package shrinks to the archive checks.
 

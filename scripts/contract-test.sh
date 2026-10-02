@@ -77,7 +77,7 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   # SHLIB_OPENMP_* flags. data.table follows them on linux, but on macOS
   # its configure probes -Xclang -fopenmp itself and links -lomp, which
   # succeeds wherever a libomp is reachable (conda llvm-openmp in the dev
-  # env, whose Makeconf carries -Wl,-rpath,$CONDA/lib). That is the
+  # env, which zigbuild/dev.Makevars puts on the -L and rpath). That is the
   # package opting in, not R offering OpenMP, so there it is reported only.
   th_info <- capture.output(getDTthreads(verbose = TRUE))
   cat(th_info, sep = "\n")
@@ -122,6 +122,14 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
     apps <- ps::ps_apps()
     stopifnot(is.data.frame(apps))
   }
+  # Makeconf names no build path (feat-no-host-paths F1.5): FLIBS is the
+  # bare runtime the shims resolve, and LDFLAGS has no rpath outside the
+  # conda package. --no-user-files: the pixi env points R_MAKEVARS_USER at
+  # zigbuild/dev.Makevars, which adds the env -I/-L/-rpath on top.
+  cfg <- function(v) tools::Rcmd(c("config", "--no-user-files", v), stdout = TRUE)
+  stopifnot(grepl("-lflang_rt.runtime", cfg("FLIBS"), fixed = TRUE),
+            !grepl("libflang_rt", cfg("FLIBS"), fixed = TRUE),
+            !grepl("-rpath", cfg("LDFLAGS"), fixed = TRUE))
   cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
   cat("data.table grouped aggregation: OK\n")
   cat("minqa (Rcpp-dependent + package Fortran) bobyqa: OK\n")
