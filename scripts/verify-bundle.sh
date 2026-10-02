@@ -220,8 +220,9 @@ fi
 # does (relRPaths, linkSibling). Then a package compiled with this tree (C++, so libc++ is
 # involved on macOS) must record no rpath at all, and still load: libR and
 # the libraries it needs are already in the process. The shims make that
-# so (zig's -feach-lib-rpath on macOS; conda's -rpath in LDFLAGS is
-# stripped from Makeconf here). Skipped without zig, as on a user machine.
+# so (on macOS their deployment-target triple records no rpath for -L
+# directories; conda's -rpath in LDFLAGS is stripped from Makeconf here).
+# Skipped without zig, as on a user machine.
 if [ "$OS" != windows ]; then
   bin_list="$VERIFY_DIR/bin-list.txt"
   if [ "$OS" = linux ]; then
@@ -276,6 +277,58 @@ if [ "$OS" != windows ]; then
   fi
   echo "== C++ runtime verified: $n_r R binaries, none needs a shared libc++/libstdc++"
 
+  # macOS deployment target: every Mach-O in the tree at or below
+  # MACOS_MIN (build.zig's macos_min; conda's vendored libraries are
+  # lower). A native target would stamp the build machine's version.
+  # Then the load commands: install names relative (packages copy libR's
+  # into their own load commands), dependencies relative or the system's,
+  # and R's own binaries take from the SDK's /usr/lib only what conda has
+  # no copy of: build.zig adds the SDK's lib dir last, and ahead of
+  # conda's it would bind -lz/-liconv/-lcurl to the SDK's older stubs.
+  if [ "$OS" = macos ]; then
+    bad=""
+    while IFS= read -r f; do
+      m="$(macho_minos "$f")"
+      if [ -z "$m" ] || version_gt "$m" "$MACOS_MIN"; then bad="$bad ${f#$BUNDLE_DIR/}=${m:-none}"; fi
+    done < "$bin_list"
+    if [ -n "$bad" ]; then
+      echo "error: Mach-O files above the macOS $MACOS_MIN floor:$bad" >&2
+      exit 1
+    fi
+    echo "== macOS floor verified: $(wc -l < "$bin_list" | tr -d ' ') Mach-O files, minos <= $MACOS_MIN"
+    bad=""
+    while IFS= read -r f; do
+      id="$(otool -D "$f" 2>/dev/null | tail -n +2)"
+      case "$id" in ""|@rpath/*|@loader_path/*|@executable_path/*|[!/]*) ;; *) bad="$bad ${f#$BUNDLE_DIR/}:id=$id" ;; esac
+      for dep in $(otool -L "$f" 2>/dev/null | tail -n +2 | awk '{print $1}'); do
+        [ "$dep" = "$id" ] && continue
+        case "$dep" in @rpath/*|@loader_path/*|@executable_path/*|/usr/lib/*|/System/Library/*) ;; *) bad="$bad ${f#$BUNDLE_DIR/}:$dep" ;; esac
+        case "$f" in "$BUNDLE_DIR"/lib/R/bin/toolchain/*) ;; "$BUNDLE_DIR"/lib/R/*)
+          case "$dep" in /usr/lib/libSystem.B.dylib|/usr/lib/libresolv.9.dylib|/usr/lib/libobjc.A.dylib) ;; /usr/lib/*) bad="$bad ${f#$BUNDLE_DIR/}:$dep(SDK)" ;; esac ;;
+        esac
+      done
+    done < "$bin_list"
+    [ "$(otool -D "$BUNDLE_DIR/lib/R/lib/libR.dylib" | tail -n +2)" = "@rpath/libR.dylib" ] || bad="$bad lib/R/lib/libR.dylib:id"
+    if [ -n "$bad" ]; then
+      echo "error: install names or load commands:$bad" >&2
+      exit 1
+    fi
+    echo "== load commands verified: relative install names, no build-machine or SDK-stub dependencies"
+  fi
+  # A package's objects and .so at or below the floor too: zig stamps the
+  # link, so only the objects show a compiler that ignored it (flang
+  # defaults to the host SDK's version).
+  check_minos() {
+    [ "$OS" = macos ] || return 0
+    for f in "$@"; do
+      m="$(macho_minos "$f")"
+      if [ -z "$m" ] || version_gt "$m" "$MACOS_MIN"; then
+        echo "error: ${f##*/} minos ${m:-none} > $MACOS_MIN" >&2
+        exit 1
+      fi
+    done
+  }
+
   zig_dir="$(dirname "$(command -v zig 2>/dev/null || echo /nonexistent/zig)")"
   if [ -x "$zig_dir/zig" ]; then
     pkg_dir="$VERIFY_DIR/shlib"
@@ -301,6 +354,7 @@ CPP
     fi
     # zig's own libc++ is static, and the shims keep it so where
     # conda-forge zig would pick a shared one (see toolchain/zig-cc).
+    check_minos "$pkg_dir/rp.o" "$pkg_dir/rp.so"
     cxx_dep="$(cxx_deps "$pkg_dir/rp.so")"
     if [ -n "$cxx_dep" ]; then
       echo "error: a C++ package compiled with the bundle needs a shared C++ runtime: $cxx_dep" >&2
@@ -329,6 +383,7 @@ CPP
 FORTRAN
       (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
         "$R_BIN" CMD SHLIB -o fs.so fs.f > fshlib.log 2>&1) || { cat "$pkg_dir/fshlib.log" >&2; echo "error: R CMD SHLIB of a Fortran file failed with the bundle" >&2; exit 1; }
+      check_minos "$pkg_dir/fs.o" "$pkg_dir/fs.so"
       if [ "$OS" = linux ]; then
         f_dep="$(patchelf --print-needed "$pkg_dir/fs.so" | grep flang_rt || true)"
       else

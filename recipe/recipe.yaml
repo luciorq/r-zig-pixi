@@ -357,6 +357,10 @@ outputs:
         - if: osx
           then:
             - libiconv
+            # build.zig's deployment target (macos_min): every Mach-O says
+            # minos 13.0, so refuse older macOS at solve time rather than
+            # at load time. r-zig-toolchain gets it through its exact pin.
+            - __osx >=13.0
         - if: win
           then:
             - libjpeg-turbo

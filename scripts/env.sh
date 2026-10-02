@@ -84,6 +84,25 @@ njobs() {
   nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4
 }
 
+# macOS deployment target: build.zig's macos_min, the shims'
+# "<arch>-native.13.0". The checks assert every Mach-O is at or below it.
+MACOS_MIN=13.0
+# A Mach-O file's minos (LC_BUILD_VERSION; LC_VERSION_MIN_MACOSX on old
+# files), empty when it has neither.
+macho_minos() {
+  otool -l "$1" 2>/dev/null | awk '
+    /cmd LC_BUILD_VERSION/      { b = 1; next }
+    /cmd LC_VERSION_MIN_MACOSX/ { v = 1; next }
+    b && $1 == "minos"   { print $2; exit }
+    v && $1 == "version" { print $2; exit }'
+}
+# True when version $1 is above $2 (MAJOR.MINOR[.PATCH]), without sort -V.
+version_gt() {
+  awk -v a="$1" -v b="$2" 'BEGIN { split(a, x, "."); split(b, y, ".")
+    for (i = 1; i <= 3; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 }
+    exit 1 }'
+}
+
 # flang where the env provides it (conda-forge's on linux-64, flang-pixi's
 # flang-zig on osx-arm64 — see pixi.toml's per-target deps), gfortran
 # elsewhere. Same probe order as build.zig's FortranCompiler selection.

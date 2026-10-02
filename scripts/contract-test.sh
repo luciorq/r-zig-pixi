@@ -150,4 +150,24 @@ if [ "$OS" = linux ] || [ "$OS" = macos ]; then
   fi
   echo "C++ runtime: static in every compiled package"
 fi
+# macOS: every compiled package at or below the deployment target the
+# shims pass (MACOS_MIN), and the SDK's lib dir last on their link lines:
+# data.table's zlib.h comes from the env, so its libz must too, not the
+# SDK's older stub in /usr/lib.
+if [ "$OS" = macos ]; then
+  bad=""
+  for so in "$LIB"/*/libs/*.so; do
+    m="$(macho_minos "$so")"
+    if [ -z "$m" ] || version_gt "$m" "$MACOS_MIN"; then bad="$bad ${so#$LIB/}=${m:-none}"; fi
+  done
+  if [ -n "$bad" ]; then
+    echo "error: compiled packages above the macOS $MACOS_MIN floor:$bad" >&2
+    exit 1
+  fi
+  if otool -L "$LIB/data.table/libs/data_table.so" | grep -q '/usr/lib/libz\.'; then
+    echo "error: data.table linked the SDK's libz stub (the SDK -L is not last in the shims)" >&2
+    exit 1
+  fi
+  echo "macOS floor: every compiled package at minos <= $MACOS_MIN"
+fi
 echo "Contract test passed ($VARIANT/$OS)."

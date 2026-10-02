@@ -529,8 +529,9 @@ the packaging above, the preflight, and `R CMD config` failing cleanly.
 **B — one Zig multi-call binary** (now F3, moved up 2026-10-01) that
 dispatches on its own name, like busybox. It replaces the bash shims and
 has to carry everything they learned: Windows' `-l` lookup of
-`lib<n>.dll.a`/`lib<n>.lib`, the `-mwindows` link set, the macOS `-l`/`-L`
-rewrite (no implicit rpaths), `-l` de-duplication (dyld's "duplicate
+`lib<n>.dll.a`/`lib<n>.lib`, the `-mwindows` link set, the macOS
+deployment target (`-target <arch>-native.13.0`, `-F` for the SDK's
+frameworks, the SDK's `-L` last on links), `-l` de-duplication (dyld's "duplicate
 linked dylib"), the glibc 2.17 target pin, OpenMP wiring (`-I`/`-L` for
 `omp.h`/libomp, also when the caller links `-lomp`), the `ZIG_LIB_DIR`
 mirror against conda-forge zig's shared libc++ (until F4), the SONAME
@@ -732,7 +733,7 @@ r-zig on all five platforms.
   inspection suggested. Upstream R sets `-compatibility_version
   ${MAJR_VERSION} -current_version ${PACKAGE_VERSION}`
   (`configure.ac:1877`); matching it is still tidy, but not a blocker on
-  macOS 26 (untested on macOS 13, minimal's deployment target).
+  macOS 26 (untested on macOS 13, the deployment target).
 - **Windows (run on kappa, 2026-09-29):** conda-forge's win-64 jsonlite
   and quadprog (built with R 4.5.1) load and run in r-zig's Windows R
   4.6.1, quadprog's BLAS through r-zig's `Rblas.dll`. Only the location
@@ -956,36 +957,84 @@ with the default env's win-64 zig (build `_15`).
 - conda-forge zig links shared `libc++.1.dylib` on macOS, no opt-out:
   the 2026-09-29 decision (conda keeps it; wheel and standalone use
   upstream zig).
-- `minos` follows the build host with a native target: already under
-  Open.
+- `minos` follows the build host with a native target: resolved
+  2026-10-01 with `-target <arch>-native.13.0` (below).
 - Linux gets static libc++ only while the env has no `libcxx`: none of
   the lockfile's linux envs has one today. Adopted as a check (below).
 
-**`-target <arch>-macos.13.0` in the shims: not viable.**
-- It does build and link C++: that corrects this plan's 2026-09-29 note,
-  which read clang's warnings (the source file `error_category.cpp`)
-  as a failure. Without the `ZIG_LIB_DIR` mirror the result still links
-  shared `@rpath/libc++.1.dylib` (the probe applies to non-native
-  targets too); with the mirror it is static, `minos 13.0`, no rpath,
-  and loads. Upstream zig pinned: static, `minos 13.0`, loads.
-- It loses the SDK, with both zigs: `-framework X` is "unable to find
-  framework" with `--sysroot`, `-isysroot`, `-iframework`,
-  `-iframeworkwithsysroot` alike; `-F<sdk>` and linking the SDK's
-  `X.tbd` directly make conda-forge zig panic ("for loop over objects
-  with non-equal lengths") and upstream zig fail ("unable to resolve
-  dependency"). Native links the same `.tbd` fine.
-- pak's `ps` (CRAN 1.9.3) with pinned-target shims fails to compile:
-  `posix.c` includes `net/if_media.h`, an SDK header zig's bundled
-  Darwin headers lack; its configure also links `-framework AppKit`.
-  So the pin would break ps, and pak with it.
-- `minos` with a native target: `-mmacosx-version-min=13.0` compiles
-  but leaves `minos` at the host's (26.4.1); `-Wl,-platform_version` is
-  an unsupported linker arg. Zig 0.16 has no way to keep the SDK and
-  set the deployment target. What is left for r-zig-packages: build on
-  the oldest supported runner, or rewrite `LC_BUILD_VERSION` after the
-  link and re-sign ad hoc (`codesign` is always present).
-- The shims therefore keep the native target and the `-l`/`-L`
-  rewrite that removes zig's implicit rpaths.
+**macOS deployment target: `-target <arch>-native.13.0` (2026-10-01;
+replaces the 2026-09-30 "not viable").** Verified on omicron (macOS
+26.4.1 arm64, CLT SDK 26.4) with conda-forge zig 0.16.0 `_15` and `_19`
+(with the `ZIG_LIB_DIR` mirror) and upstream 0.16.0 from PyPI `ziglang`,
+each probe rebuilt independently by a second agent. The recipe came from
+another agent's investigation; this branch's addition is the SDK `-L`
+going last.
+- The OS word must be the literal `native`, then MAJOR.MINOR
+  (`aarch64-native.13` is rejected). zig then treats the OS as
+  non-native (`std.Target.Query.isNativeOs` requires `os_version_min ==
+  null`): `LC_BUILD_VERSION minos 13.0`, and no LC_RPATH for `-L`
+  directories. The ABI still counts as native, so headers and libSystem
+  come from the installed SDK (`LibCDirs.detect` looks for it when
+  `isNativeAbi`); clang sees the 13.0 target
+  (`__ENVIRONMENT_OS_VERSION_MIN_REQUIRED__` 130000, availability
+  warnings for macOS 14 APIs).
+- The non-native link searches no SDK directory, so two come back by
+  hand: `-F$SDK/System/Library/Frameworks` (else `-framework X` fails,
+  "searched paths: none"; headers do not need it) and `-L$SDK/usr/lib`
+  (else `-lresolv`, `-lz`, `-liconv`, `-lcurl` are not found). The SDK
+  `-L` must come **last**: ahead of conda's lib dir, `-lz` silently binds
+  the SDK's stub (zlib 1.2.12 against conda's 1.3.2 headers; iconv,
+  curl likewise), on both zigs, with no warning.
+- conda-forge zig still links a shared `@rpath/libc++.1.dylib` for this
+  target without the mirror; the mirror stays.
+- zig ignores `-mmacosx-version-min` and `MACOSX_DEPLOYMENT_TARGET`.
+  flang does not: its objects default to the host SDK's version (26.0),
+  and zig's link stamps 13.0 over them without a warning (all 43 of R's
+  Fortran objects were 26.0 in the probe). flang honours
+  `-mmacosx-version-min=13.0`, and the flag wins over the variable.
+- What the 2026-09-30 test got right and wrong: `<arch>-macos.13.0` (an
+  explicit OS tag) does lose the SDK's `usr/include` (`net/if_media.h`
+  for ps; `libDER/DERItem.h` via AppKit.h). But `-F` does not make
+  conda-forge zig panic: the panic ("for loop over objects with
+  non-equal lengths"), and upstream zig's "unable to resolve dependency
+  /usr/lib/libobjc.A.dylib", happen only without the SDK `-L`. The
+  reported `-fvisibility=hidden -O3` linker crash did not reproduce.
+- Probe results: zig level, both zigs: CoreFoundation C,
+  `net/if_media.h`, Objective-C AppKit, C++ exceptions, conda zlib and
+  libomp, flang with the static runtime: all `minos 13.0`, no LC_RPATH,
+  valid ad-hoc signature, load and run. Through the shims on the slim and
+  minimal trees: Rcpp (and a sourceCpp), ps, data.table with OpenMP,
+  quadprog, minqa, cli, a CoreFoundation package: `minos 13.0`, no
+  LC_RPATH, no libc++, no host path, all run under `env -i`; the same
+  flags minus the target give `minos 26.4.1` and two absolute rpaths.
+  Through build.zig, slim: all 16 Mach-O files under `lib/R` at 13.0,
+  `otool -L` unchanged, smoke passes, the cairo PNG byte-identical;
+  without the SDK paths the cairo module fails to link (`-lresolv`, then
+  CoreFoundation).
+- **Adopted (decided 2026-10-01):**
+  - toolchain/zig-cc and zig-cxx pass `-target <arch>-native.13.0
+    -F$SDK/System/Library/Frameworks` and append `-L$SDK/usr/lib` to
+    link lines; the `-l`/`-L` rewrite is gone (the target alone records
+    no rpaths). `$SDK` from `xcrun --sdk macosx --show-sdk-path`, as zig
+    itself asks.
+  - build.zig: one query for every macOS variant (`os_version_min =
+    macos_min`, no OS tag); `Ctx.addSdkPaths` adds both SDK dirs last on
+    every shared library and on `bin/exec/R`; `fortranOne` passes
+    `-mmacosx-version-min=13.0`; Makeconf's `FC` carries the same flag
+    (in `FC`, not `FFLAGS`, so a user's `~/.R/Makevars` keeps it and
+    `SHLIB_FCLD = $(FC)` gets it).
+  - Checks: verify-bundle.sh asserts `minos <= 13.0` for every Mach-O in
+    the tree and for its test packages' objects and `.so` (C++ and
+    Fortran: only the objects show a compiler that ignored the floor),
+    relative install names (`libR.dylib` is `@rpath/libR.dylib`), no
+    build-machine dependency, and no SDK `/usr/lib` library in R's own
+    binaries beyond libSystem, libresolv and libobjc (the guard for the
+    SDK `-L` order); contract-test.sh asserts `minos <= 13.0` for every
+    compiled package and that data.table's libz is not the SDK's.
+  - recipe: `__osx >=13.0` in r-zig-slim's osx run requirements
+    (r-zig-toolchain inherits it through its exact pin).
+- Not tested: loading on macOS 13 (no machine); R-level installs with
+  upstream zig.
 
 **Static libc++ for R itself on macOS (the mirror before `zig build`):
 works, with two conditions.**
@@ -1059,14 +1108,15 @@ the same for its C++ test package.
   - macOS: zig. For a native target, every `-L` directory becomes an
     LC_RPATH (`src/main.zig`: `each_lib_rpath orelse is_native_os`), so
     each package recorded `R_HOME/lib`. `zig cc` rejects
-    `-fno-each-lib-rpath` ("Unknown Clang option"), and pinning
-    `-target <arch>-macos.13.0` loses the SDK: no `-framework`, no SDK
-    headers (pak's `ps` stops compiling). C++ itself does work pinned;
-    an earlier note here said otherwise, from misread warnings (see
-    "flang-pixi handoff §6, reconciled"). The shims now resolve `-l<name>` against the `-L` directories
-    themselves (ld64's order) and drop the `-L` flags. Packages with no
-    rpath load: libR, libc++ and libomp are already in the process and
-    match by install name (tested with C and C++ on omicron).
+    `-fno-each-lib-rpath` ("Unknown Clang option"). From 2026-09-30 the
+    shims resolved `-l<name>` against the `-L` directories themselves
+    and dropped the `-L` flags; since 2026-10-01 they pass
+    `-target <arch>-native.13.0`, a non-native OS that records no rpath
+    for `-L` directories and still uses the SDK, and the rewrite is gone
+    (see "macOS deployment target" under "flang-pixi handoff §6,
+    reconciled"). Packages with no rpath load: libR, libc++ and libomp
+    are already in the process and match by install name (tested with C
+    and C++ on omicron).
   - R's own macOS binaries also carried build-machine rpaths (the conda
     lib dir, absolute, and `build/zig-cache/...`, relative): stage.sh
     only added its `@loader_path` pair. It now deletes every other
@@ -1100,13 +1150,14 @@ the same for its C++ test package.
     (omicron). contract-test.sh now asserts minimal's actual property,
     empty `SHLIB_OPENMP_{C,CXX,F}FLAGS` in Makeconf, and requires a
     single-threaded data.table only off macOS.
-- **macOS deployment target of compiled packages.** With the native
-  target, zig stamps `minos` with the build host's version (26.4.1 on
-  omicron), and zig 0.16 ignores `MACOSX_DEPLOYMENT_TARGET`. R minimal
-  targets 13.0. r-zig-packages binaries built on a newer runner would
-  claim that runner's macOS. A pinned target is ruled out (see "flang-pixi
-  handoff §6, reconciled"); options: build them on the oldest runner, or
-  rewrite `LC_BUILD_VERSION` after linking and re-sign ad hoc.
+- **macOS deployment target of compiled packages.** Resolved 2026-10-01
+  by `-target <arch>-native.13.0` in the shims and the same query in
+  build.zig (see "macOS deployment target" under "flang-pixi handoff §6,
+  reconciled"): R and the packages compiled with it say `minos 13.0`
+  whatever macOS builds them, so r-zig-packages can build on any
+  runner. The shim and build.zig changes ship together: a package only
+  loads where its tree's libR does. Still untested: loading on macOS 13
+  itself.
 - **Load-time needs of compiled packages:** the flang runtime is linked
   statically on linux-64 and macOS (quadprog and minqa need none).
   libc++ is static on linux-64 and Windows, but C++ packages built on

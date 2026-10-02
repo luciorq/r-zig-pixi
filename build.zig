@@ -41,6 +41,13 @@ const rspec = @import("zigbuild/rspec.zig");
 
 const r_version = "4.6.1";
 
+/// macOS deployment target of everything this build links, and of the
+/// packages compiled through toolchain/zig-cc and zig-cxx (which spell it
+/// "<arch>-native.13.0"; keep the two in sync). See the target comment in
+/// build().
+const macos_min: std.SemanticVersion = .{ .major = 13, .minor = 0, .patch = 0 };
+const macos_min_flag = "-mmacosx-version-min=13.0"; // flang's spelling of macos_min
+
 /// F5/F6: linux uses flang + ELF (.so/DT_NEEDED/RUNPATH); macOS uses
 /// gfortran + Mach-O (.dylib/install_name/@rpath — patchelf doesn't apply
 /// at all, and per FINALIZATION.md F5.2 all Mach-O rpath/codesign surgery
@@ -132,6 +139,7 @@ const Ctx = struct {
     flangrt_dir: []const u8, // conda clang resource dir holding libflang_rt.runtime.a (fc == .flang; "" otherwise)
     gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran (fc == .gfortran; "" otherwise)
     toolchain_hint: []const u8, // -Dtoolchain-hint, "" when unset
+    sdk: []const u8, // macOS: the installed SDK's root (xcrun); "" elsewhere
     subst: std.StringHashMap([]const u8),
     geninc: std.Build.LazyPath, // generated headers dir (config.h, Rconfig.h, ...)
     libR: *std.Build.Step.Compile,
@@ -234,6 +242,20 @@ const Ctx = struct {
         mod.addLibraryPath(.{ .cwd_relative = lib_dir });
     }
 
+    /// macOS: the two SDK search dirs a deployment-target link leaves out
+    /// (see the target comment in build()): -F for -framework, and usr/lib
+    /// for the SDK-only libraries (libresolv, libobjc's dependencies). Call
+    /// it last on a module, once every other -L is in: zig searches library
+    /// dirs in the order they were added, and the SDK's usr/lib also has
+    /// .tbd stubs for libz, libiconv and libcurl, so ahead of conda's lib
+    /// dir those -l flags would bind the SDK's older libraries without a
+    /// word. No-op off macOS.
+    fn addSdkPaths(ctx: *const Ctx, mod: *std.Build.Module) void {
+        if (ctx.sdk.len == 0) return;
+        mod.addFrameworkPath(.{ .cwd_relative = ctx.absSub("{s}/System/Library/Frameworks", .{ctx.sdk}) });
+        mod.addLibraryPath(.{ .cwd_relative = ctx.absSub("{s}/usr/lib", .{ctx.sdk}) });
+    }
+
     /// R_HOME install-dir for `sub` — "Library/lib/R/<sub>" on Windows
     /// (must match ctx.rhome; see the NTFS Lib/ case-fold note at this
     /// struct's rhome-computation call site), "lib/R/<sub>" elsewhere.
@@ -332,26 +354,35 @@ pub fn build(b: *std.Build) !void {
     // startup with SIGILL or SIGSEGV. See gen-subst.sh's sysroot filter.
     // Baseline stays on its own merits.)
     //
-    // macOS + minimal: the same floor idea as glibc 2.17, as a deployment
-    // target. A native macOS query makes zig stamp every binary's
-    // LC_BUILD_VERSION minos with the *build host's* version (min = max =
-    // detected), so a wheel built on a macOS 15.x runner would claim to
-    // need 15.x — and make-wheel.py derives the wheel tag from exactly that.
-    // 13.0 is zig 0.16's own supported floor (std.Target's default macOS
-    // range); ziglang, the wheel's compiler dependency, needs 12. The
-    // price of a non-native OS query is building against zig's bundled
-    // Darwin headers/libSystem stubs instead of the SDK — fine for this
-    // profile: the only SDK-only headers R includes are under HAVE_AQUA
-    // (devQuartz.c), and without cairo no -framework is linked. slim/full
-    // keep the native query (their cairo stack links frameworks).
+    // macOS: the same floor idea as glibc 2.17, as a deployment target
+    // (macos_min, 13.0). A native macOS query makes zig stamp every
+    // binary's LC_BUILD_VERSION minos with the *build host's* version, so
+    // a tree built on macOS 26 claims to need 26 (and make-wheel.py derives
+    // the wheel tag from exactly that). 13.0 is zig 0.16's own supported
+    // floor (std.Target's default macOS range); ziglang, the wheel's
+    // compiler dependency, needs 12. The query names no OS tag, only
+    // os_version_min (the "<arch>-native.13.0" the shims pass): zig then
+    // treats the OS as non-native, so it stamps 13.0 and records no rpath
+    // per -L directory, while the ABI still counts as native, so headers
+    // and libSystem come from the installed SDK (std.Target.Query's
+    // isNativeOs requires os_version_min == null; LibCDirs.detect looks
+    // for the SDK when isNativeAbi). The non-native link searches neither
+    // the SDK's frameworks nor its usr/lib, so ctx.addSdkPaths adds both
+    // back. "<arch>-macos.13.0" (an explicit OS tag) would lose the SDK
+    // altogether. Verified on omicron 2026-10-01 for every Mach-O under
+    // lib/R (feat-no-host-paths PLAN.md, "macOS deployment target").
     const target = if (os == .windows)
         b.resolveTargetQuery(.{ .abi = .gnu, .cpu_model = .baseline })
     else if (os == .linux)
         b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = .{ .major = 2, .minor = 17, .patch = 0 }, .cpu_model = .baseline })
-    else if (variant == .minimal)
-        b.resolveTargetQuery(.{ .cpu_model = .baseline, .os_version_min = .{ .semver = .{ .major = 13, .minor = 0, .patch = 0 } } })
     else
-        b.resolveTargetQuery(.{ .cpu_model = .baseline });
+        b.resolveTargetQuery(.{ .cpu_model = .baseline, .os_version_min = .{ .semver = macos_min } });
+    // The installed SDK, asked the way zig itself asks
+    // (std.zig.system.darwin.getSdk); "" off macOS.
+    const sdk: []const u8 = if (os == .macos)
+        std.mem.trim(u8, b.run(&.{ "/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path" }), " \t\r\n")
+    else
+        "";
     // gnuwin32 has no slim/full switch at all (jpeg/tiff/tcltk are always
     // on — "slim==full on Windows", a pre-existing project convention);
     // -Dvariant is meaningless there, force .full regardless of what was
@@ -449,6 +480,7 @@ pub fn build(b: *std.Build) !void {
         .rhome = rhome,
         .config_dir = config_dir,
         .toolchain_hint = toolchain_hint,
+        .sdk = sdk,
         // Windows keeps these defaults (its compile graph never passes
         // `.openmp = true` and builds its own cairo device); unix overwrites
         // both from subst.txt right after loadSubstTable below.
@@ -511,6 +543,13 @@ pub fn build(b: *std.Build) !void {
     }
     ctx.openmp = ctx.subst.get("R_OPENMP_CFLAGS").?.len > 0;
     ctx.devcairo = ctx.subst.get("BUILD_DEVCAIRO_TRUE").?.len == 0;
+    // macOS: packages' Fortran objects get the same floor as fortranOne's.
+    // In FC rather than FFLAGS/FCFLAGS: a user's ~/.R/Makevars that sets
+    // FFLAGS keeps it, and SHLIB_FCLD = $(FC) carries it to the rare
+    // Fortran-driver link (USE_FC_TO_LINK).
+    if (os == .macos and ctx.fc == .flang) {
+        try ctx.subst.put("FC", b.fmt("{s} {s}", .{ ctx.subst.get("FC").?, macos_min_flag }));
+    }
 
     // ------------------------------------------------------------------
     // Generated headers (what config.status + src/include/Makefile make)
@@ -617,6 +656,7 @@ pub fn build(b: *std.Build) !void {
     ctx.linkBlas(rbin_mod);
     linkOmp(&ctx, rbin_mod);
     ctx.relRPaths(rbin_mod, .exec);
+    ctx.addSdkPaths(rbin_mod); // last: see addSdkPaths
     const rbin = b.addExecutable(.{ .name = "R.bin", .root_module = rbin_mod });
     rbin.rdynamic = true; // MAIN_LDFLAGS = -Wl,--export-dynamic
     rbin.each_lib_rpath = false; // see addSharedLib
@@ -2307,11 +2347,14 @@ fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, script_name: []const u8
 /// knob (found via FINALIZATION.md F5.1's first real build attempt, not
 /// anticipated in the spec).
 fn addSharedLib(ctx: *const Ctx, name: []const u8, mod: *std.Build.Module) *std.Build.Step.Compile {
+    ctx.addSdkPaths(mod); // last: every caller has added its -L dirs by now
     const lib = ctx.b.addLibrary(.{ .linkage = .dynamic, .name = name, .root_module = mod });
     if (ctx.os == .macos) lib.linker_allow_shlib_undefined = true;
-    // A native target (macOS) would otherwise turn every -L directory (the
-    // env's lib dir, flang's) into an absolute rpath; relRPaths sets the
-    // ones that ship.
+    // A native target would otherwise turn every -L directory (the env's
+    // lib dir, flang's) into an absolute rpath; relRPaths sets the ones
+    // that ship. Redundant with macOS's deployment-target query (a
+    // non-native OS gets no implicit rpaths), kept so a target change
+    // can't bring them back.
     lib.each_lib_rpath = false;
     macHeaderpad(ctx, lib);
     return lib;
@@ -2547,6 +2590,11 @@ fn fortranOne(ctx: *const Ctx, dir: []const u8, file: []const u8, mod_deps: []co
     // reports it as an unused argument on every file) — omit it there.
     const run = b.addSystemCommand(&.{ compiler, opt, "-c" });
     if (ctx.os != .windows) run.addArg("-fpic");
+    // macOS: flang stamps its objects with the host SDK's version (minos
+    // 26.0 on a macOS 26 machine) unless given the floor, and zig's link
+    // relabels them 13.0 without a word. The flag rather than
+    // MACOSX_DEPLOYMENT_TARGET: flang lets the flag win over the variable.
+    if (ctx.os == .macos and fc == .flang) run.addArg(macos_min_flag);
     // gfortran on Linux: never emit glibc libmvec vector-math calls.
     // gfortran's driver auto-adds `-fpre-include=<sysroot>/usr/include/
     // finclude/math-vector-fortran.h` whenever the sysroot's glibc is new

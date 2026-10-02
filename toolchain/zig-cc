@@ -74,8 +74,30 @@ case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*) ;; *) r_zig_static_libcxx ;; esa
 # macOS have no glibc concept, so this only applies when uname reports a
 # real Linux kernel (not MSYS's "MINGW64_NT"/"MSYS_NT").
 target=()
+sdkL=()
 if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
   target=(-target "$(uname -m)-linux-gnu.2.17")
+fi
+# macOS: the same floor idea, as a deployment target (13.0, R's own; see
+# build.zig). The OS word must be the literal "native" plus MAJOR.MINOR:
+# zig then treats the OS as non-native (LC_BUILD_VERSION minos 13.0, and
+# no implicit LC_RPATH per -L directory) but still finds the installed
+# SDK's headers and libSystem. "<arch>-macos.13.0" would lose the SDK's
+# usr/include (net/if_media.h, which ps needs), and "<arch>-native.13" is
+# rejected. Two SDK search dirs that the non-native link leaves out come
+# back by hand: -F<sdk>/System/Library/Frameworks (-framework X at link)
+# and -L<sdk>/usr/lib (SDK-only libs: -lz -liconv -lcurl -lresolv), the
+# latter LAST on link lines only, so a -lz whose headers came from a -L
+# directory the caller passed binds that library, not the SDK's .tbd.
+# -mmacosx-version-min and MACOSX_DEPLOYMENT_TARGET are ignored by zig.
+if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
+  case "$(uname -m)" in arm64|aarch64) _arch=aarch64 ;; *) _arch=x86_64 ;; esac
+  target=(-target "$_arch-native.13.0")
+  _sdk="$(/usr/bin/xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+  if [ -n "$_sdk" ]; then
+    target+=("-F$_sdk/System/Library/Frameworks")
+    sdkL=("-L$_sdk/usr/lib")
+  fi
 fi
 
 # Windows: zig's MinGW -l search tries only <n>.dll, <n>.lib, lib<n>.a —
@@ -198,41 +220,13 @@ case "$(uname -s 2>/dev/null)" in
     done
     set -- "${_dedup[@]}" "${omp[@]}"
     omp=()
-    # No implicit rpaths. For a native target zig defaults to
-    # -feach-lib-rpath: every -L directory becomes an LC_RPATH, so each
-    # package recorded R_HOME/lib (and any conda/Homebrew lib dir) as an
-    # absolute path from the machine that compiled it. `zig cc` rejects
-    # -fno-each-lib-rpath, and a pinned -target (what keeps Linux free of
-    # this) loses the SDK: no -framework, and conda-forge zig then fails
-    # to build libc++. Apple's ld adds no rpaths for -L, so do what it
-    # sees: resolve each -l<name> against the -L directories ourselves
-    # (ld64's order: per directory .tbd, .dylib, then .a), pass the file,
-    # and drop the -L flags. Names found in none of them stay -l<name>
-    # for zig's own search (the SDK). libR, libc++ and libomp are already
-    # loaded by R and match by install name; explicit -Wl,-rpath flags
-    # (conda's Makeconf LDFLAGS) are left alone. Links only.
+    # No implicit rpaths: the non-native target above records none for
+    # -L directories, so the -L flags pass through untouched. The SDK -L
+    # is for links only.
     _link=true
     for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) _link=false; break;; esac; done
-    if $_link; then
-      _ldirs=()
-      for a in "$@"; do case "$a" in -L?*) _ldirs+=("${a#-L}");; esac; done
-      _args=()
-      for a in "$@"; do
-        case "$a" in
-          -L?*) continue ;;
-          -l?*)
-            for d in "${_ldirs[@]}"; do
-              for f in "$d/lib${a#-l}.tbd" "$d/lib${a#-l}.dylib" "$d/lib${a#-l}.a"; do
-                if [ -f "$f" ]; then a="$f"; break 2; fi
-              done
-            done
-            ;;
-        esac
-        _args+=("$a")
-      done
-      set -- "${_args[@]}"
-    fi
+    $_link || sdkL=()
     ;;
 esac
 
-exec "${ZIG[@]}" cc -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}"
+exec "${ZIG[@]}" cc -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}" "${sdkL[@]}"
