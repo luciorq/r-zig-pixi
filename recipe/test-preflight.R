@@ -2,9 +2,10 @@
 ## source, and one with compiled code stops with the preflight message
 ## that names the toolchain package (feat-no-host-paths PLAN.md, phase T).
 stopifnot(!file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")))
-## A user Makevars switches the preflight off; a dev shell's
-## R_MAKEVARS_USER (zigbuild/dev.Makevars, pixi.toml) must not leak in.
-Sys.unsetenv("R_MAKEVARS_USER")
+## A user Makevars switches the preflight off: a dev shell's
+## R_MAKEVARS_USER must not leak in, nor its R_ZIG_EXTRA_ENV (pixi.toml),
+## the compilers' extra environment.
+Sys.unsetenv(c("R_MAKEVARS_USER", "R_ZIG_EXTRA_ENV"))
 d <- tempfile("rzig-")
 lib <- file.path(d, "lib")
 dir.create(lib, recursive = TRUE)

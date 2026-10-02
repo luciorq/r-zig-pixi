@@ -144,7 +144,7 @@ const Ctx = struct {
     gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran (fc == .gfortran; "" otherwise)
     toolchain_hint: []const u8, // -Dtoolchain-hint, "" when unset
     sdk: []const u8, // macOS: the installed SDK's root (xcrun); "" elsewhere
-    conda_env: bool, // -Dconda-env: the install prefix is the conda env R is built in
+    prefix_is_env: bool, // the install prefix is the env R is built in (the conda build): samePhysicalDir
     subst: std.StringHashMap([]const u8),
     // Makeconf's own values for the keys that name the build environment
     // (loadSubstFile, makeconfValue): substituted over `subst` into
@@ -320,11 +320,6 @@ pub fn build(b: *std.Build) !void {
     // conda one for the conda build; the wheel sets its own; empty means R's
     // generic message.
     const toolchain_hint = b.option([]const u8, "toolchain-hint", "R_ZIG_TOOLCHAIN_HINT default written into etc/Renviron") orelse "";
-    // The conda build: the install prefix is the environment R is built in
-    // (recipe/build.sh; zig-build.sh passes it when R_ZIG_CONDA_BUILD is
-    // set). The one difference it makes to the tree: Makeconf's LDFLAGS
-    // keeps an rpath into the environment's lib dir (makeconfValue).
-    const conda_env = b.option(bool, "conda-env", "the install prefix is the conda env R is built in (the conda package)") orelse false;
 
     const native = b.resolveTargetQuery(.{});
     const os: Os = switch (native.result.os.tag) {
@@ -498,7 +493,7 @@ pub fn build(b: *std.Build) !void {
         .config_dir = config_dir,
         .toolchain_hint = toolchain_hint,
         .sdk = sdk,
-        .conda_env = conda_env,
+        .prefix_is_env = samePhysicalDir(io, arena, install_prefix, conda),
         // Windows keeps these defaults (its compile graph never passes
         // `.openmp = true` and builds its own cairo device); unix overwrites
         // both from subst.txt right after loadSubstTable below.
@@ -562,6 +557,14 @@ pub fn build(b: *std.Build) !void {
     if (os == .windows) return buildWindows(&ctx, io);
 
     try loadSubstTable(&ctx, io, config_dir);
+    // Makeconf's CPPFLAGS and LDFLAGS are empty in every distribution
+    // (feat-no-host-paths F3b): the compilers, rzig, add the environment's
+    // -I and -L, and for a conda env the rpath into its lib dir
+    // (zigbuild/tools/rzig/environment.zig). An empty assignment still
+    // overrides a CPPFLAGS or LDFLAGS in the environment, as R's own did.
+    // R's own build keeps the absolute values (ctx.subst).
+    try ctx.mk_subst.put("CPPFLAGS", "");
+    try ctx.mk_subst.put("LDFLAGS", "");
     // openblas has no vendored config of its own (F3.2: a link-time swap),
     // so it inherits the internal-BLAS S-table — and with it a Makeconf
     // telling packages `-lRblas`/`-lRlapack`, libraries this flavor never
@@ -891,14 +894,17 @@ pub fn build(b: *std.Build) !void {
     if (ctx.variant == .minimal) {
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("bin/make") }, .{ .custom = "lib/R/bin/toolchain" }, "make").step);
     }
-    // OpenMP's headers where Makeconf's CPPFLAGS looks,
-    // $(R_HOME)/../../include, for a tree that is not the conda env (the
-    // standalone archive; libomp itself is vendored into <prefix>/lib):
-    // packages' OpenMP probes (data.table's includes omp.h with no flag)
-    // and -fopenmp compiles find them there. A conda env has them from
-    // llvm-openmp, which owns that path. Phase T's standalone toolchain
-    // archive takes them over.
-    if (ctx.openmp and !ctx.conda_env) {
+    // OpenMP's headers in <prefix>/include, where rzig looks
+    // (zigbuild/tools/rzig/environment.zig: R's own environment, and its
+    // omp.h is what makes rzig add -lomp to a -fopenmp link), for a tree
+    // that is not the env R is built in (the standalone archive, the dev
+    // tree; libomp itself is vendored into <prefix>/lib): packages' OpenMP
+    // probes (data.table's includes omp.h with no flag) and -fopenmp
+    // compiles find them there. The conda build's prefix is the env, which
+    // has them from llvm-openmp, the package that owns that path; the same
+    // test as vendor-libs.sh's. Phase T's standalone toolchain archive
+    // takes them over.
+    if (ctx.openmp and !ctx.prefix_is_env) {
         inline for (.{ "omp.h", "ompx.h", "omp-tools.h", "ompt.h" }) |h| {
             b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("include/" ++ h) }, .{ .custom = "include" }, h).step);
         }
@@ -1728,8 +1734,8 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     // its own templates, not a bespoke replaceOwned loop — the same
     // unification Phase 4 already did for this file's link-flag
     // siblings (CAIRO_LIBS etc., loaded via loadSubstFile above).
-    // The four values that name a place (feat-no-host-paths F1.5), as
-    // unix's Makeconf writes them (makeconfValue): R_HOME-relative or bare,
+    // The four values that would name a place (feat-no-host-paths F1.5), as
+    // unix's Makeconf writes them (makeconfValue): R_HOME-relative, bare or empty,
     // never the build machine's paths, so the Windows zip and the conda
     // package carry the same file. They go into etc/x64/Makeconf only
     // (`mk`), not ctx.subst.
@@ -1742,17 +1748,17 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     // not directly under bin/ (found via a real "unable to find dynamic
     // system library 'R'" link error).
     try ctx.subst.put("IMPDIR", "bin/x64");
-    // LDFLAGS: empty in both the vendored template AND a real generated
+    // LDFLAGS: empty, as in the vendored template and a real generated
     // Makeconf (gnuwin32 provides external-library search paths via
-    // MkRules.local's LOCAL_SOFT, sourced only at R's OWN build time —
-    // nothing sources it for package builds afterward). CRAN packages
-    // routinely link bare "-lz"/"-lpng" etc. expecting *some* global
-    // search path to exist; point it at the environment's Library/lib,
-    // $(R_HOME)/../../lib (found via a real "unable to find dynamic
-    // system library 'z'" link error compiling data.table). Token-anchored
+    // MkRules.local's LOCAL_SOFT, sourced only at R's OWN build time).
+    // CRAN packages routinely link bare "-lz"/"-lpng" etc. expecting
+    // *some* global search path to exist (data.table: "unable to find
+    // dynamic system library 'z'"): rzig (gcc.exe) adds the environment's
+    // -L<prefix>/Library/lib and -idirafter <prefix>/Library/include, as
+    // on unix (zigbuild/tools/rzig/environment.zig, F3b). Token-anchored
     // (@LDFLAGS@), unlike an earlier bare "LDFLAGS =" substring replace
     // that also matched DYLIB_LDFLAGS, SHLIB_LDFLAGS and ten more.
-    try mk.put("LDFLAGS", "-L\"$(R_HOME)/../../lib\"");
+    try mk.put("LDFLAGS", "");
     // FC: the bare name, found on PATH like every other tool (an activated
     // env has Library/bin there; compiling needs one anyway). Not a copy
     // into bin/toolchain: the flang and gfortran drivers find their own
@@ -2757,14 +2763,18 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
 fn makeconfValue(ctx: *const Ctx, raw: []const u8) ![]const u8 {
     const a = ctx.b.allocator;
     var v = try std.mem.replaceOwned(u8, a, raw, "@ZR_CONDA@/bin/", "");
-    // An rpath into the environment only where the environment is the
-    // install prefix (the conda package): a package linking an env library
-    // (libz, libcurl, libomp) then finds it at load time in any process.
-    // glibc looks only at the executable's DT_RPATH for a dlopened
-    // library's dependencies, so exec/R's own would not help an embedding
-    // process (rpy2). abspath: no lib/R/../.. baked into binaries. The
-    // standalone tree and the wheel get none (verify-bundle.sh).
-    v = try std.mem.replaceOwned(u8, a, v, " -Wl,-rpath,@ZR_CONDA@/lib", if (ctx.conda_env) " -Wl,-rpath,$(abspath $(R_HOME)/../../lib)" else "");
+    // No rpath into the environment, and no CPPFLAGS/LDFLAGS (set empty in
+    // build()): rzig adds them, the rpath for a conda env only
+    // (zigbuild/tools/rzig/environment.zig, F3b). So the `# configure`
+    // comment line (R_CONFIG_ARGS) loses its 'CPPFLAGS=…' and 'LDFLAGS=…'
+    // words too, which would name flags the file does not use; the file is
+    // the same in the conda package, the standalone tree and the wheel.
+    v = try std.mem.replaceOwned(u8, a, v, " -Wl,-rpath,@ZR_CONDA@/lib", "");
+    for ([_][]const u8{ " 'CPPFLAGS=", " 'LDFLAGS=" }) |word| {
+        const i = std.mem.indexOf(u8, v, word) orelse continue;
+        const end = std.mem.indexOfScalarPos(u8, v, i + word.len, '\'') orelse continue;
+        v = try std.mem.concat(a, u8, &.{ v[0..i], v[end + 1 ..] });
+    }
     v = try std.mem.replaceOwned(u8, a, v, "-L@ZR_FLANGRT_DIR@ -lflang_rt.runtime", "-lflang_rt.runtime");
     v = try std.mem.replaceOwned(u8, a, v, "@ZR_CONDA@", "$(R_HOME)/../..");
     v = try std.mem.replaceOwned(u8, a, v, "@ZR_PREFIX@", "$(R_HOME)/../..");
@@ -2772,6 +2782,15 @@ fn makeconfValue(ctx: *const Ctx, raw: []const u8) ![]const u8 {
     v = try std.mem.replaceOwned(u8, a, v, "\\$", "$");
     v = try std.mem.replaceOwned(u8, a, v, "\\\"", "\"");
     return v;
+}
+
+/// Whether two paths name the same directory, by real path (what
+/// vendor-libs.sh's `pwd -P` compares). One that does not resolve, such as
+/// an install prefix not made yet, names another.
+fn samePhysicalDir(io: std.Io, a: std.mem.Allocator, x: []const u8, y: []const u8) bool {
+    const rx = std.Io.Dir.cwd().realPathFileAlloc(io, x, a) catch return false;
+    const ry = std.Io.Dir.cwd().realPathFileAlloc(io, y, a) catch return false;
+    return std.mem.eql(u8, rx, ry);
 }
 
 /// Fail the build when an installed text file (etc/Makeconf, libR.pc)

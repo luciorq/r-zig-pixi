@@ -15,6 +15,22 @@
 //! $(BINPREF)gcc and g++). On unix rzig replaces itself with zig (execve);
 //! on Windows it runs zig and exits with its exit code.
 //!
+//! The compilers own the compile environment (F3b): zig-cc and zig-cxx
+//! add the include/ and lib/ (and, for a conda env on unix, an rpath into
+//! lib/) of the environment R is installed in, which rzig finds from its
+//! own path, and of R_ZIG_EXTRA_ENV; Makeconf's CPPFLAGS and LDFLAGS are
+//! empty (environment.zig, compiler.zig). CONDA_PREFIX is never read.
+//!
+//!   R_ZIG_EXTRA_ENV=<root>  one more environment to compile against: a
+//!                      conda env's root, as an absolute path (rzig adds
+//!                      /Library on Windows).
+//!                      pixi.toml sets it to the pixi env for dev and test
+//!                      runs; a standalone R plus an env of libraries is
+//!                      the other use.
+//!   RZIG_TRACE=1       print the command rzig runs to stderr (one line,
+//!                      shell-quoted), then run it: R CMD INSTALL's log
+//!                      then shows every flag rzig added.
+//!
 //! Test hooks (not for builds):
 //!   RZIG_PRINT_ARGV=1  print what would run instead of running it: the
 //!                      child's ZIG_LIB_DIR as `ZIG_LIB_DIR=<value>` when
@@ -36,6 +52,7 @@ const Ctx = @import("Ctx.zig");
 const compiler = @import("compiler.zig");
 const ar = @import("ar.zig");
 const find_zig = @import("find_zig.zig");
+const environment = @import("environment.zig");
 const libcxx_mirror = @import("libcxx_mirror.zig");
 
 const Tool = enum {
@@ -92,7 +109,7 @@ pub fn main(init: std.process.Init) !u8 {
     };
 
     const env = init.environ_map;
-    const dry_run = if (env.get("RZIG_PRINT_ARGV")) |v| v.len > 0 and !mem.eql(u8, v, "0") else false;
+    const dry_run = isSet(env, "RZIG_PRINT_ARGV");
     var ctx: Ctx = .{
         .io = io,
         .arena = arena,
@@ -123,7 +140,45 @@ pub fn main(init: std.process.Init) !u8 {
     const argv = try mem.concat(arena, []const u8, &.{ zig, zig_args });
 
     if (dry_run) return printArgv(io, env, argv);
+    if (isSet(env, "RZIG_TRACE")) {
+        // what the environment rule saw: this binary's path, and the
+        // environments it chose (environment.zig)
+        ctx.warn("self {s}", .{ctx.self_exe orelse "(unknown)"});
+        for (try environment.list(&ctx)) |e| ctx.warn("environment {s}{s}", .{ e.dir, if (e.conda) " (conda)" else "" });
+        ctx.warn("{s}{f}", .{ if (env_changed) try ctx.fmt("ZIG_LIB_DIR={f} ", .{shellQuoted(env.get("ZIG_LIB_DIR") orelse "")}) else "", shellCommand(argv) });
+    }
     return run(&ctx, argv, if (env_changed) env else null);
+}
+
+/// A switch in the environment: set, not empty, not "0".
+fn isSet(env: *const std.process.Environ.Map, name: []const u8) bool {
+    const v = env.get(name) orelse return false;
+    return v.len > 0 and !mem.eql(u8, v, "0");
+}
+
+/// `argv` as one shell command line, for RZIG_TRACE.
+fn shellCommand(argv: []const []const u8) std.fmt.Alt([]const []const u8, struct {
+    fn f(xs: []const []const u8, w: *Io.Writer) Io.Writer.Error!void {
+        for (xs, 0..) |x, i| try w.print("{s}{f}", .{ if (i == 0) "" else " ", shellQuoted(x) });
+    }
+}.f) {
+    return .{ .data = argv };
+}
+
+/// One word for a POSIX shell: as is when it needs no quoting, else in
+/// single quotes (a quote inside as '\'').
+fn shellQuoted(x: []const u8) std.fmt.Alt([]const u8, struct {
+    fn f(s: []const u8, w: *Io.Writer) Io.Writer.Error!void {
+        const plain = s.len > 0 and for (s) |c| {
+            if (!(std.ascii.isAlphanumeric(c) or mem.findScalar(u8, "%+,-./:=@_", c) != null)) break false;
+        } else true;
+        if (plain) return w.writeAll(s);
+        try w.writeByte('\'');
+        for (s) |c| if (c == '\'') try w.writeAll("'\\''") else try w.writeByte(c);
+        try w.writeByte('\'');
+    }
+}.f) {
+    return .{ .data = x };
 }
 
 /// A tool name from argv[0] (or rzig's first argument): the base name,
@@ -143,7 +198,25 @@ fn selfExe(io: Io, arena: mem.Allocator, arg0: []const u8) ?[]const u8 {
         break :blk arg0;
     };
     if (builtin.os.tag != .windows) return p;
-    return mem.replaceOwned(u8, arena, p, "\\", "/") catch null;
+    // R starts programs on Windows by the 8.3 short form of the whole path
+    // (system()/system2(): .../lib/R/bin/TOOLCH~1/gcc.exe), which the
+    // environment rule's /lib/R/bin/toolchain suffix would not match:
+    // expand it to the long form first (found on kappa, 2026-10-02: the
+    // conda package's test called gcc.exe that way; Zig's realpath keeps
+    // the short names).
+    const long = longPathName(arena, p) orelse p;
+    return mem.replaceOwned(u8, arena, long, "\\", "/") catch null;
+}
+
+extern "kernel32" fn GetLongPathNameW(short: [*:0]const u16, long: [*]u16, len: u32) callconv(.winapi) u32;
+
+/// Windows: `p` with every 8.3 short component in its long form, or null.
+fn longPathName(arena: mem.Allocator, p: []const u8) ?[]const u8 {
+    const w = std.unicode.utf8ToUtf16LeAllocZ(arena, p) catch return null;
+    const buf = arena.alloc(u16, 32768) catch return null;
+    const n = GetLongPathNameW(w.ptr, buf.ptr, @intCast(buf.len));
+    if (n == 0 or n > buf.len) return null;
+    return std.unicode.utf16LeToUtf8Alloc(arena, buf[0..n]) catch null;
 }
 
 fn printArgv(io: Io, env: *const std.process.Environ.Map, argv: []const []const u8) !u8 {
@@ -198,6 +271,12 @@ test toolName {
     for ([_][]const u8{ "zig-cxx", "g++.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .cxx);
     try std.testing.expect(Tool.fromName(toolName("zig-ar")) == .ar);
     try std.testing.expect(Tool.fromName(toolName("zig-ranlib")) == .ranlib);
+}
+
+test shellCommand {
+    var buf: [256]u8 = undefined;
+    const s = try std.fmt.bufPrint(&buf, "{f}", .{shellCommand(&.{ "/z/zig", "cc", "-DX=\"a b\"", "it's", "", "-I/a b", "-Wl,-rpath,/e/lib" })});
+    try std.testing.expectEqualStrings("/z/zig cc '-DX=\"a b\"' 'it'\\''s' '' '-I/a b' -Wl,-rpath,/e/lib", s);
 }
 
 test {

@@ -42,7 +42,48 @@ pub fn libDirs(gpa: mem.Allocator, args: Args) !std.ArrayList([]const u8) {
     return dirs;
 }
 
+/// Options that read the next argument as their value (clang's separate
+/// forms seen on compile and link lines): a `-o` there is no output flag.
+const takes_value = std.StaticStringMap(void).initComptime(.{
+    .{"-Xlinker"},         .{"-Xclang"},                .{"-Xpreprocessor"},         .{"-Xassembler"},
+    .{"-Xanalyzer"},       .{"-Xopenmp-target"},        .{"-x"},                     .{"-MF"},
+    .{"-MT"},              .{"-MQ"},                    .{"-MJ"},                    .{"-include"},
+    .{"-imacros"},         .{"-include-pch"},           .{"-isystem"},               .{"-idirafter"},
+    .{"-iquote"},          .{"-iprefix"},               .{"-iwithprefix"},           .{"-iwithprefixbefore"},
+    .{"-isysroot"},        .{"-iframework"},            .{"-cxx-isystem"},           .{"-I"},
+    .{"-L"},               .{"-D"},                     .{"-U"},                     .{"-l"},
+    .{"-F"},               .{"-B"},                     .{"-framework"},             .{"-weak_framework"},
+    .{"-arch"},            .{"-target"},                .{"-z"},                     .{"-u"},
+    .{"-T"},               .{"-e"},                     .{"-rpath"},                 .{"-install_name"},
+    .{"-current_version"}, .{"-compatibility_version"}, .{"-exported_symbols_list"}, .{"-unexported_symbols_list"},
+    .{"-bundle_loader"},   .{"-mllvm"},                 .{"--param"},                .{"--sysroot"},
+    .{"-dependency-file"},
+});
+
+/// Where the first standalone `-o` is: one that is not the value of
+/// another option (`-Xlinker -o`, `-MF -o`). null when there is none (a
+/// joined `-ofile`, a compile to the default name, `-E`).
+pub fn outputIndex(args: Args) ?usize {
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (mem.eql(u8, args[i], "-o")) return i;
+        if (takes_value.has(args[i])) i += 1;
+    }
+    return null;
+}
+
 const testing = std.testing;
+
+test outputIndex {
+    try testing.expectEqual(@as(?usize, 2), outputIndex(&.{ "-shared", "-L/a", "-o", "p.so", "-o", "q" }));
+    try testing.expectEqual(@as(?usize, 0), outputIndex(&.{ "-o", "conftest", "conftest.c" }));
+    try testing.expectEqual(@as(?usize, 5), outputIndex(&.{ "-Xlinker", "-o", "-MF", "-o", "a.c", "-o", "a" }));
+    try testing.expectEqual(@as(?usize, null), outputIndex(&.{ "-olibx.so", "x.o" }));
+    try testing.expectEqual(@as(?usize, null), outputIndex(&.{ "-c", "a.c" }));
+    try testing.expectEqual(@as(?usize, null), outputIndex(&.{"-Xclang"}));
+    // the value of -o is the output's name, even when it is "-o"
+    try testing.expectEqual(@as(?usize, 0), outputIndex(&.{ "-o", "-o" }));
+}
 
 test anyWord {
     try testing.expect(anyWord(&.{ "a", "-shared" }, "-shared"));

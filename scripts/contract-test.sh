@@ -78,8 +78,9 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   # SHLIB_OPENMP_* flags. data.table follows them on linux, but on macOS
   # its configure probes -Xclang -fopenmp itself and links -lomp, which
   # succeeds wherever a libomp is reachable (conda llvm-openmp in the dev
-  # env, which zigbuild/dev.Makevars puts on the -L and rpath). That is the
-  # package opting in, not R offering OpenMP, so there it is reported only.
+  # env, whose -L and rpath rzig adds: pixi.toml sets R_ZIG_EXTRA_ENV).
+  # That is the package opting in, not R offering OpenMP, so there it is
+  # reported only.
   th_info <- capture.output(getDTthreads(verbose = TRUE))
   cat(th_info, sep = "\n")
   if (Sys.getenv("R_CONTRACT_VARIANT") == "minimal") {
@@ -123,14 +124,19 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
     apps <- ps::ps_apps()
     stopifnot(is.data.frame(apps))
   }
-  # Makeconf names no build path (feat-no-host-paths F1.5): FLIBS is the
-  # bare runtime rzig resolves, and LDFLAGS has no rpath outside the
-  # conda package. --no-user-files: the pixi env points R_MAKEVARS_USER at
-  # zigbuild/dev.Makevars, which adds the env -I/-L/-rpath on top.
+  # Makeconf names no build path and no environment (feat-no-host-paths
+  # F1.5, F3b): FLIBS is the bare runtime rzig resolves, CPPFLAGS and
+  # LDFLAGS are empty (the compilers, rzig, add the environment -I, -L and
+  # conda rpath), and CC is rzig. --no-user-files: the shipped Makeconf
+  # alone, whatever personal Makevars this machine has.
   cfg <- function(v) tools::Rcmd(c("config", "--no-user-files", v), stdout = TRUE)
+  cc1 <- strsplit(trimws(cfg("CC")), " +")[[1]][1]
   stopifnot(grepl("-lflang_rt.runtime", cfg("FLIBS"), fixed = TRUE),
             !grepl("libflang_rt", cfg("FLIBS"), fixed = TRUE),
-            !grepl("-rpath", cfg("LDFLAGS"), fixed = TRUE))
+            identical(trimws(cfg("CPPFLAGS")), ""),
+            identical(trimws(cfg("LDFLAGS")), ""),
+            basename(dirname(cc1)) == "toolchain",
+            sub(".exe$", "", basename(cc1)) %in% c("zig-cc", "gcc"))
   cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
   cat("data.table grouped aggregation: OK\n")
   cat("minqa (Rcpp-dependent + package Fortran) bobyqa: OK\n")
@@ -138,6 +144,50 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   cat("pak (recursive R.exe invocation + mbedtls quoted -D flags): OK\n")
   cat("ps (process introspection", if (ps::ps_os_type()[["MACOS"]]) "+ apps.m Objective-C ps_apps()" else "", "): OK\n")
 '
+# The environments rzig compiled those against (feat-no-host-paths F3b):
+# the tree's own (R_HOME/../..), then the pixi env, which pixi.toml names
+# in R_ZIG_EXTRA_ENV. A link line as rzig would run it: both -L before the
+# -o, an rpath only into the pixi env (a conda env; the tree is not), the
+# headers after the caller's arguments in the same order. Windows: the
+# environments are <root>/Library, headers by -idirafter, no rpath.
+if [ -n "${R_ZIG_EXTRA_ENV:-}" ]; then
+  rhome="$("$R_BIN" --vanilla -e 'cat(normalizePath(R.home(), winslash = "/"))')"
+  own="$(cd "$rhome/../.." && pwd -P)"
+  env_root="$R_ZIG_EXTRA_ENV"
+  [ "$OS" = windows ] && env_root="$(cygpath -u "$env_root")"
+  extra="$(cd "$env_root" && pwd -P)"
+  tc="$rhome/bin/toolchain/zig-cc"
+  if [ "$OS" = windows ]; then
+    own="$(cygpath -m "$own")"; extra="$(cygpath -m "$extra")/Library"; tc="$rhome/bin/toolchain/gcc.exe"
+  fi
+  argv="$(cd "$LIB" && RZIG_PRINT_ARGV=1 "$tc" -shared -o rzig-contract.so a.o -lz)"
+  # Never fails (set -e, pipefail): a missing flag is an empty position,
+  # which the checks below report with the argv.
+  at() { printf '%s\n' "$argv" | grep -nixF -- "$1" | head -1 | cut -d: -f1 || true; }
+  o="$(at -o)" lo="$(at "-L$own/lib")" le="$(at "-L$extra/lib")"
+  bad=""
+  { [ -n "$o" ] && [ -n "$lo" ] && [ -n "$le" ] && [ "$lo" -lt "$le" ] && [ "$le" -lt "$o" ]; } || bad="$bad order-of-L"
+  if [ "$OS" = windows ]; then
+    printf '%s\n' "$argv" | grep -q -- '-rpath' && bad="$bad rpath"
+    ie="$(at "$extra/include")"
+    { [ -n "$ie" ] && [ "$ie" -gt "$o" ] && [ "$(printf '%s\n' "$argv" | sed -n "$((ie - 1))p")" = -idirafter ]; } || bad="$bad idirafter"
+  else
+    re="$(at "-Wl,-rpath,$extra/lib")" ie="$(at "-I$extra/include")"
+    { [ -n "$re" ] && [ "$re" = $((le + 1)) ]; } || bad="$bad extra-rpath"
+    [ -z "$(at "-Wl,-rpath,$own/lib")" ] || bad="$bad own-rpath"
+    { [ -n "$ie" ] && [ "$ie" -gt "$o" ]; } || bad="$bad extra-include"
+    if [ -d "$own/include" ]; then
+      io="$(at "-I$own/include")"
+      { [ -n "$io" ] && [ "$io" -lt "$ie" ]; } || bad="$bad own-include"
+    fi
+  fi
+  if [ -n "$bad" ]; then
+    printf '%s\n' "$argv" >&2
+    echo "error: rzig's environment flags (own $own, extra $extra):$bad" >&2
+    exit 1
+  fi
+  echo "rzig environments: $own, then $extra (R_ZIG_EXTRA_ENV): -L before -o, headers after, rpath into conda envs only: OK"
+fi
 # Static libc++ everywhere (decided 2026-09-30): no compiled package may
 # depend on a shared C++ runtime. zig links its own libc++ statically, but
 # conda-forge's zig switches to a shared one whenever a libc++ sits beside

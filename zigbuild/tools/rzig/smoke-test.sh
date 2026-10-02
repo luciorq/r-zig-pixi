@@ -8,7 +8,10 @@
 #    and a C++ shared library, a static archive and a program using all
 #    three, which must run. The libraries must carry their SONAME, link no
 #    shared libc++ and need glibc 2.17 at most. The same commands through
-#    the bash shims in toolchain/ must produce byte-identical files.
+#    the bash shims in toolchain/ must produce byte-identical files. The
+#    copies sit in no R tree, so rzig has no environment of its own there
+#    (environment.zig), and R_ZIG_EXTRA_ENV is unset for this part: the
+#    shims know neither, and an extra environment would add an rpath.
 # 2. With an R prefix (an installed tree such as dist/R-4.6.1-slim-zig,
 #    whose bin/toolchain is rzig since F3a): small C, C++, Fortran and
 #    OpenMP packages install from source and load, and with
@@ -68,6 +71,7 @@ for kind in bash rzig; do
   (
     cd "$T/work"
     export ZIG_BIN="$ZIG"
+    unset R_ZIG_EXTRA_ENV
     t=$T/$kind
     "$t/zig-cc" -O2 -fpic -c ../src/hello.c -o hello.o
     "$t/zig-cc" -shared -o libhello.so hello.o

@@ -14,6 +14,8 @@
 #     through the bundled bin/R directly with ZIG_BIN unset (the path an
 #     embedder such as rpy2 takes: Renviron.site finds ziglang next door),
 #     and once more with ZIG_BIN pointing nowhere (python3 -m ziglang)
+#   - the compilers (rzig) ignore CONDA_PREFIX, and honour R_ZIG_EXTRA_ENV
+#     (an env's header, -L and rpath), feat-no-host-paths F3b
 #   - uninstalling r-zig-toolchain removes only R_HOME/bin/toolchain
 # pip fetches ziglang (~100 MB) from PyPI, so this needs network; point
 # PIP_FIND_LINKS at a directory holding the ziglang wheel to avoid that.
@@ -166,6 +168,56 @@ case "$cxx_deps" in
   *) echo "error: the C++ test package depends on a shared C++ runtime:" >&2
      echo "$cxx_deps" >&2; exit 1 ;;
 esac
+
+echo "== CONDA_PREFIX ignored by the compilers (rzig, feat-no-host-paths F3b)"
+# An activated env R is not installed in adds nothing: with a poisoned
+# conda env as CONDA_PREFIX (#error in zlib.h and omp.h, junk libraries),
+# rzig's command lines name only r_zig/R, and the package built that way
+# records no rpath.
+decoy="$T/decoy"
+mkdir -p "$decoy/conda-meta" "$decoy/include" "$decoy/lib"
+printf '#error decoy CONDA_PREFIX\n' > "$decoy/include/zlib.h"; cp "$decoy/include/zlib.h" "$decoy/include/omp.h"
+printf 'junk' > "$decoy/lib/libz.so"; cp "$decoy/lib/libz.so" "$decoy/lib/libomp.so"
+own="$(cd "$r_home/../.." && pwd -P)"
+argv="$(run CONDA_PREFIX="$decoy" RZIG_PRINT_ARGV=1 "$r_home/bin/toolchain/zig-cc" -shared -fopenmp -o x.so x.o -lz)"
+if printf '%s\n' "$argv" | grep -F "$decoy" || ! printf '%s\n' "$argv" | grep -qxF -- "-L$own/lib" || printf '%s\n' "$argv" | grep -q -- -rpath; then
+  printf '%s\n' "$argv" >&2; echo "error: rzig's link line: CONDA_PREFIX named, -L$own/lib missing, or an rpath" >&2; exit 1
+fi
+mkdir -p "$T/lib4"
+run CONDA_PREFIX="$decoy" R CMD INSTALL --preclean -l "$T/lib4" "$P" > "$T/decoy.log" 2>&1 || { cat "$T/decoy.log" >&2; exit 1; }
+rpath_of() {
+  if command -v readelf > /dev/null 2>&1; then readelf -d "$1" | sed -n 's/.*(R\(UN\)\{0,1\}PATH).*\[\(.*\)\]/\2/p'
+  elif command -v otool > /dev/null 2>&1; then otool -l "$1" | awk '/cmd LC_RPATH/ {r = 1} r && / path / {print $2; r = 0}'
+  fi
+}
+rp="$(rpath_of "$T/lib4/rzigwheeltest/libs/rzigwheeltest.so")"
+[ -z "$rp" ] || { echo "error: a package built with CONDA_PREFIX set records an rpath: $rp" >&2; exit 1; }
+echo "ok: rzig names only $own; no rpath"
+
+# R_ZIG_EXTRA_ENV: a standalone R compiling against an env of libraries.
+# A package using an env header and library builds, links through the env's
+# -L and loads through its rpath (the env is a conda env). The env R was
+# built in (it has zlib's header), when there is one.
+xenv=""
+for e in "$ROOT/.pixi/envs/minimal" "$ROOT/.pixi/envs/default"; do
+  [ -f "$e/include/zlib.h" ] && [ -d "$e/conda-meta" ] && { xenv="$(cd "$e" && pwd -P)"; break; }
+done
+if [ -n "$xenv" ]; then
+  Z="$T/src/rzigwheelz"
+  mkdir -p "$Z/R" "$Z/src" "$T/lib5"
+  printf 'Package: rzigwheelz\nVersion: 0.1\nTitle: Test\nDescription: Test package.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' > "$Z/DESCRIPTION"
+  printf 'useDynLib(rzigwheelz)\nexport(zv)\n' > "$Z/NAMESPACE"
+  echo 'zv <- function() .Call("rzigwheelz_zv")' > "$Z/R/f.R"
+  printf '#include <zlib.h>\n#include <Rinternals.h>\nSEXP rzigwheelz_zv(void) { return Rf_mkString(zlibVersion()); }\n' > "$Z/src/z.c"
+  echo 'PKG_LIBS = -lz' > "$Z/src/Makevars"
+  run R_ZIG_EXTRA_ENV="$xenv" CONDA_PREFIX="$decoy" R CMD INSTALL -l "$T/lib5" "$Z" > "$T/xenv.log" 2>&1 || { cat "$T/xenv.log" >&2; exit 1; }
+  rp="$(rpath_of "$T/lib5/rzigwheelz/libs/rzigwheelz.so")"
+  [ "$rp" = "$xenv/lib" ] || { echo "error: rzigwheelz.so's rpath is '$rp', not $xenv/lib" >&2; exit 1; }
+  run Rscript -e "library(rzigwheelz, lib.loc = '$T/lib5'); cat('zlib', zv(), '\n')"
+  echo "ok: R_ZIG_EXTRA_ENV=$xenv: header, -L and rpath from it"
+else
+  echo "note: no pixi env with zlib.h next to this checkout; R_ZIG_EXTRA_ENV not exercised"
+fi
 
 echo "== R CMD INSTALL via bundled bin/R, ZIG_BIN unset (Renviron.site -> sibling ziglang)"
 run "$r_home/bin/R" CMD INSTALL --preclean -l "$T/lib2" "$P"

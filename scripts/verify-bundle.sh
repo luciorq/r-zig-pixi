@@ -93,8 +93,9 @@ echo "== standalone bundle verified relocatable ($OS/$FLAVOR)"
 
 # Makeconf names no build path (feat-no-host-paths F1.5): build.zig writes
 # the environment as $(R_HOME)/../.., FLIBS as -lflang_rt.runtime and no
-# rpath for a tree that is not a conda env, and nothing edits the file
-# afterwards. Comment lines count.
+# rpath, and nothing edits the file afterwards. Comment lines count.
+# CPPFLAGS and LDFLAGS are empty (F3b): the compilers, rzig, add the
+# environment's -I and -L (and a conda env's rpath) themselves.
 if [ "$OS" = windows ]; then mk="$BUNDLE_DIR/Library/lib/R/etc/x64/Makeconf"; else mk="$BUNDLE_DIR/lib/R/etc/Makeconf"; fi
 bad=""
 # Windows: ROOT is env.sh's /c/... form; PIXI_PROJECT_ROOT is the native
@@ -107,11 +108,34 @@ for p in "$ROOT" "${PIXI_PROJECT_ROOT:-}" "${CONDA_PREFIX:-}"; do
 done
 if grep -q -- '-rpath' "$mk"; then bad="$bad -rpath"; fi
 grep -q '^FLIBS = .*-lflang_rt\.runtime' "$mk" || bad="$bad FLIBS"
+for v in CPPFLAGS LDFLAGS; do
+  # (the x64 Makeconf has CRLF line ends)
+  grep -Eq "^$v = *"$'\r'"?\$" "$mk" || bad="$bad $v-not-empty"
+  if [ "$OS" != windows ] && grep -Eq "'$v=" "$mk"; then bad="$bad $v-in-configure-line"; fi
+done
 if [ -n "$bad" ]; then
   echo "error: ${mk#$BUNDLE_DIR/} names build paths or lacks the relative forms:$bad" >&2
   exit 1
 fi
-echo "== Makeconf verified: no build path, no rpath, FLIBS = -lflang_rt.runtime"
+echo "== Makeconf verified: no build path, no rpath, CPPFLAGS and LDFLAGS empty, FLIBS = -lflang_rt.runtime"
+
+# Windows: what rzig (gcc.exe) adds for the environment it is installed in
+# (F3b): -L<prefix>/Library/lib on a link, no rpath, and nothing from a
+# CONDA_PREFIX it is not installed in. A dry run; contract-test.sh
+# compiles for real. (unix: the compiled-package checks below)
+if [ "$OS" = windows ]; then
+  decoy="$VERIFY_DIR/decoy"
+  mkdir -p "$decoy/Library/include" "$decoy/Library/lib"
+  : > "$decoy/Library/include/omp.h"; : > "$decoy/Library/lib/libomp.lib"
+  argv="$(CONDA_PREFIX="$(cygpath -w "$decoy")" RZIG_PRINT_ARGV=1 "$BUNDLE_DIR/Library/lib/R/bin/toolchain/gcc.exe" -shared -fopenmp -o x.dll a.o)"
+  if ! printf '%s\n' "$argv" | grep -qi -- "^-L.*/$(basename "$BUNDLE_DIR")/Library/lib\$" ||
+     printf '%s\n' "$argv" | grep -qi -- 'rpath\|decoy'; then
+    printf '%s\n' "$argv" >&2
+    echo "error: gcc.exe's environment flags: no -L<prefix>/Library/lib, or an rpath, or CONDA_PREFIX's" >&2
+    exit 1
+  fi
+  echo "== compilers' environment verified (dry run): -L<prefix>/Library/lib, no rpath, CONDA_PREFIX ignored"
+fi
 
 # TLS trust (unix): the bundle must verify HTTPS without the build env's
 # trust anchors. conda-forge's libcurl/OpenSSL carry $CONDA/ssl compiled
@@ -259,8 +283,9 @@ fi
 # involved on macOS) must record no rpath at all, and still load: libR and
 # the libraries it needs are already in the process. rzig makes that
 # so (on macOS its deployment-target triple records no rpath for -L
-# directories), and Makeconf's LDFLAGS has an rpath only in the conda
-# package. Skipped without zig, as on a user machine.
+# directories), and adds an rpath only into a conda env, which this tree
+# is not (zigbuild/tools/rzig/environment.zig). Skipped without zig, as on
+# a user machine.
 if [ "$OS" != windows ]; then
   bin_list="$VERIFY_DIR/bin-list.txt"
   if [ "$OS" = linux ]; then
@@ -459,29 +484,72 @@ FORTRAN
     echo "== compiled package verified: \$(FLIBS) links with no Fortran compiler (C)"
 
     # OpenMP (slim, full): omp.h from the tree's own include/ (build.zig
-    # installs it in a tree that is not a conda env; Makeconf's CPPFLAGS and
-    # rzig look there) and the vendored libomp, no rpath, nothing from
-    # the build env. Both ways packages ask: R's SHLIB_OPENMP_CFLAGS, and
-    # data.table's configure probe (omp.h included with no OpenMP flag).
+    # installs it in a tree that is not a conda env) and the vendored
+    # libomp, no rpath, nothing from the build env. Makeconf's CPPFLAGS
+    # and LDFLAGS are empty (F3b), so these build only through the -I and
+    # -L rzig adds for the environment it is installed in. Three ways
+    # packages ask: R's SHLIB_OPENMP_CFLAGS, data.table's configure probe
+    # (omp.h included with no OpenMP flag), and PKG_LIBS = -lomp with no
+    # -fopenmp at all (libomp found through rzig's -L alone).
     if grep -q '^SHLIB_OPENMP_CFLAGS = *-' "$BUNDLE_DIR/lib/R/etc/Makeconf"; then
-      mkdir -p "$pkg_dir/omp"
+      mkdir -p "$pkg_dir/omp" "$pkg_dir/lomp"
       printf '%s\n' '#include <omp.h>' '#include <R.h>' 'void ompn(int *n) { *n = omp_get_max_threads(); }' > "$pkg_dir/omp/omp.c"
       printf '%s\n' 'PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$pkg_dir/omp/Makevars"
       printf '%s\n' '#include <omp.h>' 'int ompprobe(void) { return 0; }' > "$pkg_dir/omp/probe.c"
+      printf '%s\n' 'extern int omp_get_max_threads(void);' 'void lompn(int *n) { *n = omp_get_max_threads(); }' > "$pkg_dir/lomp/lomp.c"
+      printf '%s\n' 'PKG_LIBS = -lomp' > "$pkg_dir/lomp/Makevars"
       (cd "$pkg_dir/omp" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
         "$R_BIN" CMD SHLIB -o omp.so omp.c > shlib.log 2>&1 && rm Makevars &&
         env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
-        "$R_BIN" CMD SHLIB -o probe.so probe.c >> shlib.log 2>&1) || { cat "$pkg_dir/omp/shlib.log" >&2; echo "error: an OpenMP package failed to build with the bundle" >&2; exit 1; }
-      check_minos "$pkg_dir/omp/omp.so"
-      omp_rp="$(rpaths_of "$pkg_dir/omp/omp.so" | tr '\n' ' ')"
+        "$R_BIN" CMD SHLIB -o probe.so probe.c >> shlib.log 2>&1 && cd "$pkg_dir/lomp" &&
+        env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+        "$R_BIN" CMD SHLIB -o lomp.so lomp.c >> "$pkg_dir/omp/shlib.log" 2>&1) || { cat "$pkg_dir/omp/shlib.log" >&2; echo "error: an OpenMP package failed to build with the bundle" >&2; exit 1; }
+      check_minos "$pkg_dir/omp/omp.so" "$pkg_dir/lomp/lomp.so"
+      omp_rp="$(rpaths_of "$pkg_dir/omp/omp.so" | tr '\n' ' ')$(rpaths_of "$pkg_dir/lomp/lomp.so" | tr '\n' ' ')"
       if [ -n "$omp_rp" ]; then
         echo "error: an OpenMP package compiled with the bundle records rpaths: $omp_rp" >&2
         exit 1
       fi
-      (cd "$pkg_dir/omp" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
-        "$R_BIN" --vanilla --no-echo -e 'dyn.load("omp.so"); stopifnot(.C("ompn", n = 0L)$n >= 1L)')
-      echo "== compiled package verified: OpenMP from the tree's own omp.h and libomp, no rpath, loads"
+      (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
+        "$R_BIN" --vanilla --no-echo -e 'dyn.load("omp/omp.so"); dyn.load("lomp/lomp.so"); stopifnot(.C("ompn", n = 0L)$n >= 1L, .C("lompn", n = 0L)$n >= 1L)')
+      echo "== compiled package verified: OpenMP from the tree's own omp.h and libomp through rzig's -I/-L (SHLIB_OPENMP_CFLAGS, a flagless omp.h probe, PKG_LIBS = -lomp), no rpath, loads"
     fi
+
+    # rzig never reads CONDA_PREFIX (F3b): an activated env R is not
+    # installed in adds nothing. Two decoys: the env this check runs in
+    # (real headers and libraries, a conda-meta) and a poisoned one
+    # (#error in omp.h and zlib.h, junk libraries). The C++ package, and the
+    # OpenMP one where the tree has OpenMP, rebuild with each as
+    # CONDA_PREFIX: no rpath, and rzig's command lines name neither.
+    decoy="$VERIFY_DIR/decoy"
+    mkdir -p "$decoy/conda-meta" "$decoy/include" "$decoy/lib"
+    printf '#error decoy CONDA_PREFIX\n' > "$decoy/include/omp.h"; cp "$decoy/include/omp.h" "$decoy/include/zlib.h"
+    printf 'junk' > "$decoy/lib/libomp.so"; cp "$decoy/lib/libomp.so" "$decoy/lib/libz.so"
+    for cpfx in "$decoy" ${CONDA_PREFIX:+"$CONDA_PREFIX"}; do
+      rm -f "$pkg_dir/rp.so" "$pkg_dir/rp.o" "$pkg_dir/omp/omp.so" "$pkg_dir/omp/omp.o"
+      (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" CONDA_PREFIX="$cpfx" \
+        "$R_BIN" CMD SHLIB -o rp.so rp.cpp > decoy.log 2>&1) || { cat "$pkg_dir/decoy.log" >&2; echo "error: R CMD SHLIB failed with CONDA_PREFIX=$cpfx" >&2; exit 1; }
+      sos="$pkg_dir/rp.so"
+      if [ -f "$pkg_dir/omp/omp.c" ]; then
+        printf '%s\n' 'PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$pkg_dir/omp/Makevars"
+        (cd "$pkg_dir/omp" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" CONDA_PREFIX="$cpfx" \
+          "$R_BIN" CMD SHLIB -o omp.so omp.c > decoy.log 2>&1) || { cat "$pkg_dir/omp/decoy.log" >&2; echo "error: the OpenMP package failed with CONDA_PREFIX=$cpfx" >&2; exit 1; }
+        sos="$sos $pkg_dir/omp/omp.so"
+      fi
+      for so in $sos; do
+        so_rp="$(rpaths_of "$so" | tr '\n' ' ')"
+        [ -z "$so_rp" ] || { echo "error: ${so##*/} built with CONDA_PREFIX=$cpfx records rpaths: $so_rp" >&2; exit 1; }
+      done
+      # (zig itself, and its lib dir, may live in the build env)
+      argv="$(cd "$pkg_dir" && for a in "-fopenmp -c a.c" "-shared -fopenmp -o x.so a.o -lz" "-o conftest conftest.c -lz"; do
+        env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" CONDA_PREFIX="$cpfx" RZIG_PRINT_ARGV=1 "$BUNDLE_DIR/lib/R/bin/toolchain/zig-cc" $a; done |
+        grep -vxF -- "$zig_dir/zig" | grep -v '^ZIG_LIB_DIR=')"
+      if printf '%s\n' "$argv" | grep -F -- "$cpfx"; then
+        echo "error: rzig's command lines name CONDA_PREFIX=$cpfx" >&2; exit 1
+      fi
+      printf '%s\n' "$argv" | grep -qxF -- "-L$(cd "$BUNDLE_DIR" && pwd -P)/lib" || { printf '%s\n' "$argv" >&2; echo "error: rzig's link lines lack the tree's -L" >&2; exit 1; }
+    done
+    echo "== CONDA_PREFIX ignored: the C++ package (and the OpenMP one, where offered) builds with a poisoned and with the build env as CONDA_PREFIX, no rpath, and rzig's command lines name neither"
   else
     echo "== compiled package rpath check skipped (no zig on PATH)"
   fi

@@ -10,7 +10,8 @@ pub const Fixture = struct {
     env: std.process.Environ.Map,
     tmp: testing.TmpDir,
     ctx: Ctx,
-    /// The temporary directory's absolute path.
+    /// The temporary directory's absolute path, with `/` separators as
+    /// rzig's own paths have (main.zig's selfExe, environment.zig).
     root: []const u8,
     /// What the code under test warned about (Ctx.warn), one line each.
     warnings: std.ArrayList(u8),
@@ -23,6 +24,7 @@ pub const Fixture = struct {
         f.warnings = .empty;
         f.ctx = .{ .io = testing.io, .arena = f.arena.allocator(), .env = &f.env, .os = os, .name = "rzig-test", .warnings = &f.warnings };
         f.root = try f.tmp.dir.realPathFileAlloc(testing.io, ".", f.arena.allocator());
+        if (@import("builtin").os.tag == .windows) f.root = try std.mem.replaceOwned(u8, f.arena.allocator(), f.root, "\\", "/");
         // hermetic: no SDK unless a test provides an xcrun
         f.ctx.xcrun = f.path("no-xcrun");
     }

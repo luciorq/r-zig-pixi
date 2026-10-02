@@ -121,10 +121,10 @@ if ! grep -q '^R_ZIG_CA_BUNDLE=' "$R_HOME_DIR/etc/Renviron"; then
 fi
 echo "   vendored CA bundle ($(grep -c 'BEGIN CERTIFICATE' "$R_HOME_DIR/etc/ca-bundle.crt") certificates) as etc/ca-bundle.crt"
 
-# etc/Makeconf needs no edit: build.zig writes it with $(R_HOME)/../..
-# for the environment and a bare -lflang_rt.runtime (feat-no-host-paths
-# F1.5), right in a conda env and here alike, and fails the build if it
-# names a build path.
+# etc/Makeconf needs no edit: build.zig writes it with no environment
+# flags at all (CPPFLAGS and LDFLAGS empty: the compilers, rzig, add them,
+# feat-no-host-paths F3b) and a bare -lflang_rt.runtime (F1.5), right in a
+# conda env and here alike, and fails the build if it names a build path.
 
 if [ "$OS" = macos ]; then
   case "$(uname -m)" in

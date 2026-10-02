@@ -352,6 +352,95 @@ workarounds into code.** In order:
     the environment on every Windows compile (MinGW header shadowing);
     a standalone R run inside an unrelated activated conda env must not
     pick up that env through CONDA_PREFIX.
+    - **F3b done 2026-10-02.** Designed by a workflow (three designs:
+      parity, fully toolchain-owned, explicit environment; a judge; an
+      adversarial critique against the code), decided by the user,
+      implemented by a workflow (an implementer in a worktree, three
+      review lenses, a skeptic each, a fix pass), merged and tested here.
+      - **The rule** (zigbuild/tools/rzig/environment.zig, the only
+        place it is decided): R's own environment is the real path of
+        rzig's executable minus `/lib/R/bin/toolchain` (Windows:
+        `/Library/lib/R/bin/toolchain`, ignoring case; the environment
+        is then `<root>/Library`); a copy anywhere else has none. A
+        second environment comes only from `R_ZIG_EXTRA_ENV` (a root,
+        made absolute and resolved; applied even when rzig is not in an
+        R tree; dropped when it is the same as R's own). An environment
+        is conda iff `<root>/conda-meta` is a directory (unix). rzig
+        never reads CONDA_PREFIX, OpenMP included: that closed a leak,
+        reproduced by the design workflow, where a standalone R inside
+        an unrelated activated env picked up that env's OpenMP flags.
+      - **The flags** (compiler.zig `envFlags`, after the flang runtime
+        and before Windows' import-library lookup): `-I<env>/include`
+        after the caller's arguments on every call (Windows:
+        `-idirafter`, measured safe on kappa: the env's 1400 headers and
+        zig's MinGW, libc++ and clang headers share one name,
+        `profile.h`, and no zig header `#include_next`s it); on links
+        only, `-L<env>/lib` and for a conda env `-Wl,-rpath,<env>/lib`
+        immediately before the first standalone `-o`, exactly where
+        Makeconf's LDFLAGS sat (decided: the environment's libraries
+        keep winning over a package's own `-L`, and CRAN packages see
+        today's link order); `-lomp` for a `-fopenmp` link when an
+        environment has omp.h. Only directories that exist are added.
+        macOS: the SDK `-L` stays last, `-l` de-dup covers the new
+        flags. `RZIG_TRACE=1` prints the final command, then runs it.
+      - **Makeconf after:** CPPFLAGS and LDFLAGS empty on unix and
+        Windows (so the nested configure.win bug cannot trigger), the
+        configure comment line without them, `-Dconda-env` gone; LIBS,
+        TCLTK_*, FC and FLIBS unchanged. The conda package's Makeconf is
+        byte-identical to the standalone tree's (sha256 checked).
+        zigbuild/dev.Makevars is gone: pixi's pipeline activation sets
+        `R_ZIG_EXTRA_ENV` to the pixi env (`%CONDA_PREFIX%` on win-64,
+        checked on kappa). pixi runs no longer carry a Makevars of ours,
+        so they no longer switch the compile preflight off (a personal
+        `R_MAKEVARS_USER` or `~/.R/Makevars` still does, and shapes local
+        results; the contract's `R CMD config` checks use
+        `--no-user-files`).
+      - **What R CMD config loses:** CPPFLAGS and LDFLAGS (and
+        `--ldflags` the conda rpath). Scans of 333 and 274 cached CRAN
+        and Bioconductor packages found every reader pairing them with
+        Makeconf's CC/CXX (rzig, which adds the flags back) or R CMD
+        SHLIB. An embedder linked with another compiler on a distro
+        without default `--as-needed` loses the conda rpath that
+        `R CMD config --ldflags` used to print; conda's Python (DT_RPATH
+        `$ORIGIN/../lib`) and RInside (`R CMD config CXX`) do not.
+        USE_FC_TO_LINK links and package rules that hand `$(CPPFLAGS)`
+        to `$(FC)` lose the environment until F3c (zig-fc, decided as
+        next).
+      - **Also:** rzig gives an executable link on Windows gcc's `.exe`
+        when `-o` names no extension (`gcc px.c -o px`): ps and processx
+        build px.exe and interrupt.exe that way, and no r-zig build had
+        them before (the warning "problem copying .\px.exe" was in every
+        Windows CI log, bash shims included).
+      - **Windows short paths** (found on kappa): R starts programs by
+        the 8.3 short form of the whole path (`system2()` called
+        `.../lib/R/bin/TOOLCH~1/gcc.exe`), so the suffix check missed and
+        rzig added no environment; make's calls (Makeconf's
+        `$(R_HOME)/bin/toolchain/`) and cmd's were fine. rzig now expands
+        its own path with `GetLongPathNameW` (Zig's realpath keeps the
+        short names). `RZIG_TRACE=1` also prints rzig's own path and the
+        environments it chose, which is how this was found.
+      - Tested 2026-10-02: linux-64 (rzig unit tests 35 and the parity
+        test; slim build, smoke, contract, verify-package, hermetic;
+        minimal build, contract, verify-package; the wheel and
+        wheel-test; the conda package and its tests: env -I/-L/rpath from
+        rzig, a decoy CONDA_PREFIX ignored, the zlib package's rpath
+        exactly `<env>/lib`); osx-arm64 on omicron (the same, plus
+        minimal smoke and hermetic); osx-64 under Rosetta (unit tests,
+        build, contract, verify-package); win-64 on kappa (unit tests,
+        verify-package with the dry run, contract, hermetic, ps's px.exe
+        and interrupt.exe installed, the conda package and its tests).
+  - **Later (not urgent; test carefully first): the toolchain in an
+    environment of its own** (asked 2026-10-02). rzig itself is small
+    (300-600 KB) and could ship with R; the heavy part, zig and flang
+    (about 1.5 GB on macOS), could live in one shared environment that
+    several R environments use, as Rtools is installed once on Windows.
+    rzig already finds zig through ZIG_BIN, PATH or `python3 -m
+    ziglang`, and flang on PATH; one explicit variable (say
+    `R_ZIG_TOOLCHAIN_ENV`) would cover both. F3b's `R_ZIG_EXTRA_ENV`
+    (an extra environment of headers and libraries) applies even when
+    rzig does not sit in an R tree, so it composes with this. Touches
+    phase T's package split and the compile preflight's "is the
+    toolchain here" test.
 - **F4. One zig** (see Open): upstream zig everywhere, or a feedstock
   opt-out; the mirror goes.
 
@@ -457,9 +546,13 @@ zig 0.16's std.Build):
       process (rpy2, RInside). Revisit with data: recipe/test-toolchain.R
       builds a package linking fontconfig (an env library R does not load
       at startup) without the rpath and reports, never fails, whether it
-      loads in a fresh R. That measures R's own process only, where
-      exec/R's rpath into the env covers it (linux-64: TRUE); an embedder
-      needs its own probe before the rpath can go.
+      loads in a fresh R. **Correction (2026-10-02, F3b's critique):**
+      its "TRUE" was not the env's library: the package mapped the
+      *host's* `/usr/lib/x86_64-linux-gnu/libfontconfig.so.1`. exec/R
+      carries DT_RUNPATH, which glibc does not apply to a dlopened
+      library's dependencies either, so without the rpath even R's own
+      process binds host libraries, silently. The rpath stays, now added
+      by rzig (F3b), and the probe is gone.
     - **FLIBS is `-lflang_rt.runtime -lm`** (decided). toolchain/zig-cc
       and zig-cxx replace it with the static archive of the flang on PATH
       (`flang -print-resource-dir`/lib/<triple>/, checked for flang-zig on

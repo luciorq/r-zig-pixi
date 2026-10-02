@@ -10,20 +10,29 @@
 # Without an argument it builds rzig with $ZIG (default: zig on PATH).
 #
 # Both sit in a fake installed tree, so that "four levels above my own
-# directory" (where OpenMP comes from) names the same place:
+# directory" (where the shims' OpenMP comes from) names the place rzig
+# finds its own environment in (environment.zig):
 #   $W/<tree>/lib/R/bin/toolchain/{zig-cc,...,gcc,g++}  copies of rzig
 #   $W/<tree>/lib/R/bin/bash/{zig-cc,...}               the shims, with
 #       /usr/bin/xcrun replaced by a stub that prints $FAKE_SDK
+# (the Windows tree is $W/winomptree/Library/lib/R/bin/...).
 # Each case runs three times, in an emptied environment:
 #   bash  the shim, with a fake `uname` that answers for the OS under test
 #         and ZIG_BIN (or PATH) naming a stub that prints what it was given;
 #   dry   rzig with RZIG_PRINT_ARGV=1 RZIG_OS=<os> RZIG_XCRUN=<stub>;
 #   real  linux cases only: rzig for real, execve into the same stub.
 # Standard output (and state a case inspects) and standard error must be
-# equal. Two kinds of difference are deliberate and reported as such when
-# they are the only ones: rzig names the tree it is installed in without
-# the shim's `<dir>/../../../..` (always applied), and what a case's
-# CASE_DELIBERATE sed script does to the bash side, with CASE_WHY.
+# equal. Three kinds of difference are deliberate and reported as such
+# when they are the only ones:
+#   - rzig names the tree it is installed in without the shim's
+#     `<dir>/../../../..` (always applied to the bash side);
+#   - rzig adds -L<tree>/lib, its own environment's (F3b: Makeconf's
+#     LDFLAGS did that before, the shims never), on every link line: taken
+#     out of rzig's side (where it goes is compiler.zig's unit tests'
+#     business) and reported as "ok+";
+#   - what a case's CASE_DELIBERATE sed script does to the bash side, with
+#     CASE_WHY: F3b's other differences (rzig never reads CONDA_PREFIX; the
+#     tree's headers on every call, -idirafter on Windows), and two more.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -65,10 +74,13 @@ tree() {
     chmod +x "$sh/$n"
   done
 }
-tree tree                                   # no omp.h: OpenMP from CONDA_PREFIX
+tree tree                                   # no omp.h: the shims' OpenMP from CONDA_PREFIX
 tree omptree; mkdir -p "$W/omptree/include" "$W/omptree/lib"; : > "$W/omptree/include/omp.h"
-mkdir -p "$W/winomptree/include" "$W/winomptree/lib"; tree winomptree
-: > "$W/winomptree/include/omp.h"; : > "$W/winomptree/lib/libomp.lib"
+# installed on Windows: <prefix>/Library/lib/R/bin/toolchain
+W_LIB=winomptree/Library W_LIB2=winomptree2/Library
+mkdir -p "$W/$W_LIB/include" "$W/$W_LIB/lib"; tree "$W_LIB"
+: > "$W/$W_LIB/include/omp.h"; : > "$W/$W_LIB/lib/libomp.lib"
+mkdir -p "$W/$W_LIB2/include" "$W/$W_LIB2/lib"; tree "$W_LIB2"; : > "$W/$W_LIB2/include/omp.h"
 
 # stub <path> [argv0]: stands in for zig (or python3), prints the child's
 # ZIG_LIB_DIR when it has one, then its argv, one per line: the format of
@@ -125,12 +137,12 @@ prog "$W/flang-win/flang" "printf '%s\\r\\n' '$winrd'"
 for f in libdlla.dll.a ziglib.lib libmsvc.lib stop.dll; do touchf "$W/win/d1/$f"; done
 for f in libstop.dll.a libdlla.lib libonly2.dll.a; do touchf "$W/win/d2/$f"; done
 touchf "$W/winenv/Library/lib/libomp.lib"
-mkdir -p "$W/winenv2/Library/lib"
 for f in libgfortran.dll.a libquadmath.dll.a; do touchf "$W/gcclib/$f"; done
 prog "$W/gf/gfortran" "echo '$W/gcclib/libgfortran.dll.a'"
 
-pass=0 deliberate=0 fail=0
+pass=0 own=0 deliberate=0 fail=0
 why_tree="rzig names the tree it is installed in as such, not as the shim's <its dir>/../../../.."
+why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not installed in adds nothing"
 
 # run_case NAME OS TOOL [ARGS...], with
 #   CASE_ENV         VAR=value words for every side (array; default ZIG_BIN=stub,
@@ -169,13 +181,19 @@ run_case() {
   done
   # always: the shim's unnormalized "<its dir>/../../../.." is rzig's tree
   sed -e "s|$W/$t/lib/R/bin/bash/\.\./\.\./\.\./\.\.|$W/$t|g" ${CASE_DELIBERATE:+-e "$CASE_DELIBERATE"} "$W/out.bash" > "$W/want"
+  # always: rzig's -L into its own environment (F3b), taken out of its side
+  local own_l="-L$W/$t/lib" own_added=0
   for side in "${sides[@]:1}"; do
-    cmp -s "$W/want" "$W/out.$side" || { ok=0; diff -u "$W/want" "$W/out.$side" | sed 's/^/    /' >> "$W/report" || :; }
+    grep -qxF -- "$own_l" "$W/out.$side" && own_added=1
+    grep -vxF -- "$own_l" "$W/out.$side" > "$W/cmp.$side" || :
+    cmp -s "$W/want" "$W/cmp.$side" || { ok=0; diff -u "$W/want" "$W/cmp.$side" | sed 's/^/    /' >> "$W/report" || :; }
   done
-  if [ "$ok" = 1 ] && ! cmp -s "$W/out.bash" "$W/out.dry"; then
+  if [ "$ok" = 1 ] && ! cmp -s "$W/out.bash" "$W/cmp.dry"; then
     deliberate=$((deliberate + 1))
     printf 'ok*  %-8s %s\n     deliberate: %s\n' "$os" "$name" "${CASE_WHY:-$why_tree}"
     diff "$W/out.bash" "$W/out.dry" | sed 's/^/     /' || :
+  elif [ "$ok" = 1 ] && [ "$own_added" = 1 ]; then
+    own=$((own + 1)); printf 'ok+  %-8s %s\n' "$os" "$name"
   elif [ "$ok" = 1 ]; then
     pass=$((pass + 1)); printf 'ok   %-8s %s\n' "$os" "$name"
   else
@@ -226,23 +244,29 @@ CASE_PATH="$W/flang"
 run_case "-lflang_rt alone is another library" linux zig-cc -shared -o p.so a.o -lflang_rt -lflang_rt.runtimex
 
 # --- OpenMP ------------------------------------------------------------------------
-CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env")
-run_case "OpenMP compile (CONDA_PREFIX)" linux zig-cc -fopenmp -c a.c
-CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env")
-run_case "OpenMP link" linux zig-cxx -shared -fopenmp -o pkg.so a.o
-CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env")
-run_case "OpenMP link, caller's -lomp (data.table)" linux zig-cc -shared -fopenmp -o datatable.so a.o -lomp
-CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env")
+# The shims took OpenMP from CONDA_PREFIX when their tree had no omp.h, and
+# put the tree's -L after the caller's arguments with -lomp; rzig ignores
+# CONDA_PREFIX and adds its environment's -L before -o on every link (F3b).
+why_omp="the shims' OpenMP -L<tree>/lib is rzig's own-environment -L (before -o on every link, F3b)"
+CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_DELIBERATE="\|^-I$W/env/include\$|d"; CASE_WHY=$why_conda
+run_case "OpenMP compile (CONDA_PREFIX ignored)" linux zig-cc -fopenmp -c a.c
+CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_DELIBERATE="\|^-[IL]$W/env/|d
+/^-lomp\$/d"; CASE_WHY=$why_conda
+run_case "OpenMP link (CONDA_PREFIX ignored)" linux zig-cxx -shared -fopenmp -o pkg.so a.o
+CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_DELIBERATE="\|^-[IL]$W/env/|d"; CASE_WHY=$why_conda
+run_case "OpenMP link, caller's -lomp (data.table; CONDA_PREFIX ignored)" linux zig-cc -shared -fopenmp -o datatable.so a.o -lomp
+CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d"; CASE_WHY=$why_omp
 run_case "-fopenmp-simd counts (substring)" linux zig-cc -fopenmp-simd -o prog a.o
-run_case "OpenMP without CONDA_PREFIX" linux zig-cc -fopenmp -shared -o pkg.so a.o
-CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_TREE=omptree
+run_case "OpenMP without omp.h anywhere" linux zig-cc -fopenmp -shared -o pkg.so a.o
+CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d"; CASE_WHY=$why_omp
 run_case "OpenMP from the tree rzig is in (omp.h there)" linux zig-cc -shared -fopenmp -o pkg.so a.o
 CASE_TREE=omptree
 run_case "OpenMP from the tree, compile, no CONDA_PREFIX" linux zig-cxx -fopenmp -c a.cpp
-CASE_TREE=omptree
+CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d"; CASE_WHY=$why_omp
 run_case "OpenMP from the tree, caller's -lomp" linux zig-cc -shared -fopenmp -o dt.so a.o -lomp
-CASE_TREE=omptree
-run_case "no -fopenmp: nothing from the tree" linux zig-cc -shared -o pkg.so a.o -lomp
+CASE_TREE=omptree; CASE_DELIBERATE="\$a -I$W/omptree/include"
+CASE_WHY="rzig adds its environment's headers to every call, not only -fopenmp ones (F3b)"
+run_case "no -fopenmp: the tree's headers, no -lomp" linux zig-cc -shared -o pkg.so a.o -lomp
 
 # --- ar, ranlib ----------------------------------------------------------------------
 CASE_RESET='rm -f libstat.a'; CASE_STATE='ls libstat.a 2>&1 || :'
@@ -289,13 +313,13 @@ run_case "-framework link" macos zig-cc -dynamiclib -o ps.so apps.o -framework A
 run_case "-L kept, explicit -rpath kept" macos zig-cxx -shared -L"$W/mac/a" -lX -L"$W/mac/b" -lY -lW -lX -L /sep -Wl,-rpath,/keep -o pkg.so
 CASE_ENV=(ZIG_BIN="$STUB")
 run_case "no SDK: target only" macos zig-cc -dynamiclib -o pkg.so a.o -lz
-CASE_ENV=(ZIG_BIN="$STUB" FAKE_SDK="$SDK" CONDA_PREFIX="$W/macenv")
+CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d"; CASE_WHY=$why_omp
 run_case "OpenMP link: libomp, SDK -L after it" macos zig-cc -dynamiclib -fopenmp -o pkg.so a.o
-CASE_ENV=(ZIG_BIN="$STUB" FAKE_SDK="$SDK" CONDA_PREFIX="$W/macenv")
+CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d"; CASE_WHY=$why_omp
 run_case "data.table: -Xclang -fopenmp, -lomp twice" macos zig-cc -dynamiclib -Xclang -fopenmp -o datatable.so a.o -lomp -lomp
-CASE_ENV=(ZIG_BIN="$STUB" FAKE_SDK="$SDK" CONDA_PREFIX="$W/macenv")
-run_case "OpenMP compile" macos zig-cxx -Xclang -fopenmp -c a.cpp
-CASE_TREE=omptree
+CASE_ENV=(ZIG_BIN="$STUB" FAKE_SDK="$SDK" CONDA_PREFIX="$W/macenv"); CASE_DELIBERATE="\|^-I$W/macenv/include\$|d"; CASE_WHY=$why_conda
+run_case "OpenMP compile (CONDA_PREFIX ignored)" macos zig-cxx -Xclang -fopenmp -c a.cpp
+CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d"; CASE_WHY=$why_omp
 run_case "OpenMP from the tree" macos zig-cxx -dynamiclib -fopenmp -o pkg.so a.o -lomp
 run_case "lib*.so link: SONAME (all OSes)" macos zig-cc -shared -o libfoo.so a.o
 CASE_ENV=(XDG_CACHE_HOME="$W/cache6" FAKE_SDK="$SDK"); CASE_PATH="$W/envD/bin"; CASE_RESET="rm -rf '$W/cache6'"; CASE_STATE=$mirror_state
@@ -329,14 +353,20 @@ run_case "-l lookup: .dll.a, zig's own names, lib<n>.lib" windows gcc -shared -s
   -L"$W/win/d1" -L"$W/win/d2" -ldlla -lziglib -lmsvc -lstop -lonly2 -lnowhere -L"$RH/bin/x64" -lR
 run_case "-mwindows link set" windows gcc -mwindows -o Rgui.exe a.o -L"$W/win/d1" -ldlla
 run_case "lib*.so link: SONAME (all OSes)" windows g++ -shared -o libfoo.so a.o
-CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/winenv")
-run_case "OpenMP: libomp.lib by path" windows g++ -shared -fopenmp -o pkg.dll a.o
-CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/winenv2")
-run_case "OpenMP: no libomp.lib, -L -lomp" windows gcc -fopenmp -shared -o pkg.dll a.o
-CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/winenv")
-run_case "caller's -lomp resolved to libomp.lib" windows gcc -fopenmp -shared -o pkg.dll a.o -L"$W/winenv/Library/lib" -lomp
-CASE_TREE=winomptree
-run_case "OpenMP from the tree (<prefix>/Library)" windows g++ -shared -fopenmp -o pkg.dll a.o
+CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/winenv"); CASE_DELIBERATE="\|$W/winenv/|d"; CASE_WHY=$why_conda
+run_case "OpenMP (CONDA_PREFIX ignored)" windows g++ -shared -fopenmp -o pkg.dll a.o
+# the shims' last two lines are their CONDA_PREFIX -I and -L
+CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/winenv"); CASE_WHY=$why_conda
+CASE_DELIBERATE="\|^-I$W/winenv/Library/include\$|d
+\$ {\|^-L$W/winenv/Library/lib\$|d}"
+run_case "caller's -lomp resolved to libomp.lib (CONDA_PREFIX ignored)" windows gcc -fopenmp -shared -o pkg.dll a.o -L"$W/winenv/Library/lib" -lomp
+why_win="rzig gives its environment's headers to every Windows compile with -idirafter, after MinGW's (F3b)"
+CASE_TREE=$W_LIB; CASE_DELIBERATE="s|^-I\\($W/$W_LIB/include\\)\$|-idirafter\\n\\1|"; CASE_WHY=$why_win
+run_case "OpenMP from the tree (<prefix>/Library): libomp.lib by path" windows g++ -shared -fopenmp -o pkg.dll a.o
+CASE_TREE=$W_LIB2; CASE_WHY="$why_win; $why_omp"
+CASE_DELIBERATE="s|^-I\\($W/$W_LIB2/include\\)\$|-idirafter\\n\\1|
+\|^-L$W/$W_LIB2/lib\$|d"
+run_case "OpenMP from the tree, no libomp.lib: -lomp" windows gcc -fopenmp -shared -o pkg.dll a.o
 CASE_PATH="$W/flang-win"
 run_case "FLIBS: Windows flang's answer, then -lc++" windows gcc -shared -o pkg.dll a.o -L"$W/win/d1" -lflang_rt.runtime -lc++ -lflang_rt.runtime -lc++
 CASE_PATH="$W/gf"
@@ -348,5 +378,5 @@ CASE_ENV=(XDG_CACHE_HOME="$W/cache7"); CASE_PATH="$W/envB/bin"; CASE_STATE='ls "
 run_case "libc++ beside zig: no mirror on Windows" windows zig-cxx -shared -o pkg.dll a.o
 run_case "ar and ranlib passthrough" windows zig-ar rcs libw.a a.o
 
-echo "== $pass identical, $deliberate deliberate differences, $fail failed"
+echo "== $pass identical, $own identical but for rzig's own-environment -L, $deliberate deliberate differences, $fail failed"
 [ "$fail" = 0 ]

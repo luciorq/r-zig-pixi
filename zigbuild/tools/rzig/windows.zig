@@ -41,6 +41,24 @@ pub fn libs(ctx: *Ctx, args: Args) !Args {
     return out.items;
 }
 
+/// MinGW gcc names an executable link's output `<name>.exe` when `-o`
+/// gives a name without an extension (`gcc px.c -o px` writes px.exe);
+/// zig writes exactly the name given. Packages build helper programs that
+/// way and then look for the .exe (ps and processx: px.exe,
+/// interrupt.exe, which no r-zig build had before 2026-10-02). Shared
+/// libraries and compile-only calls keep their names.
+pub fn exeSuffix(ctx: *Ctx, args: Args) !Args {
+    if (cmdline.compileOnly(args) or cmdline.anyWord(args, "-shared") or cmdline.anyWord(args, "-r")) return args;
+    const i = cmdline.outputIndex(args) orelse return args;
+    if (i + 1 >= args.len) return args;
+    const name = args[i + 1];
+    const base = if (mem.lastIndexOfAny(u8, name, "/\\")) |sep| name[sep + 1 ..] else name;
+    if (base.len == 0 or mem.indexOfScalar(u8, base, '.') != null) return args;
+    const out = try ctx.arena.dupe([]const u8, args);
+    out[i + 1] = try ctx.fmt("{s}.exe", .{name});
+    return out;
+}
+
 /// GNU ld's order in each directory, against what zig finds by itself.
 fn importLib(ctx: *Ctx, dirs: Args, name: []const u8) !?[]const u8 {
     for (dirs) |d| {
@@ -108,4 +126,18 @@ test "gfortran's libdir for -lgfortran/-lquadmath, nothing without gfortran" {
     // an answer without a directory (gcc's when it does not know the file)
     try f.write("bin/gfortran", "#!/bin/sh\necho libgfortran.dll.a\n", .fromMode(0o755));
     try expectArgs(&.{"-lquadmath"}, try libs(&f.ctx, &.{"-lquadmath"}));
+}
+
+test "exeSuffix: gcc's .exe for an executable named without an extension" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    try expectArgs(&.{ "-O2", "px.c", "-o", "px.exe" }, try exeSuffix(&f.ctx, &.{ "-O2", "px.c", "-o", "px" }));
+    try expectArgs(&.{ "-o", "tools/cmdzip.exe", "a.c" }, try exeSuffix(&f.ctx, &.{ "-o", "tools/cmdzip", "a.c" }));
+    try expectArgs(&.{ "-o", "C:\\x.y\\conftest.exe", "a.c" }, try exeSuffix(&f.ctx, &.{ "-o", "C:\\x.y\\conftest", "a.c" }));
+    // already named, a DLL, a compile, an object: unchanged
+    try expectArgs(&.{ "-o", "px.exe", "px.c" }, try exeSuffix(&f.ctx, &.{ "-o", "px.exe", "px.c" }));
+    try expectArgs(&.{ "-shared", "-o", "ps", "a.o" }, try exeSuffix(&f.ctx, &.{ "-shared", "-o", "ps", "a.o" }));
+    try expectArgs(&.{ "-c", "a.c", "-o", "a" }, try exeSuffix(&f.ctx, &.{ "-c", "a.c", "-o", "a" }));
+    try expectArgs(&.{ "-Xlinker", "-o", "a.c" }, try exeSuffix(&f.ctx, &.{ "-Xlinker", "-o", "a.c" }));
 }
