@@ -282,6 +282,26 @@ workarounds into code.** In order:
   the Windows `gcc.exe`/`g++.exe` forwarders), the same code on every OS
   and unit-tested. Compiling then needs no bash on Windows; package
   `configure` scripts still need `sh`, which is theirs, not ours.
+  - **F3a. Parity and integration.** rzig (prototype built 2026-10-01 in
+    a worktree off b244ba6) catches up with the shims as they are now
+    (the macOS `<arch>-native.13.0` target and SDK search dirs, the
+    `-lflang_rt.runtime` resolver, OpenMP found from the tree's own
+    location) and replaces them: build.zig builds it for the target and
+    installs it as `bin/toolchain/{zig-cc,zig-cxx,zig-ar,zig-ranlib}`
+    (and `gcc.exe`/`g++.exe` on Windows); the bash shims and
+    win-exec-forward.c retire.
+  - **F3b. The toolchain owns the compile environment** (direction set
+    2026-10-02, after F1.5): where the environment is (rzig's own
+    location), its `-I`/`-L`, OpenMP, the flang runtime, the conda-only
+    rpath, the macOS SDK and deployment target, the glibc floor. Makeconf
+    then shrinks to R's own values and `$(R_HOME)/bin/toolchain`, the same
+    file in every distribution, and zigbuild/dev.Makevars goes. F1.5
+    made those Makeconf values relative and moved FLIBS and the OpenMP
+    lookup into the shims; this finishes the move. To weigh: the flags
+    leave `R CMD config` (configure scripts and people read it); `-I` to
+    the environment on every Windows compile (MinGW header shadowing);
+    a standalone R run inside an unrelated activated conda env must not
+    pick up that env through CONDA_PREFIX.
 - **F4. One zig** (see Open): upstream zig everywhere, or a feedstock
   opt-out; the mirror goes.
 
