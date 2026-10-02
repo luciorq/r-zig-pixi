@@ -3,13 +3,15 @@ R_LIBS_USER_default(): a user library of our own, XDG on unix
 The default per-user package library is told apart from any other R
 install's. Linux and macOS follow the XDG base directory spec instead of
 R's per-OS defaults (macOS's ~/Library/R in particular):
-$XDG_DATA_HOME, else ~/.local/share, then R/<platform>-zig/<x.y>.
+$XDG_DATA_HOME, else ~/.local/share, then R/<platform>-zig/<x.y>, where
+<platform> is the conda subdir name (linux-64, linux-aarch64, osx-arm64,
+osx-64).
 Windows keeps LOCALAPPDATA, already the right (non-roaming) place, as
 R/win-64-zig/<x.y>. Requested directly (feat-zig-build TODO.md, F7.3).
 
 --- a/src/library/base/R/library.R
 +++ b/src/library/base/R/library.R
-@@ -996,14 +996,19 @@
+@@ -996,14 +996,20 @@
          x.y <- paste(R.version$major, sep=".",
                       strsplit(R.version$minor, ".", fixed=TRUE)[[1L]][1L])
          if(.Platform$OS.type == "windows" && s["machine"] == "x86-64")
@@ -28,7 +30,8 @@ R/win-64-zig/<x.y>. Requested directly (feat-zig-build TODO.md, F7.3).
 +            data_home <- if (nzchar(xdg)) xdg else file.path(home, ".local", "share")
 +            plat <- if (s["sysname"] == "Darwin")
 +                        paste0("osx-", if (s["machine"] == "arm64") "arm64" else "64", "-zig")
-+                    else if (s["sysname"] == "Linux") "linux-64-zig"
++                    else if (s["sysname"] == "Linux")
++                        paste0("linux-", if (s["machine"] == "x86_64") "64" else s["machine"], "-zig")
 +                    else paste0(R.version$platform, "-zig")
 +            file.path(data_home, "R", plat, x.y)
 +        }
