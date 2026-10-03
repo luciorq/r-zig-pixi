@@ -1,13 +1,81 @@
 # feat-no-host-paths — no build-machine paths, and a base R that installs without a toolchain
 
-**Status (2026-10-01).** Phase A done on all five platforms (the
-hermetic tier-0/1 check runs in CI everywhere). Phase T done for conda
-and pip (`r-zig-slim` + `r-zig-toolchain`, `r-zig` + `r-zig-toolchain`);
-the standalone tarball is not split yet. libc++ and the flang runtime are
-static everywhere. Next: phase F (see "Simplicity review and phase F"),
-which collapses the post-build tree surgery into `zig build` before T's
-standalone part, B (now F3), C, D, S and P. R source references are to R
-4.6.1 (`build/R-4.6.1/`).
+**Status and handoff (2026-10-03).** Read this first; the sections
+below hold the detail and the reasons.
+
+Where it stands (branch feat-no-host-paths, PR open against main; pushed
+up to d233f2a "chore(ci): verify before package"; CI green on every
+job, run 37123137421):
+- Phase A done on all five platforms (the hermetic tier-0/1 check runs in
+  CI everywhere). Phase T done for conda and pip (`r-zig-slim` +
+  `r-zig-toolchain`; `r-zig` + `r-zig-toolchain` wheels); the standalone
+  tarball is not split yet. libc++ and the flang runtime are static
+  everywhere (flang-rt-zig build >= 9 is static-only).
+- Phase F: F1 (zig build installs the final tree; F1.5 Makeconf names no
+  build path) done; F2 (R patches as a series under
+  zigbuild/patches/R-4.6.1/) done; F3a (rzig, one Zig binary, replaces
+  the bash shims and win-exec-forward.c), F3b (rzig owns the compile
+  environment; Makeconf CPPFLAGS/LDFLAGS empty; R_ZIG_EXTRA_ENV; never
+  CONDA_PREFIX) and F3c (zig-fc: Fortran in the toolchain) done. macOS
+  deployment target 13.0 (`-target <arch>-native.13.0`, SDK `-F`/`-L`
+  last; rzig re-signed with codesign on macOS hosts) done.
+- F1.6 committed as d233f2a ("chore(ci): verify before package"),
+  tested on linux-64, osx-arm64, osx-64 under Rosetta and win-64:
+  verify-bundle.sh split into scripts/verify-tree.sh (static checks on
+  the installed tree, pixi task `verify-tree`), scripts/verify-bundle.sh
+  (archive checks) and scripts/verify-helpers.sh; hermetic on a copy of
+  the installed tree; new CI order (green in CI). Docs-only commits: add `[skip ci]`, else the push
+  cancels a running CI run (pull_request paths-ignore looks at the whole
+  PR, and cancel-in-progress is on).
+
+The decisions that shape the code now (each has its record below):
+- The installed tree is the shipped tree (F1); every check runs on it.
+- Makeconf is the same file in every distribution and names no path
+  outside `$(R_HOME)` (F1.5, F3b): FC/CC/CXX are `$(R_HOME)/bin/toolchain/
+  zig-*`, FLIBS `-lflang_rt.runtime`, CPPFLAGS/LDFLAGS empty. Reason: the
+  user's principle, one build path and one toolchain; the environment
+  belongs to the toolchain, not to make variables (asked 2026-10-02:
+  "why did we increase our reliance on Makeconf?").
+- rzig decides the environment (zigbuild/tools/rzig/environment.zig):
+  its own real path minus `/lib/R/bin/toolchain` (Windows `/Library/...`,
+  8.3 short names expanded with GetLongPathNameW), plus R_ZIG_EXTRA_ENV
+  (pixi sets it to the pixi env for dev runs); conda iff `<root>/conda-meta`;
+  never CONDA_PREFIX. Env `-I` after the caller's args (Windows
+  `-idirafter`), env `-L` and the conda-only rpath just before the first
+  `-o` (where LDFLAGS sat: the environment's libraries win, CRAN link
+  order unchanged). The conda rpath stays because glibc applies only the
+  executable's DT_RPATH to a dlopened library's dependencies (and
+  exec/R has RUNPATH): without it packages bind host libraries silently.
+- `RZIG_TRACE=1` prints rzig's own path, the environments it chose and
+  the final command; `RZIG_PRINT_ARGV=1` prints the command instead of
+  running it.
+
+What remains, in order (proposed; ask the user before starting each):
+1. F1.7 (proposed 2026-10-03, see the F1 steps): Windows into the CI
+   matrix: vendor conda's DLLs/Tcl at build time on Windows (so hermetic
+   can run before package, and the installed tree is the shipped tree
+   there too), wire R's regression suite (`check`) into buildWindows,
+   then add windows-latest to the matrix.
+2. F4: one zig (upstream zig everywhere, or a feedstock opt-out), which
+   retires the ZIG_LIB_DIR libc++ mirror.
+3. T's standalone split (a standalone toolchain archive), then the
+   recipe's host which/sed/grep cleanup.
+4. Later, test carefully first: the toolchain in an environment of its
+   own (F3 section).
+
+How to verify (Linux here; omicron = osx-arm64 and osx-64 via Rosetta
+in ~/rz-osx64; kappa = win-64 in C:\Users\admin\r-zig-pixi; see the
+test-servers notes for SSH):
+- `pixi run rzig-test` (rzig unit tests + parity test on linux)
+- `pixi run build && pixi run verify-tree && pixi run smoke && pixi run
+  contract && pixi run hermetic && pixi run verify-package`
+- `pixi run -e minimal build && pixi run -e minimal verify-tree &&
+  pixi run -e minimal verify-package`; `pixi run -e wheel wheel &&
+  pixi run -e wheel wheel-test`; `pixi run -e pkg conda-package`
+- Windows order: build, verify-tree, smoke, contract, verify-package,
+  then hermetic.
+
+R source references are to R 4.6.1 (`build/R-4.6.1/`).
 
 ## Goal
 
@@ -705,10 +773,24 @@ zig 0.16's std.Build):
     tests, build, verify-tree, smoke, contract, package + verify-package,
     hermetic. verify-tree runs on the legs verify-package ran on
     (default, minimal); it also passes on linux-64 full and openblas.
+- F1.7 (proposed 2026-10-03, not started): Windows joins the CI matrix.
+  Why Windows is a separate CI job today: history (gnuwin32 and the bash
+  shims were a different build; gone since F1/F3) plus four remaining
+  differences: one variant only (R's Windows build has no slim/minimal
+  switches; no wheel, no openblas); no `check` step (R's regression
+  suite is wired only into build.zig's unix path, buildWindows returns
+  before it: a test gap); hermetic must follow `package`, because only
+  package-standalone.sh vendors conda's DLLs and Tcl into bin/x64
+  (vendor-libs.sh does nothing on Windows); `build -- --verbose` and a
+  60-minute timeout against MSYS process-spawn hangs. Plan: vendor the
+  DLLs/Tcl at build time on Windows (the installed tree becomes the
+  shipped tree there too), wire `check` into buildWindows, then a single
+  matrix with windows-latest/default and per-step `if:` only for the
+  wheel.
 
-Order: T's conda and wheel parts (done) → F1 → F2 → F3 → T's standalone
-split (it needs F1's layout and F3's binary) → P. F4 can be decided at
-any point. The decisions this branch made stay valid through F: tiers,
+Order: T's conda and wheel parts (done) → F1 (done) → F2 (done) → F3a/F3b/F3c (done) → F1.7 (proposed) → F4 → T's
+standalone split (it needs F1's layout and F3's binary) → P. F4 can be
+decided at any point. The decisions this branch made stay valid through F: tiers,
 the split by `bin/toolchain`, the preflight, static runtimes, the
 hermetic check.
 
