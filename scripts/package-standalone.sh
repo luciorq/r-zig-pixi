@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Turn the staged install in $PREFIX into a self-contained standalone
 # bundle and tar it up:
-#   - vendor every conda-env shared library into <prefix>/lib (the same
-#     location the dual rpaths from stage.sh already search — in a conda
-#     env the solver provides these, standalone we copy them)
+#   - vendor every conda-env shared library into <prefix>/lib
+#     (vendor-libs.sh; the relative rpaths build.zig writes search there,
+#     and in a conda env the solver provides them)
 #   - vendor runtime data the libs need (fontconfig config)
 #   - emit dist/R-<ver>-<flavor>-<platform>.tar.gz + sha256
 # Linux, macOS, and Windows all implemented.
 . "$(dirname "$0")/env.sh"
 
-test -d "$R_HOME_DIR" || { echo "error: run 'pixi run install' first" >&2; exit 1; }
+test -d "$R_HOME_DIR" || { echo "error: run 'pixi run build' first" >&2; exit 1; }
 CONDA="${CONDA_PREFIX:?}"
 # Derive the archive's source-directory name from $PREFIX itself rather
 # than hardcoding "R-$R_VERSION-$FLAVOR" — the zig-built prefix carries a
@@ -81,78 +81,9 @@ if [ "$OS" != linux ] && [ "$OS" != macos ]; then
   exit 1
 fi
 
-echo "== bundling dependencies into $PREFIX/lib"
-if [ "$OS" = linux ]; then
-  # ELF-magic scan (not name patterns): must also catch the tools bundled
-  # into bin/toolchain by stage.sh (nm/dd/realpath/grep — needed by
-  # libtool/javareconf), whose own conda-lib deps (libzstd, libpcre2-8,
-  # libgcc_s, ...) need vendoring exactly like R's own binaries.
-  elfs=()
-  while read -r f; do
-    head -c4 "$f" 2>/dev/null | grep -q $'\x7fELF' && elfs+=("$f")
-  done < <(find "$R_HOME_DIR" -type f)
-  n_copied=0
-  changed=1
-  while [ "$changed" = 1 ]; do
-    changed=0
-    for f in "${elfs[@]}"; do
-      while read -r dep; do
-        base="$(basename "$dep")"
-        if [ ! -f "$PREFIX/lib/$base" ]; then
-          cp -L "$dep" "$PREFIX/lib/$base"
-          # minimal (the wheel's tree): conda-forge ships these with full
-          # DWARF (libstdc++.so.6: 24 MiB, ~2 without). R's own binaries
-          # are already built stripped for minimal (build.zig newCMod).
-          # Before patchelf, not after: binutils strip and a patchelf-
-          # relocated .dynamic don't always get along.
-          if [ "$VARIANT" = minimal ]; then
-            chmod u+w "$PREFIX/lib/$base"
-            strip --strip-debug "$PREFIX/lib/$base"
-          fi
-          patchelf --set-rpath '$ORIGIN' "$PREFIX/lib/$base" 2>/dev/null || true
-          n_copied=$((n_copied + 1))
-          elfs+=("$PREFIX/lib/$base")
-          changed=1
-        fi
-      done < <(LD_LIBRARY_PATH="$CONDA/lib" ldd "$f" 2>/dev/null | awk -v p="$CONDA" '$3 ~ "^"p {print $3}')
-    done
-  done
-  echo "   vendored $n_copied conda libraries"
-else
-  # macOS: conda-forge dylibs record deps as bare "@rpath/<name>" — no
-  # absolute path to match against like ldd gives us, so resolve each
-  # @rpath/<name> against $CONDA/lib ourselves (that's the only place
-  # these came from; R's own libR.dylib/libRblas.dylib are bare names,
-  # already present in R_HOME/lib, and never need vendoring). Same
-  # Mach-O-magic scan + fixed-point loop shape as the Linux ELF walk,
-  # so newly-vendored tools' own deps (bin/toolchain/nm etc.) get caught.
-  machos=()
-  while read -r f; do
-    head -c4 "$f" 2>/dev/null | grep -q $'\xcf\xfa\xed\xfe' && machos+=("$f")
-  done < <(find "$R_HOME_DIR" -type f)
-  n_copied=0
-  changed=1
-  while [ "$changed" = 1 ]; do
-    changed=0
-    for f in "${machos[@]}"; do
-      while read -r dep; do
-        base="${dep#@rpath/}"
-        [ -f "$CONDA/lib/$base" ] || continue
-        if [ ! -f "$PREFIX/lib/$base" ]; then
-          cp -L "$CONDA/lib/$base" "$PREFIX/lib/$base"
-          # @loader_path (no traversal — the file lives in $PREFIX/lib
-          # itself) lets it resolve its own @rpath/ peers once vendored.
-          install_name_tool -add_rpath "@loader_path" "$PREFIX/lib/$base" 2>/dev/null || true
-          codesign --force --sign - "$PREFIX/lib/$base" 2>/dev/null || true
-          n_copied=$((n_copied + 1))
-          machos+=("$PREFIX/lib/$base")
-          changed=1
-        fi
-      done < <(otool -L "$f" 2>/dev/null | awk '/@rpath\// {print $1}')
-    done
-  done
-  echo "   vendored $n_copied conda libraries"
-fi
+# conda's libraries into <prefix>/lib (zig-build.sh already did this
+# after the build; again here, idempotent)
+bash "$(dirname "$0")/vendor-libs.sh"
 
 if [ -d "$CONDA/etc/fonts" ] && [ ! -d "$PREFIX/etc/fonts" ]; then
   mkdir -p "$PREFIX/etc"
@@ -160,34 +91,40 @@ if [ -d "$CONDA/etc/fonts" ] && [ ! -d "$PREFIX/etc/fonts" ]; then
   echo "   vendored fontconfig configuration"
 fi
 
-# Standalone has no env: strip the build-env include/lib flags that
-# stage.sh keeps for conda-package use.
-# Whole-token matches only (the flag must end at a space, a quote or the
-# line end): as bare prefix matches these also ate the head of longer
-# paths — `-L$CONDA/lib/clang/23/lib/darwin` (flang's runtime dir in
-# FLIBS) became `/clang/23/lib/darwin`, so every Fortran package link
-# failed after packaging (found 2026-09-24 on omicron: minqa and quadprog
-# both broke in the contract test once verify-package had run on the same
-# tree). `-I$CONDA/include/libpng16` was one edit away from the same fate.
-# (Two expressions per flag rather than one `\(...\|$\)` alternation: `|`
-# is the s/// delimiter here, so `\|` cannot also mean "or".)
-sed -i \
-  -e "s|-I$CONDA/include\([ \"]\)|\1|g" -e "s|-I$CONDA/include\$||" \
-  -e "s|-L$CONDA/lib\([ \"]\)|\1|g"         -e "s|-L$CONDA/lib\$||" \
-  -e "s|-Wl,-rpath,$CONDA/lib\([ \"]\)|\1|g" -e "s|-Wl,-rpath,$CONDA/lib\$||" \
-  "$R_HOME_DIR/etc/Makeconf"
-
-# minimal (the r-zig wheel's tree): the flang runtime is linked statically
-# into libR/libRblas/libRlapack, and nothing this tree is used with
-# provides a Fortran compiler (the wheel's compiler is PyPI ziglang, which
-# has no Fortran frontend), so FLIBS has nothing left to name, and its
-# -L points into this build machine's pixi env. Empty it: C/C++ packages
-# using CRAN's usual `PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)`
-# then link cleanly. Packages with Fortran sources need a user-supplied
-# FC and its runtime, as documented for the wheel.
-if [ "$VARIANT" = minimal ]; then
-  sed -i 's|^FLIBS = .*|FLIBS = |' "$R_HOME_DIR/etc/Makeconf"
+# TLS trust. The vendored libcurl and OpenSSL are conda-forge's, built
+# with this env's paths compiled in (libcurl's default CA file is
+# $CONDA/ssl/cacert.pem, OpenSSL's directory $CONDA/ssl): outside this
+# machine every HTTPS request failed with "libcurl error code 77: error
+# adding trust anchors from file" (found 2026-09-28; the wheel, built
+# from this tree, had the same). Ship the env's Mozilla bundle and set
+# R_ZIG_CA_BUNDLE: R's libcurl.c, patched (zigbuild/patches/), then takes
+# CURL_CA_BUNDLE if the user set one, else SSL_CERT_FILE, else the
+# system's bundle, else this file, and passes it to curl as
+# CURLOPT_CAINFO, so the compiled-in path is never used. Not
+# CURL_CA_BUNDLE itself: Renviron exports to every program R starts, and
+# curl or Python's requests would drop their own trust for this frozen
+# copy. Interim fix: the per-platform curl in
+# .github/devdocs/feat-no-host-paths/PLAN.md ("libcurl") replaces it.
+# etc/Renviron, not Renviron.site: `R --vanilla`/`Rscript --vanilla` imply
+# --no-environ, which skips Renviron.site but still reads etc/Renviron.
+# Windows needs none of this: conda-forge's curl there uses Schannel,
+# the Windows certificate store.
+CA_SRC="$CONDA/ssl/cacert.pem"
+test -s "$CA_SRC" || { echo "error: $CA_SRC missing (ca-certificates not in the env?)" >&2; exit 1; }
+test -f "$R_HOME_DIR/etc/Renviron" || { echo "error: $R_HOME_DIR/etc/Renviron missing (not a staged tree?)" >&2; exit 1; }
+install -m 0644 "$CA_SRC" "$R_HOME_DIR/etc/ca-bundle.crt"
+if ! grep -q '^R_ZIG_CA_BUNDLE=' "$R_HOME_DIR/etc/Renviron"; then
+  {
+    echo '## r-zig: fallback trust anchors (read by the patched libcurl.c).'
+    echo 'R_ZIG_CA_BUNDLE=${R_HOME}/etc/ca-bundle.crt'
+  } >> "$R_HOME_DIR/etc/Renviron"
 fi
+echo "   vendored CA bundle ($(grep -c 'BEGIN CERTIFICATE' "$R_HOME_DIR/etc/ca-bundle.crt") certificates) as etc/ca-bundle.crt"
+
+# etc/Makeconf needs no edit: build.zig writes it with no environment
+# flags at all (CPPFLAGS and LDFLAGS empty: the compilers, rzig, add them,
+# feat-no-host-paths F3b) and a bare -lflang_rt.runtime (F1.5), right in a
+# conda env and here alike, and fails the build if it names a build path.
 
 if [ "$OS" = macos ]; then
   case "$(uname -m)" in

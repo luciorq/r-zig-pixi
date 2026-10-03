@@ -66,10 +66,16 @@ jobs:
           - os: ubuntu-24.04-arm
             env: openblas
           # minimal: the r-zig Python wheel's variant (pixi.toml
-          # [feature.minimal]). linux-64 only until the other platforms'
-          # zigbuild/config/<plat>-minimal dirs are vendored — gen-config's
-          # minimal legs produce them; add each OS here once its dir lands.
+          # [feature.minimal]); unix only. linux-x86_64's vendored config
+          # was captured locally, the other three by gen-config's minimal
+          # legs (run 36151245208, 2026-09-25).
           - os: ubuntu-latest
+            env: minimal
+          - os: ubuntu-24.04-arm
+            env: minimal
+          - os: macos-latest
+            env: minimal
+          - os: macos-15-intel
             env: minimal
     timeout-minutes: 180
     steps:
@@ -79,19 +85,44 @@ jobs:
           # minimal also needs the python-only `wheel` env for its last steps
           environments: ${{ matrix.env == 'minimal' && 'minimal wheel' || matrix.env }}
           cache: true
+      # rzig, the compilers zig build installs into R_HOME/bin/toolchain
+      # (feat-no-host-paths F3): unit tests on this OS; on linux also the
+      # parity test against the bash shims for every OS's command lines.
+      - name: rzig tests
+        run: pixi run -e ${{ matrix.env }} rzig-test
+      # `zig build` installs the tree that ships (feat-no-host-paths F1),
+      # libraries vendored; every check below runs on that tree, and the
+      # archive is made from it last (F1.6).
       - name: Build R (zig build alone, no autoconf/make)
         run: pixi run -e ${{ matrix.env }} build
+      # Static checks of the installed tree, before anything runs it:
+      # Makeconf, the compilers are rzig, relative rpaths, the glibc and
+      # macOS floors, the C++ runtime, load commands, minimal's excluded
+      # libraries (scripts/verify-tree.sh). The variants CI packages.
+      - name: Verify the installed tree (Makeconf, rzig, rpaths, floors)
+        if: matrix.env == 'default' || matrix.env == 'minimal'
+        run: pixi run -e ${{ matrix.env }} verify-tree
       - name: Smoke test
         run: pixi run -e ${{ matrix.env }} smoke
       - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
         run: pixi run -e ${{ matrix.env }} contract
       - name: Regression suite (Examples/Specific/Reg)
         run: pixi run -e ${{ matrix.env }} check
-      # Standalone bundle: reuses this job's already-built prefix (cheap).
+      # Tiers 0/1 (feat-no-host-paths): a copy of the installed tree starts
+      # R and installs source R-only and binary packages with nothing but
+      # /bin/sh and its own bin/ on PATH; on linux, strace fails any other
+      # program.
+      - name: Hermetic tier 0/1 check (installed tree, empty environment)
+        if: matrix.env == 'default' || matrix.env == 'minimal'
+        run: pixi run -e ${{ matrix.env }} hermetic
+      # Standalone archive: reuses this job's already-built prefix (cheap).
       # Only the default (slim) and minimal variants are packaged in CI for
       # now — full/openblas relocation is exercised manually, not automated
-      # yet. minimal's bundle is the wheel's input, so it can't be skipped.
-      - name: Package + verify standalone bundle
+      # yet. minimal's archive is the wheel's input, so it can't be skipped.
+      # verify-package checks the archive itself: extracted elsewhere, R
+      # and packages compiled with it run under env -i, TLS with the
+      # shipped CA bundle (scripts/verify-bundle.sh).
+      - name: Package + verify the standalone archive (relocated, env -i)
         if: matrix.env == 'default' || matrix.env == 'minimal'
         run: pixi run -e ${{ matrix.env }} verify-package
       # The r-zig wheel: the tree verify-package just packaged, zipped with
@@ -115,7 +146,7 @@ jobs:
   # in scope for Windows, see FINALIZATION.md F6: addCheckStep is only
   # wired into the unix build() path). The package-compilation contract
   # (Makeconf.win wiring, a real R.exe CMD dispatcher, native gcc.exe/
-  # g++.exe wrappers) IS done — see FINALIZATION.md F7 — so `contract`
+  # g++.exe, now rzig) IS done — see FINALIZATION.md F7 — so `contract`
   # runs here same as linux/macOS.
   build-windows:
     name: windows-latest / default
@@ -132,17 +163,28 @@ jobs:
         with:
           environments: default
           cache: true
+      - name: rzig tests
+        run: pixi run rzig-test
       # --verbose: zig build prints nothing until it finishes, so a hung
       # step leaves an empty log; with it the last command started is the
       # last line, which is the diagnosis.
       - name: Build R (zig build alone, no autoconf/make/gnuwin32)
         run: pixi run build -- --verbose
+      # Windows' static checks: the compilers are rzig, Makeconf.
+      - name: Verify the installed tree (Makeconf, rzig)
+        run: pixi run verify-tree
       - name: Smoke test
         run: pixi run smoke
       - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
         run: pixi run contract
-      - name: Package + verify standalone bundle
+      - name: Package + verify the standalone archive (relocated)
         run: pixi run verify-package
+      # After package, unlike unix: the Windows tree runs on its own only
+      # once package-standalone.sh has vendored conda's DLLs into its
+      # bin/x64 (vendor-libs.sh does that at build time on unix only), and
+      # hermetic's PATH is R's bin/x64 plus System32.
+      - name: Hermetic tier 0/1 check (installed tree, empty environment)
+        run: pixi run hermetic
 
   # conda-forge-style package (rattler-build) — always the slim variant
   # regardless of matrix.env above, since recipe/build.sh never sets
@@ -195,7 +237,7 @@ jobs:
       # rattler-build's own test phase runs with a literal unexpanded
       # %PREFIX% on PATH on Windows, so it can never exercise the
       # Library/bin/{R,Rscript}.bat shims a real install relies on (see
-      # recipe/recipe.yaml's win test comment + scripts/stage.sh). This
+      # recipe/recipe.yaml's win test comment + build.zig's Library/bin/*.bat). This
       # is the regression check for that: a genuinely fresh pixi project
       # installing straight from the just-built local channel, invoking
       # bare `Rscript` the same way a real user would. (Was disabled on

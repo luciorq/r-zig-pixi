@@ -36,6 +36,21 @@ R_VERSION = "4.6.1"
 # resolves a task to the default environment when every environment
 # offering it gets it from the same feature. Every build environment
 # lists this feature in [environments] below.
+# Dev and test runs compile packages against the dev tree, which is the
+# tree that ships: its compilers (rzig) add the include/ and lib/ of the
+# environment R is installed in, which for the dev tree is dist/R-*-zig,
+# not this pixi env. R_ZIG_EXTRA_ENV names one more environment for rzig
+# to add after it (feat-no-host-paths F3b, zigbuild/tools/rzig/
+# environment.zig): the pixi env's headers and libraries, and an rpath
+# into them (it is a conda env), as R installed into a conda env has
+# them. rzig never reads CONDA_PREFIX itself; on Windows it appends
+# /Library. Checks of the shipped tree alone run under env -i.
+[feature.pipeline.activation.env]
+R_ZIG_EXTRA_ENV = "$CONDA_PREFIX"
+
+[feature.pipeline.target.win-64.activation.env]
+R_ZIG_EXTRA_ENV = "%CONDA_PREFIX%"
+
 [feature.pipeline.tasks]
 fetch = "bash scripts/fetch-r.sh"
 # Only build path: `zig build` alone (no autoconf, no make, no gnuwin32)
@@ -57,9 +72,27 @@ smoke = "bash scripts/zig-smoke.sh"
 # Windows package-compilation contract (Makeconf.win, a compiled R.exe
 # front-end) is explicitly deferred, see FINALIZATION.md F6.1/F6.2.
 contract = "bash scripts/zig-contract.sh"
-install = { cmd = "bash scripts/zig-stage.sh", depends-on = ["build"] }
+# `zig build` installs the final tree (feat-no-host-paths PLAN.md, F1);
+# kept as an alias of build for existing commands.
+install = { depends-on = ["build"] }
+# Static checks of that installed tree, run right after build (F1.6):
+# Makeconf, the compilers are rzig, rpaths, the glibc and macOS floors,
+# the C++ runtime, load commands, minimal's excluded libraries. Takes an
+# optional tree path (`pixi run verify-tree -- <dir>`).
+verify-tree = "bash scripts/verify-tree.sh"
 package = { cmd = "bash scripts/zig-package.sh", depends-on = ["install"] }
+# The archive's own checks: extracted elsewhere, R and packages compiled
+# with it run under env -i, TLS with the shipped CA bundle.
 verify-package = { cmd = "bash scripts/zig-verify-package.sh", depends-on = ["package"] }
+# Tier 0/1 with an empty environment and PATH=<tree>/bin (unix; strace on
+# linux): start R, install without compiling. Runs on a copy of the
+# installed tree, not the archive (Windows: once package has vendored
+# its DLLs into the tree).
+hermetic = "bash scripts/hermetic-check.sh"
+# rzig, the compilers in R_HOME/bin/toolchain (zigbuild/tools/rzig/): its
+# unit tests here, and on linux the parity test against the bash shims in
+# toolchain/ for every OS's command lines. Needs no R build.
+rzig-test = "bash zigbuild/tools/rzig/test.sh"
 clean = "bash scripts/clean.sh"
 # Not part of the build path (zig-build.sh never calls this) — exists
 # solely so zigbuild/tools/gen-subst.sh has a config.status to replay
@@ -130,6 +163,7 @@ tar = "*"
 gzip = "*"
 unzip = "*"
 zip = "*"
+patch = "*"  # zig-build.sh applies zigbuild/patches/ (m2-patch on win-64)
 
 # Rust coreutils everywhere conda-forge ships them; GNU coreutils on linux-aarch64.
 # Fortran compiler per target: flang where available, gfortran otherwise.
@@ -177,12 +211,13 @@ m2-grep = "*"
 m2-gawk = "*"
 m2-unzip = "*"
 m2-zip = "*"
+m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no win-64 `patch`
 
 # osx-64 Fortran: flang-zig as well (Phase 2, platform 3) — conda-forge
 # ships no flang for macOS at all; validated under Rosetta on omicron.
 [target.osx-64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see osx-arm64
 uutils-coreutils = "*"
 
 # osx-arm64 Fortran: flang-pixi's zig-built flang (LLVM 23.1.1) from the
@@ -194,7 +229,12 @@ uutils-coreutils = "*"
 # ~1.5 GiB closure (flang-zig + lld-zig + flang-rt-zig).
 [target.osx-arm64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+# flang-rt-zig build >= 9 (flang-pixi, 2026-10-01): static-only (no
+# .dylib/.so) and built with hidden visibility, so a Fortran package
+# exports 2-4 symbols instead of re-exporting the whole runtime (~830)
+# and -lflang_rt.runtime can only mean the archive. win-64 has no build 9:
+# its runtime was always static-only.
+flang-rt-zig = { version = "*", build-number = ">=9" }
 uutils-coreutils = "*"
 
 # linux-aarch64 Fortran: flang-zig (Phase 2, platform 4 — the last one);
@@ -204,7 +244,7 @@ uutils-coreutils = "*"
 # by gen-config.yaml's ubuntu-24.04-arm legs, validated by build-r's).
 [target.linux-aarch64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see osx-arm64
 coreutils = "*"
 patchelf = "*"
 
@@ -253,7 +293,7 @@ R_BLAS = "openblas"
 # ICU, which needs libstdc++. That is 14 of the wheel's ~49 MiB. Pinning
 # `libcurl = "<8.21"` below would drop it, at the cost of an older curl
 # (8.20.0 is from 2026-04-29). Left unpinned on purpose: that is a
-# security-vs-size call. verify-bundle.sh reports these libraries and
+# security-vs-size call. verify-tree.sh reports these libraries and
 # fails only if R's own binaries link them.
 #
 # What guarantees the profile is configure-only.sh's explicit --without-*/
@@ -298,6 +338,7 @@ tar = "*"
 gzip = "*"
 unzip = "*"
 zip = "*"
+patch = "*"
 
 [feature.minimal.target.linux-64.dependencies]
 flang = "*"
@@ -307,18 +348,18 @@ patchelf = "*"
 
 [feature.minimal.target.linux-aarch64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see osx-arm64
 coreutils = "*"
 patchelf = "*"
 
 [feature.minimal.target.osx-64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see osx-arm64
 uutils-coreutils = "*"
 
 [feature.minimal.target.osx-arm64.dependencies]
 flang-zig = "*"
-flang-rt-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see osx-arm64
 uutils-coreutils = "*"
 
 # Wheel assembly + test: only Python (stdlib zipfile/hashlib, venv, pip).
@@ -364,7 +405,11 @@ python = ">=3.9"
 # (never hit the bug there; just a slightly simpler directory name).
 # -c: rattler-build does not read the workspace channels; `universe` is
 # where flang-zig/flang-rt-zig (osx-arm64 Fortran) come from.
-conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id -c conda-forge -c https://prefix.dev/universe"
+# rm: rattler-build restores the staging output (the R build) from
+# dist/conda/build_cache under a key that does not hash the recipe's
+# `path:` sources (scripts/, zigbuild/, build.zig), so a local rebuild
+# after editing them silently reused the old build (2026-09-30).
+conda-package = "rm -rf dist/conda/build_cache && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id -c conda-forge -c https://prefix.dev/universe"
 
 # Channel administration: list/delete published package files. Neither
 # rattler-build nor pixi has CLI support for either operation (upload-

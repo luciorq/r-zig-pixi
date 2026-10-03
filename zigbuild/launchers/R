@@ -1,0 +1,21 @@
+#!/bin/sh
+# <prefix>/bin/R: runs <prefix>/lib/R/bin/R from wherever the tree is
+# (installed by build.zig; feat-no-host-paths PLAN.md, F1.4). POSIX sh:
+# the directory of a path is "${_s%/*}" rather than `dirname`, and a
+# symlink is followed one hop at a time with plain `readlink` (macOS has
+# no `readlink -f`). The "(/*)" case form: macOS's bash 3.2 misparses an
+# empty first branch without the parenthesis.
+_s="$0"
+while [ -h "$_s" ]; do
+  case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
+  _d="$(cd -P "${_d:-/}" && pwd)"
+  _s="$(readlink "$_s")"
+  case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac
+done
+case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
+here="$(cd -P "${_d:-/}" && pwd)"
+# standalone trees carry a fontconfig configuration; harmless if absent
+if [ -d "$here/../etc/fonts" ]; then
+  FONTCONFIG_PATH="$here/../etc/fonts"; export FONTCONFIG_PATH
+fi
+exec "$here/../lib/R/bin/R" "$@"

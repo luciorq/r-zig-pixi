@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run package-standalone.sh against the zig-built prefix (staged by
-# zig-stage.sh / `pixi run install`). Mirrors zig-smoke.sh's own prefix
+# `pixi run build`, which installs the final tree). Mirrors zig-smoke.sh's own prefix
 # derivation so callers don't need to know $FLAVOR to find it.
 . "$(dirname "$0")/env.sh"
 

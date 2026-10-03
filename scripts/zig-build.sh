@@ -11,73 +11,85 @@
 # Library/bin/zig.cmd|.bat — native cmd.exe/PowerShell resolve those via
 # PATHEXT automatically, but MSYS bash (what this script runs under) does
 # not, so a bare `zig` fails with "command not found" even though it's on
-# PATH. Same fallback toolchain/zig-cc already uses for the same reason.
+# PATH. Same fallback rzig (R_HOME/bin/toolchain's zig-cc) uses.
 ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
 
 PREFIX_ZIG="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
 
-# The Sys.which source patch from configure-r.sh must be present in the
-# source tree for relocatable installs (see PLAN.md of feat-initial-setup).
-sw="$SRC_DIR/src/library/base/R/unix/system.unix.R"
-if [ -f "$sw" ] && ! grep -q 'bin/toolchain/which' "$sw"; then
-  sed -i \
-    's|which <- "@WHICH@"|which <- { w <- file.path(R.home(), "bin", "toolchain", "which"); if (file.exists(w)) w else "@WHICH@" }|' \
-    "$sw"
+# --- R source patches (feat-no-host-paths PLAN.md, phase F2) ---------------
+# zigbuild/patches/R-<version>/*.patch, one file per concern, each saying
+# what it changes and why. They change code the build compiles (libR, the
+# internet module, base/tools/utils' .rdb files) and the bin/R and R CMD
+# templates, so they go in before zig build: in order, with no fuzz, to a
+# pristine source. The stamp records what the tree carries: empty after
+# extraction (fetch-r.sh, recipe/build.sh), the series' sha256 list once
+# applied. Anything else, no stamp included (a tree patched in place by an
+# older zig-build.sh, an interrupted run, another series), is extracted
+# again from the tarball first, so a changed patch never meets an old one.
+# GNU patch comes with the env: conda-forge's patch, m2-patch on Windows.
+patches="$ROOT/zigbuild/patches/R-$R_VERSION"
+stamp="$SRC_DIR/.r-zig-patches"
+series="$(cd "$patches" && sha256sum *.patch)"
+applied="$(cat "$stamp" 2>/dev/null || echo none)"
+if [ "$applied" != "$series" ]; then
+  if [ -n "$applied" ]; then
+    echo "r-zig: $SRC_DIR does not carry this patch series; extracting it again"
+    rm -rf "$SRC_DIR"
+    bash "$(dirname "$0")/fetch-r.sh"
+  fi
+  # no stamp while applying: an interrupted run extracts again next time
+  rm -f "$stamp"
+  for p in "$patches"/*.patch; do
+    patch -p1 -f -F0 --no-backup-if-mismatch -d "$SRC_DIR" -i "$p" ||
+      { echo "error: ${p##*/} did not apply to $SRC_DIR" >&2; exit 1; }
+  done
+  printf '%s\n' "$series" > "$stamp"
 fi
 
-# R_LIBS_USER_default() (library.R) is R core's own OS-aware default for
-# the per-user package library — same "compiled into base.rdb, can't be
-# sed-patched after the fact" constraint as the Sys.which() patch above, so
-# it has to happen here, before bootstrap builds base.rdb. Requested
-# directly, not a bug — revised twice from R core's stock defaults (first
-# to a conda-platform-tagged "R/<conda-subdir>-zig" scheme keeping R
-# core's own top-level "R" dir, then to this: unix (Linux/macOS alike)
-# follows the XDG base directory spec — $XDG_DATA_HOME if set and
-# non-empty, else ~/.local/share — instead of R core's own per-OS
-# defaults (macOS's ~/Library/R/... in particular). Windows has no XDG
-# equivalent; LOCALAPPDATA (non-roaming, machine-local) is already the
-# right semantic match and R core already uses it, so it's unchanged.
-# This project only ships linux-64/osx-arm64/win-64, so those three
-# conda-style platform tags are hardcoded; anything else falls back to R
-# core's own platform string, "-zig"-tagged. Replaces the whole function
-# body (not a single-line sed) via awk, matched between the function's own
-# opening/closing lines — safe because the body has no nested braces, so
-# the first "    }" line after the opening is unambiguously this
-# function's own close. Idempotent (checked via the distinctive
-# "win-64-zig" literal, which no unpatched/differently-patched R source
-# has).
-lu="$SRC_DIR/src/library/base/R/library.R"
-if [ -f "$lu" ] && ! grep -q '"win-64-zig"' "$lu"; then
-  r_libs_user_repl=$(cat <<'RCODE'
-    R_LIBS_USER_default <- function() {
-        home <- normalizePath("~", mustWork = FALSE)  # possibly /nonexistent
-        ## FIXME: could re-use v from "above".
-        x.y <- paste(R.version$major, sep=".",
-                     strsplit(R.version$minor, ".", fixed=TRUE)[[1L]][1L])
-        if(.Platform$OS.type == "windows" && s["machine"] == "x86-64")
-            file.path(Sys.getenv("LOCALAPPDATA"), "R", "win-64-zig", x.y)
-        else if (.Platform$OS.type == "windows") # including aarch64
-            file.path(Sys.getenv("LOCALAPPDATA"), "R",
-                      paste0("win-", s["machine"], "-zig"), x.y)
-        else {
-            xdg <- Sys.getenv("XDG_DATA_HOME")
-            data_home <- if (nzchar(xdg)) xdg else file.path(home, ".local", "share")
-            plat <- if (s["sysname"] == "Darwin")
-                        paste0("osx-", if (s["machine"] == "arm64") "arm64" else "64", "-zig")
-                    else if (s["sysname"] == "Linux") "linux-64-zig"
-                    else paste0(R.version$platform, "-zig")
-            file.path(data_home, "R", plat, x.y)
-        }
-    }
-RCODE
-  )
-  awk -v repl="$r_libs_user_repl" '
-    BEGIN { in_block=0 }
-    /R_LIBS_USER_default <- function\(\) \{/ { print repl; in_block=1; next }
-    in_block && /^    \}$/ { in_block=0; next }
-    in_block { next }
-    { print }
-  ' "$lu" > "$lu.tmp" && mv "$lu.tmp" "$lu"
+# libc++ is linked statically, everywhere (decided 2026-09-30): R itself
+# (libR, bin/exec/R, the modules) and, through rzig (R_HOME/bin/toolchain's
+# zig-cc and zig-cxx, zigbuild/tools/rzig/libcxx_mirror.zig), every
+# package compiled with it. Upstream zig does that on its own;
+# conda-forge's zig links a shared libc++ whenever one sits in
+# <zig lib dir>/../../lib (feedstock patch Lld.zig-prefer-shared-libcxx),
+# which a macOS conda env always has. A ZIG_LIB_DIR mirror without it
+# beside defeats the probe (flang-pixi handoff section 6). zig build's
+# cache is not keyed on the probe's result, so a warm cache would hand
+# back the shared-libc++ links: the mirror build gets its own local cache.
+zl="${ZIG_LIB_DIR:-}"
+[ -z "$zl" ] && [ -f "${ZIG%/*}/../lib/zig/std/std.zig" ] && zl="${ZIG%/*}/../lib/zig"
+if [ -n "$zl" ]; then
+  shared_cxx=""
+  for e in libc++.1.dylib libc++.dylib libc++.so.1 libc++.so libc++.dll.a; do
+    [ -e "$zl/../../lib/$e" ] && shared_cxx="$zl/../../lib/$e" && break
+  done
+  if [ -n "$shared_cxx" ] && [ "$OS" = windows ]; then
+    # MSYS's ln -s copies, so no mirror here; no win-64 env has one today.
+    echo "error: $shared_cxx would make zig link a shared libc++; remove the libcxx package from this env" >&2
+    exit 1
+  elif [ -n "$shared_cxx" ]; then
+    zl="$(cd "$zl" && pwd -P)"
+    mirror="$BUILD_DIR/zig-lib-static"
+    rm -rf "$mirror"
+    mkdir -p "$mirror/lib/zig"
+    for e in "$zl"/*; do ln -s "$e" "$mirror/lib/zig/"; done
+    export ZIG_LIB_DIR="$mirror/lib/zig"
+    export ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR-static-libcxx"
+    echo "r-zig: static libc++ (zig lib dir mirrored from $zl)"
+  fi
 fi
 
-exec "$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"
+# The conda build (recipe/recipe.yaml sets R_ZIG_CONDA_BUILD): the compile
+# preflight's hint names r-zig-toolchain (the wheel sets its own; otherwise
+# R's generic message). Nothing else differs: the tree is the same in every
+# distribution, and rzig decides a conda env's rpath where it runs (F3b).
+conda=()
+if [ -n "${R_ZIG_CONDA_BUILD:-}" ]; then
+  conda=("-Dtoolchain-hint=add the r-zig-toolchain package to this environment (pixi add r-zig-toolchain, or conda install r-zig-toolchain)")
+fi
+"$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "${conda[@]}" "$@"
+
+# The installed tree runs on its own (F1.3): R's rpaths are relative
+# (build.zig relRPaths), so the env's libraries it needs go into
+# <prefix>/lib. A no-op for the conda build, whose prefix is the env.
+R_INSTALL_PREFIX="$PREFIX_ZIG" bash "$(dirname "$0")/vendor-libs.sh"

@@ -22,6 +22,47 @@ else
   ZIG=(python3 -m ziglang)
 fi
 
+# libc++ is linked statically, everywhere (decided 2026-09-30). Upstream
+# zig always does; conda-forge's zig (feedstock patch Lld.zig-prefer-
+# shared-libcxx) links a shared libc++ instead whenever one sits in
+# <zig lib dir>/../../lib, which is always the case in a macOS conda env
+# and in any env that has the `libcxx` package. The probe is relative to
+# the lib dir, so point ZIG_LIB_DIR at a mirror of it (a directory of
+# symlinks, nested as <mirror>/lib/zig so that <mirror>/lib has no libc++).
+# Kept in the user's cache, one per zig lib dir, made once: mkdir is the
+# lock for parallel make jobs, .complete the marker. Unix only (MSYS's
+# ln -s copies; no win-64 env has libc++.dll.a); see zig-build.sh for R's
+# own build.
+r_zig_static_libcxx() {
+  local zl="${ZIG_LIB_DIR:-}" d m key e i
+  if [ -z "$zl" ] && [ "${ZIG[0]}" != python3 ]; then
+    d="${ZIG[0]%/*}"; [ "$d" = "${ZIG[0]}" ] && d=.
+    [ -f "$d/../lib/zig/std/std.zig" ] && zl="$d/../lib/zig"
+  fi
+  [ -n "$zl" ] && [ -d "$zl" ] || return 0
+  for e in libc++.1.dylib libc++.dylib libc++.so.1 libc++.so; do
+    [ -e "$zl/../../lib/$e" ] && break
+    e=""
+  done
+  [ -n "$e" ] || return 0
+  zl="$(cd "$zl" && pwd -P)"
+  key="$( { echo "$zl"; ls "$zl"; } | cksum | cut -d' ' -f1)"
+  m="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/r-zig/zig-lib-$key"
+  if [ ! -e "$m/.complete" ]; then
+    if mkdir -p "${m%/*}" 2>/dev/null && mkdir "$m" 2>/dev/null; then
+      mkdir -p "$m/lib/zig" && for e in "$zl"/*; do ln -s "$e" "$m/lib/zig/"; done && : > "$m/.complete"
+    else
+      i=0; while [ ! -e "$m/.complete" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+    fi
+  fi
+  if [ -e "$m/.complete" ]; then
+    export ZIG_LIB_DIR="$m/lib/zig"
+  else
+    echo "zig-cc: could not prepare $m; this link may use a shared libc++" >&2
+  fi
+}
+case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*) ;; *) r_zig_static_libcxx ;; esac
+
 # Linux: pin the same glibc 2.17 floor build.zig uses for R itself
 # (HPC servers on old distros — RHEL/CentOS 7 era). Without this,
 # packages compiled through this shim (R CMD INSTALL/SHLIB) default to
@@ -33,9 +74,65 @@ fi
 # macOS have no glibc concept, so this only applies when uname reports a
 # real Linux kernel (not MSYS's "MINGW64_NT"/"MSYS_NT").
 target=()
+sdkL=()
 if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
   target=(-target "$(uname -m)-linux-gnu.2.17")
 fi
+# macOS: the same floor idea, as a deployment target (13.0, R's own; see
+# build.zig). The OS word must be the literal "native" plus MAJOR.MINOR:
+# zig then treats the OS as non-native (LC_BUILD_VERSION minos 13.0, and
+# no implicit LC_RPATH per -L directory) but still finds the installed
+# SDK's headers and libSystem. "<arch>-macos.13.0" would lose the SDK's
+# usr/include (net/if_media.h, which ps needs), and "<arch>-native.13" is
+# rejected. Two SDK search dirs that the non-native link leaves out come
+# back by hand: -F<sdk>/System/Library/Frameworks (-framework X at link)
+# and -L<sdk>/usr/lib (SDK-only libs: -lz -liconv -lcurl -lresolv), the
+# latter LAST on link lines only, so a -lz whose headers came from a -L
+# directory the caller passed binds that library, not the SDK's .tbd.
+# -mmacosx-version-min and MACOSX_DEPLOYMENT_TARGET are ignored by zig.
+if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
+  case "$(uname -m)" in arm64|aarch64) _arch=aarch64 ;; *) _arch=x86_64 ;; esac
+  target=(-target "$_arch-native.13.0")
+  _sdk="$(/usr/bin/xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+  if [ -n "$_sdk" ]; then
+    target+=("-F$_sdk/System/Library/Frameworks")
+    sdkL=("-L$_sdk/usr/lib")
+  fi
+fi
+
+# Fortran runtime: Makeconf's FLIBS says -lflang_rt.runtime (feat-no-
+# host-paths F1.5). Link the static archive of the flang on PATH, the
+# compiler FC runs, wherever its LLVM keeps it (<resource dir>/lib/
+# <triple>/): never a shared runtime, which would need an rpath into the
+# environment at load time (conda-forge's linux-64 flang-rt ships one next
+# to the archive), and not tied to the LLVM major R was built with. Once:
+# R CMD SHLIB repeats $(FLIBS). No flang on PATH: nothing this link has
+# was compiled by it, so the flag goes (CRAN's usual `PKG_LIBS =
+# $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)` puts it on C and C++ links too). A
+# flang without the archive: dropped with a warning, so only a Fortran
+# package fails, at its load test.
+case " $* " in
+  *" -lflang_rt.runtime "*)
+    _frt=""
+    if _rd="$(flang -print-resource-dir 2>/dev/null)" && [ -n "$_rd" ]; then
+      _rd="${_rd%$'\r'}"; _rd="${_rd//\\//}"
+      for _c in "$_rd"/lib/*/libflang_rt.runtime.a; do
+        if [ -f "$_c" ]; then _frt="$_c"; break; fi
+      done
+      [ -n "$_frt" ] || echo "${0##*/}: warning: no libflang_rt.runtime.a under $_rd/lib/*/; dropping -lflang_rt.runtime" >&2
+    fi
+    _a=()
+    for a in "$@"; do
+      if [ "$a" = -lflang_rt.runtime ]; then
+        [ -n "$_frt" ] && _a+=("$_frt")
+        _frt=""
+        continue
+      fi
+      _a+=("$a")
+    done
+    set -- "${_a[@]}"
+    ;;
+esac
 
 # Windows: zig's MinGW -l search tries only <n>.dll, <n>.lib, lib<n>.a —
 # missing lib<n>.dll.a (MinGW import libs, what GNU ld searches first)
@@ -100,13 +197,26 @@ if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
   done
 fi
 # OpenMP: zig cc performs -fopenmp codegen but bundles neither omp.h nor
-# libomp and won't auto-link it — wire in conda-forge's llvm-openmp.
+# libomp and won't auto-link it — wire in llvm-openmp's. They are in the
+# environment R lives in, the one Makeconf calls $(R_HOME)/../..: four
+# levels above this script in R_HOME/bin/toolchain (on Windows that is
+# <prefix>/Library), a conda env or the standalone prefix (build.zig
+# installs omp.h there, libomp is vendored). CONDA_PREFIX when the script
+# runs from anywhere else (the repo's toolchain/, for configure-only.sh).
 omp=()
-if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
-  case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*) inc="$CONDA_PREFIX/Library/include"; lib="$CONDA_PREFIX/Library/lib";;
-    *)            inc="$CONDA_PREFIX/include";         lib="$CONDA_PREFIX/lib";;
-  esac
+_ob=""
+if [[ " $* " == *"-fopenmp"* ]]; then
+  _s="${BASH_SOURCE[0]//\\//}"   # the Windows forwarder passes C:\...\zig-cc
+  _ob="${_s%/*}/../../../.."
+  if [ ! -f "$_ob/include/omp.h" ]; then
+    case "$(uname -s 2>/dev/null)" in
+      MINGW*|MSYS*) _ob="${CONDA_PREFIX:+$CONDA_PREFIX/Library}" ;;
+      *)            _ob="${CONDA_PREFIX:-}" ;;
+    esac
+  fi
+fi
+if [ -n "$_ob" ]; then
+  inc="$_ob/include"; lib="$_ob/lib"
   omp+=(-I"$inc")
   linking=true
   for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) linking=false; break;; esac; done
@@ -122,6 +232,13 @@ if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
     else
       omp+=(-L"$lib" -lomp)
     fi
+  elif $linking; then
+    # The caller's own -lomp still needs the directory to find it in:
+    # Makeconf's LDFLAGS has it, but a probe that calls $CC directly does
+    # not, and data.table's macOS probe (PKG_LIBS=-lomp) then failed to
+    # link and built without OpenMP (found 2026-09-30 on a staged slim
+    # tree, before Makeconf named the environment at all).
+    omp+=(-L"$lib")
   fi
 fi
 
@@ -148,8 +265,15 @@ case "$(uname -s 2>/dev/null)" in
       esac
       _dedup+=("$a")
     done
-    set -- "${_dedup[@]}"
+    set -- "${_dedup[@]}" "${omp[@]}"
+    omp=()
+    # No implicit rpaths: the non-native target above records none for
+    # -L directories, so the -L flags pass through untouched. The SDK -L
+    # is for links only.
+    _link=true
+    for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) _link=false; break;; esac; done
+    $_link || sdkL=()
     ;;
 esac
 
-exec "${ZIG[@]}" cc -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}"
+exec "${ZIG[@]}" cc -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}" "${sdkL[@]}"

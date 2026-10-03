@@ -27,6 +27,9 @@ SRC_DIR="$BUILD_DIR/R-$R_VERSION"
 OBJ_DIR="$BUILD_DIR/obj-$R_VERSION-$FLAVOR"
 # R_INSTALL_PREFIX override: the conda recipe installs into rattler's $PREFIX
 PREFIX="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR}"
+# The bash compiler shims, for configure-only.sh's capture (gen-subst.sh
+# turns this path into @ZR_TOOLCHAIN@). What gets installed is rzig
+# (zigbuild/tools/rzig/), which parity-test.sh holds to these.
 TOOLCHAIN="$ROOT/toolchain"
 TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
 CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
@@ -82,6 +85,25 @@ fi
 
 njobs() {
   nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4
+}
+
+# macOS deployment target: build.zig's macos_min, the shims'
+# "<arch>-native.13.0". The checks assert every Mach-O is at or below it.
+MACOS_MIN=13.0
+# A Mach-O file's minos (LC_BUILD_VERSION; LC_VERSION_MIN_MACOSX on old
+# files), empty when it has neither.
+macho_minos() {
+  otool -l "$1" 2>/dev/null | awk '
+    /cmd LC_BUILD_VERSION/      { b = 1; next }
+    /cmd LC_VERSION_MIN_MACOSX/ { v = 1; next }
+    b && $1 == "minos"   { print $2; exit }
+    v && $1 == "version" { print $2; exit }'
+}
+# True when version $1 is above $2 (MAJOR.MINOR[.PATCH]), without sort -V.
+version_gt() {
+  awk -v a="$1" -v b="$2" 'BEGIN { split(a, x, "."); split(b, y, ".")
+    for (i = 1; i <= 3; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 }
+    exit 1 }'
 }
 
 # flang where the env provides it (conda-forge's on linux-64, flang-pixi's

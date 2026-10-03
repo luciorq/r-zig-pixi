@@ -12,3 +12,7 @@ pixi.lock merge=binary linguist-language=YAML linguist-generated=true -diff
 # the likely reason). build.zig's parser now tolerates CRLF as well; this
 # keeps the checkout itself sane.
 * text=auto eol=lf
+# R's source patches: patch -p1 applies them with no fuzz to LF sources,
+# so they must be LF too. Explicit rather than auto: a CRLF-saved patch is
+# normalized on commit, and the rule holds if the one above ever changes.
+zigbuild/patches/** text eol=lf

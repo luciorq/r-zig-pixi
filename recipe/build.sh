@@ -4,7 +4,8 @@
 set -euxo pipefail
 
 export PIXI_PROJECT_ROOT="$PWD"
-export R_VERSION="$PKG_VERSION"
+# set by the recipe (a staging output has no PKG_VERSION)
+export R_VERSION="${R_VERSION:-${PKG_VERSION:?}}"
 # internal tzcode needs zoneinfo; host tzdata provides it. TZ pinned for
 # reproducible doc builds regardless of the build machine's zone.
 export TZDIR="$PREFIX/share/zoneinfo"
@@ -16,14 +17,17 @@ export CONDA_PREFIX="$PREFIX"
 
 mkdir -p build
 mv R-src "build/R-$R_VERSION"
-chmod +x toolchain/zig-* scripts/*.sh
+# rattler-build extracted a pristine source: mark it as such (empty patch
+# stamp, as fetch-r.sh does), so zig-build.sh applies zigbuild/patches/
+# to it instead of extracting it again from a tarball it doesn't have.
+: > "build/R-$R_VERSION/.r-zig-patches"
+chmod +x scripts/*.sh
 
 # zig build alone (no autoconf, no make) — the default path since
 # Milestone 5's F1-F6 (see .github/devdocs/feat-zig-build/). $R_INSTALL_
 # PREFIX is already rattler's own $PREFIX (set above), so zig-build.sh's
 # PREFIX_ZIG resolves to it directly (no "-zig" suffix leaks into the
-# conda package). stage.sh normalizes the result for conda-package use
-# (dual rpath, launcher shims, etc) — same tail call install-r.sh used to
-# make for the legacy path.
+# conda package). zig build installs the final tree: relative rpaths,
+# relocatable launchers, rzig as the compilers in lib/R/bin/toolchain
+# (feat-no-host-paths PLAN.md, F1 and F3); nothing runs after it.
 bash scripts/zig-build.sh
-bash scripts/stage.sh

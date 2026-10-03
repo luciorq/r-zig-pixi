@@ -1,0 +1,25 @@
+bin/Rcmd: export Renviron's variables without sed
+
+Every `R CMD` (INSTALL included) exported the variables etc/Renviron
+sets with an `export` of sed's output. The same with the shell's own
+read: the name before the first "=" on each line, when it is an
+identifier (comment lines never are). feat-no-host-paths PLAN.md,
+phase A3.
+
+--- a/src/scripts/Rcmd.in
++++ b/src/scripts/Rcmd.in
+@@ -37,7 +37,13 @@
+ export BSTINPUTS
+ 
+ . "${R_HOME}/etc${R_ARCH}/Renviron"
+-export `sed 's/^ *#.*//; s/^\([^=]*\)=.*/\1/' "${R_HOME}/etc${R_ARCH}/Renviron"`
++## r-zig: no sed
++while IFS= read -r _l || test -n "${_l}"; do
++  case "${_l}" in
++    *=*) _n="${_l%%=*}"
++         case "${_n}" in ''|[0-9]*|*[!A-Za-z0-9_]*) ;; *) export "${_n}" ;; esac ;;
++  esac
++done < "${R_HOME}/etc${R_ARCH}/Renviron"
+ 
+ extra=
+ case "${1}" in

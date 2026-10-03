@@ -22,10 +22,18 @@ pixi add r-zig-slim
 pixi run Rscript -e 'R.version.string'
 ```
 
-Package compilation (`install.packages(...)`) works out of the box in the
-installed environment — the Zig toolchain ships as a runtime dependency of
-the package itself, so CRAN packages with C/C++/Fortran source compile
-without any extra system setup.
+`r-zig-slim` is R alone: it runs R and installs packages that need no
+compiling (R-only source packages and binary packages). To compile CRAN
+packages with C/C++/Fortran sources, add the toolchain, which brings zig,
+flang, make (and on Windows the POSIX userland) and pins the exact
+`r-zig-slim` build:
+
+```bash
+pixi add r-zig-toolchain
+```
+
+Without it, installing a package with compiled code stops with a message
+naming `r-zig-toolchain`.
 
 ### Build the conda package yourself
 
@@ -33,7 +41,8 @@ without any extra system setup.
 pixi run -e pkg conda-package
 ```
 
-Produces `dist/conda/<platform>/r-zig-slim-*.conda` via `rattler-build`,
+Produces `dist/conda/<platform>/r-zig-slim-*.conda` and
+`r-zig-toolchain-*.conda` via `rattler-build`,
 using this repo's own recipe (`recipe/recipe.yaml`). Useful for testing a
 change to the build before publishing, or for producing a package for a
 platform not published upstream.
@@ -54,9 +63,10 @@ typically run once per machine/OS as part of a release.
 For iterating on the build itself rather than consuming a package:
 
 ```bash
-pixi run build   # zig build, no autoconf/make/gnuwin32
-pixi run smoke   # quick sanity check
-pixi run check   # R's own regression suite (linux/macOS)
+pixi run build         # zig build, no autoconf/make/gnuwin32
+pixi run verify-tree   # static checks of the installed tree (Makeconf, rpaths, floors)
+pixi run smoke         # quick sanity check
+pixi run check         # R's own regression suite (linux/macOS)
 ```
 
 Three variants are available as pixi environments: `default` (slim —
@@ -68,18 +78,27 @@ the Python wheel wraps.
 ### Build R as a Python wheel
 
 ```bash
-pixi run -e minimal verify-package   # build, stage, vendor libs, verify
-pixi run -e wheel wheel              # -> dist/wheel/r_zig-4.6.1-py3-none-<platform>.whl
-pixi run -e wheel wheel-test         # pip-install it into a fresh venv and use it
+pixi run -e minimal build            # the installed tree, libraries vendored
+pixi run -e minimal verify-tree      # its static checks
+pixi run -e minimal verify-package   # archive it, check the archive relocated
+pixi run -e wheel wheel              # -> dist/wheel/r_zig-4.6.1-*.whl and r_zig_toolchain-4.6.1-*.whl
+pixi run -e wheel wheel-test         # pip-install them into a fresh venv and use them
 ```
 
 The wheel (`r-zig`, import name `r_zig`) is the whole relocatable
 `minimal` tree plus console scripts `R`/`Rscript` and `r_zig.r_home()` for
-embedders such as rpy2. `install.packages()` compiles C/C++ packages with
-the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package, a wheel
-dependency, and GNU make is bundled, so no system compiler is needed. Linux
+embedders such as rpy2; it installs packages that need no compiling. For
+packages with C/C++ code, `pip install r-zig-toolchain` adds the compiler
+front (rzig) and GNU make, with the PyPI
+[`ziglang`](https://pypi.org/project/ziglang/) package as the compiler, so
+no system compiler is needed.
+ziglang is an upstream zig build, which links its own libc++ statically,
+so compiled C++ packages need no C++ runtime; a zig from a conda
+environment on PATH links conda's shared libc++ on macOS instead. Linux
 wheels are `manylinux2014` (glibc 2.17). Packages with Fortran sources need
-a Fortran compiler, which neither the wheel nor ziglang provides.
+a Fortran compiler, which neither the wheel nor ziglang provides: R's FC,
+the toolchain's `zig-fc`, runs an LLVM `flang` found on PATH and stops
+with a message when there is none.
 Details: `.github/devdocs/feat-wheel-minimal/PLAN.md`.
 
 ### Older Linux HPC servers
