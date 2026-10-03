@@ -75,10 +75,19 @@ contract = "bash scripts/zig-contract.sh"
 # `zig build` installs the final tree (feat-no-host-paths PLAN.md, F1);
 # kept as an alias of build for existing commands.
 install = { depends-on = ["build"] }
+# Static checks of that installed tree, run right after build (F1.6):
+# Makeconf, the compilers are rzig, rpaths, the glibc and macOS floors,
+# the C++ runtime, load commands, minimal's excluded libraries. Takes an
+# optional tree path (`pixi run verify-tree -- <dir>`).
+verify-tree = "bash scripts/verify-tree.sh"
 package = { cmd = "bash scripts/zig-package.sh", depends-on = ["install"] }
+# The archive's own checks: extracted elsewhere, R and packages compiled
+# with it run under env -i, TLS with the shipped CA bundle.
 verify-package = { cmd = "bash scripts/zig-verify-package.sh", depends-on = ["package"] }
 # Tier 0/1 with an empty environment and PATH=<tree>/bin (unix; strace on
-# linux): start R, install without compiling. Uses the packaged artifact.
+# linux): start R, install without compiling. Runs on a copy of the
+# installed tree, not the archive (Windows: once package has vendored
+# its DLLs into the tree).
 hermetic = "bash scripts/hermetic-check.sh"
 # rzig, the compilers in R_HOME/bin/toolchain (zigbuild/tools/rzig/): its
 # unit tests here, and on linux the parity test against the bash shims in
@@ -284,7 +293,7 @@ R_BLAS = "openblas"
 # ICU, which needs libstdc++. That is 14 of the wheel's ~49 MiB. Pinning
 # `libcurl = "<8.21"` below would drop it, at the cost of an older curl
 # (8.20.0 is from 2026-04-29). Left unpinned on purpose: that is a
-# security-vs-size call. verify-bundle.sh reports these libraries and
+# security-vs-size call. verify-tree.sh reports these libraries and
 # fails only if R's own binaries link them.
 #
 # What guarantees the profile is configure-only.sh's explicit --without-*/

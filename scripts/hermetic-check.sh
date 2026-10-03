@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Tier-0/1 hermetic check (feat-no-host-paths PLAN.md, phase A6): the
-# packaged standalone tree must start R and install packages that need
-# no compiling with nothing from the machine but /bin/sh. Runs the
-# extracted artifact with an empty environment and PATH set to the
+# standalone tree must start R and install packages that need no
+# compiling with nothing from the machine but /bin/sh. Runs a copy of the
+# installed tree (zig-build.sh's prefix: the tree that ships, F1) in a
+# temporary directory, with an empty environment and PATH set to the
 # tree's own bin/ only, then:
 #   - starts R (osVersion must be set: it used to come from `uname`),
 #   - installs two R-only source packages, one at a time and with
@@ -21,29 +22,44 @@
 # needs (SYSTEMROOT, WINDIR) and PATH is R's bin\x64 plus System32. The
 # binary package comes from CRAN (win.binary), since --build needs an
 # external zip there. No execve trace: the empty PATH is the check, as on
-# macOS.
+# macOS. The Windows tree runs on its own only once package-standalone.sh
+# has vendored its DLLs into bin/x64 (vendor-libs.sh does that for unix
+# at build time, not for Windows), so there this runs after `package`.
+#
+# The installed tree, not the archive (F1.6): CI runs this before
+# packaging, and the copy proves the same relocation. It lacks only what
+# package-standalone.sh adds (the CA bundle; fontconfig's configuration),
+# which tier 0/1 does not need: without R_ZIG_CA_BUNDLE, libcurl keeps
+# its compiled-in trust (the build env's) for the CRAN step here, and
+# verify-bundle.sh checks the shipped trust on the archive.
 . "$(dirname "$0")/env.sh"
 
 case "$OS" in
-  linux)
-    case "$(uname -m)" in x86_64) plat=linux-64 ;; aarch64) plat=linux-aarch64 ;; *) plat="linux-$(uname -m)" ;; esac
-    ext=tar.gz ;;
-  macos)
-    case "$(uname -m)" in arm64) plat=osx-arm64 ;; x86_64) plat=osx-64 ;; *) plat="osx-$(uname -m)" ;; esac
-    ext=tar.gz ;;
-  windows)
-    plat=win-64; ext=zip ;;
-  *)
-    echo "hermetic-check: unsupported OS '$OS'" >&2; exit 1 ;;
+  linux|macos|windows) ;;
+  *) echo "hermetic-check: unsupported OS '$OS'" >&2; exit 1 ;;
 esac
-export R_INSTALL_PREFIX="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
-artifact="$ROOT/dist/R-$R_VERSION-$FLAVOR-$plat.$ext"
-test -f "$artifact" || { echo "error: $artifact not found; run 'pixi run package' first" >&2; exit 1; }
+TREE="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
+command -v cygpath > /dev/null 2>&1 && TREE="$(cygpath -u "$TREE")"
+if [ "$OS" = windows ]; then rh="Library/lib/R"; else rh="lib/R"; fi
+test -d "$TREE/$rh" || { echo "error: no R tree at $TREE; run 'pixi run build' first" >&2; exit 1; }
+# Resolved, so that cp -a below copies the directory and not a symlink
+# to it (which would put R back in its original place and let the
+# toolchain removal hit the real tree).
+TREE="$(cd "$TREE" && pwd -P)"
+# Windows: package-standalone.sh vendors the DLLs R.dll needs (and
+# creates R_HOME/Tcl on every run); without them Rscript.exe only fails
+# with a loader error.
+if [ "$OS" = windows ] && [ ! -d "$TREE/$rh/Tcl" ]; then
+  echo "error: the Windows tree has no vendored DLLs/Tcl yet; run 'pixi run package' first" >&2
+  exit 1
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-if [ "$ext" = zip ]; then unzip -q "$artifact" -d "$WORK"; else tar -xzf "$artifact" -C "$WORK"; fi
-T="$WORK/$(basename "$R_INSTALL_PREFIX")"
+# A copy: the scenario removes the toolchain below, and R must not rely
+# on the place it was built in.
+cp -a "$TREE" "$WORK/"
+T="$WORK/$(basename "$TREE")"
 if [ "$OS" = windows ]; then
   R_BINDIR="$T/Library/lib/R/bin/x64"
   R_START=("$R_BINDIR/Rscript.exe" --vanilla check.R)
@@ -58,7 +74,7 @@ else
   R_START=("$T/bin/R" --vanilla --no-echo -f check.R)
   HERMETIC_ENV=(HOME="$WORK" TMPDIR="$WORK/tmp" PATH="$T/bin")
 fi
-test -x "${R_START[0]}" || { echo "error: ${R_START[0]} missing from the extracted tree" >&2; exit 1; }
+test -x "${R_START[0]}" || { echo "error: ${R_START[0]} missing from the copied tree" >&2; exit 1; }
 mkdir -p "$WORK/lib" "$WORK/tmp" "$WORK/pk"
 # Tiers 0/1 are the base package: no toolchain (phase T). Remove the
 # directory the toolchain package provides, so the scenario is exactly

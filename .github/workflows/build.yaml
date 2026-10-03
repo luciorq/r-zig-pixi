@@ -90,27 +90,41 @@ jobs:
       # parity test against the bash shims for every OS's command lines.
       - name: rzig tests
         run: pixi run -e ${{ matrix.env }} rzig-test
+      # `zig build` installs the tree that ships (feat-no-host-paths F1),
+      # libraries vendored; every check below runs on that tree, and the
+      # archive is made from it last (F1.6).
       - name: Build R (zig build alone, no autoconf/make)
         run: pixi run -e ${{ matrix.env }} build
+      # Static checks of the installed tree, before anything runs it:
+      # Makeconf, the compilers are rzig, relative rpaths, the glibc and
+      # macOS floors, the C++ runtime, load commands, minimal's excluded
+      # libraries (scripts/verify-tree.sh). The variants CI packages.
+      - name: Verify the installed tree (Makeconf, rzig, rpaths, floors)
+        if: matrix.env == 'default' || matrix.env == 'minimal'
+        run: pixi run -e ${{ matrix.env }} verify-tree
       - name: Smoke test
         run: pixi run -e ${{ matrix.env }} smoke
       - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
         run: pixi run -e ${{ matrix.env }} contract
       - name: Regression suite (Examples/Specific/Reg)
         run: pixi run -e ${{ matrix.env }} check
-      # Standalone bundle: reuses this job's already-built prefix (cheap).
-      # Only the default (slim) and minimal variants are packaged in CI for
-      # now — full/openblas relocation is exercised manually, not automated
-      # yet. minimal's bundle is the wheel's input, so it can't be skipped.
-      - name: Package + verify standalone bundle
-        if: matrix.env == 'default' || matrix.env == 'minimal'
-        run: pixi run -e ${{ matrix.env }} verify-package
-      # Tiers 0/1 (feat-no-host-paths): the packaged tree starts R and
-      # installs source R-only and binary packages with nothing but /bin/sh
-      # and its own bin/ on PATH; on linux, strace fails any other program.
-      - name: Hermetic tier 0/1 check
+      # Tiers 0/1 (feat-no-host-paths): a copy of the installed tree starts
+      # R and installs source R-only and binary packages with nothing but
+      # /bin/sh and its own bin/ on PATH; on linux, strace fails any other
+      # program.
+      - name: Hermetic tier 0/1 check (installed tree, empty environment)
         if: matrix.env == 'default' || matrix.env == 'minimal'
         run: pixi run -e ${{ matrix.env }} hermetic
+      # Standalone archive: reuses this job's already-built prefix (cheap).
+      # Only the default (slim) and minimal variants are packaged in CI for
+      # now — full/openblas relocation is exercised manually, not automated
+      # yet. minimal's archive is the wheel's input, so it can't be skipped.
+      # verify-package checks the archive itself: extracted elsewhere, R
+      # and packages compiled with it run under env -i, TLS with the
+      # shipped CA bundle (scripts/verify-bundle.sh).
+      - name: Package + verify the standalone archive (relocated, env -i)
+        if: matrix.env == 'default' || matrix.env == 'minimal'
+        run: pixi run -e ${{ matrix.env }} verify-package
       # The r-zig wheel: the tree verify-package just packaged, zipped with
       # the r_zig Python package, then pip-installed into a fresh venv
       # (ziglang from PyPI) and used with the pixi env scrubbed away —
@@ -156,13 +170,20 @@ jobs:
       # last line, which is the diagnosis.
       - name: Build R (zig build alone, no autoconf/make/gnuwin32)
         run: pixi run build -- --verbose
+      # Windows' static checks: the compilers are rzig, Makeconf.
+      - name: Verify the installed tree (Makeconf, rzig)
+        run: pixi run verify-tree
       - name: Smoke test
         run: pixi run smoke
       - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
         run: pixi run contract
-      - name: Package + verify standalone bundle
+      - name: Package + verify the standalone archive (relocated)
         run: pixi run verify-package
-      - name: Hermetic tier 0/1 check
+      # After package, unlike unix: the Windows tree runs on its own only
+      # once package-standalone.sh has vendored conda's DLLs into its
+      # bin/x64 (vendor-libs.sh does that at build time on unix only), and
+      # hermetic's PATH is R's bin/x64 plus System32.
+      - name: Hermetic tier 0/1 check (installed tree, empty environment)
         run: pixi run hermetic
 
   # conda-forge-style package (rattler-build) — always the slim variant

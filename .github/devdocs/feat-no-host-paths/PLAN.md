@@ -673,6 +673,38 @@ zig 0.16's std.Build):
       find its runtime in a conda env today either.
 - F1.6 CI: build (final tree), then smoke, contract, check, hermetic, then
   archive; verify-package shrinks to the archive checks.
+  - **F1.6 done 2026-10-03** (a workflow: an implementer in a worktree,
+    two review lenses, a skeptic each, a fix pass; then the macOS and
+    Windows runs here). verify-bundle.sh is split by what a check needs:
+    - scripts/verify-tree.sh (pixi task `verify-tree`, on the installed
+      tree right after the build, about 4 s): the compilers are rzig;
+      Makeconf (no build path, the tree's own path included, no rpath,
+      CPPFLAGS/LDFLAGS empty, FLIBS, FC = zig-fc); the linux glibc
+      ceiling; every rpath relative; no shared C++ runtime in R's
+      binaries; macOS minos and load commands; minimal's excluded
+      libraries; and a guard that the binary list is not empty.
+    - scripts/verify-bundle.sh (`verify-package`, after `package`): what
+      needs the extracted archive: R running from a new place under
+      `env -i`, TLS with the shipped CA bundle, the compiled packages
+      built and loaded there (C++, Fortran, `USE_FC_TO_LINK`, `$(FLIBS)`
+      without flang, OpenMP, the decoy CONDA_PREFIX runs, zig-fc without
+      flang), the Windows dry runs.
+    - scripts/verify-helpers.sh: what both use (needed_of, rpaths_of,
+      cxx_deps, minos_over_floor). No check was lost or weakened: the 16
+      check lines of the old script are exactly the union of the two
+      new ones on the same archive; defects planted in copies of the
+      slim and minimal trees (an absolute rpath, a Makeconf build path,
+      a script in place of rzig, a shared libc++, ...) were all caught.
+    - hermetic runs on a copy of the installed tree (resolved through
+      symlinks first), before the archive on unix; on Windows after
+      `package`, which is what copies conda's DLLs and Tcl into the tree
+      (vendor-libs.sh does nothing there), with a clear error if run
+      before it.
+    CI order (unix): rzig tests, build, verify-tree, smoke, contract,
+    check, hermetic, package + verify-package, the wheel; Windows: rzig
+    tests, build, verify-tree, smoke, contract, package + verify-package,
+    hermetic. verify-tree runs on the legs verify-package ran on
+    (default, minimal); it also passes on linux-64 full and openblas.
 
 Order: T's conda and wheel parts (done) → F1 → F2 → F3 → T's standalone
 split (it needs F1's layout and F3's binary) → P. F4 can be decided at

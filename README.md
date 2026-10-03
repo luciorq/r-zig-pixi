@@ -63,9 +63,10 @@ typically run once per machine/OS as part of a release.
 For iterating on the build itself rather than consuming a package:
 
 ```bash
-pixi run build   # zig build, no autoconf/make/gnuwin32
-pixi run smoke   # quick sanity check
-pixi run check   # R's own regression suite (linux/macOS)
+pixi run build         # zig build, no autoconf/make/gnuwin32
+pixi run verify-tree   # static checks of the installed tree (Makeconf, rpaths, floors)
+pixi run smoke         # quick sanity check
+pixi run check         # R's own regression suite (linux/macOS)
 ```
 
 Three variants are available as pixi environments: `default` (slim —
@@ -77,7 +78,9 @@ the Python wheel wraps.
 ### Build R as a Python wheel
 
 ```bash
-pixi run -e minimal verify-package   # build, stage, vendor libs, verify
+pixi run -e minimal build            # the installed tree, libraries vendored
+pixi run -e minimal verify-tree      # its static checks
+pixi run -e minimal verify-package   # archive it, check the archive relocated
 pixi run -e wheel wheel              # -> dist/wheel/r_zig-4.6.1-*.whl and r_zig_toolchain-4.6.1-*.whl
 pixi run -e wheel wheel-test         # pip-install them into a fresh venv and use them
 ```

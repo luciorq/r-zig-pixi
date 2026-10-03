@@ -6,7 +6,26 @@
 # human to re-run it. Windows binaries derive R_HOME natively (no PATH
 # tricks needed there); unix binaries get a scrubbed PATH
 # to prove they need nothing from the environment that built them.
+#
+# The checks here are the ones whose point is the relocated,
+# environment-free tree, or that need what package-standalone.sh adds
+# (feat-no-host-paths PLAN.md, F1.6):
+#   - the archive exists and extracts;
+#   - R runs from the new place (unix: env -i), with the variant's
+#     capabilities: the vendored libraries load from there;
+#   - TLS trust with the shipped CA bundle and nothing from the build env;
+#   - packages compiled with the relocated tree build and load under
+#     env -i: C++, Fortran, USE_FC_TO_LINK, $(FLIBS) without flang,
+#     OpenMP, decoy CONDA_PREFIX runs, zig-fc with no flang (Windows: rzig's
+#     dry runs, -L from where the tree now is, CONDA_PREFIX ignored).
+# The static checks of the tree (Makeconf, the compilers are rzig, rpaths,
+# the glibc ceiling, the C++ runtime of R's binaries, the macOS floor and
+# load commands, minimal's excluded libraries) read files, headers and
+# load commands, which moving the tree does not change: verify-tree.sh
+# runs them on the installed tree right after the build. Shared helpers:
+# verify-helpers.sh (rpaths_of, needed_of, cxx_deps, minos_over_floor).
 . "$(dirname "$0")/env.sh"
+. "$(dirname "$0")/verify-helpers.sh"
 
 case "$OS" in
   linux)
@@ -50,23 +69,6 @@ fi
 # succeeded but the hardcoded BUNDLE_DIR guess didn't exist).
 BUNDLE_DIR="$VERIFY_DIR/$(basename "$PREFIX")"
 
-# The compilers Makeconf names are rzig (feat-no-host-paths F3), one
-# binary under every name: compiling runs no shell script of ours. FC is
-# rzig's zig-fc (F3c).
-if [ "$OS" = windows ]; then
-  tc_dir="Library/lib/R/bin/toolchain"; tc_names="gcc.exe g++.exe zig-fc.exe zig-cc zig-cxx"
-else
-  tc_dir="lib/R/bin/toolchain"; tc_names="zig-cc zig-cxx zig-fc zig-ar zig-ranlib"
-fi
-for t in $tc_names; do
-  f="$BUNDLE_DIR/$tc_dir/$t"
-  if [ ! -f "$f" ] || [ "$(head -c2 "$f")" = '#!' ] || ! cmp -s "$f" "$BUNDLE_DIR/$tc_dir/${tc_names%% *}"; then
-    echo "error: $tc_dir/$t is missing, a script, or not the same rzig as the rest" >&2
-    exit 1
-  fi
-done
-echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig"
-
 # minimal (the wheel profile) has no cairo/png by design — assert that
 # instead, so a graphics stack creeping back in fails here too.
 if [ "$VARIANT" = minimal ]; then
@@ -91,37 +93,6 @@ else
     "$R_BIN" --vanilla --no-echo -e "$CHECK_R"
 fi
 echo "== standalone bundle verified relocatable ($OS/$FLAVOR)"
-
-# Makeconf names no build path (feat-no-host-paths F1.5): build.zig writes
-# the environment as $(R_HOME)/../.., FLIBS as -lflang_rt.runtime and no
-# rpath, and nothing edits the file afterwards. Comment lines count.
-# CPPFLAGS and LDFLAGS are empty (F3b): the compilers, rzig, add the
-# environment's -I and -L (and a conda env's rpath) themselves. FC is
-# rzig's zig-fc (F3c), which runs the flang on PATH.
-if [ "$OS" = windows ]; then mk="$BUNDLE_DIR/Library/lib/R/etc/x64/Makeconf"; else mk="$BUNDLE_DIR/lib/R/etc/Makeconf"; fi
-bad=""
-# Windows: ROOT is env.sh's /c/... form; PIXI_PROJECT_ROOT is the native
-# one, and a leak is written C:\... or C:/... (any drive-letter case).
-for p in "$ROOT" "${PIXI_PROJECT_ROOT:-}" "${CONDA_PREFIX:-}"; do
-  [ -n "$p" ] || continue
-  for q in "$p" "$(printf '%s' "$p" | tr '\\' /)"; do
-    if grep -qiF -- "$q" "$mk"; then bad="$bad $q"; fi
-  done
-done
-if grep -q -- '-rpath' "$mk"; then bad="$bad -rpath"; fi
-grep -q '^FLIBS = .*-lflang_rt\.runtime' "$mk" || bad="$bad FLIBS"
-# (on Windows inside the template's USE_LLVM else branch, indented)
-grep -Eq '^ *FC = \$\(R_HOME\)/bin/toolchain/zig-fc *'$'\r''?$' "$mk" || bad="$bad FC-not-zig-fc"
-for v in CPPFLAGS LDFLAGS; do
-  # (the x64 Makeconf has CRLF line ends)
-  grep -Eq "^$v = *"$'\r'"?\$" "$mk" || bad="$bad $v-not-empty"
-  if [ "$OS" != windows ] && grep -Eq "'$v=" "$mk"; then bad="$bad $v-in-configure-line"; fi
-done
-if [ -n "$bad" ]; then
-  echo "error: ${mk#$BUNDLE_DIR/} names build paths or lacks the relative forms:$bad" >&2
-  exit 1
-fi
-echo "== Makeconf verified: no build path, no rpath, CPPFLAGS and LDFLAGS empty, FLIBS = -lflang_rt.runtime, FC = zig-fc"
 
 # Windows: what rzig (gcc.exe) adds for the environment it is installed in
 # (F3b): -L<prefix>/Library/lib on a link, no rpath, and nothing from a
@@ -207,204 +178,24 @@ if [ "$OS" != windows ]; then
   fi
 fi
 
-# minimal: the point of the profile is what R does NOT link. No binary
-# of R's own (libR, modules, base-package .so, bin/exec/R) may name a
-# library from the graphics/ICU/OpenMP/libdeflate stacks. That is the
-# part the configure profile controls; what third-party libraries drag
-# in is reported, not failed: conda-forge's libcurl >= 8.21 links
-# libpsl, which links ICU (and so libstdc++), on every platform — see
-# pixi.toml's [feature.minimal] for the size cost and the pin that would
-# avoid it.
-if [ "$VARIANT" = minimal ] && [ "$OS" != windows ]; then
-  excluded_re='lib(cairo|pango|harfbuzz|fontconfig|freetype|glib|gobject|gio|pixman|png|jpeg|tiff|X11|xcb|icu|omp|iomp|gomp|deflate)'
-  r_bins="$VERIFY_DIR/r-bins.txt"
-  find "$BUNDLE_DIR/lib/R" -path "$BUNDLE_DIR/lib/R/bin/toolchain" -prune -o \
-    -type f \( -name '*.so' -o -name '*.dylib' -o -path '*/bin/exec/R' \) -print > "$r_bins"
-  bad=""
-  while IFS= read -r f; do
-    if [ "$OS" = linux ]; then
-      deps="$(patchelf --print-needed "$f" 2>/dev/null || true)"
-    else
-      deps="$(otool -L "$f" 2>/dev/null | tail -n +2 | awk '{print $1}' || true)"
-    fi
-    hit="$(printf '%s\n' "$deps" | grep -E "(^|/)$excluded_re" || true)"
-    [ -z "$hit" ] || bad="$bad ${f#$BUNDLE_DIR/}->$(echo $hit | tr ' ' ',')"
-  done < "$r_bins"
-  if [ -n "$bad" ]; then
-    echo "error: minimal R links libraries its profile excludes:$bad" >&2
-    exit 1
-  fi
-  echo "== minimal profile verified: $(wc -l < "$r_bins" | tr -d ' ') R binaries, none links graphics/ICU/OpenMP/libdeflate"
-  transitive="$(ls "$BUNDLE_DIR/lib" | grep -E "^$excluded_re" | tr '\n' ' ' || true)"
-  [ -z "$transitive" ] || echo "   note: vendored as dependencies of third-party libs (not of R): $transitive"
-fi
-
-# Old-server guarantee (Linux only): fail if any shipped ELF requires glibc
-# newer than the floor build.zig's target pin promises. This is the check
-# side of the floor — a zig update or stray flag that raises the
-# requirement should die here, not on a customer's old box.
-#
-# Two tiers, learned from the first hosted-CI run of this check
-# (2026-09-19): everything R needs to *run* (R itself, its modules and
-# package .so files, every vendored library under lib/) must stay at the
-# 2.17 floor — and does. The compile-time helper tools build.zig installs
-# into lib/R/bin/toolchain (nm/realpath/sed/... for bin/libtool and
-# javareconf) come from conda-forge, whose linux baseline is glibc 2.28
-# now: coreutils' `realpath` needs GLIBC_2.28, nothing else did. Those
-# tools only run when compiling packages or reconfiguring Java, which
-# already requires a development machine with zig on PATH, so they are
-# bounded at conda-forge's own baseline instead — anything above *that*
-# still trips (a host tool leaking in, conda-forge moving to 2.34).
-#
-# The ELF list is collected first, then checked: an `exit 1` inside a
-# `while read < <(find ...)` loop fires the EXIT trap's rm -rf while find
-# is still walking the tree — the real error line was followed by a
-# screenful of "cannot open"/"No such file or directory" noise from the
-# half-deleted tree, which is what the first CI failure looked like.
-if [ "$OS" = linux ]; then
-  GLIBC_FLOOR="2.17"          # runtime artifacts: R + vendored libs
-  GLIBC_TOOLS_CEILING="2.28"  # lib/R/bin/toolchain helpers (conda-forge baseline)
-  elf_list="$VERIFY_DIR/elf-list.txt"
-  find "$BUNDLE_DIR" -type f \( -name '*.so*' -o -perm -u+x \) \
-    -exec sh -c 'head -c4 "$1" | od -An -tx1 | grep -q "7f 45 4c 46"' _ {} \; -print \
-    > "$elf_list"
-  worst=""; worst_file=""; tools_over=0; failed=0
-  while IFS= read -r f; do
-    # `|| true`: an ELF with no versioned glibc imports makes grep exit 1,
-    # and env.sh's pipefail + set -e would silently kill the whole script
-    # on that assignment (latent in the first version of this check too).
-    ceil=$(objdump -T "$f" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/^GLIBC_//' | sort -uV | tail -1 || true)
-    [ -z "$ceil" ] && continue
-    case "$f" in
-      "$BUNDLE_DIR"/lib/R/bin/toolchain/*) limit="$GLIBC_TOOLS_CEILING"; tier="toolchain helper" ;;
-      *) limit="$GLIBC_FLOOR"; tier="runtime" ;;
-    esac
-    if [ "$(printf '%s\n' "$ceil" "$limit" | sort -V | tail -1)" != "$limit" ]; then
-      echo "error: $f ($tier) requires GLIBC_$ceil > $limit" >&2
-      failed=1
-    elif [ "$tier" = "toolchain helper" ] && [ "$(printf '%s\n' "$ceil" "$GLIBC_FLOOR" | sort -V | tail -1)" != "$GLIBC_FLOOR" ]; then
-      echo "note: ${f#$BUNDLE_DIR/} (toolchain helper, compile-time only) requires GLIBC_$ceil > runtime floor $GLIBC_FLOOR"
-      tools_over=$((tools_over + 1))
-    fi
-    if [ "$tier" = runtime ] && { [ -z "$worst" ] || [ "$(printf '%s\n' "$ceil" "$worst" | sort -V | tail -1)" = "$ceil" ]; }; then
-      worst="$ceil"; worst_file="${f#$BUNDLE_DIR/}"
-    fi
-  done < "$elf_list"
-  [ "$failed" = 0 ] || exit 1
-  echo "== glibc ceiling verified: runtime worst $worst ($worst_file) <= floor $GLIBC_FLOOR; $tools_over toolchain helper(s) above the floor, all <= $GLIBC_TOOLS_CEILING"
-fi
-
-# No build-machine rpaths (unix). Every RUNPATH/LC_RPATH entry in the tree
-# must be relative to the file ($ORIGIN, @loader_path): zig records the
-# build env's lib dir and zig-cache dirs unless told not to, which build.zig
-# does (relRPaths, linkSibling). Then a package compiled with this tree (C++, so libc++ is
-# involved on macOS) must record no rpath at all, and still load: libR and
-# the libraries it needs are already in the process. rzig makes that
-# so (on macOS its deployment-target triple records no rpath for -L
-# directories), and adds an rpath only into a conda env, which this tree
-# is not (zigbuild/tools/rzig/environment.zig). Skipped without zig, as on
+# Packages compiled with the relocated tree (unix). A package compiled
+# with this tree (C++, so libc++ is involved on macOS) must record no
+# rpath at all, and still load: libR and the libraries it needs are
+# already in the process. rzig makes that so (on macOS its
+# deployment-target triple records no rpath for -L directories), and adds
+# an rpath only into a conda env, which this tree is not
+# (zigbuild/tools/rzig/environment.zig). That every rpath of the tree's
+# own binaries is relative is verify-tree.sh's. Skipped without zig, as on
 # a user machine.
 if [ "$OS" != windows ]; then
-  bin_list="$VERIFY_DIR/bin-list.txt"
-  if [ "$OS" = linux ]; then
-    find "$BUNDLE_DIR" -type f \( -name '*.so*' -o -perm -u+x \) \
-      -exec sh -c 'head -c4 "$1" | od -An -tx1 | grep -q "7f 45 4c 46"' _ {} \; -print > "$bin_list"
-  else
-    find "$BUNDLE_DIR" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) \
-      -exec sh -c 'head -c4 "$1" | od -An -tx1 | grep -q "cf fa ed fe"' _ {} \; -print > "$bin_list"
-  fi
-  rpaths_of() {
-    if [ "$OS" = linux ]; then
-      patchelf --print-rpath "$1" 2>/dev/null | tr ':' '\n' | grep -v '^$' || true
-    else
-      otool -l "$1" | awk '/cmd LC_RPATH/ {r = 1} r && / path / {sub(/^ *path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print; r = 0}'
-    fi
-  }
-  bad=""
-  while IFS= read -r f; do
-    for rp in $(rpaths_of "$f"); do
-      case "$rp" in '$ORIGIN'|'$ORIGIN/'*|@loader_path|@loader_path/*) ;; *) bad="$bad
-  ${f#$BUNDLE_DIR/}: $rp" ;; esac
-    done
-  done < "$bin_list"
-  if [ -n "$bad" ]; then
-    echo "error: build-machine rpaths in the bundle:$bad" >&2
-    exit 1
-  fi
-  echo "== rpaths verified: $(wc -l < "$bin_list" | tr -d ' ') binaries, all relative"
-
-  # Static libc++ everywhere (decided 2026-09-30): none of R's own
-  # binaries may depend on a shared C++ runtime. The vendored conda
-  # libraries in lib/ may (ICU links libc++ on macOS, libstdc++ on linux);
-  # they are not ours to build.
-  cxx_deps() {
-    if [ "$OS" = linux ]; then
-      patchelf --print-needed "$1" 2>/dev/null | grep -E '^lib(c\+\+|stdc\+\+)\.so' || true
-    else
-      otool -L "$1" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -E '(^|/)lib(c\+\+|stdc\+\+)[.0-9]*\.dylib$' || true
-    fi
-  }
-  bad=""
-  n_r=0
-  while IFS= read -r f; do
-    case "$f" in "$BUNDLE_DIR"/lib/R/bin/toolchain/*) continue ;; "$BUNDLE_DIR"/lib/R/*) ;; *) continue ;; esac
-    n_r=$((n_r + 1))
-    hit="$(cxx_deps "$f")"
-    [ -z "$hit" ] || bad="$bad ${f#$BUNDLE_DIR/}->$(echo $hit | tr ' ' ',')"
-  done < "$bin_list"
-  if [ -n "$bad" ]; then
-    echo "error: R binaries depend on a shared C++ runtime:$bad" >&2
-    exit 1
-  fi
-  echo "== C++ runtime verified: $n_r R binaries, none needs a shared libc++/libstdc++"
-
-  # macOS deployment target: every Mach-O in the tree at or below
-  # MACOS_MIN (build.zig's macos_min; conda's vendored libraries are
-  # lower). A native target would stamp the build machine's version.
-  # Then the load commands: install names relative (packages copy libR's
-  # into their own load commands), dependencies relative or the system's,
-  # and R's own binaries take from the SDK's /usr/lib only what conda has
-  # no copy of: build.zig adds the SDK's lib dir last, and ahead of
-  # conda's it would bind -lz/-liconv/-lcurl to the SDK's older stubs.
-  if [ "$OS" = macos ]; then
-    bad=""
-    while IFS= read -r f; do
-      m="$(macho_minos "$f")"
-      if [ -z "$m" ] || version_gt "$m" "$MACOS_MIN"; then bad="$bad ${f#$BUNDLE_DIR/}=${m:-none}"; fi
-    done < "$bin_list"
-    if [ -n "$bad" ]; then
-      echo "error: Mach-O files above the macOS $MACOS_MIN floor:$bad" >&2
-      exit 1
-    fi
-    echo "== macOS floor verified: $(wc -l < "$bin_list" | tr -d ' ') Mach-O files, minos <= $MACOS_MIN"
-    bad=""
-    while IFS= read -r f; do
-      id="$(otool -D "$f" 2>/dev/null | tail -n +2)"
-      case "$id" in ""|@rpath/*|@loader_path/*|@executable_path/*|[!/]*) ;; *) bad="$bad ${f#$BUNDLE_DIR/}:id=$id" ;; esac
-      for dep in $(otool -L "$f" 2>/dev/null | tail -n +2 | awk '{print $1}'); do
-        [ "$dep" = "$id" ] && continue
-        case "$dep" in @rpath/*|@loader_path/*|@executable_path/*|/usr/lib/*|/System/Library/*) ;; *) bad="$bad ${f#$BUNDLE_DIR/}:$dep" ;; esac
-        case "$f" in "$BUNDLE_DIR"/lib/R/bin/toolchain/*) ;; "$BUNDLE_DIR"/lib/R/*)
-          case "$dep" in /usr/lib/libSystem.B.dylib|/usr/lib/libresolv.9.dylib|/usr/lib/libobjc.A.dylib) ;; /usr/lib/*) bad="$bad ${f#$BUNDLE_DIR/}:$dep(SDK)" ;; esac ;;
-        esac
-      done
-    done < "$bin_list"
-    [ "$(otool -D "$BUNDLE_DIR/lib/R/lib/libR.dylib" | tail -n +2)" = "@rpath/libR.dylib" ] || bad="$bad lib/R/lib/libR.dylib:id"
-    if [ -n "$bad" ]; then
-      echo "error: install names or load commands:$bad" >&2
-      exit 1
-    fi
-    echo "== load commands verified: relative install names, no build-machine or SDK-stub dependencies"
-  fi
   # A package's objects and .so at or below the floor too: zig stamps the
   # link, so only the objects show a compiler that ignored it (flang
   # defaults to the host SDK's version).
   check_minos() {
     [ "$OS" = macos ] || return 0
     for f in "$@"; do
-      m="$(macho_minos "$f")"
-      if [ -z "$m" ] || version_gt "$m" "$MACOS_MIN"; then
-        echo "error: ${f##*/} minos ${m:-none} > $MACOS_MIN" >&2
+      if m="$(minos_over_floor "$f")"; then
+        echo "error: ${f##*/} minos $m > $MACOS_MIN" >&2
         exit 1
       fi
     done
@@ -473,11 +264,7 @@ FORTRAN
       (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
         "$R_BIN" CMD SHLIB -o fs.so fs.f > fshlib.log 2>&1) || { cat "$pkg_dir/fshlib.log" >&2; echo "error: R CMD SHLIB of a Fortran file failed with the bundle" >&2; exit 1; }
       check_minos "$pkg_dir/fs.o" "$pkg_dir/fs.so"
-      if [ "$OS" = linux ]; then
-        f_dep="$(patchelf --print-needed "$pkg_dir/fs.so" | grep flang_rt || true)"
-      else
-        f_dep="$(otool -L "$pkg_dir/fs.so" | grep flang_rt || true)"
-      fi
+      f_dep="$(needed_of "$pkg_dir/fs.so" | grep flang_rt || true)"
       if [ -n "$f_dep" ]; then
         echo "error: a Fortran package compiled with the bundle needs a shared flang runtime: $f_dep" >&2
         exit 1
@@ -498,11 +285,7 @@ FORTRAN
         "$R_BIN" CMD SHLIB -o fl.so fl.f > shlib.log 2>&1) || { cat "$pkg_dir/fl/shlib.log" >&2; echo "error: a USE_FC_TO_LINK Fortran package failed to link with the bundle" >&2; exit 1; }
       grep -Eq 'toolchain/zig-fc (-shared|-dynamiclib) .*-o fl\.so' "$pkg_dir/fl/shlib.log" || { cat "$pkg_dir/fl/shlib.log" >&2; echo "error: the USE_FC_TO_LINK link did not run zig-fc" >&2; exit 1; }
       check_minos "$pkg_dir/fl/fl.o" "$pkg_dir/fl/fl.so"
-      if [ "$OS" = linux ]; then
-        f_dep="$(patchelf --print-needed "$pkg_dir/fl/fl.so" | grep flang_rt || true)"
-      else
-        f_dep="$(otool -L "$pkg_dir/fl/fl.so" | grep flang_rt || true)"
-      fi
+      f_dep="$(needed_of "$pkg_dir/fl/fl.so" | grep flang_rt || true)"
       fl_rp="$(rpaths_of "$pkg_dir/fl/fl.so" | tr '\n' ' ')"
       if [ -n "$f_dep" ] || [ -n "$fl_rp" ]; then
         echo "error: the USE_FC_TO_LINK package needs a shared flang runtime ($f_dep) or records rpaths ($fl_rp)" >&2
@@ -612,6 +395,6 @@ FORTRAN
     done
     echo "== CONDA_PREFIX ignored: the C++ package (and the OpenMP one, where offered) builds with a poisoned and with the build env as CONDA_PREFIX, no rpath, and rzig's command lines name neither"
   else
-    echo "== compiled package rpath check skipped (no zig on PATH)"
+    echo "== compiled-package checks skipped (no zig on PATH)"
   fi
 fi
