@@ -8,8 +8,8 @@
 # to prove they need nothing from the environment that built them.
 #
 # The checks here are the ones whose point is the relocated,
-# environment-free tree, or that need what package-standalone.sh adds
-# (feat-no-host-paths PLAN.md, F1.6):
+# environment-free tree (feat-no-host-paths PLAN.md, F1.6; the archive is
+# the installed tree as it is, F1.7):
 #   - the archive exists and extracts;
 #   - R runs from the new place (unix: env -i), with the variant's
 #     capabilities: the vendored libraries load from there;
@@ -18,12 +18,13 @@
 #     env -i: C++, Fortran, USE_FC_TO_LINK, $(FLIBS) without flang,
 #     OpenMP, decoy CONDA_PREFIX runs, zig-fc with no flang (Windows: rzig's
 #     dry runs, -L from where the tree now is, CONDA_PREFIX ignored).
-# The static checks of the tree (Makeconf, the compilers are rzig, rpaths,
-# the glibc ceiling, the C++ runtime of R's binaries, the macOS floor and
-# load commands, minimal's excluded libraries) read files, headers and
-# load commands, which moving the tree does not change: verify-tree.sh
-# runs them on the installed tree right after the build. Shared helpers:
-# verify-helpers.sh (rpaths_of, needed_of, cxx_deps, minos_over_floor).
+# The static checks of the tree (Makeconf, the compilers are rzig, the CA
+# bundle, rpaths, the glibc ceiling, the C++ runtime of R's binaries, the
+# macOS floor and load commands, minimal's excluded libraries, Windows'
+# Tcl/Tk and DLL closure) read files, headers and load commands, which
+# moving the tree does not change: verify-tree.sh runs them on the
+# installed tree right after the build. Shared helpers: verify-helpers.sh
+# (rpaths_of, needed_of, cxx_deps, minos_over_floor).
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
 
@@ -62,7 +63,7 @@ else
   tar -xzf "$artifact" -C "$VERIFY_DIR"
 fi
 # Same $PREFIX-basename derivation as package-standalone.sh's own
-# prefix_base fix — the archive's top-level directory name matches
+# prefix_base — the archive's top-level directory name matches
 # whatever $PREFIX actually was at package time (zig-built prefixes carry
 # a "-zig" suffix), not a hardcoded "R-$R_VERSION-$FLAVOR" (found via a
 # real verify-bundle run against a zig-built prefix on kappa: extraction
@@ -76,9 +77,27 @@ if [ "$VARIANT" = minimal ]; then
 else
   CHECK_CAPS='stopifnot(capabilities("cairo"), capabilities("png"))'
 fi
+# tcltk (unix full): Tcl starts with the script library the tree ships,
+# not the build env's that the vendored libtcl names, and `clock`, which
+# needs the msgcat module, works. Under env -i there is no DISPLAY, so Tk
+# stays down (a warning) and only Tcl is tested. (Windows: verify-tree.sh
+# checks R_HOME/Tcl's files, hermetic-check.sh loads tcltk from it with an
+# empty environment, and check's tcltk examples use it.)
+CHECK_TCLTK=""
+if [ "$OS" != windows ]; then
+  CHECK_TCLTK="
+if (capabilities('tcltk')) {
+  suppressWarnings(library(tcltk))
+  lib <- normalizePath(tcltk::tclvalue(tcltk::.Tcl('info library')))
+  stopifnot(startsWith(lib, normalizePath(file.path(R.home(), '..'))),
+            tcltk::tclvalue(tcltk::.Tcl('clock format 0 -gmt 1 -format %Y')) == '1970')
+  cat('tcltk OK:', lib, '\n')
+}"
+fi
 CHECK_R="
 stopifnot(max(abs(solve(matrix(c(2,0,0,2),2,2)) - matrix(c(.5,0,0,.5),2,2))) < 1e-9)
 $CHECK_CAPS
+$CHECK_TCLTK
 cat('bundle OK\n')
 "
 

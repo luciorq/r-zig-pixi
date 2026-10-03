@@ -33,8 +33,10 @@
 //!
 //! Everything installs directly into the final prefix (zig build --prefix):
 //! <prefix>/lib/R is R_HOME, <prefix>/bin holds the launchers — the same
-//! layout make install produces, so stage.sh/package-standalone.sh work
-//! downstream unchanged (verified F4.1).
+//! layout make install produces. That tree is the one that ships
+//! (feat-no-host-paths F1, F1.7): scripts/vendor-libs.sh adds the env's
+//! shared libraries after the build, and package-standalone.sh only
+//! archives it.
 
 const std = @import("std");
 const rspec = @import("zigbuild/rspec.zig");
@@ -809,6 +811,9 @@ pub fn build(b: *std.Build) !void {
         // and `@TCLTK_LIBS@ @LIBM@` — geninc/src/include are the zig
         // equivalent of the first two -I's.
         const m = newCMod(&ctx);
+        // library/tcltk/libs/tcltk.so, as newPkgMod's: R_HOME/lib and
+        // <prefix>/lib, where vendor-libs.sh puts libtcl and libtk.
+        ctx.relRPaths(m, .pkglibs);
         m.addIncludePath(ctx.geninc);
         m.addIncludePath(ctx.path("src/include"));
         var extra = std.ArrayList([]const u8).empty;
@@ -816,7 +821,33 @@ pub fn build(b: *std.Build) !void {
         var it = std.mem.tokenizeScalar(u8, ctx.subst.get("TCLTK_CPPFLAGS").?, ' ');
         while (it.next()) |tok| try extra.append(arena, tok);
         addCGroup(&ctx, m, "src/library/tcltk/src", &rspec.tcltk_c, .{ .extra = extra.items });
-        applyLinkFlags(&ctx, m, ctx.subst.get("TCLTK_LIBS").?);
+        // linux: conda-forge's libtcl8.6.so and libtk8.6.so carry no
+        // DT_SONAME, and for such a library lld records in DT_NEEDED the
+        // path it was given, which zig makes the env's absolute one. So
+        // tcltk.so named the build machine, vendor-libs.sh's walk (ldd, by
+        // name) never copied the two, and anywhere else library(tcltk)
+        // failed in dyn.load. The link takes copies that carry their own
+        // file name as DT_SONAME instead (patchelf, in the cache, used for
+        // this link only, never installed): tcltk.so then needs them by
+        // name, through its relative rpath in <prefix>/lib, where
+        // vendor-libs.sh copies the env's. (macOS: their install names are
+        // @rpath/..., nothing to do.)
+        var libs = std.ArrayList(u8).empty;
+        var lt = std.mem.tokenizeScalar(u8, ctx.subst.get("TCLTK_LIBS").?, ' ');
+        while (lt.next()) |tok| {
+            if (ctx.os == .linux and (std.mem.eql(u8, tok, "-ltcl8.6") or std.mem.eql(u8, tok, "-ltk8.6"))) {
+                const so = b.fmt("lib{s}.so", .{tok[2..]});
+                const named = b.addSystemCommand(&.{ "patchelf", "--set-soname", so, "--output" });
+                named.setName(b.fmt("{s} with DT_SONAME", .{so}));
+                const copy = named.addOutputFileArg(so);
+                named.addFileArg(.{ .cwd_relative = ctx.absSub("{s}/lib/{s}", .{ ctx.conda, so }) });
+                m.addObjectFile(copy);
+            } else {
+                try libs.appendSlice(arena, tok);
+                try libs.append(arena, ' ');
+            }
+        }
+        applyLinkFlags(&ctx, m, libs.items);
         applyLinkFlags(&ctx, m, ctx.subst.get("LIBM").?);
         try pkg_libs.append(arena, .{ .pkg = "tcltk", .lib = addSharedLib(&ctx, "pkg_tcltk", m) });
     }
@@ -910,6 +941,10 @@ pub fn build(b: *std.Build) !void {
             b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("include/" ++ h) }, .{ .custom = "include" }, h).step);
         }
     }
+    // The env's runtime data, for a tree that is not the env: the CA
+    // bundle (etc/Renviron names it, finalRenviron), fontconfig's
+    // configuration, and in full Tcl/Tk's script libraries.
+    try installEnvRuntime(&ctx, io);
     // ------------------------------------------------------------------
     // Static R_HOME payload: headers, etc/, bin scripts, share/, doc/,
     // and every base package's R code / DESCRIPTION / NAMESPACE / data.
@@ -1506,6 +1541,10 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.path("src/gnuwin32/fixed/etc/Rcmd_environ"), ctx.rhomeInstallDir("etc"), "Rcmd_environ").step);
 
     try installWindowsCompilerContract(ctx, io);
+    // The env's runtime data, for a tree that is not the env (Tcl/Tk and
+    // fontconfig's configuration), and etc/Renviron.site (in the conda
+    // build: MY_TCLTK, the env's Tcl/Tk).
+    try installEnvRuntime(ctx, io);
 
     // ------------------------------------------------------------------
     // Base-package shared libs (library/<pkg>/libs/x64/<pkg>.dll — R's
@@ -1569,7 +1608,15 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         // entirely: conda-forge's Windows env doesn't ship it at all here
         // (no webp/libwebp lib file anywhere in Library/lib).
         applyLinkFlags(ctx, m, ctx.subst.get("WIN_BITMAP_LIBS").?);
-        grdevices_lib = addSharedLib(ctx, "pkg_grDevices", m);
+        // Named grDevices, not pkg_grDevices as the other package DLLs
+        // are: winCairo.dll imports it, and a PE import names the DLL by
+        // the file name it was linked as; the loader then matches it
+        // against the installed grDevices.dll's name. With the pkg_ name,
+        // winCairo.dll never loaded ("unable to load winCairo.dll" from
+        // svg(), cairo_pdf() and png(type = "cairo"), while
+        // capabilities("cairo") said TRUE); found by verify-tree.sh's DLL
+        // closure check (F1.7).
+        grdevices_lib = addSharedLib(ctx, "grDevices", m);
         try win_pkg_libs.append(b.allocator, .{ .pkg = "grDevices", .lib = grdevices_lib.? });
     }
 
@@ -1680,6 +1727,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         m.linkLibrary(libR);
         try win_pkg_libs.append(b.allocator, .{ .pkg = "parallel", .lib = addSharedLib(ctx, "pkg_parallel", m) });
     }
+    try win_pkg_libs.append(b.allocator, .{ .pkg = "tcltk", .lib = winTcltkLib(ctx, libR) });
 
     // ------------------------------------------------------------------
     // library/ + share/ + doc/ + bootstrap: without this, Rscript.exe can
@@ -1693,6 +1741,22 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const top = b.step("r", "Build R.dll+Rblas+Rlapack+Rgraphapp+Riconv+Rscript.exe (Windows, CLI-only — F6.0)");
     top.dependOn(boot_step);
     b.default_step = top;
+    addCheckStepWindows(ctx, top);
+}
+
+/// library/tcltk/libs/x64/tcltk.dll, from src/library/tcltk/src/
+/// Makefile.win: its three sources, -DWin32, Tcl/Tk 8.6 from the env
+/// (conda-forge's is the threaded build, tcl86t/tk86t: WIN_TCLTK_LIBS,
+/// which also names user32 for tcltk_win.c's foreground-window calls).
+/// Windows R is always built with tcltk (capabilities("tcltk") is TRUE)
+/// and the package's R code is installed, so without the DLL
+/// library(tcltk) failed with "DLL 'tcltk' not found"; make check's
+/// tcltk examples found it (addCheckStepWindows).
+fn winTcltkLib(ctx: *Ctx, libR: *std.Build.Step.Compile) *std.Build.Step.Compile {
+    const m = newPkgMod(ctx, "src/library/tcltk/src", &rspec.win_tcltk_c, .{ .extra = &.{"-DWin32"} });
+    m.linkLibrary(libR);
+    applyLinkFlags(ctx, m, ctx.subst.get("WIN_TCLTK_LIBS").?);
+    return addSharedLib(ctx, "pkg_tcltk", m);
 }
 
 const WinPkgLib = struct { pkg: []const u8, lib: *std.Build.Step.Compile };
@@ -1806,8 +1870,9 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
 
     const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
     var mkc = try gnuwin32O3ToO2(b, try substituteWith(ctx, raw, &mk));
-    // Tcl/Tk headers and libraries where the standalone tree vendors them
-    // (package-standalone.sh); inside a conda env this is unused.
+    // Tcl/Tk headers and libraries where the standalone tree has them
+    // (installEnvRuntime installs R_HOME/Tcl); inside a conda env this is
+    // unused.
     mkc = try replaceLine(b, mkc, "TCL_HOME", "TCL_HOME = $(R_HOME)/Tcl");
     try assertNoBuildPath(ctx, "etc/x64/Makeconf", raw, mkc);
     const mkc_wf = b.addWriteFiles();
@@ -1826,14 +1891,7 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
         .install_dir = .{ .custom = "Library/bin" },
         .install_subdir = "",
     }).step);
-
-    // The compile preflight's hint: Windows R reads etc/Renviron.site, not
-    // etc/Renviron (see finalRenviron for unix).
-    if (ctx.toolchain_hint.len > 0) {
-        const site_wf = b.addWriteFiles();
-        const site = site_wf.add("Renviron.site", b.fmt("R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{s}'}}\n", .{ctx.toolchain_hint}));
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(site, ctx.rhomeInstallDir("etc"), "Renviron.site").step);
-    }
+    // (etc/Renviron.site, with the compile preflight's hint: installEnvRuntime)
 }
 
 /// `text` with the line starting `key` (then spaces or `=`) replaced by
@@ -2125,6 +2183,118 @@ fn addCheckStep(ctx: *Ctx, io: std.Io, r_top: *std.Build.Step) !void {
         run.step.dependOn(&chmod_w.step);
         check.dependOn(&run.step);
     }
+}
+
+/// Windows: the same three targets through R's own tests/Makefile.win,
+/// as src/gnuwin32/Makefile's `check` runs it (`make -C ../../tests -f
+/// Makefile.win check`, i.e. these three plus Internet, left out as on
+/// unix: it needs the network, and upstream ignores its failures).
+///
+/// Makefile.win expects to sit in R_HOME/tests, because R builds in
+/// place on Windows: it sets R_HOME = .., includes ../src/gnuwin32/
+/// MkRules and ../share/make/vars.mk, and runs $(R_HOME)/$(BINDIR)/Rterm
+/// (BINDIR = bin/x64); tests/Examples/Makefile.win includes $(R_HOME)/
+/// src/gnuwin32/MkRules. So the check runs in a stand-in for that tree,
+/// as addCheckStep writes a top_builddir with a bin/R wrapper: R's
+/// tests directory, src/gnuwin32/MkRules (MkRules.rules alone, which is
+/// what src/gnuwin32/Makefile makes it from when there is no
+/// MkRules.local), share/make/vars.mk, and bin/x64/Rterm, R and Rcmd,
+/// scripts that run the installed tree's .exe of that name (MSYS sh
+/// finds the script first and honours its #!). The Makefiles then run
+/// unmodified. Setting R_HOME on make's command line instead does not
+/// work: it reaches the Examples sub-make through MAKEFLAGS, whose
+/// include then looks for src/gnuwin32/MkRules in the installed tree.
+///
+/// The stand-in is made fresh on every run, in the output directory of
+/// a first step (removed, then copied again): the files written here
+/// (a WriteFiles in the zig cache, which make never writes to) plus R's
+/// tests directory, copied from the R source. make writes into that
+/// copy, so each run starts from R's own files and nothing an earlier
+/// run wrote; the copy stays after the run, for reading a failed test's
+/// .Rout.fail. make must not run in the WriteFiles directory itself:
+/// zig does not look at it again on a cache hit, so its outputs would
+/// stay there for every later run, and would even count as up to date
+/// (the .R files keep the tarball's dates), skipping those tests.
+/// (b.tmpPath would also give a fresh directory, but zig 0.16's build
+/// runner never deletes those, so each run would leave a copy behind.)
+/// If an earlier run's Rterm.exe is still running and holds a file in
+/// the copy, the first step fails until that process ends.
+///
+/// Two make variables say what unix's tests/Makefile gets from configure
+/// when the recommended packages are not installed (they are not built
+/// here) and Makefile.win always assumes they are: test-src-sloppy-b
+/// empty (eval-etc-2.R, which needs Matrix) and test-src-reg3 =
+/// reg-plot-latin1.R (reg-tests-3.R and reg-examples3.R need MASS,
+/// survival and Matrix).
+///
+/// test-Examples compares each base package's example output with R's
+/// <pkg>-Ex.Rout.save, as unix's tests/Examples/Makefile does with
+/// srcdir=$(srcdir). Upstream finds them in R_HOME/tests/Examples
+/// (testInstalledPackages' default srcdir), the directory make runs the
+/// examples in; the installed tree has no tests directory, as on unix.
+/// tests/Examples/Makefile.win has no srcdir to set; TEST_DONTTEST is
+/// the one variable it puts into its R call, so it carries the argument:
+/// `FALSE,srcdir=getwd()`, that same directory, here the fresh copy of
+/// R's tests/Examples (unix's Makefile, too, passes srcdir only while
+/// TEST_DONTTEST is FALSE, its default). No path is spelled out: the
+/// MSYS runtime takes quotes, single ones too, out of make's Windows
+/// command line, and R needs a path quoted. A difference prints a NOTE
+/// with the diff, as on unix; only R_STRICT_PACKAGE_CHECK=TRUE makes it
+/// fail.
+///
+/// The environment is pixi's, as for the build, and the tree is the one
+/// that ships (F1.7): R.dll's DLLs are in bin/x64, which Windows searches
+/// before PATH (zig-build.sh runs vendor-libs.sh before and after zig
+/// build), and Tcl/Tk in R_HOME/Tcl (installEnvRuntime). MY_TCLTK and
+/// TCL_LIBRARY are removed, as a user's would be absent: with MY_TCLTK
+/// set, tcltk's .onLoad (src/library/tcltk/R/windows/zzz.R) never looks
+/// at R_HOME/Tcl, and TCL_LIBRARY would point Tcl at other scripts. So
+/// the tcltk examples load the tree's own Tcl/Tk.
+///
+/// No TZ, as in upstream's tests/Makefile.win: Sys.timezone() then asks
+/// Windows (registryTZ.c, built for Windows only), which test-TimeZone's
+/// timezone.R checks; with TZ set it only returns TZ. (Unix sets
+/// TZ=UTC.)
+///
+/// The targets run one after another, as test-all-basics runs them,
+/// since they share the tests directory; stdin is empty, so nothing in
+/// them can wait for input.
+fn addCheckStepWindows(ctx: *Ctx, r_top: *std.Build.Step) void {
+    const b = ctx.b;
+
+    const wf = b.addWriteFiles();
+    _ = wf.addCopyFile(ctx.path("src/gnuwin32/MkRules.rules"), "src/gnuwin32/MkRules");
+    _ = wf.addCopyFile(ctx.path("share/make/vars.mk"), "share/make/vars.mk");
+    for ([_][]const u8{ "Rterm", "R", "Rcmd" }) |exe| {
+        _ = wf.add(b.fmt("bin/x64/{s}", .{exe}), b.fmt("#!/bin/sh\nexec \"{s}/bin/x64/{s}.exe\" \"$@\"\n", .{ ctx.rhome, exe }));
+    }
+
+    const fresh = b.addSystemCommand(&.{ "sh", "-c", "rm -rf \"$3\" && cp -R \"$1\" \"$3\" && cp -R \"$2\" \"$3/tests\"", "check-tree" });
+    fresh.setName("check: fresh tests tree");
+    fresh.addDirectoryArg(wf.getDirectory());
+    fresh.addDirectoryArg(ctx.path("tests"));
+    const tests = fresh.addOutputDirectoryArg("check").path(b, "tests");
+    fresh.has_side_effects = true;
+    fresh.step.dependOn(r_top);
+
+    const check = b.step("check", "Run R's regression suite (Examples/Specific/Reg) against the zig-built R");
+    var last = &fresh.step;
+    for ([_][]const u8{ "test-Examples", "test-Specific", "test-Reg" }) |target| {
+        const run = b.addSystemCommand(&.{ "make", "-f", "Makefile.win", "test-src-sloppy-b=", "test-src-reg3=reg-plot-latin1.R" });
+        if (std.mem.eql(u8, target, "test-Examples")) {
+            run.addArg("TEST_DONTTEST=FALSE,srcdir=getwd()");
+        }
+        run.addArg(target);
+        run.setName(b.fmt("make check: {s}", .{target}));
+        run.setCwd(tests);
+        run.setStdIn(.{ .bytes = "" });
+        run.removeEnvironmentVariable("MY_TCLTK");
+        run.removeEnvironmentVariable("TCL_LIBRARY");
+        run.has_side_effects = true;
+        run.step.dependOn(last);
+        last = &run.step;
+    }
+    check.dependOn(last);
 }
 
 /// Like substFile, but with a caller-supplied `srcdir` (each generated
@@ -2799,6 +2969,159 @@ fn samePhysicalDir(io: std.Io, a: std.mem.Allocator, x: []const u8, y: []const u
     return std.mem.eql(u8, rx, ry);
 }
 
+fn pathExists(io: std.Io, p: []const u8) bool {
+    std.Io.Dir.cwd().access(io, p, .{}) catch return false;
+    return true;
+}
+
+/// The runtime data a tree that is not the env R is built in needs from
+/// that env, installed with the tree as the omp.h headers are
+/// (feat-no-host-paths F1.7: the installed tree is the shipped tree on
+/// every OS, and package-standalone.sh only archives it). The env's
+/// shared libraries come after the build instead, from
+/// scripts/vendor-libs.sh, since which ones is a walk over what the built
+/// binaries need. The conda build (ctx.prefix_is_env) gets none of it:
+/// the env's own packages (ca-certificates, fontconfig, tk) provide it
+/// where conda-forge's libraries look for it. Windows' tcltk is the one
+/// exception, below.
+///   - unix: the env's CA bundle as R_HOME/etc/ca-bundle.crt, which
+///     etc/Renviron names (finalRenviron); the build fails without it.
+///     fontconfig's configuration as <prefix>/etc/fonts when the env has
+///     one (minimal has no fontconfig). full (the variant that builds
+///     tcltk): Tcl's and Tk's script libraries and Tcl's modules as
+///     <prefix>/lib/{tcl8.6,tk8.6,tcl8}, beside the libtcl and libtk
+///     vendor-libs.sh copies, the layout of a Tcl install; etc/Renviron
+///     points TCL_LIBRARY at the first (finalRenviron).
+///   - Windows: the Tcl/Tk runtime in R_HOME/Tcl, where tcltk's .onLoad
+///     loads it from (Tcl/bin as library.dynam's DLLpath, Tcl/lib as
+///     TCLLIBPATH); the build fails without it, tcltk is always built
+///     there. fontconfig's configuration as R_HOME/etc/fonts, which
+///     etc/Renviron.site points FONTCONFIG_PATH at. etc/Renviron.site is
+///     written here, for the conda build too: it carries the compile
+///     preflight's hint (Windows R reads Renviron.site, not etc/Renviron,
+///     which finalRenviron writes for unix), and in the conda build
+///     MY_TCLTK: tcltk's .onLoad (src/library/tcltk/R/windows/zzz.R)
+///     stops with "Tcl/Tk support files were not installed" unless
+///     R_HOME/Tcl/bin exists or MY_TCLTK names the directory of the Tcl/Tk
+///     DLLs, which in a conda env is the tk package's Library/bin
+///     (tcl86t.dll finds its scripts in Library/lib relative to itself).
+///     `R --vanilla` skips Renviron.site, and on Windows no other file R
+///     reads at startup, so there library(tcltk) needs MY_TCLTK set by
+///     hand.
+fn installEnvRuntime(ctx: *const Ctx, io: std.Io) !void {
+    const b = ctx.b;
+    const fonts = !ctx.prefix_is_env and pathExists(io, ctx.condaDir("etc/fonts"));
+    if (ctx.os != .windows) {
+        if (ctx.prefix_is_env) return;
+        // TLS trust. The vendored libcurl and OpenSSL are conda-forge's,
+        // built with this env's paths compiled in (libcurl's default CA
+        // file is <env>/ssl/cacert.pem, OpenSSL's directory <env>/ssl):
+        // outside this machine every HTTPS request failed with "libcurl
+        // error code 77: error adding trust anchors from file" (found
+        // 2026-09-28; the wheel, built from this tree, had the same). Ship
+        // the env's Mozilla bundle and set R_ZIG_CA_BUNDLE: R's libcurl.c,
+        // patched (zigbuild/patches/), then takes CURL_CA_BUNDLE if the
+        // user set one, else SSL_CERT_FILE, else the system's bundle, else
+        // this file, and passes it to curl as CURLOPT_CAINFO, so the
+        // compiled-in path is never used. Not CURL_CA_BUNDLE itself:
+        // Renviron exports to every program R starts, and curl or Python's
+        // requests would drop their own trust for this frozen copy.
+        // Interim fix: the per-platform curl in
+        // .github/devdocs/feat-no-host-paths/PLAN.md ("libcurl") replaces
+        // it. Windows needs none of this: conda-forge's curl there uses
+        // Schannel, the Windows certificate store.
+        const ca = ctx.condaDir("ssl/cacert.pem");
+        const ca_size = if (std.Io.Dir.cwd().statFile(io, ca, .{})) |st| st.size else |_| 0;
+        if (ca_size == 0) {
+            std.debug.print("error: {s} is missing or empty (ca-certificates not in the env?); the tree ships it as etc/ca-bundle.crt\n", .{ca});
+            return error.MissingCaBundle;
+        }
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ca }, ctx.rhomeInstallDir("etc"), "ca-bundle.crt").step);
+        if (fonts) try installEnvDir(ctx, io, ctx.condaDir("etc/fonts"), .{ .custom = "etc/fonts" });
+        // tcltk (full). conda-forge's libtcl has the env's lib/tcl8.6
+        // compiled in as its script library, and R starts Tcl with no
+        // executable name to search from (Tcl_FindExecutable(NULL)), so
+        // off this machine Tcl_Init found no init.tcl and library(tcltk)
+        // failed. Tk's library and the modules (tcl8: msgcat, which
+        // `clock` needs, http, ...) are found beside Tcl's: Tcl's auto_path
+        // and module roots include [file dirname [info library]].
+        if (ctx.variant == .full) {
+            inline for (.{ "tcl8.6", "tk8.6", "tcl8" }) |d| {
+                if (!pathExists(io, ctx.condaDir("lib/" ++ d))) {
+                    std.debug.print("error: {s} is missing (tk not in the env?); the tree ships it as lib/{s}\n", .{ ctx.condaDir("lib/" ++ d), d });
+                    return error.MissingTclTk;
+                }
+                try installEnvDir(ctx, io, ctx.condaDir("lib/" ++ d), .{ .custom = "lib/" ++ d });
+            }
+        }
+        return;
+    }
+    var site = std.ArrayList(u8).empty;
+    if (ctx.toolchain_hint.len > 0) {
+        try site.appendSlice(b.allocator, b.fmt("R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{s}'}}\n", .{ctx.toolchain_hint}));
+    }
+    if (ctx.prefix_is_env) {
+        // R_HOME is <env>/Library/lib/R, so this is <env>/Library/bin.
+        // Renviron expands a nested default only when it is a whole ${...}
+        // term, hence the helper variable (as finalRenviron's MAKE).
+        try site.appendSlice(b.allocator, "R_ZIG_TCLTK=${R_HOME}/../../bin\nMY_TCLTK=${MY_TCLTK-${R_ZIG_TCLTK}}\n");
+    } else {
+        inline for (.{ "bin/tcl86t.dll", "bin/tk86t.dll", "lib/tcl8.6", "lib/tk8.6", "lib/tcl8" }) |sub| {
+            if (!pathExists(io, ctx.condaDir(sub))) {
+                std.debug.print("error: {s} is missing (tk not in the env?); the tree ships Tcl/Tk in R_HOME/Tcl\n", .{ctx.condaDir(sub)});
+                return error.MissingTclTk;
+            }
+        }
+        // The DLLs only in Tcl/bin, CRAN's layout: a copy in bin/x64 wins
+        // the search order and then looks for init.tcl relative to itself
+        // (vendor-libs.sh keeps them out of bin/x64).
+        inline for (.{ "tcl86t.dll", "tk86t.dll" }) |dll| {
+            b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("bin/" ++ dll) }, ctx.rhomeInstallDir("Tcl/bin"), dll).step);
+        }
+        // tcl8 holds Tcl's modules (msgcat, which `clock` needs, http,
+        // platform, tcltest); Tcl looks for them under the parent of its
+        // script library, Tcl/lib.
+        inline for (.{ "tcl8.6", "tk8.6", "tcl8" }) |d| {
+            try installEnvDir(ctx, io, ctx.condaDir("lib/" ++ d), ctx.rhomeInstallDir("Tcl/lib/" ++ d));
+        }
+        if (fonts) {
+            try installEnvDir(ctx, io, ctx.condaDir("etc/fonts"), ctx.rhomeInstallDir("etc/fonts"));
+            try site.appendSlice(b.allocator, "FONTCONFIG_PATH=${R_HOME}/etc/fonts\n");
+        }
+    }
+    if (site.items.len > 0) {
+        const site_wf = b.addWriteFiles();
+        const f = site_wf.add("Renviron.site", site.items);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(f, ctx.rhomeInstallDir("etc"), "Renviron.site").step);
+    }
+}
+
+/// Install every file under `src`, a directory of the env, into `dest`,
+/// following symlinks: conda-forge's fontconfig links etc/fonts/conf.d/
+/// *.conf to ../../../share/fontconfig/conf.avail, which a tree outside
+/// the env does not have, and std.Build's InstallDir skips symlinks
+/// altogether; so each arrives as the file it names. A link to nothing,
+/// or to a directory, is left out.
+fn installEnvDir(ctx: *const Ctx, io: std.Io, src: []const u8, dest: std.Build.InstallDir) !void {
+    const b = ctx.b;
+    var dir = try std.Io.Dir.cwd().openDir(io, src, .{ .iterate = true });
+    defer dir.close(io);
+    var it = try dir.walk(b.allocator);
+    defer it.deinit();
+    while (try it.next(io)) |e| {
+        const from = b.fmt("{s}/{s}", .{ src, e.path });
+        switch (e.kind) {
+            .file => {},
+            .sym_link => {
+                const st = std.Io.Dir.cwd().statFile(io, from, .{}) catch continue;
+                if (st.kind != .file) continue;
+            },
+            else => continue,
+        }
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = from }, dest, b.dupe(e.path)).step);
+    }
+}
+
 /// Fail the build when an installed text file (etc/Makeconf, libR.pc)
 /// names the machine that built it: the conda env, the install prefix,
 /// the R source, this checkout, rattler-build's build prefix, or a
@@ -3249,7 +3572,9 @@ fn ldpaths(ctx: *const Ctx) []const u8 {
 /// etc/Renviron as it ships (phase A4, F1.4): untar() and unzip() use R's
 /// internal code (installing a package without compiling runs no tar or
 /// unzip), printing goes to a bare `lpr`, minimal's MAKE is the bundled
-/// GNU make, and the compile preflight's hint comes from -Dtoolchain-hint.
+/// GNU make, the compile preflight's hint comes from -Dtoolchain-hint, and
+/// a tree that is not the env names its CA bundle and, in full, Tcl's
+/// script library (installEnvRuntime).
 /// `${X-default}` keeps a value set in the environment, as upstream's
 /// Renviron does. The tool defaults PAGER/R_BROWSER/... come from the
 /// normalized configure table (zigbuild/tools/normalize-subst.sh).
@@ -3275,6 +3600,30 @@ fn finalRenviron(ctx: *const Ctx, raw: []const u8) ![]u8 {
     }
     if (ctx.toolchain_hint.len > 0) {
         try out.appendSlice(b.allocator, b.fmt("R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{s}'}}\n", .{ctx.toolchain_hint}));
+    }
+    // etc/Renviron, not Renviron.site: `R --vanilla`/`Rscript --vanilla`
+    // imply --no-environ, which skips Renviron.site but still reads this
+    // file. Why R_ZIG_CA_BUNDLE and not CURL_CA_BUNDLE: installEnvRuntime.
+    if (!ctx.prefix_is_env) {
+        try out.appendSlice(b.allocator,
+            \\## r-zig: fallback trust anchors (read by the patched libcurl.c).
+            \\R_ZIG_CA_BUNDLE=${R_HOME}/etc/ca-bundle.crt
+            \\
+        );
+    }
+    // full: Tcl's script library, which installEnvRuntime installs as
+    // <prefix>/lib/tcl8.6 (R_HOME is <prefix>/lib/R); the vendored libtcl
+    // names only the build env's. A Tcl that R starts gets this too, and
+    // skips it when its version differs (init.tcl requires its exact
+    // patchlevel, and Tcl moves on to its own). The helper variable: see
+    // MAKE above.
+    if (!ctx.prefix_is_env and ctx.variant == .full) {
+        try out.appendSlice(b.allocator,
+            \\## r-zig: Tcl's script library, shipped in the tree (tcltk).
+            \\R_ZIG_TCL_LIBRARY=${R_HOME}/../tcl8.6
+            \\TCL_LIBRARY=${TCL_LIBRARY-${R_ZIG_TCL_LIBRARY}}
+            \\
+        );
     }
     return out.items;
 }

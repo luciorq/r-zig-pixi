@@ -9,4 +9,15 @@ stopifnot(
 )
 caps <- capabilities()
 stopifnot(caps[["png"]], caps[["iconv"]], caps[["libcurl"]], caps[["cairo"]])
+## the cairo devices draw: winCairo.dll loads on first use, and
+## capabilities("cairo") is TRUE even when it cannot load
+f <- tempfile(fileext = ".svg"); svg(f); plot(1:10); invisible(dev.off())
+stopifnot(file.size(f) > 1000)
 cat("conda R OK\n")
+## tcltk: a conda env has no R_HOME/Tcl, so etc/Renviron.site's MY_TCLTK
+## points tcltk's .onLoad at the tk package's DLLs in Library/bin, and Tcl
+## finds its scripts and modules (msgcat, which `clock` needs) beside them
+## in Library/lib (build.zig installEnvRuntime).
+library(tcltk)
+stopifnot(tclvalue(.Tcl("clock format 0 -gmt 1 -format %Y")) == "1970")
+cat("conda tcltk OK: Tcl/Tk", tclvalue(tcl("info", "patchlevel")), "\n")

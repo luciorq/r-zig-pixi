@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Static checks of the installed R tree, the tree that ships
-# (feat-no-host-paths PLAN.md, F1 and F1.6). `zig build` installs it into
-# dist/R-<ver>-<flavor>-zig (Windows: its Library/ layout), zig-build.sh
-# vendors the env's libraries into it, and package-standalone.sh archives
-# it. CI runs this right after the build, before smoke, contract, check
-# and hermetic, so a tree that names the build machine fails at once.
+# (feat-no-host-paths PLAN.md, F1, F1.6 and F1.7). `zig build` installs
+# it into dist/R-<ver>-<flavor>-zig (Windows: its Library/ layout) with
+# the runtime data it needs from the env (build.zig's installEnvRuntime),
+# zig-build.sh then vendors the env's shared libraries into it
+# (vendor-libs.sh), and package-standalone.sh only archives it. CI runs
+# this right after the build, before smoke, contract, check and hermetic,
+# so a tree that names the build machine fails at once.
 #
 # Usage: verify-tree.sh [TREE]   (default: zig-build.sh's prefix)
 #
@@ -13,11 +15,19 @@
 #   - the compilers Makeconf names are rzig (one binary, no scripts);
 #   - Makeconf names no build path and has no rpath; CPPFLAGS and LDFLAGS
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
+#   - Windows (a tree that is not a conda env): the Tcl/Tk runtime is in
+#     R_HOME/Tcl (with Tcl's modules), and every DLL a PE file in the tree
+#     imports is in the tree (its own directory, R_HOME/bin/x64, or
+#     R_HOME/Tcl/bin for the Tcl/Tk DLLs) or the system's;
+#   - unix (a tree that is not a conda env): etc/ca-bundle.crt holds
+#     certificates and etc/Renviron names it in R_ZIG_CA_BUNDLE; with
+#     tcltk (full), Tcl/Tk's script libraries and Tcl's modules are in
+#     <prefix>/lib and etc/Renviron points TCL_LIBRARY there;
 #   - minimal: no binary of R's own links a library the profile excludes;
 #   - linux: no ELF needs a glibc above the floor (2.17; toolchain helpers
 #     conda-forge's 2.28);
 #   - unix: every rpath is relative to its file; none of R's own binaries
-#     needs a shared C++ runtime;
+#     needs a shared C++ runtime; linux: every DT_NEEDED is a bare name;
 #   - macOS: every Mach-O at or below MACOS_MIN; install names relative,
 #     dependencies relative or the system's, and only what conda has no
 #     copy of from the SDK's /usr/lib.
@@ -27,14 +37,13 @@
 # bundle, and packages compiled with the relocated tree build and load
 # under env -i (C++, Fortran, USE_FC_TO_LINK, FLIBS without flang,
 # OpenMP, decoy CONDA_PREFIX runs, zig-fc with no flang; Windows: rzig's
-# dry runs). The archive is this tree plus what package-standalone.sh
-# adds (fontconfig's configuration, the CA bundle; vendor-libs.sh again,
-# a no-op on a tree zig-build.sh vendored; on Windows the DLLs and Tcl),
-# none of which the checks here read; so they run once, here. (What runs
-# in between leaves the tree as it was: smoke and check only run it,
-# contract installs into build/testlib-*, hermetic works on a copy.)
-# Shared helpers (rpaths_of, needed_of, cxx_deps, minos_over_floor):
-# verify-helpers.sh; MACOS_MIN, macho_minos, version_gt: env.sh.
+# dry runs). The archive is this tree as it is, so the checks here run
+# once, here. (What runs in between leaves the tree as it was: smoke and
+# check only run it, contract installs into build/testlib-*, hermetic
+# works on a copy.)
+# Shared helpers (rpaths_of, needed_of, cxx_deps, minos_over_floor,
+# win_system_dll): verify-helpers.sh; MACOS_MIN, macho_minos, version_gt:
+# env.sh.
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
 
@@ -100,12 +109,113 @@ if [ -n "$bad" ]; then
 fi
 echo "== Makeconf verified: no build path, no rpath, CPPFLAGS and LDFLAGS empty, FLIBS = -lflang_rt.runtime, FC = zig-fc"
 
-# Windows has no rpaths, glibc or Mach-O: the binary checks below are unix.
-# (Its DLLs are vendored by package-standalone.sh; verify-bundle.sh and
-# the hermetic check run R from that tree.)
+# What a tree that is not a conda env carries from the env: the runtime
+# data build.zig installs (installEnvRuntime) and the shared libraries
+# vendor-libs.sh copies. A conda env (<tree>/conda-meta, the conda build's
+# prefix) has both from its own packages, and gets neither.
+conda_tree=""
+if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
+
+# Windows has no rpaths, glibc or Mach-O: the binary checks further down
+# are unix. Its own: the Tcl/Tk runtime and the DLL closure.
 if [ "$OS" = windows ]; then
+  if [ -z "$conda_tree" ]; then
+    # Tcl/Tk where tcltk's .onLoad loads it (CRAN's layout): the DLLs in
+    # Tcl/bin, through library.dynam's DLLpath, and only there (a copy in
+    # bin/x64 wins the search order, then looks for init.tcl relative to
+    # itself and fails); the script libraries in Tcl/lib (TCLLIBPATH), and
+    # Tcl's modules in Tcl/lib/tcl8 (msgcat, which `clock` needs).
+    bad=""
+    for f in Tcl/bin/tcl86t.dll Tcl/bin/tk86t.dll Tcl/lib/tcl8.6/init.tcl Tcl/lib/tk8.6/tk.tcl; do
+      [ -s "$TREE/$rh/$f" ] || bad="$bad $f(missing)"
+    done
+    [ -n "$(find "$TREE/$rh/Tcl/lib/tcl8" -name 'msgcat-*.tm' 2>/dev/null)" ] || bad="$bad Tcl/lib/tcl8/*/msgcat-*.tm(missing)"
+    for f in tcl86t.dll tk86t.dll; do
+      [ ! -e "$TREE/$rh/bin/x64/$f" ] || bad="$bad bin/x64/$f(misplaced)"
+    done
+    if [ -n "$bad" ]; then
+      echo "error: the Tcl/Tk runtime in $rh/Tcl:$bad" >&2
+      exit 1
+    fi
+    echo "== Tcl/Tk runtime verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib"
+
+    # The DLL closure: every DLL a PE file in the tree imports is found in
+    # the tree, where the loader looks for it (the file's own directory;
+    # R_HOME/bin/x64, the directory of R's executables, where vendor-libs.sh
+    # copies conda's DLLs; R_HOME/Tcl/bin for the Tcl/Tk DLLs), or is the
+    # system's (System32, or an API set). A conda DLL missing here would
+    # load from the build machine's PATH in every check that has the env
+    # on PATH, and fail only on a user's machine.
+    pe_list="$WORK/pe-list.txt"
+    find "$TREE" -type f \( -name '*.dll' -o -name '*.exe' \) > "$pe_list"
+    n_pe="$(wc -l < "$pe_list" | tr -d ' ')"
+    [ "$n_pe" -gt 0 ] || { echo "error: no DLL or EXE files found under $TREE" >&2; exit 1; }
+    bad=""
+    : > "$WORK/in-tree.txt"; : > "$WORK/system.txt"
+    while IFS= read -r f; do
+      pe_dir="${f%/*}"
+      for dep in $(needed_of "$f"); do
+        case "$dep" in
+          tcl86t.dll|tk86t.dll) where="$TREE/$rh/Tcl/bin" ;;
+          *) where="$TREE/$rh/bin/x64" ;;
+        esac
+        if [ -f "$pe_dir/$dep" ] || [ -f "$where/$dep" ]; then
+          echo "$dep" >> "$WORK/in-tree.txt"
+        elif win_system_dll "$dep"; then
+          echo "$dep" >> "$WORK/system.txt"
+        else
+          bad="$bad
+  ${f#$TREE/}: $dep"
+        fi
+      done
+    done < "$pe_list"
+    if [ -n "$bad" ]; then
+      echo "error: DLLs imported but not in the tree (vendor-libs.sh copies conda's into $rh/bin/x64) nor the system's:$bad" >&2
+      exit 1
+    fi
+    echo "== DLL closure verified: $n_pe PE files; $(sort -fu "$WORK/in-tree.txt" | wc -l | tr -d ' ') DLLs they import are in the tree, $(sort -fu "$WORK/system.txt" | wc -l | tr -d ' ') the system's"
+  fi
   echo "== installed tree verified ($OS/$FLAVOR)"
   exit 0
+fi
+
+# TLS trust (build.zig's installEnvRuntime): a tree that is not a conda env
+# ships the env's Mozilla bundle as etc/ca-bundle.crt, and etc/Renviron
+# names it in R_ZIG_CA_BUNDLE, the patched libcurl.c's last fallback
+# (zigbuild/patches/); without either, HTTPS fails on any other machine.
+# (HTTPS with it: verify-bundle.sh, on the extracted archive.)
+if [ -z "$conda_tree" ]; then
+  ca="lib/R/etc/ca-bundle.crt"
+  n_ca="$(grep -c 'BEGIN CERTIFICATE' "$TREE/$ca" 2>/dev/null || true)"
+  if [ "${n_ca:-0}" -eq 0 ]; then
+    echo "error: $ca is missing or holds no certificates" >&2
+    exit 1
+  fi
+  if ! grep -qxF 'R_ZIG_CA_BUNDLE=${R_HOME}/etc/ca-bundle.crt' "$TREE/lib/R/etc/Renviron"; then
+    echo "error: lib/R/etc/Renviron does not set R_ZIG_CA_BUNDLE=\${R_HOME}/etc/ca-bundle.crt" >&2
+    exit 1
+  fi
+  echo "== CA bundle verified: $ca ($n_ca certificates), named by R_ZIG_CA_BUNDLE in etc/Renviron"
+
+  # tcltk (full): the vendored libtcl names only the build env's script
+  # library, so the tree carries Tcl's and Tk's, and Tcl's modules, in
+  # lib/ (Tk's and the modules are found beside Tcl's), and etc/Renviron
+  # points TCL_LIBRARY at it (build.zig's installEnvRuntime).
+  if [ -n "$(find "$TREE/lib/R/library/tcltk/libs" -name 'tcltk.*' 2>/dev/null)" ]; then
+    bad=""
+    for f in lib/tcl8.6/init.tcl lib/tk8.6/tk.tcl; do
+      [ -s "$TREE/$f" ] || bad="$bad $f(missing)"
+    done
+    [ -n "$(find "$TREE/lib/tcl8" -name 'msgcat-*.tm' 2>/dev/null)" ] || bad="$bad lib/tcl8/*/msgcat-*.tm(missing)"
+    grep -qxF 'R_ZIG_TCL_LIBRARY=${R_HOME}/../tcl8.6' "$TREE/lib/R/etc/Renviron" &&
+      grep -qxF 'TCL_LIBRARY=${TCL_LIBRARY-${R_ZIG_TCL_LIBRARY}}' "$TREE/lib/R/etc/Renviron" ||
+      bad="$bad etc/Renviron(no TCL_LIBRARY)"
+    if [ -n "$bad" ]; then
+      echo "error: tcltk's Tcl/Tk scripts:$bad" >&2
+      exit 1
+    fi
+    echo "== Tcl/Tk scripts verified: lib/{tcl8.6,tk8.6,tcl8}, TCL_LIBRARY in etc/Renviron"
+  fi
 fi
 
 # minimal: the point of the profile is what R does NOT link. No binary
@@ -215,6 +325,27 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 echo "== rpaths verified: $n_bins binaries, all relative"
+
+# linux: every DT_NEEDED is a bare name, found through those rpaths. lld
+# records the path it was given for a library with no DT_SONAME (zig gives
+# it the env's absolute one): conda-forge's libtcl and libtk have none,
+# which build.zig works around for tcltk.so. Such an entry names the build
+# machine, and vendor-libs.sh's walk does not see it. (macOS: the load
+# command check below.)
+if [ "$OS" = linux ]; then
+  bad=""
+  while IFS= read -r f; do
+    for dep in $(needed_of "$f"); do
+      case "$dep" in */*) bad="$bad
+  ${f#$TREE/}: $dep" ;; esac
+    done
+  done < "$bin_list"
+  if [ -n "$bad" ]; then
+    echo "error: libraries named by path in DT_NEEDED:$bad" >&2
+    exit 1
+  fi
+  echo "== DT_NEEDED verified: $n_bins binaries, every entry a bare name"
+fi
 
 # Static libc++ everywhere (decided 2026-09-30): none of R's own
 # binaries may depend on a shared C++ runtime. The vendored conda

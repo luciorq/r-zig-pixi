@@ -4,8 +4,9 @@
 below hold the detail and the reasons.
 
 Where it stands (branch feat-no-host-paths, PR open against main; pushed
-up to d233f2a "chore(ci): verify before package"; CI green on every
-job, run 37123137421):
+up to b4f97cc, the last code commit d233f2a "chore(ci): verify before
+package", CI green on every job, run 37123137421; F1.7 is done in the
+working tree, tested on every OS by hand, not yet committed):
 - Phase A done on all five platforms (the hermetic tier-0/1 check runs in
   CI everywhere). Phase T done for conda and pip (`r-zig-slim` +
   `r-zig-toolchain`; `r-zig` + `r-zig-toolchain` wheels); the standalone
@@ -27,9 +28,19 @@ job, run 37123137421):
   the installed tree; new CI order (green in CI). Docs-only commits: add `[skip ci]`, else the push
   cancels a running CI run (pull_request paths-ignore looks at the whole
   PR, and cancel-in-progress is on).
+- F1.7 (2026-10-03, see its record in the F1 steps): `package` only
+  archives on every OS (zig build installs the env's runtime data,
+  vendor-libs.sh copies its shared libraries, Windows' DLLs included);
+  `check` runs on Windows (R's tests/Makefile.win); one CI matrix with
+  windows-latest in it. Found and fixed five bugs on the way: no
+  tcltk.dll on Windows, winCairo.dll unloadable on Windows (svg/cairo
+  devices), linux full's tcltk.so naming the build env's libtcl, the Tcl
+  script libraries missing from standalone trees, and the recipe's win-64
+  solve picking tk 9 (tk is pinned to 8.6 now).
 
 The decisions that shape the code now (each has its record below):
-- The installed tree is the shipped tree (F1); every check runs on it.
+- The installed tree is the shipped tree (F1, on every OS since F1.7);
+  every check runs on it, and `package` only archives it.
 - Makeconf is the same file in every distribution and names no path
   outside `$(R_HOME)` (F1.5, F3b): FC/CC/CXX are `$(R_HOME)/bin/toolchain/
   zig-*`, FLIBS `-lflang_rt.runtime`, CPPFLAGS/LDFLAGS empty. Reason: the
@@ -51,17 +62,14 @@ The decisions that shape the code now (each has its record below):
   running it.
 
 What remains, in order (proposed; ask the user before starting each):
-1. F1.7 (proposed 2026-10-03, see the F1 steps): Windows into the CI
-   matrix: vendor conda's DLLs/Tcl at build time on Windows (so hermetic
-   can run before package, and the installed tree is the shipped tree
-   there too), wire R's regression suite (`check`) into buildWindows,
-   then add windows-latest to the matrix.
-2. F4: one zig (upstream zig everywhere, or a feedstock opt-out), which
+1. F4: one zig (upstream zig everywhere, or a feedstock opt-out), which
    retires the ZIG_LIB_DIR libc++ mirror.
-3. T's standalone split (a standalone toolchain archive), then the
+2. T's standalone split (a standalone toolchain archive), then the
    recipe's host which/sed/grep cleanup.
-4. Later, test carefully first: the toolchain in an environment of its
+3. Later, test carefully first: the toolchain in an environment of its
    own (F3 section).
+4. Small, open: Windows Makeconf's TCL_VERSION (86 vs conda's 86t) for
+   packages that link Tcl/Tk (F1.7's record).
 
 How to verify (Linux here; omicron = osx-arm64 and osx-64 via Rosetta
 in ~/rz-osx64; kappa = win-64 in C:\Users\admin\r-zig-pixi; see the
@@ -72,8 +80,9 @@ test-servers notes for SSH):
 - `pixi run -e minimal build && pixi run -e minimal verify-tree &&
   pixi run -e minimal verify-package`; `pixi run -e wheel wheel &&
   pixi run -e wheel wheel-test`; `pixi run -e pkg conda-package`
-- Windows order: build, verify-tree, smoke, contract, verify-package,
-  then hermetic.
+- Windows: the same order as unix, `pixi run build && pixi run
+  verify-tree && pixi run smoke && pixi run contract && pixi run check &&
+  pixi run hermetic && pixi run verify-package` (no minimal or wheel).
 
 R source references are to R 4.6.1 (`build/R-4.6.1/`).
 
@@ -773,22 +782,145 @@ zig 0.16's std.Build):
     tests, build, verify-tree, smoke, contract, package + verify-package,
     hermetic. verify-tree runs on the legs verify-package ran on
     (default, minimal); it also passes on linux-64 full and openblas.
-- F1.7 (proposed 2026-10-03, not started): Windows joins the CI matrix.
-  Why Windows is a separate CI job today: history (gnuwin32 and the bash
-  shims were a different build; gone since F1/F3) plus four remaining
-  differences: one variant only (R's Windows build has no slim/minimal
-  switches; no wheel, no openblas); no `check` step (R's regression
-  suite is wired only into build.zig's unix path, buildWindows returns
-  before it: a test gap); hermetic must follow `package`, because only
-  package-standalone.sh vendors conda's DLLs and Tcl into bin/x64
-  (vendor-libs.sh does nothing on Windows); `build -- --verbose` and a
-  60-minute timeout against MSYS process-spawn hangs. Plan: vendor the
-  DLLs/Tcl at build time on Windows (the installed tree becomes the
-  shipped tree there too), wire `check` into buildWindows, then a single
-  matrix with windows-latest/default and per-step `if:` only for the
-  wheel.
+- F1.7: Windows joins the CI matrix, and the installed tree is the shipped
+  tree on every OS. Why Windows was a separate CI job (asked 2026-10-03):
+  history (gnuwin32 and the bash shims were a different build; gone since
+  F1/F3) plus four differences: one variant only (R's Windows build has
+  no slim/minimal switches; no wheel, no openblas); no `check` step (R's
+  regression suite was wired only into build.zig's unix path); hermetic
+  had to follow `package`, because only package-standalone.sh vendored
+  conda's DLLs and Tcl into the tree; `build -- --verbose` and a
+  60-minute timeout against MSYS process-spawn hangs.
+  - **F1.7 done 2026-10-03** (a workflow: two implementers in worktrees,
+    one for vendoring and CI, one for the Windows check; two review lenses
+    and a skeptic each; a fix pass each; merged here, with the integration
+    edits below; then the runs on every OS).
+  - **`package` only archives, on every OS.** Everything the tree needs
+    from the env arrives with the build:
+    - build.zig `installEnvRuntime`, for a tree that is not the env
+      (`!prefix_is_env`; the conda build's env packages provide it all):
+      unix: the env's CA bundle as R_HOME/etc/ca-bundle.crt and
+      R_ZIG_CA_BUNDLE in etc/Renviron (finalRenviron; the build fails
+      without the bundle), fontconfig's etc/fonts as <prefix>/etc/fonts
+      (symlinks followed: conda-forge's conf.d links into
+      share/fontconfig, which `cp -a` used to ship as dangling links), and
+      in full Tcl/Tk's script libraries and Tcl's modules as
+      <prefix>/lib/{tcl8.6,tk8.6,tcl8} with TCL_LIBRARY in etc/Renviron.
+      Windows: Tcl/Tk in R_HOME/Tcl, CRAN's layout (the DLLs in Tcl/bin
+      only; tcl8.6, tk8.6 and tcl8 in Tcl/lib), fontconfig's configuration
+      in R_HOME/etc/fonts with FONTCONFIG_PATH in etc/Renviron.site, which
+      installEnvRuntime now writes (with the preflight's hint); in the
+      conda build it sets `MY_TCLTK=${R_HOME}/../../bin`, the tk package's
+      DLLs (a conda env has no R_HOME/Tcl; Tcl finds its scripts in
+      Library/lib beside the DLL).
+    - scripts/vendor-libs.sh: on Windows the DLL closure walk that
+      package-standalone.sh did (every PE in the tree, conda's Library/bin
+      DLLs into R_HOME/bin/x64, the Tcl DLLs never there). zig-build.sh
+      runs it before and after zig build, and each run first removes what
+      an earlier one copied (files whose name the env also has), so a copy
+      that predates a `pixi update` never ships or wins the search order
+      during the build's own R runs (Windows: bin/x64 before PATH; macOS:
+      the rpath before the fallback). A library the env no longer has at
+      all (a soname bump) stays until the tree is removed. The
+      prefix-is-env test compares `cygpath -m -l`, lower-cased, on Windows.
+    - scripts/package-standalone.sh: the archive and its sha256 (named by
+      basename, so `sha256sum -c` works beside it), nothing else.
+    - scripts/env.sh no longer exports MY_TCLTK/TCL_LIBRARY on Windows:
+      the dev tree ships its own Tcl/Tk now, and every check loads it.
+  - **`check` on Windows** (build.zig `addCheckStepWindows`): R's own
+    tests/Makefile.win, unmodified, targets test-Examples, test-Specific
+    and test-Reg (as unix; Internet left out on both, it needs the
+    network and upstream ignores its failures). It runs in a stand-in for
+    R_HOME/tests made fresh on every run (a first step removes and copies
+    it: the WriteFiles scaffolding, MkRules from MkRules.rules,
+    share/make/vars.mk, bin/x64/{Rterm,R,Rcmd} scripts that exec the
+    installed tree's .exe, plus R's tests/ from the source), so no output
+    of an earlier run is reused. Examples are compared with R's
+    .Rout.save (`TEST_DONTTEST=FALSE,srcdir=getwd()`, the one variable
+    Makefile.win puts into its R call). No TZ, as upstream (so
+    registryTZ.c is exercised; unix keeps TZ=UTC). MY_TCLTK and
+    TCL_LIBRARY are removed, so the tcltk examples load the tree's own
+    Tcl/Tk. Left out, as unix's configure leaves them out without the
+    recommended packages: eval-etc-2.R (Matrix), reg-tests-3.R and
+    reg-examples3.R (MASS, survival, Matrix). About 6.5 minutes on kappa,
+    including zig re-running the bootstrap.
+  - **Bugs found and fixed:**
+    1. Windows built no tcltk.dll: `library(tcltk)` failed with "DLL
+       'tcltk' not found" while capabilities("tcltk") said TRUE (found by
+       check's tcltk examples). `winTcltkLib`, from tcltk's Makefile.win
+       (`WIN_TCLTK_LIBS = -ltcl86t -ltk86t -luser32`, conda's Tcl is the
+       threaded build).
+    2. Windows' winCairo.dll imported `pkg_grDevices.dll`, the zig
+       artifact's name, while the tree has grDevices.dll: svg(),
+       cairo_pdf() and png(type = "cairo") failed with "unable to load
+       winCairo.dll", capabilities("cairo") TRUE (found by verify-tree's
+       new DLL closure check). The Windows grDevices artifact is named
+       grDevices. smoke now draws with svg() and png(type = "cairo") on
+       every OS, and recipe/test-win.R with svg().
+    3. linux full: conda-forge's libtcl8.6.so and libtk8.6.so carry no
+       DT_SONAME, so lld recorded the path zig gave it, the build env's
+       absolute one, in tcltk.so's DT_NEEDED: vendor-libs.sh never copied
+       them and off the build machine library(tcltk) failed in dyn.load.
+       tcltk.so now links copies (in the cache) that patchelf gives their
+       file name as DT_SONAME, and has the package rpaths. Also every
+       unix full tree shipped no Tcl script library (Tcl_Init failed off
+       the build machine): installEnvRuntime above.
+    4. Windows' R_HOME/Tcl lacked lib/tcl8 (msgcat: `clock format`
+       failed), and in a win-64 conda env tcltk could not find Tcl at all
+       (no R_HOME/Tcl, no MY_TCLTK): installEnvRuntime above;
+       recipe/test-win.R loads tcltk and runs `clock format`.
+    5. The recipe's win-64 host env solved tk 9.0.4 (unpinned there),
+       while pixi.lock has 8.6.13: with tcltk.dll now built, the conda
+       build's link of -ltcl86t failed (tk 9 ships tcl90.dll and
+       tcl9tk90.dll). tk is pinned to 8.6.* in pixi.toml (win-64 and the
+       tcltk feature) and in the recipe (win host and run), the version
+       WIN_TCLTK_LIBS, unix full's -ltcl8.6 and the R_HOME/Tcl and
+       lib/tcl8.6 layouts are written for. Tcl/Tk 9 is a later, separate
+       change.
+  - **New checks.** verify-tree.sh: unix (not a conda env) the CA bundle
+    and R_ZIG_CA_BUNDLE line, full's Tcl/Tk scripts and TCL_LIBRARY
+    lines, linux every DT_NEEDED a bare name; Windows the Tcl/Tk runtime
+    (none in bin/x64) and the DLL closure (every import of every PE in the
+    tree is in its own directory, bin/x64, Tcl/bin for the Tcl DLLs, or
+    the system's). hermetic-check.sh on Windows loads tcltk from R_HOME/
+    Tcl with an empty environment and requires Tcl's and Tk's script
+    libraries to be under it; verify-bundle.sh (unix full) loads tcltk
+    from the extracted archive under env -i.
+  - **CI:** build-windows is folded into the build matrix
+    (`windows-latest`/`default` with `build_args: "-- --verbose"` and
+    `timeout: 90`); one step order on every OS: rzig tests, build,
+    verify-tree, smoke, contract, check, hermetic, package +
+    verify-package, the wheel (minimal). The 14 unix legs run exactly the
+    commands they ran before; Windows gains check, and hermetic moves
+    before package.
+  - **Tested 2026-10-03:** linux-64 default (build, verify-tree, smoke,
+    contract, check, hermetic, verify-package), minimal (build,
+    verify-tree, hermetic, verify-package), the wheel and wheel-test, the
+    conda package; full (build, verify-tree, smoke, verify-package with
+    tcltk from the extracted archive; by the implementer, before the
+    merge). osx-arm64 on omicron: slim (the same seven), minimal, the
+    wheel, full (build, verify-tree, smoke, verify-package: tcltk from
+    the extracted archive's lib/tcl8.6); its conda package did not run
+    (omicron's downloads of the new zig_impl build kept being cut off;
+    CI builds it). osx-64 under
+    Rosetta: build, verify-tree, smoke, hermetic, verify-package. win-64
+    on kappa from a removed tree (so vendoring ran from scratch): build,
+    smoke, contract, check, hermetic (tcltk from R_HOME/Tcl), verify-package
+    passed, verify-tree found bug 2; after its fix build, verify-tree
+    (77 PE files, the closure complete), smoke (the cairo devices draw),
+    check, hermetic and verify-package passed, and the conda package
+    (after bug 5's pin) passed its tests, svg() and tcltk through
+    MY_TCLTK included.
+    linux-aarch64: CI.
+  - **Open:** Windows' etc/x64/Makeconf keeps `TCL_VERSION = 86`, so a
+    package that links Tcl/Tk through it (tkrplot) asks for -ltcl86, while
+    conda ships tcl86t (and the standalone tree has no Tcl import
+    libraries); untested. The Windows check prints two NOTEs: tools-Ex
+    (the Windows tree has no COPYING, linux's has) and stats-Ex (two
+    htest titles wrap differently). The tree ships no R_HOME/tests (as on
+    unix).
 
-Order: T's conda and wheel parts (done) → F1 (done) → F2 (done) → F3a/F3b/F3c (done) → F1.7 (proposed) → F4 → T's
+Order: T's conda and wheel parts (done) → F1 (done) → F2 (done) → F3a/F3b/F3c (done) → F1.7 (done) → F4 → T's
 standalone split (it needs F1's layout and F3's binary) → P. F4 can be
 decided at any point. The decisions this branch made stay valid through F: tiers,
 the split by `bin/toolchain`, the preflight, static runtimes, the

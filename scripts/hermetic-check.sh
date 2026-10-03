@@ -11,6 +11,8 @@
 #     --build, installs that binary and removes everything again,
 #   - installs R6 from CRAN when it is reachable (download, TLS, R's
 #     internal untar),
+#   - Windows: loads tcltk, whose Tcl/Tk must then come from the tree's
+#     own R_HOME/Tcl,
 #   - requires R to have removed its session temp directories.
 # On linux, where strace can trace, every program started must be
 # /bin/sh or one of R's own launchers: an undeclared tool fails the job
@@ -22,17 +24,17 @@
 # needs (SYSTEMROOT, WINDIR) and PATH is R's bin\x64 plus System32. The
 # binary package comes from CRAN (win.binary), since --build needs an
 # external zip there. No execve trace: the empty PATH is the check, as on
-# macOS. The Windows tree runs on its own only once package-standalone.sh
-# has vendored its DLLs into bin/x64 (vendor-libs.sh does that for unix
-# at build time, not for Windows), so there this runs after `package`.
+# macOS.
 #
-# The installed tree, not the archive (F1.6): CI runs this before
-# packaging, and the copy proves the same relocation. It lacks only what
-# package-standalone.sh adds (the CA bundle; fontconfig's configuration),
-# which tier 0/1 does not need: without R_ZIG_CA_BUNDLE, libcurl keeps
-# its compiled-in trust (the build env's) for the CRAN step here, and
-# verify-bundle.sh checks the shipped trust on the archive.
+# The installed tree, not the archive (F1.6, F1.7): it is the tree that
+# ships on every OS, so CI runs this before packaging, and the copy proves
+# the same relocation. zig build installs the env's runtime data into it
+# (unix: the CA bundle and R_ZIG_CA_BUNDLE, so the CRAN step here goes
+# through the shipped trust rule; Windows: Tcl/Tk) and zig-build.sh's
+# vendor-libs.sh copies the env's shared libraries (Windows: conda's DLLs
+# into bin/x64) after every build; package-standalone.sh only archives it.
 . "$(dirname "$0")/env.sh"
+. "$(dirname "$0")/verify-helpers.sh"
 
 case "$OS" in
   linux|macos|windows) ;;
@@ -46,12 +48,19 @@ test -d "$TREE/$rh" || { echo "error: no R tree at $TREE; run 'pixi run build' f
 # to it (which would put R back in its original place and let the
 # toolchain removal hit the real tree).
 TREE="$(cd "$TREE" && pwd -P)"
-# Windows: package-standalone.sh vendors the DLLs R.dll needs (and
-# creates R_HOME/Tcl on every run); without them Rscript.exe only fails
-# with a loader error.
-if [ "$OS" = windows ] && [ ! -d "$TREE/$rh/Tcl" ]; then
-  echo "error: the Windows tree has no vendored DLLs/Tcl yet; run 'pixi run package' first" >&2
-  exit 1
+# Windows: with PATH reduced to bin\x64 and System32 below, R.dll's conda
+# DLLs must sit in bin/x64, where vendor-libs.sh copies them after every
+# build; without them Rscript.exe fails with only a loader error. (The
+# whole closure is verify-tree.sh's.)
+if [ "$OS" = windows ]; then
+  missing=""
+  for d in $(needed_of "$TREE/$rh/bin/x64/R.dll"); do
+    [ -f "$TREE/$rh/bin/x64/$d" ] || win_system_dll "$d" || missing="$missing $d"
+  done
+  if [ -n "$missing" ]; then
+    echo "error: R.dll's DLLs are not in $rh/bin/x64:$missing; run 'pixi run build' (zig-build.sh runs vendor-libs.sh after zig build)" >&2
+    exit 1
+  fi
 fi
 
 WORK="$(mktemp -d)"
@@ -148,6 +157,19 @@ if (online) {
     remove.packages("R6", lib = lib)
     cat("CRAN: R6 installed from source and removed\n")
 } else cat("CRAN: offline, skipped\n")
+if (windows) {
+    ## tcltk as the shipped tree loads it: MY_TCLTK is unset here, so
+    ## .onLoad takes the Tcl/Tk DLLs from R_HOME/Tcl/bin, and Tcl finds its
+    ## scripts beside them; with nothing on PATH but bin\x64 and System32,
+    ## no other Tcl can stand in.
+    library(tcltk)
+    ## (case-insensitive, as Windows paths are)
+    tcl_home <- tolower(normalizePath(R.home("Tcl"), "/"))
+    for (lib in c(tclvalue(tcl("info", "library")), tclvalue(tcl("set", "tk_library"))))
+        if (!startsWith(tolower(normalizePath(lib, "/")), paste0(tcl_home, "/")))
+            stop("Tcl/Tk scripts from outside R_HOME/Tcl: ", lib)
+    cat("tcltk: Tcl/Tk", tclvalue(tcl("info", "patchlevel")), "from R_HOME/Tcl\n")
+}
 cat("tier 0/1 scenario OK\n")
 RCODE
 

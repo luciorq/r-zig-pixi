@@ -66,7 +66,7 @@ For iterating on the build itself rather than consuming a package:
 pixi run build         # zig build, no autoconf/make/gnuwin32
 pixi run verify-tree   # static checks of the installed tree (Makeconf, rpaths, floors)
 pixi run smoke         # quick sanity check
-pixi run check         # R's own regression suite (linux/macOS)
+pixi run check         # R's own regression suite
 ```
 
 Three variants are available as pixi environments: `default` (slim —
@@ -112,7 +112,10 @@ distributions than the build machine, without a separate build variant.
 
 Everything runs on GitHub-hosted runners: `build` (ubuntu-latest,
 ubuntu-24.04-arm, macos-latest, macos-15-intel × slim/full, plus the
-linux openblas variants), `build-windows`, and `conda-package` for all
+linux openblas variants, minimal on all four, and windows-latest's one
+variant; the same steps in the same order on every OS, on the installed
+tree, which is the tree the standalone archive packs), and
+`conda-package` for all
 five subdirs (linux-64, linux-aarch64, osx-arm64, osx-64, win-64), which
 publishes to the `universe` channel on prefix.dev via OIDC trusted
 publishing on every push to `main`. There is no self-hosted fleet — the

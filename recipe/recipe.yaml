@@ -300,12 +300,14 @@ outputs:
         # gnuwin32 has no capability off-switches (unlike unix's
         # --without-jpeglib etc.), so Windows R unconditionally links the
         # jpeg/tiff bitmap devices, the tcltk package, and NLS — these are
-        # genuinely linked-at-runtime deps here, not just build inputs
+        # genuinely linked-at-runtime deps here, not just build inputs.
+        # tk 8.6, as pixi.toml: tcltk.dll links tcl86t/tk86t; an unpinned
+        # solve picks tk 9.0 (tcl90.dll), and the link fails.
         - if: win
           then:
             - libjpeg-turbo
             - libtiff
-            - tk
+            - tk 8.6.*
             - gettext
     build:
       # A staging output is not a package: rattler-build sets no PKG_NAME
@@ -365,7 +367,7 @@ outputs:
           then:
             - libjpeg-turbo
             - libtiff
-            - tk
+            - tk 8.6.*
             - gettext
     tests:
       # Mirrors scripts/smoke-test.sh's actual assertions (numerics: LAPACK

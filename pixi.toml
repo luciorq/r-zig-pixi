@@ -59,35 +59,42 @@ fetch = "bash scripts/fetch-r.sh"
 # Milestone 5 (FINALIZATION.md's "Final" item), then retired — see
 # Milestone 7 in feat-legacy-retirement/.
 build = { cmd = "bash scripts/zig-build.sh", depends-on = ["fetch"] }
-# R's regression suite (Examples/Specific/Reg) against the zig build —
-# linux/macOS only, no `check` step exists in the Windows compile graph
-# (addCheckStep is only wired into the unix build() path; make-check
-# parity was never in scope for Windows — see FINALIZATION.md F6).
+# R's regression suite (make check's Examples/Specific/Reg targets)
+# against the installed tree, on every OS: R's own tests/Makefile on
+# linux/macOS (build.zig addCheckStep), tests/Makefile.win on Windows
+# (addCheckStepWindows, which lists what it leaves out and why). The
+# tree's own libraries and Tcl/Tk: build put them in it (F1.7).
 check = { cmd = "bash scripts/zig-build.sh check", depends-on = ["fetch"] }
 # smoke/contract/install/package/verify-package all resolve the zig
 # prefix themselves (mirroring zig-build.sh's own $FLAVOR-based prefix
 # derivation) so callers don't need to know it.
 smoke = "bash scripts/zig-smoke.sh"
-# contract (R CMD SHLIB/INSTALL via Makeconf) is unix-only for now — the
-# Windows package-compilation contract (Makeconf.win, a compiled R.exe
-# front-end) is explicitly deferred, see FINALIZATION.md F6.1/F6.2.
+# contract: CRAN packages compiled with the installed tree through its
+# Makeconf (R CMD SHLIB/INSTALL: Rcpp, data.table, minqa + OpenMP), on
+# every OS (Windows: etc/x64/Makeconf and R.exe's CMD dispatcher).
 contract = "bash scripts/zig-contract.sh"
 # `zig build` installs the final tree (feat-no-host-paths PLAN.md, F1);
 # kept as an alias of build for existing commands.
 install = { depends-on = ["build"] }
 # Static checks of that installed tree, run right after build (F1.6):
-# Makeconf, the compilers are rzig, rpaths, the glibc and macOS floors,
-# the C++ runtime, load commands, minimal's excluded libraries. Takes an
-# optional tree path (`pixi run verify-tree -- <dir>`).
+# Makeconf, the compilers are rzig, the CA bundle, rpaths, the glibc and
+# macOS floors, the C++ runtime, load commands, minimal's excluded
+# libraries; Windows: Tcl/Tk and the DLL closure. Takes an optional tree
+# path (`pixi run verify-tree -- <dir>`).
 verify-tree = "bash scripts/verify-tree.sh"
+# The standalone archive (dist/R-<ver>-<flavor>-<platform>.tar.gz, Windows
+# .zip, plus its sha256): only archives the installed tree, which build
+# made complete on every OS (F1.7: zig build installs the env's runtime
+# data, vendor-libs.sh its shared libraries).
 package = { cmd = "bash scripts/zig-package.sh", depends-on = ["install"] }
 # The archive's own checks: extracted elsewhere, R and packages compiled
-# with it run under env -i, TLS with the shipped CA bundle.
+# with it run with nothing from the build env (unix: env -i, TLS with the
+# shipped CA bundle; Windows: rzig's dry runs).
 verify-package = { cmd = "bash scripts/zig-verify-package.sh", depends-on = ["package"] }
-# Tier 0/1 with an empty environment and PATH=<tree>/bin (unix; strace on
-# linux): start R, install without compiling. Runs on a copy of the
-# installed tree, not the archive (Windows: once package has vendored
-# its DLLs into the tree).
+# Tier 0/1 with an empty environment and only the tree's own programs on
+# PATH (unix: <tree>/bin, strace on linux; Windows: bin\x64 plus
+# System32): start R, install without compiling. Runs on a copy of the
+# installed tree, the tree that ships, so it needs no `package` first.
 hermetic = "bash scripts/hermetic-check.sh"
 # rzig, the compilers in R_HOME/bin/toolchain (zigbuild/tools/rzig/): its
 # unit tests here, and on linux the parity test against the bash shims in
@@ -195,7 +202,10 @@ uutils-coreutils = "*"
 # carries these (parity caveat, tracked in TODO.md)
 libjpeg-turbo = "*"
 libtiff = "*"
-tk = "*"
+# Tcl/Tk 8.6: tcltk.dll links tcl86t/tk86t (WIN_TCLTK_LIBS) and R_HOME/Tcl
+# is 8.6's layout (build.zig installEnvRuntime); conda-forge's tk 9.0 has
+# other names (tcl90.dll, tcl9tk90.dll). recipe/recipe.yaml pins the same.
+tk = "8.6.*"
 gettext = "*"
 m2-bash = "*"
 m2-make = "*"
@@ -251,7 +261,9 @@ patchelf = "*"
 # --- optional capabilities (compile-time: only via the 'full' environment) ---
 
 [feature.tcltk.dependencies]
-tk = "*"
+# 8.6: the vendored config links -ltcl8.6 -ltk8.6, and the tree ships
+# lib/tcl8.6 (build.zig installEnvRuntime); see win-64 above.
+tk = "8.6.*"
 
 [feature.img-formats.dependencies]
 libjpeg-turbo = "*"
@@ -365,7 +377,7 @@ uutils-coreutils = "*"
 # Wheel assembly + test: only Python (stdlib zipfile/hashlib, venv, pip).
 # Not the build env: python's own closure (readline, tk, sqlite, ...)
 # has no business being visible to R's configure. The input is the
-# minimal build's staged, vendored tree (`pixi run -e minimal package`);
+# minimal build's installed, vendored tree (`pixi run -e minimal build`);
 # R_BUILD_VARIANT is set here too so env.sh derives the same
 # dist/R-<ver>-minimal-zig prefix.
 [feature.wheel]

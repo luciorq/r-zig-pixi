@@ -81,15 +81,24 @@ fi
 
 # The conda build (recipe/recipe.yaml sets R_ZIG_CONDA_BUILD): the compile
 # preflight's hint names r-zig-toolchain (the wheel sets its own; otherwise
-# R's generic message). Nothing else differs: the tree is the same in every
-# distribution, and rzig decides a conda env's rpath where it runs (F3b).
+# R's generic message). Nothing else depends on this flag: rzig decides a
+# conda env's rpath where it runs (F3b), and what a standalone tree takes
+# from the env (build.zig's installEnvRuntime, vendor-libs.sh) is left out
+# because the prefix is the env, not because of the flag.
 conda=()
 if [ -n "${R_ZIG_CONDA_BUILD:-}" ]; then
   conda=("-Dtoolchain-hint=add the r-zig-toolchain package to this environment (pixi add r-zig-toolchain, or conda install r-zig-toolchain)")
 fi
-"$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "${conda[@]}" "$@"
 
-# The installed tree runs on its own (F1.3): R's rpaths are relative
-# (build.zig relRPaths), so the env's libraries it needs go into
-# <prefix>/lib. A no-op for the conda build, whose prefix is the env.
+# The installed tree runs on its own, and is the tree that ships (F1.3,
+# F1.7): the env's shared libraries it needs go into it, <prefix>/lib on
+# unix (R's rpaths are relative, build.zig relRPaths), R_HOME/bin/x64 on
+# Windows (vendor-libs.sh). After the build, for what it built; and
+# before it on a tree an earlier build left, because the build runs R
+# from the tree (the bootstrap, check) and a copy in the tree comes
+# before the env's library (Windows: bin/x64 before PATH; macOS: the
+# rpath before the fallback path): after a `pixi update` it would be the
+# env's old one. A no-op for the conda build, whose prefix is the env.
+R_INSTALL_PREFIX="$PREFIX_ZIG" bash "$(dirname "$0")/vendor-libs.sh"
+"$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "${conda[@]}" "$@"
 R_INSTALL_PREFIX="$PREFIX_ZIG" bash "$(dirname "$0")/vendor-libs.sh"

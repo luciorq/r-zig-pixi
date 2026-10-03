@@ -1,7 +1,7 @@
 name: build-r
 
 # Docs-only changes never touch the build: skip the whole matrix for
-# them (a full run is ~30 min of runner time across 16 jobs). Note the
+# them (a full run is 20 jobs: 15 build legs, 5 conda packages). Note the
 # consequence for branch protection: a docs-only PR reports no build-r
 # checks at all, so don't mark them "required" or such PRs can't merge.
 # `[skip ci]` in a commit message also works for a one-off.
@@ -34,7 +34,10 @@ jobs:
   # Only build path: `zig build` alone (no autoconf, no make, no
   # gnuwin32) — see .github/devdocs/feat-zig-build/. The autoconf/gnuwin32
   # legacy jobs that used to sit alongside this one were retired in
-  # Milestone 7 — see .github/devdocs/feat-legacy-retirement/.
+  # Milestone 7 — see .github/devdocs/feat-legacy-retirement/. One job for
+  # every OS, Windows included (feat-no-host-paths F1.7): the same steps in
+  # the same order everywhere, on the tree `zig build` installs, which is
+  # the tree that ships.
   build:
     name: ${{ matrix.os }} / ${{ matrix.env }}
     # Gated behind ENABLE_HOSTED_JOBS (repo Settings > Actions > Variables)
@@ -77,7 +80,21 @@ jobs:
             env: minimal
           - os: macos-15-intel
             env: minimal
-    timeout-minutes: 180
+          # Windows: one variant only (R's Windows build has no slim/
+          # minimal switches; no wheel, no openblas), so only `default`.
+          # build_args: zig build prints nothing until it finishes, so a
+          # hung step leaves an empty log; with --verbose the last command
+          # started is the last line, which is the diagnosis.
+          # timeout: windows-latest's MSYS process spawning flakes
+          # ("cygheap read copy failed") have twice turned a build into a
+          # silent hang (2026-09-20). The leg took ~20 min when healthy
+          # before it ran R's regression suite; 90 leaves room for that and
+          # still fails a hang long before the 180 of the other legs.
+          - os: windows-latest
+            env: default
+            build_args: "-- --verbose"
+            timeout: 90
+    timeout-minutes: ${{ matrix.timeout || 180 }}
     steps:
       - uses: actions/checkout@v6
       - uses: prefix-dev/setup-pixi@v0.10.0
@@ -90,16 +107,20 @@ jobs:
       # parity test against the bash shims for every OS's command lines.
       - name: rzig tests
         run: pixi run -e ${{ matrix.env }} rzig-test
-      # `zig build` installs the tree that ships (feat-no-host-paths F1),
-      # libraries vendored; every check below runs on that tree, and the
-      # archive is made from it last (F1.6).
+      # `zig build` installs the tree that ships (feat-no-host-paths F1,
+      # F1.7), with the runtime data it needs from the env (the CA bundle,
+      # fontconfig's configuration, Windows' Tcl/Tk), and zig-build.sh
+      # then copies the env's shared libraries into it (vendor-libs.sh;
+      # Windows: conda's DLLs into bin/x64). Every check below runs on
+      # that tree, and the archive is made from it last (F1.6).
       - name: Build R (zig build alone, no autoconf/make)
-        run: pixi run -e ${{ matrix.env }} build
+        run: pixi run -e ${{ matrix.env }} build ${{ matrix.build_args }}
       # Static checks of the installed tree, before anything runs it:
-      # Makeconf, the compilers are rzig, relative rpaths, the glibc and
-      # macOS floors, the C++ runtime, load commands, minimal's excluded
-      # libraries (scripts/verify-tree.sh). The variants CI packages.
-      - name: Verify the installed tree (Makeconf, rzig, rpaths, floors)
+      # Makeconf, the compilers are rzig, the CA bundle, relative rpaths,
+      # the glibc and macOS floors, the C++ runtime, load commands,
+      # minimal's excluded libraries; Windows: the Tcl/Tk runtime and the
+      # DLL closure (scripts/verify-tree.sh). The variants CI packages.
+      - name: Verify the installed tree (Makeconf, rzig, libraries, floors)
         if: matrix.env == 'default' || matrix.env == 'minimal'
         run: pixi run -e ${{ matrix.env }} verify-tree
       - name: Smoke test
@@ -109,26 +130,29 @@ jobs:
       - name: Regression suite (Examples/Specific/Reg)
         run: pixi run -e ${{ matrix.env }} check
       # Tiers 0/1 (feat-no-host-paths): a copy of the installed tree starts
-      # R and installs source R-only and binary packages with nothing but
-      # /bin/sh and its own bin/ on PATH; on linux, strace fails any other
-      # program.
+      # R and installs source R-only and binary packages with an empty
+      # environment and only its own bin/ on PATH (unix: plus /bin/sh, and
+      # on linux strace fails any other program; Windows: bin\x64 plus
+      # System32).
       - name: Hermetic tier 0/1 check (installed tree, empty environment)
         if: matrix.env == 'default' || matrix.env == 'minimal'
         run: pixi run -e ${{ matrix.env }} hermetic
-      # Standalone archive: reuses this job's already-built prefix (cheap).
-      # Only the default (slim) and minimal variants are packaged in CI for
-      # now — full/openblas relocation is exercised manually, not automated
-      # yet. minimal's archive is the wheel's input, so it can't be skipped.
+      # Standalone archive: package-standalone.sh only archives this job's
+      # installed tree (cheap). Only the default (slim; Windows' one
+      # variant) and minimal variants are packaged in CI for now —
+      # full/openblas relocation is exercised manually, not automated yet.
+      # minimal's tree is the wheel's input, so it can't be skipped.
       # verify-package checks the archive itself: extracted elsewhere, R
-      # and packages compiled with it run under env -i, TLS with the
-      # shipped CA bundle (scripts/verify-bundle.sh).
-      - name: Package + verify the standalone archive (relocated, env -i)
+      # and packages compiled with it run with nothing from the build env
+      # (unix: env -i, TLS with the shipped CA bundle; Windows: rzig's dry
+      # runs) (scripts/verify-bundle.sh).
+      - name: Package + verify the standalone archive (relocated)
         if: matrix.env == 'default' || matrix.env == 'minimal'
         run: pixi run -e ${{ matrix.env }} verify-package
-      # The r-zig wheel: the tree verify-package just packaged, zipped with
-      # the r_zig Python package, then pip-installed into a fresh venv
-      # (ziglang from PyPI) and used with the pixi env scrubbed away —
-      # including R CMD INSTALL of a C/C++ package through ziglang.
+      # The r-zig wheel: the minimal tree verify-package just packaged,
+      # zipped with the r_zig Python package, then pip-installed into a
+      # fresh venv (ziglang from PyPI) and used with the pixi env scrubbed
+      # away — including R CMD INSTALL of a C/C++ package through ziglang.
       - name: Build + test the r-zig wheel
         if: matrix.env == 'minimal'
         run: |
@@ -142,54 +166,10 @@ jobs:
           path: dist/wheel/*.whl
           if-no-files-found: error
 
-  # `zig build` on Windows — no `check` step (make-check parity was never
-  # in scope for Windows, see FINALIZATION.md F6: addCheckStep is only
-  # wired into the unix build() path). The package-compilation contract
-  # (Makeconf.win wiring, a real R.exe CMD dispatcher, native gcc.exe/
-  # g++.exe, now rzig) IS done — see FINALIZATION.md F7 — so `contract`
-  # runs here same as linux/macOS.
-  build-windows:
-    name: windows-latest / default
-    # Gated behind ENABLE_HOSTED_JOBS — see `build` job above for details.
-    if: vars.ENABLE_HOSTED_JOBS == 'true'
-    runs-on: windows-latest
-    # 60, not 180: this leg takes ~20 min when healthy, and windows-latest's
-    # MSYS process spawning flakes ("cygheap read copy failed") have twice
-    # turned a build into a silent hang (2026-09-20) — fail fast, re-run.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.10.0
-        with:
-          environments: default
-          cache: true
-      - name: rzig tests
-        run: pixi run rzig-test
-      # --verbose: zig build prints nothing until it finishes, so a hung
-      # step leaves an empty log; with it the last command started is the
-      # last line, which is the diagnosis.
-      - name: Build R (zig build alone, no autoconf/make/gnuwin32)
-        run: pixi run build -- --verbose
-      # Windows' static checks: the compilers are rzig, Makeconf.
-      - name: Verify the installed tree (Makeconf, rzig)
-        run: pixi run verify-tree
-      - name: Smoke test
-        run: pixi run smoke
-      - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
-        run: pixi run contract
-      - name: Package + verify the standalone archive (relocated)
-        run: pixi run verify-package
-      # After package, unlike unix: the Windows tree runs on its own only
-      # once package-standalone.sh has vendored conda's DLLs into its
-      # bin/x64 (vendor-libs.sh does that at build time on unix only), and
-      # hermetic's PATH is R's bin/x64 plus System32.
-      - name: Hermetic tier 0/1 check (installed tree, empty environment)
-        run: pixi run hermetic
-
   # conda-forge-style package (rattler-build) — always the slim variant
   # regardless of matrix.env above, since recipe/build.sh never sets
   # R_BUILD_VARIANT. A from-scratch build in its own isolated sandbox, so
-  # it can't reuse the `build`/`build-windows` jobs' prefixes; that
+  # it can't reuse the `build` job's prefixes; that
   # roughly doubles per-platform CI time, which is the tradeoff for
   # catching a recipe regression before a real release. All 5 platforms
   # on GitHub-hosted runners — the self-hosted gamma/omicron/kappa fleet
@@ -223,7 +203,7 @@ jobs:
     # 90, not 300: the longest leg (win-64, from-scratch rattler-build
     # sandbox) takes ~15 min when healthy; windows-latest's MSYS spawn
     # flake has hung a build inside this sandbox before (2026-09-20),
-    # where build-windows's --verbose/60-min guard doesn't reach. Fail
+    # where the build job's Windows --verbose guard doesn't reach. Fail
     # fast, re-run the leg.
     timeout-minutes: 90
     steps:

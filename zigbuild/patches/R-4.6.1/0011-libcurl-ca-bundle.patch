@@ -1,8 +1,9 @@
 libcurl: CA bundle rule for the standalone tree and the wheel
 
 Their vendored libcurl and OpenSSL are conda-forge's, with the build
-env's CA paths compiled in, so package-standalone.sh ships a Mozilla
-bundle and sets R_ZIG_CA_BUNDLE in etc/Renviron. CURL_CA_BUNDLE there
+env's CA paths compiled in, so the tree ships a Mozilla bundle and sets
+R_ZIG_CA_BUNDLE in etc/Renviron (build.zig's installEnvRuntime and
+finalRenviron, for a tree that is not the env). CURL_CA_BUNDLE there
 instead would leak into every program R starts (curl, Python's requests,
 ...) and override their own trust, so curlCommon() reads the r-zig
 variable itself: CURL_CA_BUNDLE as upstream, then, only when

@@ -190,6 +190,10 @@ pub const win_utils_windows_c = [_][]const u8{
 /// build — excludes tcltk_win.c).
 pub const tcltk_c = [_][]const u8{ "init.c", "tcltk.c", "tcltk_unix.c" };
 
+/// Windows (src/library/tcltk/src/Makefile.win SOURCES_C): tcltk_win.c
+/// in place of tcltk_unix.c.
+pub const win_tcltk_c = [_][]const u8{ "init.c", "tcltk.c", "tcltk_win.c" };
+
 /// Public API headers installed to R_HOME/include (src/include/Makefile.in
 /// SRC_HEADERS; OBJ_HEADERS Rconfig.h/Rmath.h/Rversion.h are generated).
 pub const public_headers = [_][]const u8{

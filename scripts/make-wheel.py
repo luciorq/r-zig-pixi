@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Assemble the r-zig wheels from the minimal variant's standalone tree.
 
-Input is what `pixi run -e minimal package` leaves in
-dist/R-<ver>-minimal-zig: installed by zig build (location-independent
+Input is the tree `pixi run -e minimal build` leaves in
+dist/R-<ver>-minimal-zig, the same tree the standalone archive packs
+(feat-no-host-paths F1.7): installed by zig build (location-independent
 launchers, $ORIGIN/@loader_path rpaths, rzig + GNU make in
-lib/R/bin/toolchain, a Makeconf that names no build path) and made
-standalone by package-standalone.sh (conda libraries vendored into lib/,
-the CA bundle).
+lib/R/bin/toolchain, a Makeconf that names no build path, the env's CA
+bundle named in etc/Renviron) with the conda libraries it needs vendored
+into lib/ by zig-build.sh (vendor-libs.sh).
 That tree already runs from anywhere, so the wheel is that tree under
 `r_zig/R/` plus the small `r_zig` Python package (python/r_zig/) and the
 console scripts `R`/`Rscript`. Two wheels come out of it (phase T of
@@ -346,7 +347,7 @@ def main() -> None:
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--prefix", default=os.path.join(ROOT, "dist", f"R-{r_version}-{variant}-zig"),
-                    help="staged + packaged R tree (default: %(default)s)")
+                    help="installed R tree, as zig-build.sh leaves it (default: %(default)s)")
     ap.add_argument("--out-dir", default=os.path.join(ROOT, "dist", "wheel"))
     ap.add_argument("--version", default=r_version, help="wheel version (default: the R version)")
     ap.add_argument("--build-tag", default="", help="wheel build tag, e.g. 1 (PEP 427)")
@@ -358,15 +359,15 @@ def main() -> None:
     if variant != "minimal" and not args.any_variant:
         die(f"R_BUILD_VARIANT is {variant!r}; the wheel wraps the minimal variant (--any-variant to override)")
     if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "exec", "R")):
-        die(f"no R build at {prefix} — run `pixi run -e minimal package` first")
+        die(f"no R build at {prefix} — run `pixi run -e minimal build` first")
     if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "toolchain", "zig-cc")):
-        die(f"{prefix} has no R_HOME/bin/toolchain — run `pixi run -e minimal package` first")
+        die(f"{prefix} has no R_HOME/bin/toolchain — run `pixi run -e minimal build` first")
     if not any(re.search(r"\.(so(\.\d+)*|dylib)$", f) for f in os.listdir(os.path.join(prefix, "lib"))):
-        die(f"no vendored libraries in {prefix}/lib — run `pixi run -e minimal package` first")
+        die(f"no vendored libraries in {prefix}/lib — run `pixi run -e minimal build` first")
     with open(os.path.join(prefix, "lib", "R", "etc", "Renviron"), "rb") as f:
         has_ca = b"\nR_ZIG_CA_BUNDLE=" in b"\n" + f.read()
     if not (has_ca and os.path.isfile(os.path.join(prefix, "lib", "R", "etc", "ca-bundle.crt"))):
-        die(f"{prefix} has no CA bundle (etc/ca-bundle.crt, R_ZIG_CA_BUNDLE) — run `pixi run -e minimal package` first")
+        die(f"{prefix} has no CA bundle (etc/ca-bundle.crt, R_ZIG_CA_BUNDLE) — run `pixi run -e minimal build` first")
     if args.build_tag and not args.build_tag[0].isdigit():
         die("--build-tag must start with a digit (PEP 427)")
 

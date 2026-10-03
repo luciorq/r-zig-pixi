@@ -1,34 +1,118 @@
 #!/usr/bin/env bash
-# Copy the conda-env libraries R's binaries need into <prefix>/lib, so the
-# installed tree runs on its own (feat-no-host-paths PLAN.md, F1.3: the
-# tree zig build installs is the tree that ships, and every check runs on
-# it). R's binaries find these through the relative rpaths build.zig
-# writes (relRPaths: R_HOME/lib and <prefix>/lib), and conda-forge's
-# libraries carry rpaths of their own ($ORIGIN/. on linux, @loader_path/
-# on macOS), so this is a plain copy: no patchelf, and on macOS no
-# install_name_tool, except for the rare conda library that names another
-# by the env's absolute path (below).
+# Copy the conda-env shared libraries R's binaries need into the installed
+# tree, so it runs on its own (feat-no-host-paths PLAN.md, F1.3 and F1.7:
+# the tree zig build installs is the tree that ships, on every OS, and
+# every check runs on it). zig-build.sh runs this after every build, and
+# before it on a tree an earlier build left (see there); the rest the tree
+# needs from the env (the CA bundle, fontconfig's configuration, Tcl/Tk's
+# script libraries, and on Windows Tcl/Tk's DLLs) build.zig installs
+# itself (installEnvRuntime). Each run first
+# removes what an earlier one copied, then copies what the binaries in the
+# tree need now, from the env as it is now (below).
+#   - unix: into <prefix>/lib. R's binaries find these through the
+#     relative rpaths build.zig writes (relRPaths: R_HOME/lib and
+#     <prefix>/lib), and conda-forge's libraries carry rpaths of their own
+#     ($ORIGIN/. on linux, @loader_path/ on macOS), so this is a plain
+#     copy: no patchelf, and on macOS no install_name_tool, except for the
+#     rare conda library that names another by the env's absolute path
+#     (below).
+#   - Windows: conda's Library/bin DLLs into R_HOME/bin/x64, the directory
+#     of Rscript.exe and R.exe, where the loader looks first for every DLL
+#     the process loads (R.dll's, the modules', packages').
 #
 # A no-op when the prefix is the env itself (the conda build: the
-# libraries are already in <prefix>/lib, as run dependencies). Windows'
-# DLLs are copied by package-standalone.sh. Idempotent: zig-build.sh runs
-# it after every build, package-standalone.sh again.
+# libraries are already there, as run dependencies).
 #
-# Expects R_INSTALL_PREFIX (zig-build.sh and zig-package.sh export it).
+# Expects R_INSTALL_PREFIX (zig-build.sh passes it).
 . "$(dirname "$0")/env.sh"
+. "$(dirname "$0")/verify-helpers.sh"
 
 CONDA="${CONDA_PREFIX:?}"
-[ "$OS" = windows ] && exit 0
-test -d "$R_HOME_DIR" || { echo "vendor-libs: no R at $R_HOME_DIR" >&2; exit 1; }
-if [ "$(cd "$PREFIX" && pwd -P)" = "$(cd "$CONDA" && pwd -P)" ]; then
+# (zig-build.sh's run before the first build: nothing to vendor into yet)
+if [ ! -d "$R_HOME_DIR" ]; then
+  echo "== vendor-libs: no R at $R_HOME_DIR yet, nothing to do"
+  exit 0
+fi
+# The conda build installs into the env (recipe/build.sh points both
+# R_INSTALL_PREFIX and CONDA_PREFIX at rattler's $PREFIX). The same test
+# as build.zig's prefix_is_env, on resolved paths. Windows: MSYS bash may
+# be handed C:\..., C:/... or /c/..., with 8.3 short names, and NTFS
+# ignores case, so the long Windows form (cygpath -m -l), lower-cased, is
+# compared there.
+resolved() {
+  local d
+  d="$(cd "$1" && pwd -P)" || return 1
+  if [ "$OS" = windows ]; then
+    cygpath -m -l "$d" | tr '[:upper:]' '[:lower:]'
+  else
+    echo "$d"
+  fi
+}
+if [ "$(resolved "$PREFIX")" = "$(resolved "$CONDA")" ]; then
+  exit 0
+fi
+
+# What an earlier run copied comes out first: every file directly in the
+# destination whose name the env also has (unix: <prefix>/lib, where the
+# build itself installs only directories; Windows: the DLLs in
+# R_HOME/bin/x64, where R's own, R.dll, Rblas.dll and the rest, have no
+# namesake in conda's Library/bin). The env's file may have changed since
+# (pixi update), and a copy kept because its name is there would ship the
+# old one, and load it wherever the tree's copy comes before the env's.
+# A library the env no longer has at all (a soname bump, e.g. ICU's) is
+# not recognised here and stays; nothing needs it, and removing the tree
+# drops it.
+n_old=0
+if [ "$OS" = windows ]; then
+  for f in "$R_HOME_DIR"/bin/x64/*.dll; do
+    [ -f "$f" ] && [ -f "$CONDA/Library/bin/${f##*/}" ] || continue
+    rm -f "$f"
+    n_old=$((n_old + 1))
+  done
+else
+  for f in "$PREFIX"/lib/*; do
+    [ -d "$f" ] && continue
+    [ -e "$CONDA/lib/${f##*/}" ] || [ -L "$CONDA/lib/${f##*/}" ] || continue
+    rm -f "$f"
+    n_old=$((n_old + 1))
+  done
+fi
+[ "$n_old" = 0 ] || echo "== removed $n_old libraries an earlier run vendored"
+
+# Windows: every PE file in the tree (R's own, the toolchain's, and the
+# Tcl DLLs build.zig installs into R_HOME/Tcl/bin: tcl86t.dll needs
+# zlib1.dll), then a fixed-point walk over the DLLs copied by this run.
+# The Tcl DLLs stay only in Tcl/bin, CRAN's layout: a copy in bin/x64
+# wins the search order but then looks for init.tcl relative to itself
+# and fails. (needed_of: verify-helpers.sh, the imports verify-tree.sh
+# checks.)
+if [ "$OS" = windows ]; then
+  BIN="$R_HOME_DIR/bin/x64"
+  CLIB="$CONDA/Library/bin"
+  mkdir -p "$BIN"
+  mapfile -t pes < <(find "$PREFIX" -type f \( -name '*.dll' -o -name '*.exe' \))
+  n=0
+  i=0
+  while [ "$i" -lt "${#pes[@]}" ]; do
+    f="${pes[$i]}"
+    i=$((i + 1))
+    while read -r dep; do
+      case "$dep" in tcl86t.dll|tk86t.dll) continue ;; esac
+      if [ -f "$CLIB/$dep" ] && [ ! -f "$BIN/$dep" ]; then
+        cp "$CLIB/$dep" "$BIN/$dep"
+        pes+=("$BIN/$dep")
+        n=$((n + 1))
+      fi
+    done < <(needed_of "$f")
+  done
+  echo "== vendored $n conda DLLs into $BIN"
   exit 0
 fi
 mkdir -p "$PREFIX/lib"
 
 # Every binary under <prefix>/lib: R_HOME (ELF or Mach-O magic, not name
-# patterns: the tools in bin/toolchain count too, e.g. minimal's make) and
-# what an earlier run vendored, then a fixed-point walk over the libraries
-# copied by this one.
+# patterns: the tools in bin/toolchain count too, e.g. minimal's make),
+# then a fixed-point walk over the libraries copied by this run.
 case "$OS" in
   linux) magic=$'\x7fELF' ;;
   macos) magic=$'\xcf\xfa\xed\xfe' ;;
