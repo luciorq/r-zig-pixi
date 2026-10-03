@@ -50,7 +50,6 @@ const r_version = "4.6.1";
 /// one definition, zigbuild/tools/rzig/floors.zig. See the target comment
 /// in build().
 const macos_min: std.SemanticVersion = floors.macos;
-const macos_min_flag = "-mmacosx-version-min=" ++ floors.majorMinor(floors.macos); // flang's spelling of macos_min
 
 /// F5/F6: linux uses flang + ELF (.so/DT_NEEDED/RUNPATH); macOS uses
 /// gfortran + Mach-O (.dylib/install_name/@rpath — patchelf doesn't apply
@@ -580,13 +579,15 @@ pub fn build(b: *std.Build) !void {
     }
     ctx.openmp = ctx.subst.get("R_OPENMP_CFLAGS").?.len > 0;
     ctx.devcairo = ctx.subst.get("BUILD_DEVCAIRO_TRUE").?.len == 0;
-    // macOS: packages' Fortran objects get the same floor as fortranOne's.
-    // In FC rather than FFLAGS/FCFLAGS: a user's ~/.R/Makevars that sets
-    // FFLAGS keeps it, and SHLIB_FCLD = $(FC) carries it to the rare
-    // Fortran-driver link (USE_FC_TO_LINK).
-    if (os == .macos and ctx.fc == .flang) {
-        try ctx.subst.put("FC", b.fmt("{s} {s}", .{ ctx.subst.get("FC").?, macos_min_flag }));
-    }
+    // FC is the toolchain's Fortran front, rzig's zig-fc (feat-no-host-
+    // paths F3c, zigbuild/tools/rzig/fortran.zig), as CC and CXX are its
+    // zig-cc and zig-cxx: it runs the flang on PATH, on macOS with the
+    // floor packages' Fortran objects get (floors.zig, as fortranOne's;
+    // FC carried it before), and links a USE_FC_TO_LINK package
+    // (SHLIB_FCLD = $(FC)) through zig with the static runtime, which
+    // flang's own driver cannot find. Makeconf only: R's own build runs
+    // flang itself (fortranOne).
+    if (ctx.fc == .flang) try ctx.mk_subst.put("FC", "$(R_HOME)/bin/toolchain/zig-fc");
 
     // ------------------------------------------------------------------
     // Generated headers (what config.status + src/include/Makefile make)
@@ -1703,11 +1704,10 @@ const WinPkgLib = struct { pkg: []const u8, lib: *std.Build.Step.Compile };
 /// Makeconf.win) with BINPREF pointed at that directory — so
 /// `$(BINPREF)$(CCBASE)` etc. resolve to real, absolute, working paths
 /// rather than a bare name that Windows would resolve to whatever
-/// unrelated compiler happens to be on PATH. gfortran is NOT bundled here
-/// (see the FC replacement below) — it internally locates its own f951
-/// backend relative to its own install location, so a standalone copy
-/// breaks it; FC points straight at the conda env's original gfortran.exe
-/// instead.
+/// unrelated compiler happens to be on PATH. flang is NOT bundled here
+/// (see the FC replacement below) — it locates its own pieces relative to
+/// its own install location, so a standalone copy breaks it; FC is rzig's
+/// zig-fc.exe, which runs the flang on PATH.
 fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     const b = ctx.b;
     const toolchain_dir: std.Build.InstallDir = ctx.rhomeInstallDir("bin/toolchain");
@@ -1759,13 +1759,17 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     // (@LDFLAGS@), unlike an earlier bare "LDFLAGS =" substring replace
     // that also matched DYLIB_LDFLAGS, SHLIB_LDFLAGS and ten more.
     try mk.put("LDFLAGS", "");
-    // FC: the bare name, found on PATH like every other tool (an activated
-    // env has Library/bin there; compiling needs one anyway). Not a copy
-    // into bin/toolchain: the flang and gfortran drivers find their own
-    // pieces (flang.cfg and its intrinsic modules; gfortran's f951)
-    // relative to where they are installed.
+    // FC: rzig's zig-fc.exe (installRzig; MSYS make and sh find it by the
+    // name without .exe), as on unix (F3c): it runs the flang on PATH (an
+    // activated env has Library/bin there) and links a USE_FC_TO_LINK
+    // package through zig with the static runtime and libc++. flang
+    // itself is not copied into bin/toolchain: the flang and gfortran
+    // drivers find their own pieces (flang.cfg and its intrinsic modules;
+    // gfortran's f951) relative to where they are installed. Fortran that
+    // calls into R under USE_FC_TO_LINK needs $(LIBR) in PKG_LIBS
+    // (install.R drops it from that link), as with upstream's gfortran.
     try mk.put("FC", switch (ctx.fc) {
-        .flang => "flang",
+        .flang => "$(R_HOME)/bin/toolchain/zig-fc",
         .gfortran => "gfortran",
     });
     // FLIBS: what R CMD SHLIB appends to every package link that has
@@ -2305,9 +2309,11 @@ fn winCmdFrontend(ctx: *Ctx, libR: *std.Build.Step.Compile, rgraphapp: *std.Buil
 /// the name it was started as. The r-zig-toolchain packages own this
 /// directory; the compile preflight (zigbuild/patches/, install.R) looks
 /// for its zig-cc on every OS.
-///   unix:    zig-cc, zig-cxx (CC/CXX/OBJC/OBJCXX), zig-ar, zig-ranlib
+///   unix:    zig-cc, zig-cxx (CC/CXX/OBJC/OBJCXX), zig-fc (FC), zig-ar,
+///            zig-ranlib
 ///   Windows: gcc.exe, g++.exe (Makeconf.win's $(BINPREF)gcc and g++),
-///            and zig-cc, zig-cxx for the preflight. A real PE executable
+///            zig-fc.exe (FC, which names it without .exe), and zig-cc,
+///            zig-cxx for the preflight. A real PE executable
 ///            is what R's Windows system() can run: it resolves a bare
 ///            command name by appending ".exe" only, never through
 ///            PATHEXT (found on kappa: `system("gcc --version")` reached an
@@ -2320,8 +2326,8 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
     const b = ctx.b;
     const step = b.step("install-rzig", "Install rzig into R_HOME/bin/toolchain");
     const names: []const []const u8 = switch (ctx.os) {
-        .windows => &.{ "gcc.exe", "g++.exe", "zig-cc", "zig-cxx" },
-        else => &.{ "zig-cc", "zig-cxx", "zig-ar", "zig-ranlib" },
+        .windows => &.{ "gcc.exe", "g++.exe", "zig-fc.exe", "zig-cc", "zig-cxx" },
+        else => &.{ "zig-cc", "zig-cxx", "zig-fc", "zig-ar", "zig-ranlib" },
     };
     for (names) |n| {
         step.dependOn(&b.addInstallFileWithDir(ctx.rzig, ctx.rhomeInstallDir("bin/toolchain"), n).step);
@@ -2587,7 +2593,7 @@ fn fortranOne(ctx: *const Ctx, dir: []const u8, file: []const u8, mod_deps: []co
     // 26.0 on a macOS 26 machine) unless given the floor, and zig's link
     // relabels them 13.0 without a word. The flag rather than
     // MACOSX_DEPLOYMENT_TARGET: flang lets the flag win over the variable.
-    if (ctx.os == .macos and fc == .flang) run.addArg(macos_min_flag);
+    if (ctx.os == .macos and fc == .flang) run.addArg(floors.macos_min_flag);
     // gfortran on Linux: never emit glibc libmvec vector-math calls.
     // gfortran's driver auto-adds `-fpre-include=<sysroot>/usr/include/
     // finclude/math-vector-fortran.h` whenever the sysroot's glibc is new

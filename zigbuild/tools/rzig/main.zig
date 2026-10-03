@@ -6,14 +6,18 @@
 //!
 //!   zig-cc, gcc       zig cc   with the shims' argument rewriting
 //!   zig-cxx, g++      zig c++  likewise
+//!   zig-fc            flang    (macOS: the floor); a shared link of
+//!                              objects: zig cc as zig-cc, plus the
+//!                              static Fortran runtime (F3c, fortran.zig)
 //!   zig-ar            zig ar   (macOS: seeds a missing archive)
 //!   zig-ranlib        zig ranlib
 //!   rzig <name> ...   the same, naming the tool explicitly
 //!
 //! build.zig installs it under those names into R_HOME/bin/toolchain, the
 //! directory Makeconf names (Windows: gcc.exe and g++.exe, Makeconf.win's
-//! $(BINPREF)gcc and g++). On unix rzig replaces itself with zig (execve);
-//! on Windows it runs zig and exits with its exit code.
+//! $(BINPREF)gcc and g++, and zig-fc.exe, its FC). On unix rzig replaces
+//! itself with the program it runs, zig or flang (execve); on Windows it
+//! runs it and exits with its exit code.
 //!
 //! The compilers own the compile environment (F3b): zig-cc and zig-cxx
 //! add the include/ and lib/ (and, for a conda env on unix, an rpath into
@@ -50,6 +54,7 @@ const mem = std.mem;
 const Io = std.Io;
 const Ctx = @import("Ctx.zig");
 const compiler = @import("compiler.zig");
+const fortran = @import("fortran.zig");
 const ar = @import("ar.zig");
 const find_zig = @import("find_zig.zig");
 const environment = @import("environment.zig");
@@ -58,23 +63,26 @@ const libcxx_mirror = @import("libcxx_mirror.zig");
 const Tool = enum {
     cc,
     cxx,
+    fc,
     ar,
     ranlib,
 
     fn fromName(name: []const u8) ?Tool {
         const map = std.StaticStringMap(Tool).initComptime(.{
-            .{ "zig-cc", .cc },   .{ "gcc", .cc },
-            .{ "zig-cxx", .cxx }, .{ "g++", .cxx },
-            .{ "zig-ar", .ar },   .{ "zig-ranlib", .ranlib },
+            .{ "zig-cc", .cc },         .{ "gcc", .cc },
+            .{ "zig-cxx", .cxx },       .{ "g++", .cxx },
+            .{ "zig-fc", .fc },         .{ "zig-ar", .ar },
+            .{ "zig-ranlib", .ranlib },
         });
         return map.get(name);
     }
 
-    /// The shim it stands for, in messages.
+    /// The shim it stands for, in messages (zig-fc has no bash shim).
     fn shimName(t: Tool) []const u8 {
         return switch (t) {
             .cc => "zig-cc",
             .cxx => "zig-cxx",
+            .fc => "zig-fc",
             .ar => "zig-ar",
             .ranlib => "zig-ranlib",
         };
@@ -82,7 +90,7 @@ const Tool = enum {
 };
 
 const usage =
-    \\usage: zig-cc|zig-cxx|zig-ar|zig-ranlib|gcc|g++ [args...]
+    \\usage: zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib|gcc|g++ [args...]
     \\       rzig <one of those names> [args...]
     \\
 ;
@@ -126,18 +134,28 @@ pub fn main(init: std.process.Init) !u8 {
         if (env.get("RZIG_XCRUN")) |v| ctx.xcrun = v;
     }
 
-    const zig = try find_zig.find(&ctx);
     const caller = args[1..];
-    var env_changed = false;
-    const zig_args = switch (t) {
-        .cc, .cxx => cc: {
-            if (ctx.os != .windows) env_changed = try libcxx_mirror.apply(&ctx, zig[0]);
-            break :cc try compiler.argv(&ctx, if (t == .cc) .c else .cxx, caller);
+    const cmd: Ctx.Command = switch (t) {
+        .cc, .cxx => .{ .zig = try compiler.argv(&ctx, if (t == .cc) .c else .cxx, caller) },
+        // no flang: 127, as a shell gives for a command it cannot find
+        .fc => fortran.command(&ctx, caller) catch |err| switch (err) {
+            error.NoFlang => return 127,
+            else => |e| return e,
         },
-        .ar => try ar.argv(&ctx, caller),
-        .ranlib => try mem.concat(arena, []const u8, &.{ &.{"ranlib"}, caller }),
+        .ar => .{ .zig = try ar.argv(&ctx, caller) },
+        .ranlib => .{ .zig = try mem.concat(arena, []const u8, &.{ &.{"ranlib"}, caller }) },
     };
-    const argv = try mem.concat(arena, []const u8, &.{ zig, zig_args });
+    // zig, when the command is zig's: found, and for a compile or link
+    // the libc++ mirror prepared (a flang command needs neither)
+    var env_changed = false;
+    const argv = switch (cmd) {
+        .program => |p| p,
+        .zig => |zig_args| zig: {
+            const zig = try find_zig.find(&ctx);
+            if ((t == .cc or t == .cxx or t == .fc) and ctx.os != .windows) env_changed = try libcxx_mirror.apply(&ctx, zig[0]);
+            break :zig try mem.concat(arena, []const u8, &.{ zig, zig_args });
+        },
+    };
 
     if (dry_run) return printArgv(io, env, argv);
     if (isSet(env, "RZIG_TRACE")) {
@@ -233,10 +251,10 @@ fn printArgv(io: Io, env: *const std.process.Environ.Map, argv: []const []const 
 /// found, 126 found but not runnable.
 fn run(ctx: *Ctx, argv: []const []const u8, env: ?*const std.process.Environ.Map) u8 {
     if (builtin.os.tag == .windows) {
-        // No exec on Windows: run zig with our standard handles and pass
-        // its exit code on, as the forwarder did. The command line is
-        // quoted by std (Microsoft's argv rules), so arguments with
-        // embedded quotes, -DX='"a.h"', arrive intact (F7.7).
+        // No exec on Windows: run zig (or flang) with our standard handles
+        // and pass its exit code on, as the forwarder did. The command
+        // line is quoted by std (Microsoft's argv rules), so arguments
+        // with embedded quotes, -DX='"a.h"', arrive intact (F7.7).
         var child = std.process.spawn(ctx.io, .{ .argv = argv, .environ_map = env }) catch |err| return cannotRun(ctx, argv[0], err);
         const term = child.wait(ctx.io) catch |err| {
             ctx.warn("waiting for {s}: {t}", .{ argv[0], err });
@@ -269,8 +287,11 @@ test toolName {
     // every name build.zig installs (installRzig)
     for ([_][]const u8{ "zig-cc", "gcc.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .cc);
     for ([_][]const u8{ "zig-cxx", "g++.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .cxx);
+    for ([_][]const u8{ "zig-fc", "zig-fc.exe", "C:/env/Library/lib/R/bin/toolchain/zig-fc.EXE" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .fc);
     try std.testing.expect(Tool.fromName(toolName("zig-ar")) == .ar);
     try std.testing.expect(Tool.fromName(toolName("zig-ranlib")) == .ranlib);
+    // no other Fortran name: FC is zig-fc, flang and gfortran stay themselves
+    for ([_][]const u8{ "flang", "gfortran.exe", "zig-f77" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == null);
 }
 
 test shellCommand {
@@ -286,6 +307,7 @@ test {
     _ = @import("environment.zig");
     _ = @import("flang_rt.zig");
     _ = compiler;
+    _ = fortran;
     _ = ar;
     _ = find_zig;
     _ = libcxx_mirror;

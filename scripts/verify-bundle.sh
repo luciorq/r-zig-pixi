@@ -51,11 +51,12 @@ fi
 BUNDLE_DIR="$VERIFY_DIR/$(basename "$PREFIX")"
 
 # The compilers Makeconf names are rzig (feat-no-host-paths F3), one
-# binary under every name: compiling runs no shell script of ours.
+# binary under every name: compiling runs no shell script of ours. FC is
+# rzig's zig-fc (F3c).
 if [ "$OS" = windows ]; then
-  tc_dir="Library/lib/R/bin/toolchain"; tc_names="gcc.exe g++.exe zig-cc zig-cxx"
+  tc_dir="Library/lib/R/bin/toolchain"; tc_names="gcc.exe g++.exe zig-fc.exe zig-cc zig-cxx"
 else
-  tc_dir="lib/R/bin/toolchain"; tc_names="zig-cc zig-cxx zig-ar zig-ranlib"
+  tc_dir="lib/R/bin/toolchain"; tc_names="zig-cc zig-cxx zig-fc zig-ar zig-ranlib"
 fi
 for t in $tc_names; do
   f="$BUNDLE_DIR/$tc_dir/$t"
@@ -95,7 +96,8 @@ echo "== standalone bundle verified relocatable ($OS/$FLAVOR)"
 # the environment as $(R_HOME)/../.., FLIBS as -lflang_rt.runtime and no
 # rpath, and nothing edits the file afterwards. Comment lines count.
 # CPPFLAGS and LDFLAGS are empty (F3b): the compilers, rzig, add the
-# environment's -I and -L (and a conda env's rpath) themselves.
+# environment's -I and -L (and a conda env's rpath) themselves. FC is
+# rzig's zig-fc (F3c), which runs the flang on PATH.
 if [ "$OS" = windows ]; then mk="$BUNDLE_DIR/Library/lib/R/etc/x64/Makeconf"; else mk="$BUNDLE_DIR/lib/R/etc/Makeconf"; fi
 bad=""
 # Windows: ROOT is env.sh's /c/... form; PIXI_PROJECT_ROOT is the native
@@ -108,6 +110,8 @@ for p in "$ROOT" "${PIXI_PROJECT_ROOT:-}" "${CONDA_PREFIX:-}"; do
 done
 if grep -q -- '-rpath' "$mk"; then bad="$bad -rpath"; fi
 grep -q '^FLIBS = .*-lflang_rt\.runtime' "$mk" || bad="$bad FLIBS"
+# (on Windows inside the template's USE_LLVM else branch, indented)
+grep -Eq '^ *FC = \$\(R_HOME\)/bin/toolchain/zig-fc *'$'\r''?$' "$mk" || bad="$bad FC-not-zig-fc"
 for v in CPPFLAGS LDFLAGS; do
   # (the x64 Makeconf has CRLF line ends)
   grep -Eq "^$v = *"$'\r'"?\$" "$mk" || bad="$bad $v-not-empty"
@@ -117,7 +121,7 @@ if [ -n "$bad" ]; then
   echo "error: ${mk#$BUNDLE_DIR/} names build paths or lacks the relative forms:$bad" >&2
   exit 1
 fi
-echo "== Makeconf verified: no build path, no rpath, CPPFLAGS and LDFLAGS empty, FLIBS = -lflang_rt.runtime"
+echo "== Makeconf verified: no build path, no rpath, CPPFLAGS and LDFLAGS empty, FLIBS = -lflang_rt.runtime, FC = zig-fc"
 
 # Windows: what rzig (gcc.exe) adds for the environment it is installed in
 # (F3b): -L<prefix>/Library/lib on a link, no rpath, and nothing from a
@@ -135,6 +139,20 @@ if [ "$OS" = windows ]; then
     exit 1
   fi
   echo "== compilers' environment verified (dry run): -L<prefix>/Library/lib, no rpath, CONDA_PREFIX ignored"
+  # zig-fc.exe (F3c): a shared link of objects (USE_FC_TO_LINK) goes
+  # through zig as gcc.exe's does, with the static runtime of the flang on
+  # PATH and libc++ appended.
+  if command -v flang > /dev/null 2>&1; then
+    argv="$(RZIG_PRINT_ARGV=1 "$BUNDLE_DIR/Library/lib/R/bin/toolchain/zig-fc.exe" -shared -o x.dll a.o)"
+    if ! printf '%s\n' "$argv" | grep -qi -- '/libflang_rt\.runtime\.a$' ||
+       ! printf '%s\n' "$argv" | grep -qxF -- '-lc++' ||
+       ! printf '%s\n' "$argv" | grep -qi -- "^-L.*/$(basename "$BUNDLE_DIR")/Library/lib\$"; then
+      printf '%s\n' "$argv" >&2
+      echo "error: zig-fc.exe's shared link lacks the static flang runtime, -lc++ or -L<prefix>/Library/lib" >&2
+      exit 1
+    fi
+    echo "== zig-fc.exe verified (dry run): a shared link goes through zig with the static flang runtime and -lc++"
+  fi
 fi
 
 # TLS trust (unix): the bundle must verify HTTPS without the build env's
@@ -467,6 +485,49 @@ FORTRAN
       (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
         "$R_BIN" --vanilla --no-echo -e 'dyn.load("fs.so"); stopifnot(.Fortran("fsum", 3L, c(1, 2, 3), s = 0)$s == 6, .Fortran("fw", 42L, r = 0L)$r == 42L)')
       echo "== compiled package verified: static flang runtime, loads (Fortran)"
+
+      # USE_FC_TO_LINK (F3c): R links with SHLIB_FCLD = $(FC), rzig's
+      # zig-fc, and takes $(FLIBS) off the line. zig-fc links objects
+      # through zig, as zig-cc does, with the static runtime of the flang on
+      # PATH (flang's own driver: "cannot find -lflang_rt.runtime"): no
+      # shared runtime, no rpath, the macOS floor, and it loads.
+      mkdir -p "$pkg_dir/fl"
+      cp "$pkg_dir/fs.f" "$pkg_dir/fl/fl.f"
+      echo 'USE_FC_TO_LINK =' > "$pkg_dir/fl/Makevars"
+      (cd "$pkg_dir/fl" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+        "$R_BIN" CMD SHLIB -o fl.so fl.f > shlib.log 2>&1) || { cat "$pkg_dir/fl/shlib.log" >&2; echo "error: a USE_FC_TO_LINK Fortran package failed to link with the bundle" >&2; exit 1; }
+      grep -Eq 'toolchain/zig-fc (-shared|-dynamiclib) .*-o fl\.so' "$pkg_dir/fl/shlib.log" || { cat "$pkg_dir/fl/shlib.log" >&2; echo "error: the USE_FC_TO_LINK link did not run zig-fc" >&2; exit 1; }
+      check_minos "$pkg_dir/fl/fl.o" "$pkg_dir/fl/fl.so"
+      if [ "$OS" = linux ]; then
+        f_dep="$(patchelf --print-needed "$pkg_dir/fl/fl.so" | grep flang_rt || true)"
+      else
+        f_dep="$(otool -L "$pkg_dir/fl/fl.so" | grep flang_rt || true)"
+      fi
+      fl_rp="$(rpaths_of "$pkg_dir/fl/fl.so" | tr '\n' ' ')"
+      if [ -n "$f_dep" ] || [ -n "$fl_rp" ]; then
+        echo "error: the USE_FC_TO_LINK package needs a shared flang runtime ($f_dep) or records rpaths ($fl_rp)" >&2
+        exit 1
+      fi
+      (cd "$pkg_dir/fl" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
+        "$R_BIN" --vanilla --no-echo -e 'dyn.load("fl.so"); stopifnot(.Fortran("fsum", 3L, c(1, 2, 3), s = 0)$s == 6, .Fortran("fw", 42L, r = 0L)$r == 42L)')
+      echo "== compiled package verified: USE_FC_TO_LINK links through zig-fc, static flang runtime, no rpath, loads (Fortran)"
+    fi
+
+    # FC names zig-fc whether or not a flang is installed: with none on
+    # PATH, a Fortran compile stops at once with exit 127 and a message
+    # naming flang as the remedy (never R_ZIG_TOOLCHAIN_HINT: zig-fc ships
+    # in the toolchain, so installing the toolchain cannot be the fix).
+    if ! [ -x /usr/bin/flang ] && ! [ -x /bin/flang ]; then
+      printf '      end\n' > "$pkg_dir/nofc.f"
+      rc=0
+      (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
+        "$BUNDLE_DIR/lib/R/bin/toolchain/zig-fc" -c nofc.f -o nofc.o > nofc.log 2>&1) || rc=$?
+      if [ "$rc" != 127 ] || ! grep -q '^zig-fc: no flang on PATH' "$pkg_dir/nofc.log"; then
+        cat "$pkg_dir/nofc.log" >&2
+        echo "error: zig-fc with no flang on PATH: exit $rc, or no message naming flang" >&2
+        exit 1
+      fi
+      echo "== zig-fc with no flang on PATH: exit 127, '$(head -1 "$pkg_dir/nofc.log")'"
     fi
 
     # $(FLIBS) on a C package's link (CRAN's usual PKG_LIBS = $(LAPACK_LIBS)

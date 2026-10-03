@@ -14,6 +14,13 @@ pub const glibc: std.SemanticVersion = .{ .major = 2, .minor = 17, .patch = 0 };
 /// 0.16's own supported floor; ziglang, the wheel's compiler, needs 12.
 pub const macos: std.SemanticVersion = .{ .major = 13, .minor = 0, .patch = 0 };
 
+/// The macOS floor as flang spells it. flang stamps its objects with the
+/// host SDK's version otherwise (minos 26.0 on a macOS 26 machine), which a
+/// zig link relabels without a word: zig-fc puts it before the caller's
+/// arguments (fortran.zig), and the repo's build.zig passes it on R's own
+/// Fortran.
+pub const macos_min_flag = "-mmacosx-version-min=" ++ majorMinor(macos);
+
 /// "MAJOR.MINOR", as zig's target triples and `-mmacosx-version-min` take it.
 pub fn majorMinor(comptime v: std.SemanticVersion) []const u8 {
     return std.fmt.comptimePrint("{d}.{d}", .{ v.major, v.minor });

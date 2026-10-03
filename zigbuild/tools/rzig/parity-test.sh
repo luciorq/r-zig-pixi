@@ -33,6 +33,8 @@
 #   - what a case's CASE_DELIBERATE sed script does to the bash side, with
 #     CASE_WHY: F3b's other differences (rzig never reads CONDA_PREFIX; the
 #     tree's headers on every call, -idirafter on Windows), and two more.
+# zig-fc (F3c) has no bash shim to compare with: fortran.zig's unit tests
+# cover it.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)

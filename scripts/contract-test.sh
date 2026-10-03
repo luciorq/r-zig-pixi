@@ -96,12 +96,13 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   stopifnot(max(abs(fit$par - c(3, 3))) < 1e-4)
   # quadprog: a *pure-Fortran* package (no C/C++ sources at all) — the one
   # shape minqa cannot cover, since its C++ sends the link through
-  # SHLIB_CXXLD. Here R CMD SHLIB compiles every file with $(FC) (flang on
-  # every platform since Phase 2) and links through SHLIB_LD, the zig-cc
-  # of rzig (gcc.exe on Windows), with $(FLIBS) appended — the resolved-at-build-time flang
-  # runtime dir, the runtime archive/dylib, and on Windows libc++. (R
-  # only links via the Fortran driver itself when a package opts in with
-  # USE_FC_TO_LINK in Makevars; that path is not exercised here.)
+  # SHLIB_CXXLD. Here R CMD SHLIB compiles every file with $(FC), the
+  # zig-fc of rzig (F3c: the flang on PATH, on every platform since Phase 2),
+  # and links through SHLIB_LD, the zig-cc of rzig (gcc.exe on Windows),
+  # with $(FLIBS) appended — -lflang_rt.runtime, which rzig resolves to
+  # the static runtime archive, and on Windows libc++. (R only links via
+  # $(FC) itself when a package opts in with USE_FC_TO_LINK in Makevars;
+  # verify-bundle.sh and the recipe test build such a package.)
   # minimize (1/2) t(x) D x - t(d) x subject to x >= 0, with D = 2I and
   # d = (2, 6): the solution is x = (1, 3). (No apostrophes in this R
   # program: it sits inside a single-quoted shell string.)
@@ -127,20 +128,25 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   # Makeconf names no build path and no environment (feat-no-host-paths
   # F1.5, F3b): FLIBS is the bare runtime rzig resolves, CPPFLAGS and
   # LDFLAGS are empty (the compilers, rzig, add the environment -I, -L and
-  # conda rpath), and CC is rzig. --no-user-files: the shipped Makeconf
+  # conda rpath), CC is rzig, and FC its zig-fc (F3c; zig-fc.exe on
+  # Windows, named without .exe). --no-user-files: the shipped Makeconf
   # alone, whatever personal Makevars this machine has.
   cfg <- function(v) tools::Rcmd(c("config", "--no-user-files", v), stdout = TRUE)
   cc1 <- strsplit(trimws(cfg("CC")), " +")[[1]][1]
+  fc1 <- strsplit(trimws(cfg("FC")), " +")[[1]][1]
   stopifnot(grepl("-lflang_rt.runtime", cfg("FLIBS"), fixed = TRUE),
             !grepl("libflang_rt", cfg("FLIBS"), fixed = TRUE),
             identical(trimws(cfg("CPPFLAGS")), ""),
             identical(trimws(cfg("LDFLAGS")), ""),
             basename(dirname(cc1)) == "toolchain",
-            sub(".exe$", "", basename(cc1)) %in% c("zig-cc", "gcc"))
+            sub(".exe$", "", basename(cc1)) %in% c("zig-cc", "gcc"),
+            basename(dirname(fc1)) == "toolchain",
+            sub(".exe$", "", basename(fc1)) == "zig-fc")
   cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
   cat("data.table grouped aggregation: OK\n")
   cat("minqa (Rcpp-dependent + package Fortran) bobyqa: OK\n")
-  cat("quadprog (pure Fortran: flang compile, FLIBS link through rzig) solve.QP: OK\n")
+  cat("quadprog (pure Fortran: zig-fc compile, FLIBS link through rzig) solve.QP: OK\n")
+  cat("R CMD config FC:", fc1, "OK\n")
   cat("pak (recursive R.exe invocation + mbedtls quoted -D flags): OK\n")
   cat("ps (process introspection", if (ps::ps_os_type()[["MACOS"]]) "+ apps.m Objective-C ps_apps()" else "", "): OK\n")
 '

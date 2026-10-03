@@ -429,6 +429,43 @@ workarounds into code.** In order:
         build, contract, verify-package); win-64 on kappa (unit tests,
         verify-package with the dry run, contract, hermetic, ps's px.exe
         and interrupt.exe installed, the conda package and its tests).
+  - **F3c done 2026-10-02: zig-fc, Fortran in the toolchain** (decided
+    in F3b's design round; implemented by a workflow: an implementer in a
+    worktree, three review lenses, a skeptic each, a fix pass).
+    Makeconf's `FC` is `$(R_HOME)/bin/toolchain/zig-fc` on every OS
+    (Windows: zig-fc.exe, which MSYS make and sh find without the
+    extension); the macOS floor left Makeconf for floors.zig. zig-fc
+    (zigbuild/tools/rzig/fortran.zig) is another rzig applet:
+    - compiles and everything else (`-E`, `--version`, configure's mixed
+      source-and-link probes) run the flang on PATH with the caller's
+      arguments, on macOS after `-mmacosx-version-min=13.0`;
+    - a shared link of objects (`-shared`/`-dynamiclib`, no source among
+      the inputs: R's `USE_FC_TO_LINK`, where `SHLIB_FCLD = $(FC)` and
+      install.R drops `$(FLIBS)`) runs zig exactly as zig-cc does
+      (floors, SDK, soname, the environment's `-L`/rpath, OpenMP,
+      Windows import libraries) with `-lflang_rt.runtime -lm` (Windows
+      `-lc++`) appended, resolved to the static runtime archive. Before,
+      that link went through flang's own driver and failed in every
+      distribution ("cannot find -lflang_rt.runtime", measured);
+    - with no flang on PATH it exits 127 with a fixed message (an LLVM
+      flang is needed; r-zig-toolchain brings one in a conda env, the
+      wheels and the standalone tree bring none). Not the toolchain
+      hint: zig-fc ships inside the toolchain package it would name.
+    Fortran compiles still get no environment `-I` (Makeconf's Fortran
+    rules never used CPPFLAGS); executable links of Fortran (configure
+    probes) still go through flang's driver. Under `USE_FC_TO_LINK` on
+    Windows, Fortran code calling R needs `$(LIBR)` in PKG_LIBS, as with
+    upstream gfortran. R's own Fortran build (fortranOne) keeps calling
+    flang directly with the floor from floors.zig.
+    Tested 2026-10-02: linux-64 (rzig unit tests 41, slim build,
+    smoke, contract, verify-package with a new `USE_FC_TO_LINK` package
+    and zig-fc's no-flang exit, hermetic, minimal, the wheel and
+    wheel-test, the conda package and its tests); osx-arm64 (the same,
+    and rattler-build relinked zig-fc fine); osx-64 under Rosetta
+    (unit tests, build, contract, verify-package); win-64 on kappa (unit
+    tests, verify-package with a zig-fc.exe dry run, contract with
+    quadprog and minqa through zig-fc, hermetic, the conda package with
+    its `USE_FC_TO_LINK` package).
   - **Later (not urgent; test carefully first): the toolchain in an
     environment of its own** (asked 2026-10-02). rzig itself is small
     (300-600 KB) and could ship with R; the heavy part, zig and flang

@@ -1,10 +1,11 @@
-//! zig-cc and zig-cxx (gcc.exe and g++.exe on Windows): what the bash
-//! shims did to the caller's arguments, in their order, and the flags of
-//! the environments a package compiles against (environment.zig), which
-//! Makeconf's CPPFLAGS and LDFLAGS carried before F3b. The steps every OS
-//! shares are here; the macOS and Windows ones are darwin.zig and
-//! windows.zig, the Fortran runtime flang_rt.zig. Every other step works
-//! around a zig or conda-forge quirk; the comments say which.
+//! zig-cc and zig-cxx (gcc.exe and g++.exe on Windows), and zig-fc's
+//! shared links (fortran.zig): what the bash shims did to the caller's
+//! arguments, in their order, and the flags of the environments a package
+//! compiles against (environment.zig), which Makeconf's CPPFLAGS and
+//! LDFLAGS carried before F3b. The steps every OS shares are here; the
+//! macOS and Windows ones are darwin.zig and windows.zig, the Fortran
+//! runtime flang_rt.zig. Every other step works around a zig or
+//! conda-forge quirk; the comments say which.
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;

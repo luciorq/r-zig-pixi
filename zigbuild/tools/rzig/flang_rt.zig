@@ -1,6 +1,7 @@
 //! The Fortran runtime. Makeconf's FLIBS says -lflang_rt.runtime
-//! (feat-no-host-paths F1.5); link the static archive of the flang on
-//! PATH, the compiler FC runs, wherever its LLVM keeps it (<resource
+//! (feat-no-host-paths F1.5), and zig-fc's shared links add it
+//! (fortran.zig); link the static archive of the flang on PATH, the
+//! compiler zig-fc runs, wherever its LLVM keeps it (<resource
 //! dir>/lib/<triple>/): never a shared runtime, which would need an rpath
 //! into the environment at load time (conda-forge's linux-64 flang-rt
 //! ships one next to the archive), and not tied to the LLVM major R was
@@ -17,7 +18,7 @@ const cmdline = @import("cmdline.zig");
 const find_zig = @import("find_zig.zig");
 const Args = cmdline.Args;
 
-const flag = "-lflang_rt.runtime";
+pub const flag = "-lflang_rt.runtime";
 const archive = "libflang_rt.runtime.a";
 
 /// `args` with the first -lflang_rt.runtime replaced by the archive (or
@@ -38,11 +39,17 @@ pub fn resolve(ctx: *Ctx, args: Args) !Args {
     return out.items;
 }
 
+/// The flang on PATH (`command -v flang`): what zig-fc runs, and whose
+/// runtime every link resolved here uses.
+pub fn flang(ctx: *Ctx) !?[]const u8 {
+    return find_zig.onPath(ctx, "flang");
+}
+
 /// <flang -print-resource-dir>/lib/*/libflang_rt.runtime.a, the first in
 /// glob order that is a file.
 fn find(ctx: *Ctx) !?[]const u8 {
-    const flang = (try find_zig.onPath(ctx, "flang")) orelse return null;
-    const res = ctx.capture(&.{ flang, "-print-resource-dir" });
+    const fc = (try flang(ctx)) orelse return null;
+    const res = ctx.capture(&.{ fc, "-print-resource-dir" });
     if (!res.ok or res.stdout.len == 0) return null;
     // a Windows flang's answer: CRLF and backslashes
     var dir = res.stdout;

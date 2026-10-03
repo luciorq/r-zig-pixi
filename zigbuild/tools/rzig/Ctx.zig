@@ -81,6 +81,14 @@ pub fn warn(ctx: *const Ctx, comptime f: []const u8, args: anytype) void {
     std.debug.print("{s}: " ++ f ++ "\n", .{ctx.name} ++ args);
 }
 
+/// What an applet runs: zig, with these arguments after its own path
+/// (main.zig finds zig, and for the compilers prepares the libc++ mirror),
+/// or another program, a whole command (zig-fc's flang).
+pub const Command = union(enum) {
+    zig: []const []const u8,
+    program: []const []const u8,
+};
+
 pub const Output = struct {
     /// It ran and exited 0.
     ok: bool,

@@ -7,6 +7,9 @@
 #     R CMD INSTALL of a package with compiled code stops with the compile
 #     preflight naming r-zig-toolchain (phase T of feat-no-host-paths)
 #   - then r-zig-toolchain (which brings ziglang and GNU make):
+#   - zig-fc (FC) is shipped, and with no flang it stops with exit 127 and
+#     a message naming flang's remedy, not the toolchain hint (the toolchain
+#     is installed by then), feat-no-host-paths F3c
 #   - R CMD INSTALL of a small package with C and C++ sources that calls
 #     BLAS through CRAN's usual `$(BLAS_LIBS) $(FLIBS)` — compiled by the
 #     PyPI ziglang package and built by the bundled GNU make, three times:
@@ -140,6 +143,28 @@ run Rscript -e '
   stopifnot(file.exists(mk), grepl("bin/toolchain/make$", mk))
   cat("MAKE =", mk, "\n")
 '
+
+echo "== zig-fc: shipped, and with no flang it stops naming flang"
+# FC is the toolchain's zig-fc (feat-no-host-paths F3c), shipped like
+# zig-cc. Neither wheel brings a Fortran compiler, so here a Fortran
+# compile stops at once: exit 127, with a message naming LLVM flang as the
+# remedy. Not R_ZIG_TOOLCHAIN_HINT (etc/Renviron, which R CMD applies):
+# its "pip install r-zig-toolchain" is already done once zig-fc exists.
+# C packages build as before.
+tc="$r_home/bin/toolchain"
+cmp -s "$tc/zig-fc" "$tc/zig-cc" || { echo "error: $tc/zig-fc is missing or not the same rzig as zig-cc" >&2; exit 1; }
+if [ -x /usr/bin/flang ] || [ -x /bin/flang ]; then
+  echo "note: this machine has a flang in /usr/bin; zig-fc's no-flang message not exercised"
+else
+  printf '      end\n' > "$T/nofc.f"
+  rc=0
+  (cd "$T" && run "$r_home/bin/R" CMD toolchain/zig-fc -c nofc.f -o nofc.o) > "$T/nofc.log" 2>&1 || rc=$?
+  if [ "$rc" != 127 ] || ! grep '^zig-fc: no flang on PATH' "$T/nofc.log" | grep -qF "install LLVM flang" ||
+    grep -qF "pip install r-zig-toolchain" "$T/nofc.log"; then
+    cat "$T/nofc.log" >&2; echo "error: zig-fc with no flang: exit $rc, or no message naming LLVM flang (or one still naming the installed toolchain)" >&2; exit 1
+  fi
+  echo "ok: exit 127: $(cat "$T/nofc.log")"
+fi
 
 echo "== R CMD INSTALL via the console script (ZIG_BIN from import ziglang)"
 run R CMD INSTALL --preclean -l "$T/lib1" "$P"

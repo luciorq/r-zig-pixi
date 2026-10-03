@@ -93,7 +93,9 @@ ziglang is an upstream zig build, which links its own libc++ statically,
 so compiled C++ packages need no C++ runtime; a zig from a conda
 environment on PATH links conda's shared libc++ on macOS instead. Linux
 wheels are `manylinux2014` (glibc 2.17). Packages with Fortran sources need
-a Fortran compiler, which neither the wheel nor ziglang provides.
+a Fortran compiler, which neither the wheel nor ziglang provides: R's FC,
+the toolchain's `zig-fc`, runs an LLVM `flang` found on PATH and stops
+with a message when there is none.
 Details: `.github/devdocs/feat-wheel-minimal/PLAN.md`.
 
 ### Older Linux HPC servers

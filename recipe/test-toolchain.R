@@ -123,16 +123,34 @@ if (!windows) {
     stopifnot(identical(rp, paste0(envdir, "/lib")))
     cat("toolchain: rzigz.so's rpath is this env's lib: OK\n")
 
-    ## Fortran through FLIBS (-lflang_rt.runtime, resolved by rzig to the
-    ## static archive of the env's flang).
-    ## Internal formatted I/O needs the runtime (_FortranAio*): a dropped
-    ## -lflang_rt.runtime fails the package's load.
-    pf <- mkpkg("rzigf", list(file = "s.f",
-        code = c("      subroutine fw(n, r)", "      integer n, r",
-                 "      character(len=12) buf", "      write(buf,'(i0)') n",
-                 "      read(buf,'(i12)') r", "      end"),
-        R = 'f <- function(n) .Fortran("fw", as.integer(n), r = 0L)$r'))
-    install.packages(pf, repos = NULL, type = "source", lib = lib)
+}
+
+## Fortran. Internal formatted I/O needs the runtime (_FortranAio*): a
+## dropped -lflang_rt.runtime fails the package's load.
+fw <- list(file = "s.f",
+    code = c("      subroutine fw(n, r)", "      integer n, r",
+             "      character(len=12) buf", "      write(buf,'(i0)') n",
+             "      read(buf,'(i12)') r", "      end"),
+    R = 'f <- function(n) .Fortran("fw", as.integer(n), r = 0L)$r')
+if (!windows) {
+    ## through FLIBS (-lflang_rt.runtime, resolved by rzig to the static
+    ## archive of the env's flang)
+    install.packages(mkpkg("rzigf", fw), repos = NULL, type = "source", lib = lib)
     stopifnot(rzigf::f(42L) == 42L)
     cat("toolchain: Fortran package through FLIBS: OK\n")
 }
+## FC is the toolchain's zig-fc (feat-no-host-paths F3c; zig-fc.exe on
+## Windows, named without .exe), which runs the env's flang. Under
+## USE_FC_TO_LINK, R links with SHLIB_FCLD = $(FC) and leaves $(FLIBS)
+## off: zig-fc links the objects through zig, as zig-cc (gcc.exe) links,
+## with the static runtime of that flang (flang's own driver: "cannot find
+## -lflang_rt.runtime").
+fc <- strsplit(cfg("FC"), " +")[[1]][1]
+stopifnot(basename(dirname(fc)) == "toolchain", sub("[.]exe$", "", basename(fc)) == "zig-fc")
+install.packages(mkpkg("rzigfl", fw, "USE_FC_TO_LINK ="), repos = NULL, type = "source", lib = lib)
+stopifnot(rzigfl::f(42L) == 42L)
+if (!windows && Sys.info()[["sysname"]] != "Darwin" && nzchar(Sys.which("readelf"))) {
+    dyn <- system2("readelf", c("-d", shQuote(file.path(lib, "rzigfl", "libs", "rzigfl.so"))), stdout = TRUE)
+    stopifnot(!any(grepl("flang_rt", dyn, fixed = TRUE)))
+}
+cat("toolchain: FC is", fc, "and a USE_FC_TO_LINK Fortran package links and loads: OK\n")
