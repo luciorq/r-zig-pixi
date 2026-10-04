@@ -1,6 +1,6 @@
 S["LTLIBOBJS"]=""
 S["LIBS_PKGS"]="-L@ZR_CONDA@/lib -lpcre2-8 -lzstd -llzma -lbz2 -lz -lrt -ldl -lm -liconv"
-S["FC_VER"]="flang version 23.1.1 (https://github.com/conda-forge/clangdev-feedstock 262945a5823b5ab7dd4012acfcbaf228fbf53c91)"
+S["FC_VER"]="flang version 23.1.1"
 S["REC_INSTALL_OPT"]=""
 S["CC_VER"]="clang version 21.1.8 (https://github.com/conda-forge/clangdev-feedstock 334cf9a5e6c0331e9f261eaf01fc3568724fcce9)"
 S["BUILD_NEW_ACCELERATE_LAPACK_FALSE"]=""

@@ -3,9 +3,10 @@
 //! (fortran.zig); link the static archive of the flang on PATH, the
 //! compiler zig-fc runs, wherever its LLVM keeps it (<resource
 //! dir>/lib/<triple>/): never a shared runtime, which would need an rpath
-//! into the environment at load time (conda-forge's linux-64 flang-rt
-//! ships one next to the archive), and not tied to the LLVM major R was
-//! built with. Once: R CMD SHLIB repeats $(FLIBS). No flang on PATH:
+//! into the environment at load time (flang-rt-zig >= 9 ships none, but
+//! conda-forge's flang-rt and older flang-rt-zig builds have one next to
+//! the archive), and not tied to the LLVM major R was built with. Once:
+//! R CMD SHLIB repeats $(FLIBS). No flang on PATH:
 //! nothing this link has was compiled by it, so the flag goes (CRAN's
 //! usual `PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)` puts it on C and
 //! C++ links too). A flang without the archive: dropped with a warning, so

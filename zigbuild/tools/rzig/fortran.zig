@@ -12,8 +12,10 @@
 //!   and install.R takes $(FLIBS) and $(LIBR) off that link, leaving the
 //!   runtime to the Fortran driver. flang's own driver links with the
 //!   system linker and the runtime it finds there: "cannot find
-//!   -lflang_rt.runtime" in a conda env (linux-64, measured 2026-10-02),
-//!   or a shared runtime that loads only through an rpath into the env.
+//!   -lflang_rt.runtime" (conda-forge's linux-64 flang, measured
+//!   2026-10-02), or a runtime found through its config file, which also
+//!   records an absolute rpath into the env (flang-zig's flang.cfg,
+//!   `-Wl,-rpath,<CFGDIR>/../lib`; measured on linux-64 2026-10-03).
 //!   The runtime goes last, where FLIBS sits on an R CMD SHLIB link; lld
 //!   and zig's Mach-O linker resolve archives in any order anyway. R's own
 //!   library is left off too: Fortran that calls into R from such a

@@ -99,9 +99,9 @@ version_gt() {
     exit 1 }'
 }
 
-# flang where the env provides it (conda-forge's on linux-64, flang-pixi's
-# flang-zig on osx-arm64 — see pixi.toml's per-target deps), gfortran
-# elsewhere. Same probe order as build.zig's FortranCompiler selection.
+# flang where the env provides it (flang-pixi's flang-zig on every
+# platform, see pixi.toml), else gfortran. Same probe order as build.zig's
+# FortranCompiler selection.
 fortran_compiler() {
   if command -v flang >/dev/null 2>&1; then echo flang
   elif command -v flang-new >/dev/null 2>&1; then echo flang-new

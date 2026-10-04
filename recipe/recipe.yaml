@@ -115,7 +115,8 @@ build:
   # 3 → 4 (2026-09-30): split into r-zig-slim (R) and r-zig-toolchain
   # (lib/R/bin/toolchain plus the compiler run dependencies), phase T of
   # feat-no-host-paths; libc++ static everywhere; FLIBS names the static
-  # flang runtime.
+  # flang runtime. linux-64's Fortran moved from conda-forge's flang to
+  # flang-zig (2026-10-03) before build 4 was published, so it rides here.
   number: 4
 
 outputs:
@@ -129,22 +130,14 @@ outputs:
     requirements:
       build:
         - zig 0.16.*
-        # Fortran — same per-platform split as pixi.toml: conda-forge flang on
-        # linux-64; flang-pixi's zig-built flang-zig (LLVM 23.1.1, `universe`
-        # channel — the conda-package task passes it) everywhere else: macOS
-        # (gfortran silently miscompiles R's complex LAPACK at -O2 on arm64;
-        # conda-forge has no macOS flang), win-64 (the only MinGW-ABI flang)
-        # and linux-aarch64 (no conda-forge flang). No gfortran anywhere
-        # (consolidation/PLAN.md Phase 2). build.zig picks flang whenever the
-        # build env provides $CONDA/bin/flang.
-        - if: linux64
-          then:
-            - flang
-            - flang-rt_linux-64
-        - if: not linux64
-          then:
-            - flang-zig
-            - flang-rt-zig
+        # Fortran, as pixi.toml: flang-pixi's zig-built flang-zig (LLVM
+        # 23.1.1, `universe` channel — the conda-package task passes it) on
+        # every platform; its runtime (flang-rt-zig) is static-only. No
+        # gfortran anywhere (consolidation/PLAN.md Phase 2; linux-64 left
+        # conda-forge's flang 2026-10-03). build.zig picks flang whenever
+        # the build env provides $CONDA/bin/flang.
+        - flang-zig
+        - flang-rt-zig
         - if: win
           then:
             - binutils_impl_win-64  # x86_64-w64-mingw32-nm/-dlltool for build.zig's import-stub steps
@@ -236,12 +229,7 @@ outputs:
         # Fortran runtime: linked into libR (statically for flang's
         # libflang_rt.runtime.a on every platform, see build.zig's
         # linkFortranRt), must be in host too
-        - if: linux64
-          then:
-            - flang-rt_linux-64
-        - if: not linux64
-          then:
-            - flang-rt-zig
+        - flang-rt-zig
         # build.zig copies the binutils tools (windres/ld/nm/dlltool/...) from
         # $PREFIX/Library/bin into lib/R/bin/toolchain for the package-
         # compilation contract, so they must be in *host* too (gfortran used
@@ -484,19 +472,14 @@ outputs:
         # bundled compiler front (rzig, R_HOME/bin/toolchain); these provide
         # the actual compilers. The Fortran
         # compiler must be the one R itself was built with (CRAN's own rule —
-        # module files and runtime ABI differ between flang and gfortran), so
-        # this mirrors the build: split exactly. osx-arm64's flang-zig closure
-        # is ~1.5 GiB (flang-zig + lld-zig + flang-rt-zig), the accepted cost
-        # of correct complex LAPACK at -O2 there (flang-pixi docs/11).
+        # module files and runtime ABI differ between Fortran compilers), so
+        # this mirrors the build exactly. flang-zig's closure is ~1.5 GiB
+        # (flang-zig + lld-zig + flang-rt-zig), the accepted cost of one
+        # Fortran toolchain everywhere (on osx-arm64, of correct complex
+        # LAPACK at -O2; flang-pixi docs/11).
         - zig 0.16.*
-        - if: linux64
-          then:
-            - flang
-            - flang-rt_linux-64
-        - if: not linux64
-          then:
-            - flang-zig
-            - flang-rt-zig
+        - flang-zig
+        - flang-rt-zig
         - make >=4.4
     tests:
       - script:

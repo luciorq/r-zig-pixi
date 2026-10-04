@@ -99,10 +99,10 @@ case "$VARIANT" in
   minimal)
     # The Python-wheel profile (pixi.toml's [feature.minimal]): everything
     # optional is switched off explicitly, not left to "not found" —
-    # flang's LLVM closure puts icu and llvm-openmp in the env on
-    # linux-64, and configure would happily use them. OpenMP is off
-    # because an embedded R shares its process with whatever libgomp/
-    # libomp the Python side has loaded.
+    # the toolchain's closure puts icu (conda-forge zig's LLVM, through
+    # libxml2) and llvm-openmp (flang-rt-zig) in the env, and configure
+    # would happily use them. OpenMP is off because an embedded R shares
+    # its process with whatever libgomp/libomp the Python side has loaded.
     GRAPHICS_ARGS=(--without-cairo --without-libpng)
     VARIANT_ARGS+=(
       --without-tcltk

@@ -8,9 +8,9 @@
 //!      subst.txt — the S-table dumped from a known-good config.status run;
 //!      slim and full are separate dirs since capabilities are compile-time),
 //!   2. C compiles natively through zig's Compile steps (zig cc semantics:
-//!      -fno-sanitize=undefined, -std=gnu23), Fortran through per-platform
-//!      Run steps (flang on linux, gfortran on macOS — zig has no Fortran
-//!      frontend of its own on either),
+//!      -fno-sanitize=undefined, -std=gnu23), Fortran through Run steps
+//!      (flang, flang-pixi's flang-zig on every platform — zig has no
+//!      Fortran frontend of its own),
 //!   3. the R-level base-package bootstrap (share/make/basepkg.mk logic)
 //!      runs as a sequenced chain of Run steps invoking the freshly built R.
 //!
@@ -75,11 +75,11 @@ const Os = enum { linux, macos, windows };
 /// pixi.toml (and recipe.yaml), not a build.zig platform table: whichever
 /// of the two the pixi env provides is what R gets compiled with. flang-
 /// pixi's zig-built `flang-zig` + `flang-rt-zig` (LLVM 23.1.1, published
-/// to the `universe` channel for every subdir) is being adopted platform
-/// by platform (consolidation/PLAN.md Phase 2 — osx-arm64 first, because
-/// gfortran 15/16 silently miscompiles R's complex LAPACK there at -O2);
-/// gfortran stays the fallback on each platform until that platform
-/// passes build + `check`'s lapack.R + the full contract suite at -O2.
+/// to the `universe` channel for every subdir) was adopted platform by
+/// platform (consolidation/PLAN.md Phase 2 — osx-arm64 first, because
+/// gfortran 15/16 silently miscompiles R's complex LAPACK there at -O2;
+/// linux-64, on conda-forge's flang until then, last, 2026-10-03) and is
+/// now every platform's; the gfortran branch is no platform's any more.
 /// Same probe order as scripts/env.sh's fortran_compiler().
 const FortranCompiler = enum { flang, gfortran };
 
@@ -2345,7 +2345,7 @@ fn findFlangRt(b: *std.Build, io: std.Io, conda: []const u8, os: Os) ![]const u8
             return cand;
         }
     }
-    std.debug.print("error: libflang_rt.runtime.a not found under {s}/*/lib/* — is flang-rt (flang-rt_linux-64 / flang-rt-zig) installed?\n", .{clang_root});
+    std.debug.print("error: libflang_rt.runtime.a not found under {s}/*/lib/* — is flang-rt-zig installed?\n", .{clang_root});
     return error.FlangRtNotFound;
 }
 
@@ -2636,11 +2636,10 @@ fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {
 fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
     switch (ctx.fc) {
         // flang: one runtime archive everywhere (flang-pixi docs/11
-        // contract #2), linked *statically* — that is what linux-64 has
-        // always ended up with (no DT_NEEDED on libflang_rt.runtime in
-        // libRlapack.so), now explicit so macOS, where flang-rt-zig ships
-        // a .dylib beside the .a, doesn't silently pick the dylib and hand
-        // every standalone bundle an @rpath dependency to vendor. The
+        // contract #2), linked *statically*, explicitly: flang-rt-zig
+        // >= 9 ships no shared runtime, but a flang-rt that does (older
+        // flang-rt-zig on macOS, conda-forge's) must not hand every
+        // standalone bundle an rpath dependency to vendor. The
         // runtime is C++ (docs/11 Q5): on macOS link zig's own libc++ into
         // the module so libR/libRblas/libRlapack stay self-contained
         // instead of relying on `-undefined dynamic_lookup` finding some

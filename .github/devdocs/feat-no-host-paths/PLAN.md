@@ -4,9 +4,10 @@
 below hold the detail and the reasons.
 
 Where it stands (branch feat-no-host-paths, PR open against main; pushed
-up to b4f97cc, the last code commit d233f2a "chore(ci): verify before
-package", CI green on every job, run 37123137421; F1.7 is done in the
-working tree, tested on every OS by hand, not yet committed):
+up to b4f97cc, CI green on every job through d233f2a "chore(ci): verify
+before package", run 37123137421; F1.7 committed as 23841a4 "feat: unify
+ci matrix", tested on every OS by hand; linux-64 on flang-zig is done in
+the working tree, tested on linux-64, not yet committed):
 - Phase A done on all five platforms (the hermetic tier-0/1 check runs in
   CI everywhere). Phase T done for conda and pip (`r-zig-slim` +
   `r-zig-toolchain`; `r-zig` + `r-zig-toolchain` wheels); the standalone
@@ -37,6 +38,17 @@ working tree, tested on every OS by hand, not yet committed):
   devices), linux full's tcltk.so naming the build env's libtcl, the Tcl
   script libraries missing from standalone trees, and the recipe's win-64
   solve picking tk 9 (tk is pinned to 8.6 now).
+- linux-64 on flang-zig (2026-10-03, record under Open, "Absolute
+  rpaths", after flang-rt-zig build 9): linux-64 left conda-forge's flang
+  for flang-zig + flang-rt-zig >= 9, so every subdir has one Fortran
+  toolchain and runtime model (static-only, hidden visibility,
+  `use omp_lib` works; slim/full Makeconf now has `SHLIB_OPENMP_FFLAGS =
+  -fopenmp` on linux-64 too). Fortran is one `[dependencies]` entry in
+  pixi.toml (win-64 overrides the flang-rt-zig build), no `linux64`
+  selector in the recipe; the linux-x86_64 configs were re-captured
+  (`FC_VER` "flang version 23.1.1" plus the Fortran OpenMP lines).
+  Tested on linux-64; the other platforms' locked packages are
+  unchanged.
 
 The decisions that shape the code now (each has its record below):
 - The installed tree is the shipped tree (F1, on every OS since F1.7);
@@ -70,6 +82,10 @@ What remains, in order (proposed; ask the user before starting each):
    own (F3 section).
 4. Small, open: Windows Makeconf's TCL_VERSION (86 vs conda's 86t) for
    packages that link Tcl/Tk (F1.7's record).
+5. Small: with linux-64 on flang-zig no platform uses gfortran; build.zig's
+   gfortran branch (FortranCompiler.gfortran, findGfortranLibDir, the
+   gfortran cases of linkFortranRt and the Windows Makeconf) and
+   env.sh's gfortran fallback can go.
 
 How to verify (Linux here; omicron = osx-arm64 and osx-64 via Rosetta
 in ~/rz-osx64; kappa = win-64 in C:\Users\admin\r-zig-pixi; see the
@@ -1725,10 +1741,10 @@ the same for its C++ test package.
     probe counted 871 per Fortran `.so` with build 4; libR and
     libRlapack export no `_Fortran*` either. Slim on osx-arm64 (build,
     smoke, contract, verify-package) and osx-64 (build, verify-package)
-    pass with it. The archive-path `FLIBS` stays: linux-64 uses
-    conda-forge's flang-rt, which still ships the shared library, and
-    win-64 (build 4, no build 9) was always static only. No version
-    script or export list is needed.
+    pass with it. The archive-path `FLIBS` stays: linux-64 used
+    conda-forge's flang-rt, which still ships the shared library (until
+    2026-10-03, next items), and win-64 (build 4, no build 9) was always
+    static only. No version script or export list is needed.
   - The same day flang-pixi pruned universe to its live files, and the
     lock still named deleted builds: flang-zig `_1`/`_2` and lld-zig
     `_0`/`_1` on macOS, and flang-rt-zig `_4`/`_5` in the minimal env
@@ -1744,6 +1760,101 @@ the same for its C++ test package.
     (same). A cold cache matters: zig's cache keys a Fortran compile on
     its command line and inputs, not on the flang binary, so a warm
     cache keeps objects from the previous flang (CI always starts cold).
+  - **linux-64 on flang-zig (2026-10-03).** linux-64 was the last
+    platform on conda-forge's flang (`flang` + `flang-rt_linux-64`; 22.1.8
+    in default/full/openblas/pkg, 23.1.1 in minimal), the one platform
+    whose Fortran runtime was not static-only with hidden visibility and
+    whose `use omp_lib` failed: conda-forge's llvm-openmp ships no
+    `omp_lib.mod`, so configure captured `SHLIB_OPENMP_FFLAGS` empty. It
+    now uses flang-pixi's flang-zig (`_2`) + flang-rt-zig (`_9`) + lld-zig
+    (`_1`), LLVM 23.1.1, like the other four platforms (flang-pixi's note,
+    2026-10-03, which also flagged the stale `FC_VER = flang 22.1.8` in
+    the vendored config). What changed:
+    - pixi.toml: Fortran is one entry in `[dependencies]` (`flang-zig`,
+      `flang-rt-zig` build >= 9) and in `[feature.minimal.dependencies]`;
+      win-64 overrides `flang-rt-zig` with build >= 4 (it has no build 9).
+      The other per-target Fortran lines (all five platforms, the
+      minimal feature's four) are gone.
+      recipe.yaml: no `linux64` selector left; `flang-zig` +
+      `flang-rt-zig` in the staging build, `flang-rt-zig` in host, both
+      in r-zig-toolchain's run deps, on every platform. Build number
+      stays 4: build 4 is not on the channel yet (linux-64 has `_2` and
+      `_3`, the pre-split r-zig-slim), so the change ships with it.
+    - pixi.lock (`pixi lock`, nothing else re-solved; only linux-64
+      changed, in all six environments that carry Fortran): flang-zig,
+      flang-rt-zig and lld-zig added; flang, flang-rt_linux-64 and
+      conda-forge's LLVM 22 (23 in minimal) toolchain closure removed:
+      clang, clangxx, clangdev, clang-format, clang-scan-deps,
+      clang-tools, clang_impl/clangxx_impl, libclang, libclang-cpp,
+      libclang13, compiler-rt (and _linux-64, libcompiler-rt), libllvm22
+      (libllvm23 + libmlir23 in minimal), llvmdev, llvm-tools,
+      binutils(_impl), libgcc-devel/libstdcxx-devel_linux-64, and
+      ld_impl_linux-64 in minimal. No version of any other package moved
+      (llvm-openmp stays 22.1.8 in default, 23.1.2 in minimal; zig's
+      libllvm21 and sysroot_linux-64 2.28 stay). Every universe URL in
+      the lock answers 200.
+    - The vendored linux-x86_64 configs, re-captured (configure-only.sh
+      + gen-subst.sh with flang-zig, all three variants). Only Fortran
+      lines changed: `FC_VER` "flang version 22.1.8 (https://github.com/
+      conda-forge/clangdev-feedstock ...)" (minimal: 23.1.1 with the
+      same suffix) to "flang version 23.1.1" in config.h and subst.txt,
+      all three; in slim and full `SHLIB_OPENMP_FFLAGS`,
+      `R_OPENMP_FFLAGS` and `OPENMP_FCFLAGS` "" to "-fopenmp" (configure's
+      `use omp_lib` probe now passes) and config.h's `SUPPORT_OPENMP`
+      now defined, which configure sets when C, C++ and Fortran all
+      support OpenMP; R's C code no longer reads it (it left Rconfig.h in
+      R 4.x), so R's own build is unchanged. minimal keeps its empty
+      OpenMP flags (`--disable-openmp`). Rconfig.h and GENERATED_FROM
+      are unchanged. The three files now match linux-arm64's except for
+      the CPU, vendor and triple lines, `-fpic` vs `-fPIC`, and full's
+      host-tool `INTLBISON`, as before.
+    - Dead special cases: none in code. Comments that described the
+      exception were updated (pixi.toml, recipe.yaml, build.zig,
+      scripts/env.sh, zigbuild/tools/configure-only.sh, rzig's
+      flang_rt.zig and fortran.zig, consolidation/PLAN.md); the
+      archive-path `FLIBS` and `preferred_link_mode = .static` stay, as
+      the rule for any flang-rt that ships a shared runtime beside the
+      archive. build.zig's gfortran branch is now no platform's
+      (FortranCompiler, findGfortranLibDir, the gfortran cases of
+      linkFortranRt and the Windows Makeconf): removable, not removed.
+    - Measured on linux-64, the old tree (main checkout, conda-forge
+      flang 22.1.8) against the new one, the same two probes run on
+      each: a Fortran `R CMD SHLIB` doing formatted I/O exported 1,118
+      symbols, 1,099 of them the runtime's (`_Fortran*`,
+      `_ZN7Fortran*`, `CFI_*`), and now 4, none the runtime's; R's own
+      libraries (libR, libRblas, libRlapack, lapack.so, stats.so)
+      exported none before or after, and no binary of either tree
+      needs a shared flang runtime. A package whose Fortran does `use
+      omp_lib` (`omp_get_max_threads`, a parallel reduction, formatted
+      I/O) failed to compile before ("Source file 'omp_lib.mod' was not
+      found"); now, under `env -i` with the tree and the env's flang,
+      `R CMD INSTALL` (zig-fc compile with `$(SHLIB_OPENMP_FFLAGS)`,
+      zig-cc link) and `R CMD SHLIB` with `USE_FC_TO_LINK` (zig-fc link)
+      both build it with no RUNPATH, NEEDED libomp.so from the tree, and
+      it runs 3 threads with OMP_NUM_THREADS=3. `R_compiled_by()` says
+      "flang version 23.1.1". flang-zig's own driver, for comparison,
+      finds the static runtime through flang.cfg but records the env's
+      lib as RUNPATH: zig-fc's zig link stays the reason packages load
+      without an rpath.
+    - Tested 2026-10-03 on linux-64, cold zig cache (a new worktree):
+      rzig-test (41 unit tests, parity 0 failed); default: build (the
+      log says `Fortran compiler = flang`, and libR carries "flang
+      version 23.1.1"), verify-tree, smoke, contract (Rcpp, data.table,
+      minqa, quadprog, pak, ps: OK; quadprog exports 6 symbols and minqa
+      187, none the runtime's), check (lapack.R matches its .Rout.save;
+      one NOTE, tools-Ex, grid's vignette metadata, not Fortran),
+      hermetic, verify-package; minimal: build, verify-tree, hermetic,
+      verify-package, then the wheel and wheel-test; full: build,
+      verify-tree, smoke (and the `use omp_lib` package above);
+      openblas: build, smoke; the conda packages (`pixi run -e pkg
+      conda-package`, a fresh solve that took flang-zig `_2`,
+      flang-rt-zig `_9`, lld-zig `_1` from universe): both outputs'
+      tests passed; r-zig-slim `_4` depends on no Fortran package at
+      all, r-zig-toolchain `_4` on `flang-zig` and `flang-rt-zig`.
+    - Not tested here: linux-aarch64, macOS and Windows (their
+      dependencies did not change; the manifest restructuring keeps
+      their locked packages identical, checked in the lock diff); CI
+      runs all of them.
   - Not a fix for the macOS minimal contract failure (first CI run of
     those legs, 2026-09-29, repeated on PR #12): on macOS data.table's
     configure probes `-Xclang -fopenmp` itself and links `-lomp`, and CI's
