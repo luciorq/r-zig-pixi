@@ -15,6 +15,10 @@
 #   - the compilers Makeconf names are rzig (one binary, no scripts);
 #   - Makeconf names no build path and has no rpath; CPPFLAGS and LDFLAGS
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
+#   - where Makeconf offers OpenMP (a tree that is not a conda env, not
+#     minimal): omp.h and libomp where rzig and the loader find them
+#     (Windows: Library/include/omp.h, Library/lib/libomp.lib and
+#     R_HOME/bin/x64/libomp.dll; unix: include/omp.h and lib/libomp);
 #   - Windows (a tree that is not a conda env): the Tcl/Tk runtime is in
 #     R_HOME/Tcl (with Tcl's modules), and every DLL a PE file in the tree
 #     imports is in the tree (its own directory, R_HOME/bin/x64, or
@@ -37,10 +41,11 @@
 # bundle, and packages compiled with the relocated tree build and load
 # under env -i (C++, Fortran, USE_FC_TO_LINK, FLIBS without flang,
 # OpenMP, decoy CONDA_PREFIX runs, zig-fc with no flang; Windows: rzig's
-# dry runs). The archive is this tree as it is, so the checks here run
-# once, here. (What runs in between leaves the tree as it was: smoke and
-# check only run it, contract installs into build/testlib-*, hermetic
-# works on a copy.)
+# dry runs, and OpenMP C and Fortran packages built with the tree alone
+# and loaded with only bin\x64 and System32 on PATH). The archive is
+# this tree as it is, so the checks here run once, here. (What runs in
+# between leaves the tree as it was: smoke and check only run it,
+# contract installs into build/testlib-*, hermetic works on a copy.)
 # Shared helpers (rpaths_of, needed_of, cxx_deps, minos_over_floor,
 # win_system_dll): verify-helpers.sh; MACOS_MIN, macho_minos, version_gt:
 # env.sh.
@@ -115,6 +120,35 @@ echo "== Makeconf verified: no build path, no rpath, CPPFLAGS and LDFLAGS empty,
 # prefix) has both from its own packages, and gets neither.
 conda_tree=""
 if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
+
+# OpenMP for packages (build.zig installOpenMP, vendor-libs.sh), wherever
+# Makeconf offers it (SHLIB_OPENMP_CFLAGS non-empty: every variant but
+# minimal): llvm-openmp's omp.h in the environment's include/, where rzig
+# looks (and finding it is what makes rzig add -lomp to a -fopenmp link),
+# and libomp where links and the loader find it. Windows: libomp.lib in
+# Library/lib, and libomp.dll in R_HOME/bin/x64 beside R's executables
+# (vendor-libs.sh copies it there because the tree has libomp.lib); R
+# itself has no OpenMP there (upstream's choice), so nothing in the tree
+# imports it and the DLL closure check below would not notice it
+# missing. unix: libR links libomp, which vendor-libs.sh copies into
+# lib/. (That a package builds with these alone and loads:
+# verify-bundle.sh.)
+if [ -z "$conda_tree" ] && grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
+  case "$OS" in
+    windows) omp_files="Library/include/omp.h Library/lib/libomp.lib $rh/bin/x64/libomp.dll" ;;
+    linux) omp_files="include/omp.h lib/libomp.so" ;;
+    macos) omp_files="include/omp.h lib/libomp.dylib" ;;
+  esac
+  bad=""
+  for f in $omp_files; do
+    [ -s "$TREE/$f" ] || bad="$bad $f"
+  done
+  if [ -n "$bad" ]; then
+    echo "error: Makeconf offers OpenMP (SHLIB_OPENMP_CFLAGS), but the tree lacks:$bad" >&2
+    exit 1
+  fi
+  echo "== OpenMP for packages verified: ${omp_files// /, }"
+fi
 
 # Windows has no rpaths, glibc or Mach-O: the binary checks further down
 # are unix. Its own: the Tcl/Tk runtime and the DLL closure.

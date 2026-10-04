@@ -18,7 +18,8 @@
 #     (below).
 #   - Windows: conda's Library/bin DLLs into R_HOME/bin/x64, the directory
 #     of Rscript.exe and R.exe, where the loader looks first for every DLL
-#     the process loads (R.dll's, the modules', packages').
+#     the process loads (R.dll's, the modules', packages'), libomp.dll
+#     included, which only packages import (below).
 #
 # A no-op when the prefix is the env itself (the conda build: the
 # libraries are already there, as run dependencies).
@@ -55,11 +56,13 @@ fi
 # What an earlier run copied comes out first: every file directly in the
 # destination whose name the env also has (unix: <prefix>/lib, where the
 # build itself installs only directories; Windows: the DLLs in
-# R_HOME/bin/x64, where R's own, R.dll, Rblas.dll and the rest, have no
-# namesake in conda's Library/bin). The env's file may have changed since
-# (pixi update), and a copy kept because its name is there would ship the
-# old one, and load it wherever the tree's copy comes before the env's.
-# A library the env no longer has at all (a soname bump, e.g. ICU's) is
+# R_HOME/bin/x64, where the build installs only R's own, R.dll, Rblas.dll
+# and the rest, none with a namesake in conda's Library/bin). The env's
+# file may have changed since (pixi update), and a copy kept because its
+# name is there would ship the old one, and load it wherever the tree's
+# copy comes before the env's; and a library the tree no longer needs
+# would ship on (package and the wheel archive the tree as it is). A
+# library the env no longer has at all (a soname bump, e.g. ICU's) is
 # not recognised here and stays; nothing needs it, and removing the tree
 # drops it.
 n_old=0
@@ -81,7 +84,8 @@ fi
 
 # Windows: every PE file in the tree (R's own, the toolchain's, and the
 # Tcl DLLs build.zig installs into R_HOME/Tcl/bin: tcl86t.dll needs
-# zlib1.dll), then a fixed-point walk over the DLLs copied by this run.
+# zlib1.dll) and, where packages get OpenMP, libomp.dll (below), then a
+# fixed-point walk over the DLLs copied by this run.
 # The Tcl DLLs stay only in Tcl/bin, CRAN's layout: a copy in bin/x64
 # wins the search order but then looks for init.tcl relative to itself
 # and fails. (needed_of: verify-helpers.sh, the imports verify-tree.sh
@@ -93,6 +97,16 @@ if [ "$OS" = windows ]; then
   mapfile -t pes < <(find "$PREFIX" -type f \( -name '*.dll' -o -name '*.exe' \))
   n=0
   i=0
+  # libomp.dll, for packages: R itself has no OpenMP on Windows, so no PE
+  # file in the tree imports it, but a package linked against the
+  # libomp.lib build.zig installs (installOpenMP, wherever Makeconf
+  # offers packages OpenMP) does, and the loader finds it here. The walk
+  # takes its own imports, as it does every copy's.
+  if [ -f "$PREFIX/Library/lib/libomp.lib" ] && [ ! -f "$BIN/libomp.dll" ]; then
+    cp "$CLIB/libomp.dll" "$BIN/libomp.dll"
+    pes+=("$BIN/libomp.dll")
+    n=$((n + 1))
+  fi
   while [ "$i" -lt "${#pes[@]}" ]; do
     f="${pes[$i]}"
     i=$((i + 1))

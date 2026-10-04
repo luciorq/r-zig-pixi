@@ -1,13 +1,14 @@
 # feat-no-host-paths — no build-machine paths, and a base R that installs without a toolchain
 
-**Status and handoff (2026-10-03).** Read this first; the sections
+**Status and handoff (2026-10-04).** Read this first; the sections
 below hold the detail and the reasons.
 
 Where it stands (branch feat-no-host-paths, PR open against main; pushed
 up to b4f97cc, CI green on every job through d233f2a "chore(ci): verify
 before package", run 37123137421; F1.7 committed as 23841a4 "feat: unify
-ci matrix", tested on every OS by hand; linux-64 on flang-zig is done in
-the working tree, tested on linux-64, not yet committed):
+ci matrix", tested on every OS by hand; linux-64 on flang-zig committed
+as 2622a6d; OpenMP for packages on every OS is done in the working tree,
+tested on linux-64 and win-64, not yet committed):
 - Phase A done on all five platforms (the hermetic tier-0/1 check runs in
   CI everywhere). Phase T done for conda and pip (`r-zig-slim` +
   `r-zig-toolchain`; `r-zig` + `r-zig-toolchain` wheels); the standalone
@@ -49,6 +50,20 @@ the working tree, tested on linux-64, not yet committed):
   (`FC_VER` "flang version 23.1.1" plus the Fortran OpenMP lines).
   Tested on linux-64; the other platforms' locked packages are
   unchanged.
+- OpenMP for packages, the same on every OS (2026-10-04, record after
+  F1.7's in the F1 steps): one libomp release, llvm-openmp pinned to 23.*
+  in pixi.toml and the recipe's host (flang-rt-zig's omp_lib.mod major;
+  the lock had kept 22.1.8 on unix by inertia), 23.1.2 on all five
+  platforms; r-zig-slim's run dependency stays unbounded (the run export
+  gives `>=23.1.2`). The standalone Windows tree ships omp.h and
+  libomp.lib (build.zig installOpenMP) and libomp.dll (vendor-libs.sh,
+  where the tree has libomp.lib), so OpenMP packages, C and Fortran,
+  build with the tree alone, while R itself stays without OpenMP on
+  Windows, as upstream; verify-tree checks the OpenMP files,
+  verify-package builds and loads OpenMP C and `use omp_lib` Fortran
+  packages from the archive on every OS (Windows: with only bin\x64 and
+  System32 on PATH), each linking libomp and the Fortran ones running a
+  parallel region on two threads.
 
 The decisions that shape the code now (each has its record below):
 - The installed tree is the shipped tree (F1, on every OS since F1.7);
@@ -76,13 +91,17 @@ The decisions that shape the code now (each has its record below):
 What remains, in order (proposed; ask the user before starting each):
 1. F4: one zig (upstream zig everywhere, or a feedstock opt-out), which
    retires the ZIG_LIB_DIR libc++ mirror.
-2. T's standalone split (a standalone toolchain archive), then the
+2. Major (decided 2026-10-04): a Windows minimal variant, then a Windows
+   wheel (first without compile support; compiling needs a sh/make/
+   coreutils userland the wheel would have to bring). Analysis and order:
+   the section "Windows minimal and the Windows wheel".
+3. T's standalone split (a standalone toolchain archive), then the
    recipe's host which/sed/grep cleanup.
-3. Later, test carefully first: the toolchain in an environment of its
+4. Later, test carefully first: the toolchain in an environment of its
    own (F3 section).
-4. Small, open: Windows Makeconf's TCL_VERSION (86 vs conda's 86t) for
+5. Small, open: Windows Makeconf's TCL_VERSION (86 vs conda's 86t) for
    packages that link Tcl/Tk (F1.7's record).
-5. Small: with linux-64 on flang-zig no platform uses gfortran; build.zig's
+6. Small: with linux-64 on flang-zig no platform uses gfortran; build.zig's
    gfortran branch (FortranCompiler.gfortran, findGfortranLibDir, the
    gfortran cases of linkFortranRt and the Windows Makeconf) and
    env.sh's gfortran fallback can go.
@@ -935,6 +954,166 @@ zig 0.16's std.Build):
     (the Windows tree has no COPYING, linux's has) and stats-Ex (two
     htest titles wrap differently). The tree ships no R_HOME/tests (as on
     unix).
+- OpenMP for packages, the same on every OS (2026-10-04). Asked: "Is
+  there any particular reason for libomp 22.1.8 on Linux? Should we
+  standardize?" No reason: lock inertia. And the standalone Windows tree
+  offered `SHLIB_OPENMP_*FLAGS = -fopenmp` in etc/x64/Makeconf but shipped
+  no omp.h, libomp.lib or libomp.dll: an OpenMP package compiled with the
+  tree alone failed with "'omp.h' file not found" (kappa, 2026-10-04); only
+  the pixi env as R_ZIG_EXTRA_ENV, or a conda env, made it build.
+  - **One libomp release everywhere.** pixi.toml had `llvm-openmp = "*"`,
+    and nothing asked for more (`pixi tree -i llvm-openmp`: only
+    flang-rt-zig needs it), so the lock kept 22.1.8 on linux-64,
+    linux-aarch64, osx-64 and osx-arm64, while minimal had 23.1.2 and
+    win-64 23.1.1 (flang-rt-zig build 4 requires >= 23.1.1 there). Now
+    `llvm-openmp = "23.*"`, the LLVM major of flang-zig/flang-rt-zig,
+    whose omp_lib.mod `use omp_lib` compiles against, in pixi.toml and in
+    recipe.yaml's host (the conda build uses the libomp CI tests).
+    r-zig-slim's run keeps a bare `llvm-openmp` (review, 2026-10-04): the
+    host package's run export already gives it `>=23.1.2`, so a `23.*`
+    there would add only `<24`. libomp does not need that (a newer libomp
+    runs code built against an older omp.h or omp_lib.mod; conda-forge's
+    run exports carry only a lower bound, and flang-rt-zig depends on
+    llvm-openmp unbounded), and it would clash with every package built
+    against llvm-openmp 24 (run export `>=24`) once conda-forge moves,
+    each LLVM major then needing a recipe edit and a build-number bump.
+    Package C code is compiled by zig's clang (21.1.8), not LLVM 23,
+    anyway. `pixi update llvm-openmp`
+    moved only it: 22.1.8 to 23.1.2 on the four unix platforms and 23.1.1
+    to 23.1.2 on win-64, in default, full, openblas, full-openblas and
+    pkg; minimal (23.1.2 already) and wheel unchanged; no other package
+    in any environment moved (compared per environment and platform).
+    The recipe's build number stays 4 (not on the channel yet).
+  - **Windows: OpenMP for packages, as unix has it.** R itself stays
+    without OpenMP on Windows, as upstream (gnuwin32's config.h leaves
+    HAVE_OPENMP off, "has it, but it is too slow to be usable", said of
+    GCC's libgomp under MinGW-w64; R's own OpenMP threads default to 1
+    everywhere anyway); build.zig says so at R.dll's link, where a stale
+    comment claimed conda-forge ships no LLVM libomp for Windows. Packages:
+    build.zig `installOpenMP`, one function for every OS (it replaces
+    unix's inline omp.h block), for a tree that is not the env and a
+    profile with OpenMP: llvm-openmp's headers into the environment's
+    include/ where rzig looks (unix `<prefix>/include`: omp.h, ompx.h,
+    omp-tools.h, ompt.h; Windows `<prefix>/Library/include`: omp.h and
+    ompx.h, all that win-64's package has; omp.h required, the others when
+    present), and on Windows libomp.lib into `<prefix>/Library/lib` (rzig's
+    -L, where windows.libs resolves -lomp). Windows' `ctx.openmp` (true;
+    R itself never compiles with it) also drives etc/x64/Makeconf's
+    `@OPENMP@`, which was hardcoded to -fopenmp, so one value decides
+    both what Makeconf offers and what the tree carries for it.
+  - **libomp.dll comes from vendor-libs.sh**, into R_HOME/bin/x64 beside
+    R's executables, where the loader finds a package DLL's import of it
+    (R's LoadLibrary searches the exe's directory first), as libomp comes
+    from it on unix. vendor-libs.sh removes every file in bin/x64 (unix:
+    `<prefix>/lib`) whose name the env also has, then copies the closure
+    of the tree's PE files again; nothing in the tree imports libomp.dll,
+    so its walk takes it as a root where the tree has
+    `Library/lib/libomp.lib` (installOpenMP's decision, made in one
+    place), with its own imports (VCRUNTIME140.dll, already vendored for
+    conda's other DLLs). A first version had zig build install
+    libomp.dll and changed the clearing rule to keep any copy still
+    byte-identical to the env's file, so the post-build run would not
+    delete it. Review (2026-10-04): that kept, in a reused tree, every
+    library the tree no longer needs while the env still has it
+    unchanged, and package and the wheel archive the tree as it is (e.g.
+    macOS minimal's ICU, about 14 MiB, after a `libcurl <8.21` pin, since
+    zig's closure keeps ICU in the env). Reverted to remove-all.
+  - **New checks.** verify-tree.sh, wherever Makeconf offers OpenMP in a
+    tree that is not a conda env: Windows `Library/include/omp.h`,
+    `Library/lib/libomp.lib` and `R_HOME/bin/x64/libomp.dll`; unix
+    `include/omp.h` and `lib/libomp.{so,dylib}`. verify-bundle.sh: on
+    Windows, in the extracted zip, the C shapes unix checks (a package
+    with `$(SHLIB_OPENMP_CFLAGS)` on the compile and the link, a flagless
+    omp.h probe, `PKG_LIBS = -lomp` alone, resolved to the tree's
+    libomp.lib by windows.libs) and two Fortran packages doing `use
+    omp_lib` (through `.Fortran`), R-exts' two forms: `PKG_FFLAGS =
+    $(SHLIB_OPENMP_FFLAGS)` with `PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)`
+    (linked by gcc.exe, rzig) and `USE_FC_TO_LINK` with
+    `$(SHLIB_OPENMP_FFLAGS)` (linked by zig-fc), built with
+    R_ZIG_EXTRA_ENV empty and a poisoned CONDA_PREFIX (zig, make, sh and
+    flang from PATH), each package importing libomp.dll, then loaded in an
+    R with an empty environment and PATH = bin\x64 + System32. On unix,
+    the same two Fortran packages under env -i from the extracted archive
+    (no rpath, no shared flang runtime). Every OpenMP package must link
+    libomp itself (unix: NEEDED, for the C ones too): libR has it loaded
+    already and a shared link may leave symbols undefined (macOS
+    Makeconf: `-undefined dynamic_lookup`), so a dropped -lomp would
+    still load. The Fortran source counts the threads of a
+    `num_threads(2)` region, which must be 2: without -fopenmp on the
+    compile the directives are comments, `use omp_lib` still compiles and
+    links, and the old checks (`omp_get_max_threads() >= 1`, the sum
+    5050) still passed. minimal's empty `SHLIB_OPENMP_*FLAGS` stay
+    contract-test.sh's (a copy in verify-bundle.sh was dropped in review:
+    a static read of the file, which F1.6 keeps out of the archive
+    checks, and contract runs on every minimal leg first).
+  - **Tested 2026-10-04 (first version, before the review).** linux-64,
+    cold zig cache (a new worktree): default build (libR's NEEDED
+    libomp.so is the vendored
+    `lib/libomp.so`, byte-identical to the env's llvm-openmp 23.1.2
+    file), verify-tree, smoke, contract (data.table: `OpenMP version
+    (_OPENMP) 202011`), check (one NOTE, tools-Ex, as before), hermetic,
+    verify-package (the Fortran OpenMP packages: NEEDED libomp.so, no
+    RUNPATH, 16 threads); a stale-copy run of vendor-libs.sh (two copies
+    made to differ were removed and copied again, an identical one with an
+    old mtime stayed); minimal build, verify-tree, verify-package (its
+    OpenMP flags empty); full build, verify-tree, verify-package; the
+    conda packages (both outputs' tests passed; r-zig-slim `_4` runs with
+    `llvm-openmp 23.*` and the run export `>=23.1.2`). win-64 on kappa (the tree left
+    by an earlier build: the pre-build vendor-libs run kept all its
+    copies, as identical): build, verify-tree (78 PE files, the closure
+    complete), smoke, contract (data.table with OpenMP), hermetic,
+    verify-package (the C and both Fortran packages built with the tree
+    alone and loaded with PATH = bin\x64 + System32, 12 threads). Planted
+    defects, each caught: a copy of the installed tree without
+    bin/x64/libomp.dll, then without Library/include/omp.h (verify-tree
+    names the missing file; the restored copy passes); the zip without
+    libomp.dll (the load fails, "LoadLibrary failure: The specified module
+    could not be found") and without omp.h (the C package fails, "'omp.h'
+    file not found"). A copy of zlib.dll made to differ was removed and
+    copied again, libomp.dll stayed. The win-64 conda packages: both
+    outputs' tests passed (llvm-openmp 23.1.2 in the test envs). Not
+    tested: macOS and linux-aarch64 (for them: llvm-openmp 22.1.8 to
+    23.1.2, vendor-libs.sh's rule, the new checks), openblas, the wheel.
+  - **Review fixes, tested 2026-10-04.** (r-zig-slim's run unpinned;
+    libomp.dll from vendor-libs.sh, the remove-all rule back; Windows'
+    `@OPENMP@` from `ctx.openmp`; the libomp and two-thread checks;
+    Windows' probe and `-lomp` packages; minimal's copy of the Makeconf
+    check dropped; stale comments in pixi.toml, build.yaml and
+    verify-tree.sh.) linux-64, warm zig cache: a copy of the env's
+    libgomp.so.1, which nothing links, planted in the slim tree's lib/
+    was removed by the next build's first vendor-libs run, the vendored
+    set otherwise unchanged (49 libraries); slim build, verify-tree,
+    smoke, hermetic, verify-package (omp.so, lomp.so, fomp.so and
+    fompfc.so NEED libomp.so; the num_threads(2) region ran on 2
+    threads); minimal build, verify-tree, verify-package, contract (its
+    empty `SHLIB_OPENMP_*FLAGS`); full build, verify-tree,
+    verify-package; the conda packages (both outputs' tests passed;
+    r-zig-slim `_4`'s index.json depends on `llvm-openmp` and the run
+    export `llvm-openmp >=23.1.2`, no upper bound). Planted defects in a
+    copy of verify-bundle.sh, each caught: fomp compiled without
+    `$(SHLIB_OPENMP_FFLAGS)` ("r$t == 2L is not TRUE"), fomp linked
+    without `$(SHLIB_OPENMP_CFLAGS)` ("does not link libomp"), omp.so
+    linked without it ("omp.so does not link libomp"). win-64 on kappa,
+    with the tree's Library/lib/libomp.lib and bin/x64/libomp.dll
+    deleted first: build (the pre-build vendor-libs run, no libomp.lib
+    yet, copied 42 DLLs; the post-build run 43, libomp.dll among them),
+    verify-tree, smoke, contract (data.table `OpenMP version (_OPENMP)
+    202011`), hermetic, verify-package (probe, omp, lomp, fomp and fompfc
+    built with the tree alone, each but the probe importing libomp.dll,
+    loaded with PATH = bin\x64 + System32, 12 threads, the region on 2);
+    planted: fomp compiled without `$(SHLIB_OPENMP_FFLAGS)` fails the
+    load ("r$t == 2L is not TRUE"). After the merge, macOS on omicron
+    (warm zig caches, llvm-openmp 23.1.2): osx-arm64 slim build,
+    verify-tree (omp.h, libomp.dylib), smoke, contract, hermetic,
+    verify-package (both Fortran OpenMP packages: 10 threads, the region
+    on 2, linked to the tree's libomp, no rpath), minimal build,
+    verify-tree, contract, verify-package, the wheel and wheel-test, full
+    build, verify-tree, verify-package; osx-64 under Rosetta: build,
+    verify-tree, contract, hermetic (CRAN R6 from source), verify-package.
+    omicron's network cut several pixi solves and one CRAN download
+    (hermetic's first try); the retries passed. Not tested after the
+    review fixes: linux-aarch64 (CI), openblas, the win-64 conda packages
+    (passed before the fixes).
 
 Order: T's conda and wheel parts (done) → F1 (done) → F2 (done) → F3a/F3b/F3c (done) → F1.7 (done) → F4 → T's
 standalone split (it needs F1's layout and F3's binary) → P. F4 can be
@@ -1517,6 +1696,62 @@ security release: a CI check should flag new curl releases.
 
 Separate from all of this: P3M binaries need the `HTTPUserAgent` option
 (see "Binary packages"), whichever curl is used.
+
+## Windows minimal and the Windows wheel (major todo, after the current tasks)
+
+Decided 2026-10-04: the next major item once the current work (the OpenMP
+gaps, then the queued phases) is done. Today Windows has one profile
+(win-x86_64-full) and no wheel.
+
+**A minimal tree on Windows: work, not blockers.** Windows R has no
+configure, so build.zig's buildWindows mirrors gnuwin32's one profile and
+builds everything unconditionally. Upstream's switches decide what a
+Windows minimal can drop without patching R:
+- Upstream can turn off: ICU (`USE_ICU`, MkRules.rules; the largest size
+  win), cairo (`USE_CAIRO`: winCairo.dll and the pango/fontconfig/
+  freetype/harfbuzz/glib closure). The Tcl/Tk runtime is an optional
+  component of CRAN's installer; without R_HOME/Tcl, `library(tcltk)`
+  stops with "Tcl/Tk support files were not installed".
+- Upstream always builds: png/jpeg/tiff in grDevices.dll (no switch), R's
+  own NLS (src/extra/intl), libcurl (`USE_LIBCURL = yes`, required).
+So a Windows minimal is "minimal within upstream's switches": no ICU, no
+cairo, no Tcl/Tk runtime, no OpenMP for packages (empty
+SHLIB_OPENMP_*FLAGS, so the Windows libomp of the OpenMP work is not
+shipped); png/jpeg/tiff and NLS stay. Its capability profile therefore
+differs from unix minimal and needs its own assertions (smoke, contract).
+Work: a hand-written zigbuild/config/win-x86_64-minimal (config.h,
+Rconfig.h, subst.txt link lists), variant switches in buildWindows
+(winCairo, tcltk's DLL and R_HOME/Tcl, ICU in WIN_R_DLL_LIBS), and a
+windows-latest/minimal CI leg.
+
+**The Windows wheel.**
+1. The real blocker is the userland package compilation needs. On
+   Windows, `R CMD INSTALL` of a package with compiled code runs `make`,
+   whose recipes need `sh`, `rm`, `cp`, `sed`, and runs `configure.win`
+   with `sh`. Unix gets away with bundling only make (every system has
+   /bin/sh and the tools); Windows has none of them (Rtools exists to
+   provide them; the pixi env takes them from MSYS2: m2-bash, m2-make,
+   coreutils). Options: bundle MSYS2's bash/make/coreutils as Rtools does
+   (heavy, and the process-spawning layer behind windows-latest's build
+   hangs); busybox-w32 (one small exe: sh and the tools) plus a native GNU
+   make (light, untested with R's makefiles); or first a wheel without
+   compile support: tier 0/1 (binary and R-only source packages) needs
+   nothing beyond R's own bin\x64 and System32, which hermetic proves on
+   every Windows run, and CRAN ships Windows binaries for nearly every
+   package, so such a wheel is already useful there (unlike linux).
+2. Plumbing, all solvable: make-wheel.py produces only manylinux and
+   macosx tags (it dies on anything else) and knows only the unix layout
+   (needs win_amd64, Library/lib/R, R.exe/Rscript.exe launchers);
+   embedding R in Python (rpy2) needs r_zig to call
+   `os.add_dll_directory` on R_HOME/bin/x64 (Python 3.8+ does not search
+   PATH for a loaded DLL's dependencies); wheel-test.sh is unix-only;
+   rzig finding zig from PyPI's ziglang (which has Windows wheels) is
+   untried on Windows.
+3. Not a blocker: Fortran (the unix wheels ship no flang either).
+
+Order: the Windows minimal tree first (it is what a Windows wheel would
+wrap), then a Windows wheel without compile support, then compiling from
+the wheel once the userland choice is made.
 
 ## flang-pixi handoff §6, reconciled (2026-09-30)
 

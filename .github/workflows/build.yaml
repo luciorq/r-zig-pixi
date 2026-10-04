@@ -145,7 +145,8 @@ jobs:
       # verify-package checks the archive itself: extracted elsewhere, R
       # and packages compiled with it run with nothing from the build env
       # (unix: env -i, TLS with the shipped CA bundle; Windows: rzig's dry
-      # runs) (scripts/verify-bundle.sh).
+      # runs, and OpenMP C and Fortran packages built with the tree alone)
+      # (scripts/verify-bundle.sh).
       - name: Package + verify the standalone archive (relocated)
         if: matrix.env == 'default' || matrix.env == 'minimal'
         run: pixi run -e ${{ matrix.env }} verify-package

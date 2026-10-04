@@ -495,9 +495,13 @@ pub fn build(b: *std.Build) !void {
         .toolchain_hint = toolchain_hint,
         .sdk = sdk,
         .prefix_is_env = samePhysicalDir(io, arena, install_prefix, conda),
-        // Windows keeps these defaults (its compile graph never passes
-        // `.openmp = true` and builds its own cairo device); unix overwrites
-        // both from subst.txt right after loadSubstTable below.
+        // Windows keeps these defaults. Its compile graph never passes
+        // `.openmp = true`, so R itself has no OpenMP there, and `openmp`
+        // decides only what packages get: etc/x64/Makeconf's
+        // SHLIB_OPENMP_*FLAGS (@OPENMP@, installWindowsCompilerContract)
+        // and the files their compiles and links need (installOpenMP). It
+        // builds its own cairo device. unix overwrites both from subst.txt
+        // right after loadSubstTable below.
         .openmp = true,
         .devcairo = true,
         .fc = fc,
@@ -926,21 +930,9 @@ pub fn build(b: *std.Build) !void {
     if (ctx.variant == .minimal) {
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("bin/make") }, .{ .custom = "lib/R/bin/toolchain" }, "make").step);
     }
-    // OpenMP's headers in <prefix>/include, where rzig looks
-    // (zigbuild/tools/rzig/environment.zig: R's own environment, and its
-    // omp.h is what makes rzig add -lomp to a -fopenmp link), for a tree
-    // that is not the env R is built in (the standalone archive, the dev
-    // tree; libomp itself is vendored into <prefix>/lib): packages' OpenMP
-    // probes (data.table's includes omp.h with no flag) and -fopenmp
-    // compiles find them there. The conda build's prefix is the env, which
-    // has them from llvm-openmp, the package that owns that path; the same
-    // test as vendor-libs.sh's. Phase T's standalone toolchain archive
-    // takes them over.
-    if (ctx.openmp and !ctx.prefix_is_env) {
-        inline for (.{ "omp.h", "ompx.h", "omp-tools.h", "ompt.h" }) |h| {
-            b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("include/" ++ h) }, .{ .custom = "include" }, h).step);
-        }
-    }
+    // OpenMP for packages: llvm-openmp's headers in <prefix>/include
+    // (libomp itself is vendored into <prefix>/lib, libR needs it).
+    try installOpenMP(&ctx, io);
     // The env's runtime data, for a tree that is not the env: the CA
     // bundle (etc/Renviron names it, finalRenviron), fontconfig's
     // configuration, and in full Tcl/Tk's script libraries.
@@ -1315,13 +1307,16 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // icudt.lib, verified present in the pixi env's Library/lib).
     applyLinkFlags(ctx, r_final_mod, ctx.subst.get("WIN_R_DLL_LIBS").?);
     linkFortranRt(ctx, r_final_mod);
-    // No Windows compile group currently sets `.openmp = true` (appl_c/
-    // nmath_c above omit it, unlike the unix pipeline), so nothing emits
-    // -fopenmp or references libomp/libgomp symbols yet — linking it here
-    // was speculative copy-paste from linkOmp's unix use and just breaks the
-    // link (conda-forge ships no LLVM libomp on Windows, only GCC's
-    // libgomp, which isn't ABI-compatible with clang's default OpenMP
-    // codegen anyway). Revisit if/when Windows OpenMP support is added.
+    // R itself is built without OpenMP on Windows, as upstream: gnuwin32's
+    // config.h leaves HAVE_OPENMP off ("has it, but it is too slow to be
+    // usable", said of GCC's libgomp under MinGW-w64), and R's own OpenMP
+    // threads (R_num_math_threads) default to 1 on every platform anyway.
+    // So no Windows compile group sets `.openmp = true` and R.dll links no
+    // libomp (no linkOmp here). Packages get OpenMP all the same:
+    // etc/x64/Makeconf offers SHLIB_OPENMP_*FLAGS = -fopenmp, and rzig
+    // links them against conda-forge's LLVM libomp (llvm-openmp, the
+    // release unix uses), which a standalone tree carries (installOpenMP;
+    // libomp.dll from vendor-libs.sh).
     const libR = addSharedLib(ctx, "R", r_final_mod);
     ctx.libR = libR;
     ctx.rblas = rblas;
@@ -1541,6 +1536,9 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.path("src/gnuwin32/fixed/etc/Rcmd_environ"), ctx.rhomeInstallDir("etc"), "Rcmd_environ").step);
 
     try installWindowsCompilerContract(ctx, io);
+    // OpenMP for packages (R itself has none on Windows, see R.dll's link
+    // above): llvm-openmp's headers and libomp.lib.
+    try installOpenMP(ctx, io);
     // The env's runtime data, for a tree that is not the env (Tcl/Tk and
     // fontconfig's configuration), and etc/Renviron.site (in the conda
     // build: MY_TCLTK, the env's Tcl/Tk).
@@ -1864,7 +1862,9 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     try ctx.subst.put("CSTD", "-std=gnu2x");
     try ctx.subst.put("EOPTS", "");
     try ctx.subst.put("SANOPTS", "");
-    try ctx.subst.put("OPENMP", "-fopenmp");
+    // SHLIB_OPENMP_*FLAGS, from the same value that decides whether the
+    // tree carries omp.h and libomp for them (installOpenMP).
+    try ctx.subst.put("OPENMP", if (ctx.openmp) "-fopenmp" else "");
     try ctx.subst.put("PTHREAD", "-pthread");
     try ctx.subst.put("SYMPAT", "'s/^.* [BCDRT] / /p'");
 
@@ -2973,8 +2973,48 @@ fn pathExists(io: std.Io, p: []const u8) bool {
     return true;
 }
 
+/// OpenMP for packages, in a tree that is not the env R is built in (the
+/// standalone archive, the dev tree), from the env's llvm-openmp: what
+/// R CMD SHLIB's $(SHLIB_OPENMP_*FLAGS) compiles and links need, as a
+/// conda env with llvm-openmp has it. Nothing when the profile has no
+/// OpenMP (minimal: Makeconf offers none) or the prefix is the env (the
+/// conda build: llvm-openmp is a run dependency there, and owns these
+/// paths; the same test as vendor-libs.sh's).
+///   - The headers (omp.h and the ones beside it; win-64's llvm-openmp
+///     ships only omp.h and ompx.h) into the environment's include/,
+///     where rzig looks (zigbuild/tools/rzig/environment.zig: R's own
+///     environment is <prefix>, <prefix>/Library on Windows): its omp.h
+///     is what makes rzig add -lomp to a -fopenmp link, and packages'
+///     OpenMP probes (data.table's includes omp.h with no flag) find it.
+///   - Windows: libomp.lib into <prefix>/Library/lib, the environment's
+///     lib/, where rzig's -L points and windows.libs resolves -lomp.
+/// libomp itself comes with the env's other shared libraries, from
+/// vendor-libs.sh after the build: on unix because libR links it (into
+/// <prefix>/lib); on Windows, where none of R's own DLLs imports it,
+/// because the tree has libomp.lib (into R_HOME/bin/x64, the directory of
+/// R's executables, where the loader finds a package DLL's import of it).
+/// Phase T's standalone toolchain archive takes the headers and the import
+/// library over.
+fn installOpenMP(ctx: *const Ctx, io: std.Io) !void {
+    if (!ctx.openmp or ctx.prefix_is_env) return;
+    const b = ctx.b;
+    const include: std.Build.InstallDir = .{ .custom = if (ctx.os == .windows) "Library/include" else "include" };
+    inline for (.{ "omp.h", "ompx.h", "omp-tools.h", "ompt.h" }) |h| {
+        const src = ctx.condaDir("include/" ++ h);
+        if (pathExists(io, src)) {
+            b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = src }, include, h).step);
+        } else if (comptime std.mem.eql(u8, h, "omp.h")) {
+            std.debug.print("error: {s} is missing (llvm-openmp not in the env?); the tree ships it for packages' OpenMP\n", .{src});
+            return error.MissingOpenMP;
+        }
+    }
+    if (ctx.os == .windows) {
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("lib/libomp.lib") }, .{ .custom = "Library/lib" }, "libomp.lib").step);
+    }
+}
+
 /// The runtime data a tree that is not the env R is built in needs from
-/// that env, installed with the tree as the omp.h headers are
+/// that env, installed with the tree as the OpenMP headers are
 /// (feat-no-host-paths F1.7: the installed tree is the shipped tree on
 /// every OS, and package-standalone.sh only archives it). The env's
 /// shared libraries come after the build instead, from

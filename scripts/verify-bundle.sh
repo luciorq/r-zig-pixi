@@ -16,8 +16,11 @@
 #   - TLS trust with the shipped CA bundle and nothing from the build env;
 #   - packages compiled with the relocated tree build and load under
 #     env -i: C++, Fortran, USE_FC_TO_LINK, $(FLIBS) without flang,
-#     OpenMP, decoy CONDA_PREFIX runs, zig-fc with no flang (Windows: rzig's
-#     dry runs, -L from where the tree now is, CONDA_PREFIX ignored).
+#     OpenMP (C, and Fortran with `use omp_lib`), decoy CONDA_PREFIX runs,
+#     zig-fc with no flang. Windows: rzig's dry runs (-L from where the
+#     tree now is, CONDA_PREFIX ignored), and OpenMP C and Fortran
+#     packages built with the tree alone and loaded with only bin\x64 and
+#     System32 on PATH.
 # The static checks of the tree (Makeconf, the compilers are rzig, the CA
 # bundle, rpaths, the glibc ceiling, the C++ runtime of R's binaries, the
 # macOS floor and load commands, minimal's excluded libraries, Windows'
@@ -101,6 +104,48 @@ $CHECK_TCLTK
 cat('bundle OK\n')
 "
 
+# The Fortran OpenMP packages both OSes build where Makeconf offers
+# OpenMP (below), in R-exts' two forms: fomp, $(SHLIB_OPENMP_FFLAGS) on
+# the compile and $(SHLIB_OPENMP_CFLAGS) on the link, which the C compiler
+# does; fompfc, USE_FC_TO_LINK with $(SHLIB_OPENMP_FFLAGS) on both, which
+# zig-fc links. One fixed-form source: omp_get_max_threads() through `use
+# omp_lib`, a num_threads(2) region counting its threads, and 1..100
+# summed in a parallel reduction. The count proves -fopenmp reached the
+# compile: without it the directives are comments, `use omp_lib` still
+# compiles and links, the region runs once and the sum is still 5050.
+# FOMP_R loads both from the directory holding them and checks the results.
+fomp_src() {
+  local d
+  for d in fomp fompfc; do
+    mkdir -p "$1/$d"
+    cat > "$1/$d/$d.f" <<'FORTRAN'
+      subroutine fompn(n, t, s)
+      use omp_lib
+      integer n, t, s, i
+      n = omp_get_max_threads()
+      t = 0
+!$omp parallel num_threads(2) reduction(+:t)
+      t = t + 1
+!$omp end parallel
+      s = 0
+!$omp parallel do reduction(+:s)
+      do i = 1, 100
+         s = s + i
+      end do
+!$omp end parallel do
+      end
+FORTRAN
+  done
+  printf '%s\n' 'PKG_FFLAGS = $(SHLIB_OPENMP_FFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$1/fomp/Makevars"
+  printf '%s\n' 'USE_FC_TO_LINK =' 'PKG_FFLAGS = $(SHLIB_OPENMP_FFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_FFLAGS)' > "$1/fompfc/Makevars"
+}
+FOMP_R='for (d in c("fomp", "fompfc")) {
+  dyn.load(file.path(d, paste0(d, .Platform$dynlib.ext)))
+  r <- .Fortran("fompn", n = 0L, t = 0L, s = 0L, PACKAGE = d)
+  stopifnot(r$n >= 1L, r$t == 2L, r$s == 5050L)
+  cat(d, ": omp_get_max_threads() =", r$n, "; a num_threads(2) region ran on", r$t, "threads\n")
+}'
+
 if [ "$OS" = windows ]; then
   R_BIN="$BUNDLE_DIR/Library/lib/R/bin/x64/Rscript.exe"
   test -x "$R_BIN" || { echo "error: $R_BIN missing from extracted bundle" >&2; exit 1; }
@@ -118,9 +163,10 @@ echo "== standalone bundle verified relocatable ($OS/$FLAVOR)"
 # CONDA_PREFIX it is not installed in. A dry run; contract-test.sh
 # compiles for real. (unix: the compiled-package checks below)
 if [ "$OS" = windows ]; then
+  # (poisoned: the OpenMP builds below use it as CONDA_PREFIX too)
   decoy="$VERIFY_DIR/decoy"
   mkdir -p "$decoy/Library/include" "$decoy/Library/lib"
-  : > "$decoy/Library/include/omp.h"; : > "$decoy/Library/lib/libomp.lib"
+  printf '#error decoy CONDA_PREFIX\n' > "$decoy/Library/include/omp.h"; printf 'junk' > "$decoy/Library/lib/libomp.lib"
   argv="$(CONDA_PREFIX="$(cygpath -w "$decoy")" RZIG_PRINT_ARGV=1 "$BUNDLE_DIR/Library/lib/R/bin/toolchain/gcc.exe" -shared -fopenmp -o x.dll a.o)"
   if ! printf '%s\n' "$argv" | grep -qi -- "^-L.*/$(basename "$BUNDLE_DIR")/Library/lib\$" ||
      printf '%s\n' "$argv" | grep -qi -- 'rpath\|decoy'; then
@@ -142,6 +188,59 @@ if [ "$OS" = windows ]; then
       exit 1
     fi
     echo "== zig-fc.exe verified (dry run): a shared link goes through zig with the static flang runtime and -lc++"
+  fi
+
+  # OpenMP for packages from the tree alone. R itself has no OpenMP on
+  # Windows (upstream's choice), but etc/x64/Makeconf offers
+  # SHLIB_OPENMP_*FLAGS, so the zip carries llvm-openmp's omp.h
+  # (Library/include) and libomp.lib (Library/lib), build.zig
+  # installOpenMP's, and libomp.dll (R_HOME/bin/x64), vendor-libs.sh's.
+  # The ways packages ask that unix checks below: a C package with
+  # $(SHLIB_OPENMP_CFLAGS) on the compile and the link, a flagless omp.h
+  # probe (data.table's configure), PKG_LIBS = -lomp alone (rzig's
+  # windows.libs resolves it to the tree's libomp.lib), and where Makeconf
+  # offers Fortran OpenMP the fomp/fompfc packages (`use omp_lib`). They
+  # build with no environment but the tree's: R_ZIG_EXTRA_ENV empty and
+  # the poisoned decoy as CONDA_PREFIX; zig, make, sh and flang come from
+  # PATH, as a compile needs them. Each but the probe must import
+  # libomp.dll (PE resolves every symbol at link time, so that is
+  # libomp.lib from the tree). Then they load in an R whose environment
+  # holds only what Windows needs and whose PATH is bin\x64 and System32
+  # (hermetic-check.sh's scenario), so libomp.dll comes from the tree.
+  R_EXE="$BUNDLE_DIR/Library/lib/R/bin/x64/R.exe"
+  mk_x64="$BUNDLE_DIR/Library/lib/R/etc/x64/Makeconf"
+  if grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk_x64"; then
+    ow="$VERIFY_DIR/omp-win"
+    mkdir -p "$ow/omp" "$ow/probe" "$ow/lomp" "$ow/tmp"
+    printf '%s\n' '#include <omp.h>' '#include <R.h>' 'void ompn(int *n) { *n = omp_get_max_threads(); }' > "$ow/omp/omp.c"
+    printf '%s\n' 'PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$ow/omp/Makevars"
+    printf '%s\n' '#include <omp.h>' 'int ompprobe(void) { return 0; }' > "$ow/probe/probe.c"
+    printf '%s\n' 'extern int omp_get_max_threads(void);' 'void lompn(int *n) { *n = omp_get_max_threads(); }' > "$ow/lomp/lomp.c"
+    printf '%s\n' 'PKG_LIBS = -lomp' > "$ow/lomp/Makevars"
+    printf '%s\n' 'dyn.load("omp/omp.dll"); dyn.load("lomp/lomp.dll")' 'n <- c(.C("ompn", n = 0L)$n, .C("lompn", n = 0L)$n)' 'stopifnot(n >= 1L)' 'cat("omp, lomp: omp_get_max_threads() =", n, "\n")' > "$ow/load.R"
+    pkgs="omp lomp"
+    if grep -Eq '^SHLIB_OPENMP_FFLAGS = *-' "$mk_x64" && command -v flang > /dev/null 2>&1; then
+      fomp_src "$ow"
+      printf '%s\n' "$FOMP_R" >> "$ow/load.R"
+      pkgs="omp lomp fomp fompfc"
+    fi
+    for d in probe $pkgs; do
+      src="$d.c"; [ -f "$ow/$d/$src" ] || src="$d.f"
+      (cd "$ow/$d" && R_ZIG_EXTRA_ENV= CONDA_PREFIX="$(cygpath -w "$decoy")" \
+        "$R_EXE" CMD SHLIB -o "$d.dll" "$src" > shlib.log 2>&1) || { cat "$ow/$d/shlib.log" >&2; echo "error: the OpenMP package $d failed to build with the tree alone" >&2; exit 1; }
+      [ "$d" = probe ] && continue
+      needed_of "$ow/$d/$d.dll" | grep -qix 'libomp\.dll' || { needed_of "$ow/$d/$d.dll" >&2; echo "error: $d.dll does not import libomp.dll" >&2; exit 1; }
+    done
+    if [ -f "$ow/fompfc/shlib.log" ] && ! grep -Eq 'toolchain/zig-fc(\.exe)? -shared .*-o fompfc\.dll' "$ow/fompfc/shlib.log"; then
+      cat "$ow/fompfc/shlib.log" >&2; echo "error: the USE_FC_TO_LINK link of fompfc did not run zig-fc" >&2; exit 1
+    fi
+    sysdir="$(cygpath -u "${SYSTEMROOT:-C:\Windows}")"
+    (cd "$ow" && env -i SYSTEMROOT="$(cygpath -w "$sysdir")" WINDIR="$(cygpath -w "$sysdir")" \
+      USERPROFILE="$(cygpath -w "$ow")" HOME="$(cygpath -w "$ow")" LOCALAPPDATA="$(cygpath -w "$ow")" \
+      TMPDIR="$(cygpath -w "$ow/tmp")" TMP="$(cygpath -w "$ow/tmp")" TEMP="$(cygpath -w "$ow/tmp")" \
+      PATH="$BUNDLE_DIR/Library/lib/R/bin/x64:$sysdir/System32" \
+      "$R_BIN" --vanilla load.R) || { echo "error: the OpenMP packages ($pkgs) did not load with PATH = bin\\x64 + System32" >&2; exit 1; }
+    echo "== compiled packages verified: OpenMP from the tree alone (probe $pkgs: omp.h, libomp.lib; libomp.dll from bin\\x64 at load)"
   fi
 fi
 
@@ -353,7 +452,10 @@ FORTRAN
     # -L rzig adds for the environment it is installed in. Three ways
     # packages ask: R's SHLIB_OPENMP_CFLAGS, data.table's configure probe
     # (omp.h included with no OpenMP flag), and PKG_LIBS = -lomp with no
-    # -fopenmp at all (libomp found through rzig's -L alone).
+    # -fopenmp at all (libomp found through rzig's -L alone). Each package
+    # must link libomp itself: libR has it loaded already and a shared
+    # link may leave symbols undefined (macOS Makeconf: -undefined
+    # dynamic_lookup), so one whose -lomp went missing would still load.
     if grep -q '^SHLIB_OPENMP_CFLAGS = *-' "$BUNDLE_DIR/lib/R/etc/Makeconf"; then
       mkdir -p "$pkg_dir/omp" "$pkg_dir/lomp"
       printf '%s\n' '#include <omp.h>' '#include <R.h>' 'void ompn(int *n) { *n = omp_get_max_threads(); }' > "$pkg_dir/omp/omp.c"
@@ -373,9 +475,42 @@ FORTRAN
         echo "error: an OpenMP package compiled with the bundle records rpaths: $omp_rp" >&2
         exit 1
       fi
+      for so in "$pkg_dir/omp/omp.so" "$pkg_dir/lomp/lomp.so"; do
+        needed_of "$so" | grep -q 'libomp\.' || { needed_of "$so" >&2; echo "error: ${so##*/} does not link libomp" >&2; exit 1; }
+      done
       (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
         "$R_BIN" --vanilla --no-echo -e 'dyn.load("omp/omp.so"); dyn.load("lomp/lomp.so"); stopifnot(.C("ompn", n = 0L)$n >= 1L, .C("lompn", n = 0L)$n >= 1L)')
-      echo "== compiled package verified: OpenMP from the tree's own omp.h and libomp through rzig's -I/-L (SHLIB_OPENMP_CFLAGS, a flagless omp.h probe, PKG_LIBS = -lomp), no rpath, loads"
+      echo "== compiled package verified: OpenMP from the tree's own omp.h and libomp through rzig's -I/-L (SHLIB_OPENMP_CFLAGS, a flagless omp.h probe, PKG_LIBS = -lomp), links libomp, no rpath, loads"
+    fi
+
+    # Fortran OpenMP, wherever Makeconf offers it (slim, full): `use
+    # omp_lib` compiles against the omp_lib.mod of the flang on PATH
+    # (flang-rt-zig's, LLVM 23, the release of the llvm-openmp pixi.toml
+    # pins), and the package links the tree's libomp through rzig, as the C
+    # one does (and, as there, must record it itself). R-exts' two forms:
+    # $(SHLIB_OPENMP_FFLAGS) on the compile and $(SHLIB_OPENMP_CFLAGS) on
+    # the link, which the C compiler does (fomp); and USE_FC_TO_LINK with
+    # $(SHLIB_OPENMP_FFLAGS) on both, zig-fc linking (fompfc). FOMP_R
+    # checks that a parallel region ran on two of libomp's threads. flang
+    # is on PATH for the compile only: the load runs with /usr/bin:/bin.
+    if grep -q '^SHLIB_OPENMP_FFLAGS = *-' "$BUNDLE_DIR/lib/R/etc/Makeconf" && [ -x "$zig_dir/flang" ]; then
+      fomp_src "$pkg_dir"
+      for d in fomp fompfc; do
+        (cd "$pkg_dir/$d" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+          "$R_BIN" CMD SHLIB -o "$d.so" "$d.f" > shlib.log 2>&1) || { cat "$pkg_dir/$d/shlib.log" >&2; echo "error: the Fortran OpenMP package $d failed to build with the bundle" >&2; exit 1; }
+        check_minos "$pkg_dir/$d/$d.o" "$pkg_dir/$d/$d.so"
+        f_dep="$(needed_of "$pkg_dir/$d/$d.so" | grep flang_rt || true)"
+        d_rp="$(rpaths_of "$pkg_dir/$d/$d.so" | tr '\n' ' ')"
+        if [ -n "$f_dep" ] || [ -n "$d_rp" ]; then
+          echo "error: the Fortran OpenMP package $d needs a shared flang runtime ($f_dep) or records rpaths ($d_rp)" >&2
+          exit 1
+        fi
+        needed_of "$pkg_dir/$d/$d.so" | grep -q 'libomp\.' || { needed_of "$pkg_dir/$d/$d.so" >&2; echo "error: the Fortran OpenMP package $d does not link libomp" >&2; exit 1; }
+      done
+      grep -Eq 'toolchain/zig-fc (-shared|-dynamiclib) .*-o fompfc\.so' "$pkg_dir/fompfc/shlib.log" || { cat "$pkg_dir/fompfc/shlib.log" >&2; echo "error: the USE_FC_TO_LINK link of fompfc did not run zig-fc" >&2; exit 1; }
+      (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
+        "$R_BIN" --vanilla --no-echo -e "$FOMP_R")
+      echo "== compiled package verified: Fortran OpenMP (use omp_lib, a parallel region on two threads; SHLIB_OPENMP_FFLAGS, linked by the C compiler and by zig-fc) links the tree's libomp, no rpath, loads"
     fi
 
     # rzig never reads CONDA_PREFIX (F3b): an activated env R is not

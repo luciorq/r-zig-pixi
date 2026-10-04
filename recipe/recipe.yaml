@@ -248,7 +248,10 @@ outputs:
         - icu
         - tzdata
         - libdeflate
-        - llvm-openmp
+        # 23, as pixi.toml, so the conda build uses the libomp CI tests.
+        # Its run export (>= the host version, 23.1.2 today) is the only
+        # bound r-zig-slim's run gets (below).
+        - llvm-openmp 23.*
         - cairo
         - expat
         - pango
@@ -330,6 +333,9 @@ outputs:
         - icu
         - tzdata
         - libdeflate
+        # unpinned: host's run export sets the floor, and a newer libomp
+        # runs code built against an older omp.h, so a ceiling would only
+        # clash with packages built against the next LLVM's llvm-openmp
         - llvm-openmp
         - cairo
         - expat
