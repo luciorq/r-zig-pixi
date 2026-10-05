@@ -75,6 +75,32 @@ and tiff devices), and `minimal` (smaller than slim: also no cairo/png,
 ICU, OpenMP or libdeflate; linux/macOS only). `minimal` is the variant
 the Python wheel wraps.
 
+### Build with upstream zig
+
+The environment's zig is conda-forge's build. R builds just as well with
+upstream zig (the [ziglang.org](https://ziglang.org/download/) release,
+which the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package
+is), and the project keeps both working; upstream zig is the reference.
+`pixi run fetch-zig` downloads PyPI's `ziglang` 0.16.0 wheel for this
+platform once (checksum-pinned; a wheel is a zip, so no Python is
+involved), unpacks it under `build/zig-upstream/` and prints its zig's
+path. The tasks that run zig, `build`, `check`, `rzig-test` and the two
+that compile packages with the built tree (`contract`, `verify-package`),
+take it from `ZIG_BIN`; the other checks look at the tree it built:
+
+```bash
+export ZIG_BIN="$(pixi run fetch-zig)"   # PowerShell: $env:ZIG_BIN = pixi run fetch-zig
+pixi run build && pixi run verify-tree && pixi run smoke && pixi run contract && pixi run verify-package
+```
+
+The build prints the zig it uses (`r-zig: zig = ...`); unset `ZIG_BIN`
+to go back to the environment's. Each zig keeps its own cache in
+`build/zig-cache/`, so switching between them never mixes their objects.
+The conda package (`pixi run -e pkg conda-package`) always builds with
+its recipe's zig, conda-forge's: rattler-build gives the recipe a clean
+environment, without `ZIG_BIN`. `wheel-test` always compiles with the
+`ziglang` it installs into its venv, which is upstream zig already.
+
 ### Build R as a Python wheel
 
 ```bash
@@ -93,8 +119,8 @@ front (rzig) and GNU make, with the PyPI
 [`ziglang`](https://pypi.org/project/ziglang/) package as the compiler, so
 no system compiler is needed.
 ziglang is an upstream zig build, which links its own libc++ statically,
-so compiled C++ packages need no C++ runtime; a zig from a conda
-environment on PATH links conda's shared libc++ on macOS instead. Linux
+so compiled C++ packages need no C++ runtime (with conda-forge's zig,
+which would link conda's shared libc++, rzig keeps it static). Linux
 wheels are `manylinux2014` (glibc 2.17). Packages with Fortran sources need
 a Fortran compiler, which neither the wheel nor ziglang provides: R's FC,
 the toolchain's `zig-fc`, runs an LLVM `flang` found on PATH and stops
@@ -122,6 +148,14 @@ publishing on every push to `main`. There is no self-hosted fleet — the
 former gamma/omicron/kappa runners were decommissioned in September 2026
 and fully removed on 2026-09-24. Docs-only changes (`*.md`,
 `.github/devdocs/`) skip the workflow.
+
+`upstream-zig` runs the same `build` steps (`.github/workflows/build-r.yaml`,
+shared by both workflows) on `default` for ubuntu-latest, macos-latest
+and windows-latest with upstream zig (`pixi run fetch-zig`). It is a
+release gate, not per-commit CI: it runs on demand (`gh workflow run
+upstream-zig.yaml`), for `v*` tags, and on pull requests labelled
+`upstream-zig`. Every commit already compiles packages with upstream
+zig through the wheel tests, whose compiler is PyPI's `ziglang`.
 
 The whole matrix is gated behind one repo variable, an emergency kill
 switch rather than a cost control (hosted runners are free for this

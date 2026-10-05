@@ -44,6 +44,9 @@ const rspec = @import("zigbuild/rspec.zig");
 // (feat-no-host-paths F3), and the floors it shares with R's own build.
 const rzig_build = @import("zigbuild/tools/rzig/build.zig");
 const floors = @import("zigbuild/tools/rzig/floors.zig");
+// The static-libc++ mirror against conda-forge zig's shared one, rzig's
+// for packages and R's own build's (staticLibcxxLibDir).
+const libcxx_mirror = @import("zigbuild/tools/rzig/libcxx_mirror.zig");
 
 const r_version = "4.6.1";
 
@@ -145,6 +148,11 @@ const Ctx = struct {
     gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran (fc == .gfortran; "" otherwise)
     toolchain_hint: []const u8, // -Dtoolchain-hint, "" when unset
     sdk: []const u8, // macOS: the installed SDK's root (xcrun); "" elsewhere
+    // The zig lib dir of R's links, null for zig's own: a mirror of it
+    // where conda-forge's zig would link a shared libc++
+    // (staticLibcxxLibDir). Set on every unix link (addSharedLib, R.bin);
+    // always null on Windows, whose links leave it alone.
+    zig_lib_dir: ?std.Build.LazyPath,
     prefix_is_env: bool, // the install prefix is the env R is built in (the conda build): samePhysicalDir
     subst: std.StringHashMap([]const u8),
     // Makeconf's own values for the keys that name the build environment
@@ -494,6 +502,7 @@ pub fn build(b: *std.Build) !void {
         .config_dir = config_dir,
         .toolchain_hint = toolchain_hint,
         .sdk = sdk,
+        .zig_lib_dir = try staticLibcxxLibDir(b, io, os),
         .prefix_is_env = samePhysicalDir(io, arena, install_prefix, conda),
         // Windows keeps these defaults. Its compile graph never passes
         // `.openmp = true`, so R itself has no OpenMP there, and `openmp`
@@ -704,6 +713,7 @@ pub fn build(b: *std.Build) !void {
     const rbin = b.addExecutable(.{ .name = "R.bin", .root_module = rbin_mod });
     rbin.rdynamic = true; // MAIN_LDFLAGS = -Wl,--export-dynamic
     rbin.each_lib_rpath = false; // see addSharedLib
+    rbin.zig_lib_dir = ctx.zig_lib_dir; // see addSharedLib
     macHeaderpad(&ctx, rbin);
 
     // ------------------------------------------------------------------
@@ -2312,6 +2322,41 @@ fn substFileTests(ctx: *Ctx, io: std.Io, rel: []const u8, srcdir_val: []const u8
 // helpers
 // ----------------------------------------------------------------------
 
+/// The zig lib dir R's links get (Ctx.zig_lib_dir; std.Build passes it as
+/// --zig-lib-dir, Step/Compile.zig). libc++ is static everywhere (decided
+/// 2026-09-30), and R itself links it on macOS (flang's runtime is C++,
+/// linkFortranRt). Upstream zig always links its own; conda-forge's zig
+/// links a shared one whenever one sits in <lib dir>/../../lib (every
+/// macOS env, any env with `libcxx`), unless its lib dir is a mirror with
+/// nothing beside it: zigbuild/tools/rzig/libcxx_mirror.zig, which rzig
+/// uses for packages, made here in zig build's local cache (which env.sh
+/// keeps one of per zig). Where the probe would fire the mirror is always
+/// used, so no shared-libc++ link ever enters that cache. Null otherwise,
+/// so upstream zig builds with its own lib dir. On Windows symlink
+/// mirrors cannot be made (no win-64 env has libc++.dll.a): stop instead.
+fn staticLibcxxLibDir(b: *std.Build, io: std.Io, os: Os) !?std.Build.LazyPath {
+    const lib_dir = b.graph.zig_lib_directory.path orelse ".";
+    if (os == .windows) {
+        if (try libcxx_mirror.sharedLibcxx(io, b.allocator, lib_dir, .windows)) |p| {
+            std.debug.print("error: {s} would make zig link a shared libc++; remove the libcxx package from this env\n", .{p});
+            return error.SharedLibcxx;
+        }
+        return null;
+    }
+    const cache = try b.cache_root.handle.realPathFileAlloc(io, ".", b.allocator);
+    switch (try libcxx_mirror.prepare(io, b.allocator, lib_dir, b.fmt("{s}/r-zig", .{cache}))) {
+        .none => return null,
+        .failed => |m| {
+            std.debug.print("error: could not make {s}, the zig lib dir mirror for a static libc++ (remove it if an interrupted build left it)\n", .{m});
+            return error.LibcxxMirror;
+        },
+        .ready => |mirror| {
+            std.debug.print("r-zig: static libc++ (zig lib dir {s} mirrored to {s})\n", .{ lib_dir, mirror });
+            return .{ .cwd_relative = mirror };
+        },
+    }
+}
+
 /// Locate the directory holding libflang_rt.runtime.a: the clang resource
 /// dir, `$CONDA/lib/clang/<major>/lib/<subdir>/` (`$CONDA/Library/lib/
 /// clang/...` on Windows). `<subdir>` is an LLVM triple on linux
@@ -2517,7 +2562,31 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
 /// anticipated in the spec).
 fn addSharedLib(ctx: *const Ctx, name: []const u8, mod: *std.Build.Module) *std.Build.Step.Compile {
     ctx.addSdkPaths(mod); // last: every caller has added its -L dirs by now
+    // Windows, for upstream zig (the ziglang.org release, PyPI's ziglang):
+    // a DLL without a .def file exports every global symbol (LLD's MinGW
+    // auto-export) except the C runtime's, which LLD knows by their GNU
+    // object names (dllcrt2.o), not zig's (dllcrt2.obj). So the DLL's own
+    // atexit (mingw's crtdll.c) is exported too, and an exe that calls
+    // atexit and links the DLL's import library fails with "duplicate
+    // symbol: atexit" against its own CRT object's (crtexe.c): Rterm.exe
+    // and Rscript.exe (rterm.c's atexit(restore_cp)) with Rgraphapp's.
+    // -exclude-symbols in the object's .drectve section is the directive
+    // gcc and clang emit for a hidden symbol on MinGW. conda-forge's zig
+    // hides atexit by accident (feedstock patches mingw-crtexe-no-atexit,
+    // ucrtbase-export-atexit-alias), and there this is a no-op. Packages
+    // are not affected: R links them with a .def file of their own.
+    // (feat-no-host-paths PLAN.md, F4: the upstream report's draft.)
+    if (ctx.os == .windows) {
+        const wf = ctx.b.addWriteFiles();
+        mod.addCSourceFile(.{ .file = wf.add("no_crt_exports.c",
+            \\__asm__(".section .drectve,\"yni\"\n\t.ascii \" -exclude-symbols:atexit\"\n\t.text");
+            \\
+        ), .flags = &.{} });
+    }
     const lib = ctx.b.addLibrary(.{ .linkage = .dynamic, .name = name, .root_module = mod });
+    // conda-forge's zig: a lib dir it finds no shared libc++ beside
+    // (staticLibcxxLibDir)
+    lib.zig_lib_dir = ctx.zig_lib_dir;
     if (ctx.os == .macos) lib.linker_allow_shlib_undefined = true;
     // A native target would otherwise turn every -L directory (the env's
     // lib dir, flang's) into an absolute rpath; relRPaths sets the ones

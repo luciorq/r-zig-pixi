@@ -35,10 +35,6 @@ TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
 CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
 CHECKSUM_FILE="$ROOT/scripts/checksums/R-$R_VERSION.sha256"
 
-# Keep zig's compilation cache inside the workspace, not in $HOME.
-export ZIG_GLOBAL_CACHE_DIR="$BUILD_DIR/zig-cache/global"
-export ZIG_LOCAL_CACHE_DIR="$BUILD_DIR/zig-cache/local"
-
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) OS=windows ;;
   Darwin) OS=macos ;;
@@ -75,6 +71,59 @@ if [ "$OS" != windows ] && [ -n "${CONDA_PREFIX:-}" ]; then
   # in a separate build env — keep it on PATH there.
   export PATH="$CONDA_PREFIX/bin${BUILD_PREFIX:+:$BUILD_PREFIX/bin}:/usr/bin:/bin"
 fi
+
+# The zig the scripts run (zig-build.sh, rzig's test.sh, verify-bundle's
+# compiles), found as rzig finds it (zigbuild/tools/rzig/find_zig.zig):
+# ZIG_BIN, else zig on PATH, the env's (conda-forge's). R builds with
+# conda-forge's zig and with upstream zig, the ziglang.org release, which
+# PyPI's ziglang is (feat-no-host-paths F4): with ZIG_BIN=<its path>
+# (`pixi run fetch-zig` prints one) the pipeline tasks that run zig
+# (build, check, rzig-test, contract, verify-package) build, compile and
+# test with it. Not conda-package, whose rattler-build gives the recipe a
+# clean environment and so its build env's zig, nor wheel-test, which
+# compiles with the venv's ziglang. On win-64 conda-forge's real binary is
+# x86_64-w64-mingw32-zig: its `zig` is a .bat, which MSYS bash cannot run.
+# Empty with no zig at all (scripts that run none still work).
+#
+# Always an absolute path, so that it names the same zig from every
+# directory: rzig resolves ZIG_BIN from its working directory, which R
+# CMD and verify-bundle's compiles change, and quietly takes PATH's zig,
+# the env's, when it finds nothing there. So a bare name in ZIG_BIN is
+# looked up on PATH, a relative path is taken from here (the project
+# root, where pixi runs tasks), a ZIG_BIN that does not run stops here,
+# and ZIG_BIN is exported as the result (C:/... on Windows, as fetch-zig
+# prints it), the file that builds R and keys its caches below.
+if [ -n "${ZIG_BIN:-}" ]; then
+  case "$ZIG_BIN" in
+    */*|*\\*) ZIG="$ZIG_BIN" ;;
+    *) ZIG="$(command -v "$ZIG_BIN" || true)" ;;
+  esac
+else
+  ZIG="$(command -v zig || command -v x86_64-w64-mingw32-zig || true)"
+fi
+case "$ZIG" in
+  ''|/*|[A-Za-z]:[/\\]*) ;;
+  *) ZIG="$PWD/${ZIG#./}" ;;
+esac
+if [ -n "${ZIG_BIN:-}" ]; then
+  if ! "$ZIG" version > /dev/null 2>&1; then
+    echo "error: ZIG_BIN=$ZIG_BIN names no zig that runs (from $PWD)" >&2
+    exit 1
+  fi
+  if command -v cygpath > /dev/null 2>&1; then ZIG="$(cygpath -m "$ZIG")"; fi
+  export ZIG_BIN="$ZIG"
+fi
+
+# zig's caches: inside the workspace, not in $HOME, and one per zig. zig's
+# cache knows zig's version, not which build of it, so conda-forge's
+# 0.16.0 and upstream's 0.16.0 handed each other their objects (2026-10-04:
+# one checkout gave a tree of upstream's LLD over conda clang's cached C
+# objects). The key is the zig binary's cksum (CRC and size), cheap and
+# portable: another build of zig at the same path, as a pixi update
+# installs, gets caches of its own too.
+zig_key="$({ cksum < "$ZIG"; } 2>/dev/null | tr ' ' -)" || zig_key=""
+export ZIG_GLOBAL_CACHE_DIR="$BUILD_DIR/zig-cache/zig-${zig_key:-none}/global"
+export ZIG_LOCAL_CACHE_DIR="$BUILD_DIR/zig-cache/zig-${zig_key:-none}/local"
 
 njobs() {
   nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4

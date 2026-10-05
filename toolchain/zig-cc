@@ -31,8 +31,9 @@ fi
 # symlinks, nested as <mirror>/lib/zig so that <mirror>/lib has no libc++).
 # Kept in the user's cache, one per zig lib dir, made once: mkdir is the
 # lock for parallel make jobs, .complete the marker. Unix only (MSYS's
-# ln -s copies; no win-64 env has libc++.dll.a); see zig-build.sh for R's
-# own build.
+# ln -s copies; no win-64 env has libc++.dll.a). rzig's
+# zigbuild/tools/rzig/libcxx_mirror.zig does the same (parity-test.sh),
+# and build.zig uses it for R's own build (staticLibcxxLibDir).
 r_zig_static_libcxx() {
   local zl="${ZIG_LIB_DIR:-}" d m key e i
   if [ -z "$zl" ] && [ "${ZIG[0]}" != python3 ]; then

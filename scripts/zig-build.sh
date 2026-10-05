@@ -7,12 +7,14 @@
 # (macOS fd ulimit for zig's linker opening ~300 libR objects at once is
 # already raised unconditionally by env.sh, sourced above.)
 
-# On Windows, conda-forge's own `zig` is only ever installed as
-# Library/bin/zig.cmd|.bat — native cmd.exe/PowerShell resolve those via
-# PATHEXT automatically, but MSYS bash (what this script runs under) does
-# not, so a bare `zig` fails with "command not found" even though it's on
-# PATH. Same fallback rzig (R_HOME/bin/toolchain's zig-cc) uses.
-ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
+# The zig that builds R: env.sh's $ZIG, ZIG_BIN or else the env's
+# (conda-forge's or upstream, feat-no-host-paths F4), with the caches
+# env.sh keeps for it. Printed, with its version and lib dir, as build.zig
+# prints the Fortran compiler, so a build log always says which it was.
+"$ZIG" version > /dev/null 2>&1 ||
+  { echo "error: cannot run zig '$ZIG' (ZIG_BIN=${ZIG_BIN:-}, else zig on PATH)" >&2; exit 1; }
+zig_lib="$("$ZIG" env | sed -n 's/^ *\.lib_dir = "\(.*\)",$/\1/p' | sed 's/\\\\/\\/g')"
+echo "r-zig: zig = $ZIG ($("$ZIG" version); lib dir $zig_lib)"
 
 PREFIX_ZIG="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
 
@@ -46,38 +48,11 @@ if [ "$applied" != "$series" ]; then
   printf '%s\n' "$series" > "$stamp"
 fi
 
-# libc++ is linked statically, everywhere (decided 2026-09-30): R itself
-# (libR, bin/exec/R, the modules) and, through rzig (R_HOME/bin/toolchain's
-# zig-cc and zig-cxx, zigbuild/tools/rzig/libcxx_mirror.zig), every
-# package compiled with it. Upstream zig does that on its own;
-# conda-forge's zig links a shared libc++ whenever one sits in
-# <zig lib dir>/../../lib (feedstock patch Lld.zig-prefer-shared-libcxx),
-# which a macOS conda env always has. A ZIG_LIB_DIR mirror without it
-# beside defeats the probe (flang-pixi handoff section 6). zig build's
-# cache is not keyed on the probe's result, so a warm cache would hand
-# back the shared-libc++ links: the mirror build gets its own local cache.
-zl="${ZIG_LIB_DIR:-}"
-[ -z "$zl" ] && [ -f "${ZIG%/*}/../lib/zig/std/std.zig" ] && zl="${ZIG%/*}/../lib/zig"
-if [ -n "$zl" ]; then
-  shared_cxx=""
-  for e in libc++.1.dylib libc++.dylib libc++.so.1 libc++.so libc++.dll.a; do
-    [ -e "$zl/../../lib/$e" ] && shared_cxx="$zl/../../lib/$e" && break
-  done
-  if [ -n "$shared_cxx" ] && [ "$OS" = windows ]; then
-    # MSYS's ln -s copies, so no mirror here; no win-64 env has one today.
-    echo "error: $shared_cxx would make zig link a shared libc++; remove the libcxx package from this env" >&2
-    exit 1
-  elif [ -n "$shared_cxx" ]; then
-    zl="$(cd "$zl" && pwd -P)"
-    mirror="$BUILD_DIR/zig-lib-static"
-    rm -rf "$mirror"
-    mkdir -p "$mirror/lib/zig"
-    for e in "$zl"/*; do ln -s "$e" "$mirror/lib/zig/"; done
-    export ZIG_LIB_DIR="$mirror/lib/zig"
-    export ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR-static-libcxx"
-    echo "r-zig: static libc++ (zig lib dir mirrored from $zl)"
-  fi
-fi
+# libc++ is linked statically, everywhere (decided 2026-09-30), also with
+# conda-forge's zig, which links a shared one when it finds one beside
+# its lib dir: build.zig gives R's links a mirror of that lib dir
+# (staticLibcxxLibDir), rzig does the same for packages, one
+# implementation for both (zigbuild/tools/rzig/libcxx_mirror.zig; F4).
 
 # The conda build (recipe/recipe.yaml sets R_ZIG_CONDA_BUILD): the compile
 # preflight's hint names r-zig-toolchain (the wheel sets its own; otherwise

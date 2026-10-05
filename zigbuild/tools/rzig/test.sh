@@ -7,9 +7,8 @@
 . "$(dirname "$0")/../../../scripts/env.sh"
 here=$(cd "$(dirname "$0")" && pwd)
 
-# zig as zig-build.sh finds it (on win-64 conda-forge's real binary is
-# x86_64-w64-mingw32-zig; `zig` is a .bat MSYS cannot run)
-ZIG="${ZIG_BIN:-$(command -v zig || command -v x86_64-w64-mingw32-zig)}"
+# zig as zig-build.sh runs it: env.sh's $ZIG (ZIG_BIN, else the env's)
+echo "rzig-test: zig = $ZIG ($("$ZIG" version))"
 "$ZIG" build --build-file "$here/build.zig" test --summary all
 if [ "$OS" = linux ]; then
   ZIG="$ZIG" bash "$here/parity-test.sh"

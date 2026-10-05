@@ -201,8 +201,10 @@ if [ "$OS" = windows ]; then
   # windows.libs resolves it to the tree's libomp.lib), and where Makeconf
   # offers Fortran OpenMP the fomp/fompfc packages (`use omp_lib`). They
   # build with no environment but the tree's: R_ZIG_EXTRA_ENV empty and
-  # the poisoned decoy as CONDA_PREFIX; zig, make, sh and flang come from
-  # PATH, as a compile needs them. Each but the probe must import
+  # the poisoned decoy as CONDA_PREFIX; make, sh and flang come from PATH,
+  # as a compile needs them, and zig too unless the caller set ZIG_BIN
+  # (upstream zig, F4), which these compiles and the dry runs above
+  # inherit, as they do env.sh's zig caches. Each but the probe must import
   # libomp.dll (PE resolves every symbol at link time, so that is
   # libomp.lib from the tree). Then they load in an R whose environment
   # holds only what Windows needs and whose PATH is bin\x64 and System32
@@ -319,10 +321,28 @@ if [ "$OS" != windows ]; then
     done
   }
 
-  zig_dir="$(dirname "$(command -v zig 2>/dev/null || echo /nonexistent/zig)")"
-  if [ -x "$zig_dir/zig" ]; then
+  # What a compile needs under env -i, as on a user machine. zig: env.sh's
+  # $ZIG, the one the build used (ZIG_BIN, else the env's), passed on as
+  # ZIG_BIN, which env -i drops (rzig would then take the env's zig from
+  # PATH and test conda-forge's zig after an upstream zig's build), with
+  # the caches env.sh keeps for that zig. make and flang: from PATH, their
+  # own directories (the env's bin); flang's decides whether the Fortran
+  # checks run. Every env -i that compiles takes $pkg_path and zig_env.
+  fc_dir="$(dirname "$(command -v flang 2>/dev/null || echo /nonexistent/flang)")"
+  pkg_path="$(dirname "$(command -v make 2>/dev/null || echo /nonexistent/make)"):$fc_dir:/usr/bin:/bin"
+  zig_env=(ZIG_BIN="$ZIG" ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR")
+  if [ -n "$ZIG" ] && [ -x "$ZIG" ]; then
     pkg_dir="$VERIFY_DIR/shlib"
     mkdir -p "$pkg_dir"
+    # rzig takes ZIG_BIN only when it names a zig from the compile's own
+    # directory, and otherwise quietly runs PATH's, the env's. env.sh makes
+    # $ZIG absolute; this checks that the compiles below do run it: the
+    # command's first word, after the ZIG_LIB_DIR= line rzig prints first
+    # where it gives conda-forge's zig the libc++ mirror (every macOS env).
+    rz="$(cd "$pkg_dir" && env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" RZIG_PRINT_ARGV=1 \
+      "$BUNDLE_DIR/lib/R/bin/toolchain/zig-cc" -c a.c | grep -v '^ZIG_LIB_DIR=' | sed -n 1p)"
+    [ "$rz" = "$ZIG" ] || { echo "error: the bundle's zig-cc runs '$rz', not the build's zig $ZIG" >&2; exit 1; }
+    echo "== the bundle's compilers run the build's zig, $ZIG"
     cat > "$pkg_dir/rp.cpp" <<'CPP'
 #include <R.h>
 #include <Rinternals.h>
@@ -335,7 +355,7 @@ extern "C" SEXP rp(void)
     return ScalarInteger((int) s.size());
 }
 CPP
-    (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+    (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" TMPDIR="${TMPDIR:-/tmp}" \
       "$R_BIN" CMD SHLIB -o rp.so rp.cpp > shlib.log 2>&1) || { cat "$pkg_dir/shlib.log" >&2; echo "error: R CMD SHLIB failed with the bundle" >&2; exit 1; }
     pkg_rp="$(rpaths_of "$pkg_dir/rp.so" | tr '\n' ' ')"
     if [ -n "$pkg_rp" ]; then
@@ -360,7 +380,7 @@ CPP
     # runs before staging, while libR still carries build-env rpaths that
     # hid the shared runtime once (2026-09-30, macOS slim). minimal empties
     # FLIBS (no Fortran compiler with the wheel), so it is skipped there.
-    if grep -q '^FLIBS = .*flang_rt' "$BUNDLE_DIR/lib/R/etc/Makeconf" && [ -x "$zig_dir/flang" ]; then
+    if grep -q '^FLIBS = .*flang_rt' "$BUNDLE_DIR/lib/R/etc/Makeconf" && [ -x "$fc_dir/flang" ]; then
       # fw needs the runtime (internal formatted I/O: _FortranAio*), so a
       # dropped -lflang_rt.runtime fails the dyn.load; fsum alone would not.
       cat > "$pkg_dir/fs.f" <<'FORTRAN'
@@ -379,7 +399,7 @@ CPP
       read(buf,'(i12)') r
       end
 FORTRAN
-      (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+      (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" TMPDIR="${TMPDIR:-/tmp}" \
         "$R_BIN" CMD SHLIB -o fs.so fs.f > fshlib.log 2>&1) || { cat "$pkg_dir/fshlib.log" >&2; echo "error: R CMD SHLIB of a Fortran file failed with the bundle" >&2; exit 1; }
       check_minos "$pkg_dir/fs.o" "$pkg_dir/fs.so"
       f_dep="$(needed_of "$pkg_dir/fs.so" | grep flang_rt || true)"
@@ -399,7 +419,7 @@ FORTRAN
       mkdir -p "$pkg_dir/fl"
       cp "$pkg_dir/fs.f" "$pkg_dir/fl/fl.f"
       echo 'USE_FC_TO_LINK =' > "$pkg_dir/fl/Makevars"
-      (cd "$pkg_dir/fl" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+      (cd "$pkg_dir/fl" && env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" TMPDIR="${TMPDIR:-/tmp}" \
         "$R_BIN" CMD SHLIB -o fl.so fl.f > shlib.log 2>&1) || { cat "$pkg_dir/fl/shlib.log" >&2; echo "error: a USE_FC_TO_LINK Fortran package failed to link with the bundle" >&2; exit 1; }
       grep -Eq 'toolchain/zig-fc (-shared|-dynamiclib) .*-o fl\.so' "$pkg_dir/fl/shlib.log" || { cat "$pkg_dir/fl/shlib.log" >&2; echo "error: the USE_FC_TO_LINK link did not run zig-fc" >&2; exit 1; }
       check_minos "$pkg_dir/fl/fl.o" "$pkg_dir/fl/fl.so"
@@ -439,7 +459,7 @@ FORTRAN
     ln -sf "$(command -v make)" "$pkg_dir/cf/bin/make"
     printf '%s\n' '#include <R.h>' 'void cfl(int *n) { *n = 7; }' > "$pkg_dir/cf/cf.c"
     printf '%s\n' 'PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)' > "$pkg_dir/cf/Makevars"
-    (cd "$pkg_dir/cf" && env -i HOME="$HOME" PATH="$pkg_dir/cf/bin:/usr/bin:/bin" ZIG_BIN="$zig_dir/zig" TMPDIR="${TMPDIR:-/tmp}" \
+    (cd "$pkg_dir/cf" && env -i HOME="$HOME" PATH="$pkg_dir/cf/bin:/usr/bin:/bin" "${zig_env[@]}" TMPDIR="${TMPDIR:-/tmp}" \
       "$R_BIN" CMD SHLIB -o cf.so cf.c > shlib.log 2>&1) || { cat "$pkg_dir/cf/shlib.log" >&2; echo "error: a C package using \$(FLIBS) failed to link with no flang on PATH" >&2; exit 1; }
     (cd "$pkg_dir/cf" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
       "$R_BIN" --vanilla --no-echo -e 'dyn.load("cf.so"); stopifnot(.C("cfl", n = 0L)$n == 7L)')
@@ -463,11 +483,11 @@ FORTRAN
       printf '%s\n' '#include <omp.h>' 'int ompprobe(void) { return 0; }' > "$pkg_dir/omp/probe.c"
       printf '%s\n' 'extern int omp_get_max_threads(void);' 'void lompn(int *n) { *n = omp_get_max_threads(); }' > "$pkg_dir/lomp/lomp.c"
       printf '%s\n' 'PKG_LIBS = -lomp' > "$pkg_dir/lomp/Makevars"
-      (cd "$pkg_dir/omp" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+      (cd "$pkg_dir/omp" && env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" TMPDIR="${TMPDIR:-/tmp}" \
         "$R_BIN" CMD SHLIB -o omp.so omp.c > shlib.log 2>&1 && rm Makevars &&
-        env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+        env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" TMPDIR="${TMPDIR:-/tmp}" \
         "$R_BIN" CMD SHLIB -o probe.so probe.c >> shlib.log 2>&1 && cd "$pkg_dir/lomp" &&
-        env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+        env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" TMPDIR="${TMPDIR:-/tmp}" \
         "$R_BIN" CMD SHLIB -o lomp.so lomp.c >> "$pkg_dir/omp/shlib.log" 2>&1) || { cat "$pkg_dir/omp/shlib.log" >&2; echo "error: an OpenMP package failed to build with the bundle" >&2; exit 1; }
       check_minos "$pkg_dir/omp/omp.so" "$pkg_dir/lomp/lomp.so"
       omp_rp="$(rpaths_of "$pkg_dir/omp/omp.so" | tr '\n' ' ')$(rpaths_of "$pkg_dir/lomp/lomp.so" | tr '\n' ' ')"
@@ -493,10 +513,10 @@ FORTRAN
     # $(SHLIB_OPENMP_FFLAGS) on both, zig-fc linking (fompfc). FOMP_R
     # checks that a parallel region ran on two of libomp's threads. flang
     # is on PATH for the compile only: the load runs with /usr/bin:/bin.
-    if grep -q '^SHLIB_OPENMP_FFLAGS = *-' "$BUNDLE_DIR/lib/R/etc/Makeconf" && [ -x "$zig_dir/flang" ]; then
+    if grep -q '^SHLIB_OPENMP_FFLAGS = *-' "$BUNDLE_DIR/lib/R/etc/Makeconf" && [ -x "$fc_dir/flang" ]; then
       fomp_src "$pkg_dir"
       for d in fomp fompfc; do
-        (cd "$pkg_dir/$d" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" \
+        (cd "$pkg_dir/$d" && env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" TMPDIR="${TMPDIR:-/tmp}" \
           "$R_BIN" CMD SHLIB -o "$d.so" "$d.f" > shlib.log 2>&1) || { cat "$pkg_dir/$d/shlib.log" >&2; echo "error: the Fortran OpenMP package $d failed to build with the bundle" >&2; exit 1; }
         check_minos "$pkg_dir/$d/$d.o" "$pkg_dir/$d/$d.so"
         f_dep="$(needed_of "$pkg_dir/$d/$d.so" | grep flang_rt || true)"
@@ -525,12 +545,12 @@ FORTRAN
     printf 'junk' > "$decoy/lib/libomp.so"; cp "$decoy/lib/libomp.so" "$decoy/lib/libz.so"
     for cpfx in "$decoy" ${CONDA_PREFIX:+"$CONDA_PREFIX"}; do
       rm -f "$pkg_dir/rp.so" "$pkg_dir/rp.o" "$pkg_dir/omp/omp.so" "$pkg_dir/omp/omp.o"
-      (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" CONDA_PREFIX="$cpfx" \
+      (cd "$pkg_dir" && env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" TMPDIR="${TMPDIR:-/tmp}" CONDA_PREFIX="$cpfx" \
         "$R_BIN" CMD SHLIB -o rp.so rp.cpp > decoy.log 2>&1) || { cat "$pkg_dir/decoy.log" >&2; echo "error: R CMD SHLIB failed with CONDA_PREFIX=$cpfx" >&2; exit 1; }
       sos="$pkg_dir/rp.so"
       if [ -f "$pkg_dir/omp/omp.c" ]; then
         printf '%s\n' 'PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$pkg_dir/omp/Makevars"
-        (cd "$pkg_dir/omp" && env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" TMPDIR="${TMPDIR:-/tmp}" CONDA_PREFIX="$cpfx" \
+        (cd "$pkg_dir/omp" && env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" TMPDIR="${TMPDIR:-/tmp}" CONDA_PREFIX="$cpfx" \
           "$R_BIN" CMD SHLIB -o omp.so omp.c > decoy.log 2>&1) || { cat "$pkg_dir/omp/decoy.log" >&2; echo "error: the OpenMP package failed with CONDA_PREFIX=$cpfx" >&2; exit 1; }
         sos="$sos $pkg_dir/omp/omp.so"
       fi
@@ -540,8 +560,8 @@ FORTRAN
       done
       # (zig itself, and its lib dir, may live in the build env)
       argv="$(cd "$pkg_dir" && for a in "-fopenmp -c a.c" "-shared -fopenmp -o x.so a.o -lz" "-o conftest conftest.c -lz"; do
-        env -i HOME="$HOME" PATH="$zig_dir:/usr/bin:/bin" CONDA_PREFIX="$cpfx" RZIG_PRINT_ARGV=1 "$BUNDLE_DIR/lib/R/bin/toolchain/zig-cc" $a; done |
-        grep -vxF -- "$zig_dir/zig" | grep -v '^ZIG_LIB_DIR=')"
+        env -i HOME="$HOME" PATH="$pkg_path" "${zig_env[@]}" CONDA_PREFIX="$cpfx" RZIG_PRINT_ARGV=1 "$BUNDLE_DIR/lib/R/bin/toolchain/zig-cc" $a; done |
+        grep -vxF -- "$ZIG" | grep -v '^ZIG_LIB_DIR=')"
       if printf '%s\n' "$argv" | grep -F -- "$cpfx"; then
         echo "error: rzig's command lines name CONDA_PREFIX=$cpfx" >&2; exit 1
       fi
@@ -549,6 +569,6 @@ FORTRAN
     done
     echo "== CONDA_PREFIX ignored: the C++ package (and the OpenMP one, where offered) builds with a poisoned and with the build env as CONDA_PREFIX, no rpath, and rzig's command lines name neither"
   else
-    echo "== compiled-package checks skipped (no zig on PATH)"
+    echo "== compiled-package checks skipped (no zig: ZIG_BIN unset, none on PATH)"
   fi
 fi

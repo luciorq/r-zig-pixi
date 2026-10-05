@@ -1,14 +1,16 @@
 # feat-no-host-paths — no build-machine paths, and a base R that installs without a toolchain
 
-**Status and handoff (2026-10-04).** Read this first; the sections
+**Status and handoff (2026-10-05).** Read this first; the sections
 below hold the detail and the reasons.
 
 Where it stands (branch feat-no-host-paths, PR open against main; pushed
 up to b4f97cc, CI green on every job through d233f2a "chore(ci): verify
 before package", run 37123137421; F1.7 committed as 23841a4 "feat: unify
 ci matrix", tested on every OS by hand; linux-64 on flang-zig committed
-as 2622a6d; OpenMP for packages on every OS is done in the working tree,
-tested on linux-64 and win-64, not yet committed):
+as 2622a6d; OpenMP for packages on every OS committed as 4868515, CI
+green on all 20 jobs; F4 is done in the working tree on top of 4868515,
+tested with both zigs on linux-64, osx-arm64, osx-64 under Rosetta and
+win-64, not yet committed):
 - Phase A done on all five platforms (the hermetic tier-0/1 check runs in
   CI everywhere). Phase T done for conda and pip (`r-zig-slim` +
   `r-zig-toolchain`; `r-zig` + `r-zig-toolchain` wheels); the standalone
@@ -64,6 +66,24 @@ tested on linux-64 and win-64, not yet committed):
   packages from the archive on every OS (Windows: with only bin\x64 and
   System32 on PATH), each linking libomp and the Fortran ones running a
   parallel region on two threads.
+- F4, both zigs (2026-10-05, record under F4 in "Simplicity review and
+  phase F"): R and packages build with conda-forge's zig and with
+  upstream zig (the ziglang.org release, which PyPI's ziglang is), and CI
+  keeps that tested at release time. `pixi run fetch-zig` gets upstream
+  zig (PyPI's wheel, sha256-pinned) and the pipeline tasks that run zig
+  honour ZIG_BIN (conda-package and wheel-test do not: rattler-build
+  gives the recipe a clean environment, wheel-test compiles with its
+  venv's ziglang); env.sh makes it an absolute path and keeps one zig
+  cache per zig; zig-build.sh prints the zig it
+  builds with; the two libc++ mirrors are one Zig implementation
+  (libcxx_mirror.zig, used by rzig and build.zig; zig-build.sh's bash
+  mirror is gone); build.zig hides atexit from R's Windows DLLs'
+  exports (upstream zig's one real failure, `duplicate symbol: atexit`
+  in Rterm.exe/Rscript.exe); verify-bundle.sh's env -i compiles keep
+  ZIG_BIN; CI's build steps are one reusable workflow (build-r.yaml),
+  called by build.yaml and by upstream-zig.yaml (default on
+  ubuntu/macos/windows-latest with upstream zig: dispatch, `v*` tags,
+  PRs labelled `upstream-zig`).
 
 The decisions that shape the code now (each has its record below):
 - The installed tree is the shipped tree (F1, on every OS since F1.7);
@@ -87,10 +107,22 @@ The decisions that shape the code now (each has its record below):
 - `RZIG_TRACE=1` prints rzig's own path, the environments it chose and
   the final command; `RZIG_PRINT_ARGV=1` prints the command instead of
   running it.
+- Both zigs, upstream zig the reference (F4, the user 2026-10-04/05: "I
+  want this project to keep the capability of being able to be built by
+  both zig from conda-forge and upstream", and "we should not deviate
+  further from supporting upstream just to satisfy conda-forge
+  quirks"). The design follows upstream zig (the ziglang.org release,
+  PyPI's ziglang); a conda-forge quirk gets a small, isolated workaround
+  that is a no-op with upstream zig and can be removed when the quirk
+  goes (the libc++ mirror, libcxx_mirror.zig), never a design change.
+  A difference that breaks upstream zig is fixed for upstream zig (the
+  atexit export, addSharedLib).
 
 What remains, in order (proposed; ask the user before starting each):
-1. F4: one zig (upstream zig everywhere, or a feedstock opt-out), which
-   retires the ZIG_LIB_DIR libc++ mirror.
+1. F4 is done (record under F4), tested on linux-64, osx-arm64, osx-64
+   and win-64 with both zigs: run upstream-zig.yaml once on GitHub (add
+   the `upstream-zig` label to the PR), and decide whether to file the
+   drafted upstream zig report on the auto-exported atexit.
 2. Major (decided 2026-10-04): a Windows minimal variant, then a Windows
    wheel (first without compile support; compiling needs a sh/make/
    coreutils userland the wheel would have to bring). Analysis and order:
@@ -105,6 +137,16 @@ What remains, in order (proposed; ask the user before starting each):
    gfortran branch (FortranCompiler.gfortran, findGfortranLibDir, the
    gfortran cases of linkFortranRt and the Windows Makeconf) and
    env.sh's gfortran fallback can go.
+7. Small, open (found in F4): the shipped tree still names build-machine
+   paths that verify-tree does not check: `__FILE__` strings (59 in libR
+   naming the checkout's build/R-4.6.1/src/main/*.c, more in other
+   binaries), lib/R/library/tools/misc/top.txt, and etc/fonts/fonts.conf's
+   `<cachedir>` naming the build env. `-ffile-prefix-map` (or
+   `-fmacro-prefix-map`) would fix the first; then a verify-tree check.
+8. Small, open (found in F4): on Windows, packages that link
+   `-lsynchronization` (Rust-based ones) build with conda-forge's zig,
+   which ships prebuilt MinGW import libraries, but not with upstream
+   zig 0.16.0, which has none for it.
 
 How to verify (Linux here; omicron = osx-arm64 and osx-64 via Rosetta
 in ~/rz-osx64; kappa = win-64 in C:\Users\admin\r-zig-pixi; see the
@@ -118,6 +160,13 @@ test-servers notes for SSH):
 - Windows: the same order as unix, `pixi run build && pixi run
   verify-tree && pixi run smoke && pixi run contract && pixi run check &&
   pixi run hermetic && pixi run verify-package` (no minimal or wheel).
+- Upstream zig (F4), on every OS: `export ZIG_BIN="$(pixi run
+  fetch-zig)"` (PowerShell: `$env:ZIG_BIN = pixi run fetch-zig`), then
+  the same tasks; the build log's `r-zig: zig = ...` line, RZIG_TRACE=1
+  and `.comment` (linux: `readelf -p .comment`, clang 21.1.0 for
+  upstream, 21.1.8 for conda-forge) show which zig built what. Each zig
+  has its own build/zig-cache/zig-<cksum>/ (the old build/zig-cache/
+  global and local can be deleted).
 
 R source references are to R 4.6.1 (`build/R-4.6.1/`).
 
@@ -255,18 +304,23 @@ T, the base vendors nothing; the wheel's toolchain package ships make
   through the shims, link libc++ statically. Upstream zig does that by
   itself. For conda-forge's zig, whose patch links a shared libc++
   whenever `<zig lib dir>/../../lib` has one (always in a macOS conda
-  env, on linux with any `libcxx` package), `zig-build.sh` and the
-  zig-cc/zig-cxx shims point `ZIG_LIB_DIR` at a mirror of the lib dir
-  (a real directory of symlinks, nested as `<mirror>/lib/zig` so that
-  its `../../lib` is empty): `build/zig-lib-static` for R, and
-  `${XDG_CACHE_HOME:-~/.cache}/r-zig/zig-lib-<key>` for the shims (made
-  once per lib dir; `mkdir` is the lock for parallel make jobs).
-  `zig-build.sh` also moves zig build's local cache aside when the
-  mirror is on (`zig-cache/local-static-libcxx`): that cache is not
-  keyed on the probe, and a warm one hands back the shared links.
-  `zig cc` outside zig build follows `ZIG_LIB_DIR` on every call
-  (tested). On Windows MSYS cannot make the symlinks; no win-64 env has
-  `libc++.dll.a`, and `zig-build.sh` stops if one appears. Enforced by
+  env, on linux with any `libcxx` package), zig gets a mirror of the
+  lib dir as its lib dir (a real directory of symlinks, nested as
+  `<mirror>/lib/zig` so that its `../../lib` is empty; made once per lib
+  dir, `mkdir` is the lock for parallel jobs). One implementation since
+  F4 (2026-10-05), zigbuild/tools/rzig/libcxx_mirror.zig: rzig (the
+  compilers, before them the zig-cc/zig-cxx shims) sets `ZIG_LIB_DIR`
+  to `${XDG_CACHE_HOME:-~/.cache}/r-zig/zig-lib-<key>`; build.zig
+  (staticLibcxxLibDir) makes it under zig build's local cache and sets
+  it as `zig_lib_dir` (`--zig-lib-dir`) on R's links. Until F4
+  zig-build.sh did R's in bash (`build/zig-lib-static`, plus a local
+  cache of its own, `zig-cache/local-static-libcxx`, because the cache
+  is not keyed on the probe); now the mirror is always used where the
+  probe fires, and env.sh keeps one cache per zig, so no shared link
+  enters a cache. `zig cc` outside zig build follows `ZIG_LIB_DIR` on
+  every call (tested). With upstream zig the probe never fires. On
+  Windows symlinks need a privilege; no win-64 env has `libc++.dll.a`,
+  and build.zig stops if one appears. Enforced by
   verify-bundle.sh (R's own binaries and its C++ test package, linux and
   macOS) and the contract suite (every compiled package). Conda's own C++
   libraries (ICU on macOS) still bring the shared libc++ into the
@@ -283,6 +337,9 @@ T, the base vendors nothing; the wheel's toolchain package ships make
   - r-zig-packages binaries: built with upstream zig for the standalone
     tree and the wheel, and with conda-forge's zig for conda; static
     libc++ either way.
+  - R itself builds with either (F4): the env's zig by default, upstream
+    zig with `ZIG_BIN` (`pixi run fetch-zig`); CI's upstream-zig.yaml
+    tests that as a release gate.
   - Optional, upstream: an opt-out in the conda-forge feedstock for its
     shared-libc++ lookup, which would replace the mirror.
 - **Base keeps what compiling needs from R itself:** headers,
@@ -590,8 +647,298 @@ workarounds into code.** In order:
     rzig does not sit in an R tree, so it composes with this. Touches
     phase T's package split and the compile preflight's "is the
     toolchain here" test.
-- **F4. One zig** (see Open): upstream zig everywhere, or a feedstock
-  opt-out; the mirror goes.
+- **F4. Both zigs** (redefined 2026-10-04; the original "one zig, the
+  mirror goes" is dropped): R and packages build with conda-forge's zig
+  and with upstream zig (PyPI's ziglang), and CI keeps that tested. The
+  user: "I want this project to keep the capability of being able to be
+  built by both zig from conda-forge and upstream (ziglang in PyPI should
+  be the same as upstream), so if there are modifications needed to keep
+  that capability I would like to keep it."
+  - **The user's terms (2026-10-04/05).** "I just want to keep in our
+    design decisions that we should not deviate further from supporting
+    upstream just to satisfy conda-forge quirks": upstream zig is the
+    reference, a conda-forge quirk gets a small, isolated, removable
+    workaround, never a design change (now in the Status section's
+    decisions). CI: R built with upstream zig on default for
+    ubuntu-latest, macos-latest and windows-latest, "not run for every
+    commit, treat it as major release gate or an integration test. If
+    the wheel packaging is working, it is probably enough for regular
+    CI." The two libc++ mirrors become one Zig implementation (the
+    user's choice). And the standing principle: "a single build path that
+    should just work everywhere and depend the minimum possible in OS
+    specific or shell specific trickery."
+  - **The investigation (2026-10-04, on 4868515; linux-64 here,
+    osx-arm64 and osx-64 on omicron, win-64 on kappa).**
+    - PyPI's ziglang 0.16.0 is the ziglang.org 0.16.0 build: the zig
+      binary and all 19,541 lib files are byte-identical on all three
+      OSes (the wheel only omits a FreeBSD-only header). conda-forge's
+      zig (`zig_impl_<subdir>` 0.16.0 `_15` in the lock) is another
+      binary, dynamically linked to conda's LLVM 21.1.8, with the
+      feedstock's patches.
+    - linux-64 and macOS: R built with upstream zig (ZIG_BIN) passes
+      build, verify-tree, smoke, contract, check, hermetic and
+      verify-package as it is; the same machine code.
+    - win-64: one real failure. Linking Rterm.exe and Rscript.exe fails
+      with `lld-link: duplicate symbol: atexit` (crtexe.c's crt2.obj
+      against Rgraphapp.lib's import of the DLL's own atexit). R's DLLs
+      are linked without .def files, so LLD's MinGW auto-export exports
+      every global, and LLD's exclusion of the C runtime's symbols knows
+      their GNU object names (dllcrt2.o), not zig's (dllcrt2.obj): the
+      DLL's atexit (mingw's crtdll.c) is exported. conda-forge's win-64
+      zig hides it by accident (its non_unix patches
+      mingw-crtexe-no-atexit and ucrtbase-export-atexit-alias). Plain
+      `zig cc` reproduces it (the report draft below).
+    - Two gaps in our checks: verify-bundle.sh's compiled-package section
+      ran every compile under `env -i` with PATH = the dir of `command -v
+      zig`, which dropped ZIG_BIN, so after an upstream build it tested
+      conda-forge's zig (and skipped everything in an env without zig);
+      and zig's cache cannot tell conda-forge's 0.16.0 from upstream's
+      (the same version string; lib inputs hashed relative to the lib
+      dir): switching zig in one checkout gave a mixed tree (upstream's
+      LLD over conda clang's cached objects).
+  - **The two zigs, side by side** (what matters to this project):
+
+    | | upstream (ziglang.org, PyPI ziglang) | conda-forge `zig` 0.16.0 `_15` |
+    |---|---|---|
+    | binary | static, LLVM/clang/LLD built in; clang 21.1.0 in `.comment` | dynamically linked to conda's libLLVM/libclang 21.1.8; 21.1.8 in `.comment` |
+    | libc++ | always its own, static | a shared one when `<lib dir>/../../lib` has one (Lld.zig-prefer-shared-libcxx; every macOS env, any env with `libcxx`): the mirror, libcxx_mirror.zig |
+    | glibc stubs in DT_NEEDED | only the ones used (`--as-needed`) | all of zig's glibc stubs (linux patch Lld.zig-no-unconditional-as-needed-glibc-bundled) |
+    | MinGW `atexit` (win-64 host) | crtexe.c defines it; DLLs auto-export crtdll.c's | crtexe.c's removed, UCRT alias (non_unix patches): no clash |
+    | MinGW import libraries | none for `synchronization` | prebuilt ones, `-lsynchronization` links |
+    | cache identity | version "0.16.0" | the same "0.16.0": one cache per zig (env.sh) |
+    | lib dir | `<dir of zig>/lib` | `<env>/lib/zig` |
+
+  - **What changed (2026-10-05).**
+    - build.zig `addSharedLib`, Windows: a generated `no_crt_exports.c`
+      whose `.drectve` section says `-exclude-symbols:atexit` (what gcc
+      and clang emit for a hidden symbol on MinGW). Fixes upstream zig's
+      Rterm.exe/Rscript.exe links; a no-op with conda-forge's zig (export
+      tables otherwise identical, kappa 2026-10-04). Packages are not
+      affected (R links them with a .def file).
+    - One libc++ mirror in Zig: zigbuild/tools/rzig/libcxx_mirror.zig's
+      core no longer needs rzig's Ctx: `prepare(io, arena, lib_dir,
+      cache_root)` probes `<lib dir>/../../lib` for the names the
+      feedstock patch looks for and returns the mirror's lib/zig (made
+      once: the directory is the lock, `.complete` the marker), `.none`,
+      or `.failed`; `sharedLibcxx(.., .windows)` is the Windows probe.
+      rzig's `apply` calls it with `${XDG_CACHE_HOME:-~/.cache}/r-zig`
+      (behaviour, mirror path and key unchanged: the parity test against
+      the bash shims still passes). build.zig imports the same file
+      (staticLibcxxLibDir): when the probe fires for
+      `b.graph.zig_lib_directory` it makes the mirror under zig build's
+      local cache (`<local cache>/r-zig/zig-lib-<key>`) and sets it as
+      `zig_lib_dir` on R's unix links (addSharedLib, R.bin), which std.Build
+      passes as `--zig-lib-dir`; on Windows it stops with the old message
+      if a libc++.dll.a would be linked. zig-build.sh's bash mirror
+      (`build/zig-lib-static`) and its `-static-libcxx` local cache are
+      gone: with one cache per zig and the mirror always used where the
+      probe fires, no shared-libc++ link can enter the cache. The mirror
+      stays while conda-forge's patch does; with upstream zig it does
+      nothing. (The bash shims in toolchain/ keep their copy: they are
+      the parity test's reference, not shipped.)
+    - scripts/env.sh resolves the zig once, `$ZIG`: ZIG_BIN, else `zig`
+      on PATH, else `x86_64-w64-mingw32-zig` (win-64), as rzig's
+      find_zig does, and always as an absolute path: a bare name in
+      ZIG_BIN is looked up on PATH, a relative path is taken from the
+      project root (where pixi runs tasks), a ZIG_BIN that names no zig
+      that runs stops every script that sources env.sh, and ZIG_BIN is
+      exported as the result (`cygpath -m` form on Windows). Without
+      that, a relative ZIG_BIN built R with upstream zig, but rzig, which
+      resolves ZIG_BIN from its working directory (a package's) and
+      otherwise quietly takes PATH's zig, compiled verify-package's,
+      contract's and check's packages with the env's; and ZIG_BIN=zig
+      skipped verify-package's compiled-package section (`[ -x zig ]`
+      from the root). fetch-zig.sh drops ZIG_BIN before env.sh: it runs
+      no zig and is what makes one again after `rm -rf build`.
+      zig-build.sh and rzig's test.sh use `$ZIG`, and
+      zig-build.sh prints `r-zig: zig = <path> (<version>; lib dir
+      <dir>)`. zig's caches are `build/zig-cache/zig-<cksum of the zig
+      binary: CRC-size>/{global,local}`: one per zig, and another build
+      of zig at the same path (a pixi update) gets new ones. cksum reads
+      the binary (0.1 s for upstream's 170 MB).
+    - scripts/verify-bundle.sh: every `env -i` compile passes ZIG_BIN=$ZIG
+      and env.sh's zig caches; make's and flang's directories are found
+      on their own (`fc_dir` decides the Fortran checks); the section runs
+      whenever there is a zig, and first checks that the bundle's zig-cc,
+      from a package directory under that env -i, runs `$ZIG`
+      (RZIG_PRINT_ARGV's first line after the `ZIG_LIB_DIR=` line rzig
+      prints where the libc++ mirror applies). The Windows branch compiles without
+      `env -i` and inherits both (comment added).
+    - `pixi run fetch-zig` (scripts/fetch-zig.sh): PyPI's ziglang 0.16.0
+      wheel for linux-64, linux-aarch64, osx-arm64, osx-64 or win-64,
+      sha256-pinned (the five pins checked against PyPI's JSON and by
+      download, 2026-10-05), unpacked with the env's unzip into
+      build/zig-upstream/ziglang-0.16.0-<subdir>/ once; prints the zig's
+      path (Windows: C:/... form) on stdout, nothing else. Why the wheel,
+      not ziglang.org's archive: one format (zip) and one tool on every
+      OS (ziglang.org has tar.xz on unix), PyPI's CDN for automated
+      downloads, and it is exactly the zig the r-zig wheel's users run.
+      No Python is involved and nothing enters R's build env.
+    - CI: build.yaml's build steps moved, unchanged, into
+      .github/workflows/build-r.yaml (`on: workflow_call`, inputs os, env,
+      build_args, timeout, zig), plus one step that runs only for
+      `zig: upstream` and puts fetch-zig's path into ZIG_BIN for the
+      steps after it (rzig tests included). build.yaml's matrix calls it
+      (legs still read "<os> / <env>"; concurrency, the ENABLE_HOSTED_JOBS
+      gate and conda-package unchanged). .github/workflows/upstream-zig.yaml
+      calls it for default on ubuntu-latest, macos-latest and
+      windows-latest (Windows with build.yaml's `--verbose` and 90
+      minutes), on workflow_dispatch, `v*` tags and pull requests
+      labelled `upstream-zig` (types labeled, synchronize, opened,
+      reopened; a job-level `if:` on the label, and a `labeled` event
+      only for that label; such an event for another label gets a
+      concurrency group of its own so it cannot cancel a run). Its legs
+      read "<os> / default (upstream zig)".
+  - **Upstream zig report, draft (not filed).** Title: "windows-gnu:
+    `zig cc -shared` without a .def exports mingw CRT symbols (atexit),
+    so an exe linking the import library fails with duplicate symbol:
+    atexit". Body:
+
+        zig 0.16.0 (ziglang.org release; also PyPI ziglang 0.16.0),
+        any host, target x86_64-windows-gnu.
+
+        lib.c:  int answer(void) { return 42; }
+        main.c: #include <stdlib.h>
+                int answer(void);
+                static void bye(void) {}
+                int main(void) { atexit(bye); return answer() == 42 ? 0 : 1; }
+
+        zig cc -target x86_64-windows-gnu -shared -o lib.dll lib.c -Wl,--out-implib,lib.lib
+        zig cc -target x86_64-windows-gnu -o main.exe main.c lib.lib
+
+        lld-link: error: duplicate symbol: atexit
+        >>> defined at .../lib/libc/mingw/crt/crtexe.c:328
+        >>>            .../crt2.obj
+        >>> defined at lib.lib(lib.dll)
+
+        lib.dll exports _CRT_INIT, __mingw_module_is_dll, answer and
+        atexit (llvm-readobj --coff-exports). Without a .def file LLD's
+        MinGW auto-export exports every global symbol except those it
+        recognizes as the C runtime's, which it recognizes by GNU object
+        file names (dllcrt2.o and the like); zig's CRT objects are named
+        dllcrt2.obj/crt2.obj, so crtdll.c's atexit and the CRT's other
+        globals are exported as the DLL's own (with mingw-w64's own CRT
+        objects, named that way, LLD leaves them out). Workaround: an object in the
+        DLL with `__asm__(".section .drectve,\"yni\"\n\t.ascii \"
+        -exclude-symbols:atexit\"\n\t.text");`. Expected: the CRT objects
+        zig links are excluded from auto-export like mingw-w64's.
+
+    Reproduced 2026-10-05 from linux-64 with upstream zig and with
+    conda-forge's linux zig (cross-compiling; conda-forge's win-64 zig
+    does not show it, see above); the workaround object makes both links
+    pass.
+  - **Found on the way (2026-10-05).** zig build's cache is not keyed on
+    the zig lib dir: in a scratch env with `libcxx` (and R linking libc++
+    on linux, a scratch-only edit), a build without the mirror on a cold
+    cache gave libR, libRblas, libRlapack and stats.so `NEEDED
+    libc++.so.1`; with the mirror they had none; a mirror build on the
+    cache the mirrorless one had filled got the shared links back. Hence
+    the rule above: the mirror is used wherever the probe fires (in
+    build.zig itself, so a plain `zig build` gets it too, which the bash
+    mirror in zig-build.sh never covered), and caches are per zig, so the
+    pre-F4 caches (build/zig-cache/global, local) are never read again.
+    The lock has two conda-forge builds of zig 0.16.0 on linux-64
+    (default `_15`, minimal `_19`): they get separate caches too.
+  - **Tested (linux-64, 2026-10-05, on 4868515 plus these changes).**
+    - conda-forge's zig, cold caches: `pixi run rzig-test` (42 unit tests,
+      parity 0 failed), build, verify-tree, smoke, contract, check,
+      hermetic, verify-package; `pixi run -e minimal build`, verify-tree,
+      verify-package; `pixi run -e wheel wheel && pixi run -e wheel
+      wheel-test`; `pixi run -e pkg conda-package` (both packages built,
+      their tests passed; the build log names `$BUILD_PREFIX/bin/zig`).
+    - Upstream zig (`ZIG_BIN` from `pixi run fetch-zig`), cold caches:
+      rzig-test, build, verify-tree, smoke, contract, check, hermetic,
+      verify-package. The build log: `r-zig: zig = .../build/zig-upstream/
+      ziglang-0.16.0-linux-64/ziglang/zig (0.16.0; lib dir ...)`; R's
+      binaries' `.comment`: clang 21.1.0 and LLD 21.1.0 (conda-forge's:
+      21.1.8), and fewer glibc stubs in DT_NEEDED (exec/R: libR.so and
+      libc.so.6; conda-forge's also lists libm, ld-linux, libresolv,
+      libpthread, libdl, librt, libutil). RZIG_TRACE=1 through the
+      tree's zig-cxx runs the upstream zig; under strace,
+      verify-package's compiles executed the upstream zig 67 times and
+      the env's zig never.
+    - ZIG_BIN as a relative path or a bare name (env.sh's resolution,
+      2026-10-05): sourcing env.sh with ZIG_BIN unset, `zig`, relative,
+      `./`-relative and absolute gives the absolute `$ZIG` (and the
+      caches) of that file; a missing absolute, relative or bare ZIG_BIN
+      stops with `error: ZIG_BIN=... names no zig that runs`; fetch-zig
+      runs with a stale one. The bundle's zig-cc under verify-bundle's
+      env -i, from a package directory, ran the env's zig for the old
+      relative ZIG_BIN and runs the upstream zig for env.sh's export.
+      `ZIG_BIN=build/zig-upstream/.../zig pixi run verify-package`
+      (upstream build), `ZIG_BIN=zig pixi run verify-package` (conda-
+      forge's; the compiled-package section ran) and verify-package with
+      ZIG_BIN unset: passed, each printing `the bundle's compilers run the
+      build's zig, <that zig>`. contract with the relative ZIG_BIN on the
+      upstream tree: passed, and under strace executed the upstream zig
+      719 times and the env's never. rzig-test with it: 42/42 unit tests,
+      parity 0 failed.
+    - Cache separation: conda build, upstream build, conda build,
+      upstream build in one checkout: each conda tree identical to the
+      first (`.comment` 21.1.8, same sha256 of libR, libRblas,
+      libRlapack, exec/R, internet.so, stats.so, cairo.so), each upstream
+      tree identical to the first upstream one (21.1.0).
+    - The mirror: unit test `prepare: build.zig's use...` (none for
+      upstream's layout, the mirror under any cache root, made once,
+      `.failed` for a half-made one, the Windows name); a scratch copy of
+      the project with `libcxx` added to its linux-64 env: build (the log
+      says `r-zig: static libc++ (zig lib dir ... mirrored to
+      <local cache>/r-zig/zig-lib-<key>/lib/zig)`), verify-tree (no R
+      binary needs a shared libc++), contract (every compiled package's
+      libc++ static), verify-package; a scratch build.zig linking a C++
+      library with and without `zig_lib_dir` = the mirror under conda
+      zig with libcxx: `NEEDED libc++.so.1` without, none with; the same
+      under upstream zig: the probe finds nothing, static both ways.
+    - fetch-zig: downloads, checks and unpacks once, then only prints the
+      path (0.2 s); the zig is byte-identical to the ziglang.org
+      tarball's (sha256 2317bbb9...); a wrong pinned sha256 stops it with
+      nothing unpacked and nothing on stdout; the four other platforms'
+      wheels downloaded and matched their pins.
+    - CI: `pixi exec actionlint` (with shellcheck) on build.yaml,
+      build-r.yaml and upstream-zig.yaml: no findings; a YAML parse of
+      all workflows; build-r.yaml's steps are build.yaml's old steps
+      (matrix → inputs) plus the upstream-zig step.
+    - macOS on omicron (2026-10-05), each zig from a cold cache under
+      its own key: osx-arm64 with conda-forge's zig: rzig-test, build
+      (the log names the mirror build.zig made), verify-tree (16 R
+      binaries, none needs a shared libc++; otool -L names libc++ in
+      none), smoke, contract, check, hermetic, verify-package; with
+      upstream zig (fetch-zig, the PyPI wheel): the same, no mirror line.
+      Controls under conda zig: `zig build-lib -dynamic -lc++` links
+      @rpath/libc++.1.dylib with the plain lib dir and nothing with the
+      mirror; a scratch std.Build library with zig_lib_dir = the mirror
+      is static on a cold cache, but on a cache the plain lib dir filled
+      the shared link comes back (zig's cache is not keyed on the lib
+      dir), which is why the mirror is always on for conda zig in a cache
+      of its own. Alternating warm rebuilds in one checkout (conda,
+      upstream, conda, upstream) reproduce each zig's tree byte for byte.
+      osx-64 under Rosetta: build, verify-tree, verify-package with both
+      zigs (the mirror fires there too; Falcon left the unsigned x86_64
+      upstream zig alone). Found and fixed on the way: verify-bundle's
+      new "the bundle's compilers run the build's zig" check read
+      RZIG_PRINT_ARGV's first line, which is `ZIG_LIB_DIR=<mirror>`
+      wherever rzig applies the mirror (every macOS conda env); it now
+      skips that line.
+    - win-64 on kappa (2026-10-05), cold caches: with conda-forge's zig:
+      rzig-test, build (no mirror: no libc++.dll.a), verify-tree (78 PE
+      files, the closure complete), smoke, contract, check, hermetic,
+      verify-package, and the conda package (both outputs' tests); with
+      upstream zig (fetch-zig printed the C:/ path): rzig-test, build
+      (Rterm.exe and Rscript.exe link: the atexit fix), verify-tree,
+      smoke, contract, check (per-file results identical to conda zig's),
+      hermetic, verify-package. The export and import tables of all 21 PE
+      files (R.dll, Rgraphapp, Rblas, Rlapack, Riconv, the executables,
+      the 11 base-package DLLs) are identical between the two zigs, atexit
+      exported by none; _CRT_INIT and __mingw_module_is_dll are still
+      exported by the DLLs without a .def, identically under both.
+    - Not tested: linux-aarch64 (CI); the workflows on GitHub
+      (build-r.yaml, upstream-zig.yaml); on Windows a ZIG_BIN other than
+      fetch-zig's C:/ form, and build.zig's stop when a libc++.dll.a
+      would be linked (no env has one); variants other than slim with
+      upstream zig (minimal: linux with the PyPI zig in the
+      investigation). Windows' verify-package does not check which zig
+      its package compiles run (unix's does since this change); checked
+      once by hand with RZIG_TRACE.
 
 **F1 implementation steps** (worked out 2026-10-01 from build.zig and
 zig 0.16's std.Build):
@@ -1115,9 +1462,9 @@ zig 0.16's std.Build):
     review fixes: linux-aarch64 (CI), openblas, the win-64 conda packages
     (passed before the fixes).
 
-Order: T's conda and wheel parts (done) → F1 (done) → F2 (done) → F3a/F3b/F3c (done) → F1.7 (done) → F4 → T's
-standalone split (it needs F1's layout and F3's binary) → P. F4 can be
-decided at any point. The decisions this branch made stay valid through F: tiers,
+Order: T's conda and wheel parts (done) → F1 (done) → F2 (done) → F3a/F3b/F3c (done) → F1.7 (done) → F4 (done on
+linux-64, 2026-10-05) → T's standalone split (it needs F1's layout and
+F3's binary) → P. The decisions this branch made stay valid through F: tiers,
 the split by `bin/toolchain`, the preflight, static runtimes, the
 hermetic check.
 
@@ -1286,7 +1633,7 @@ deployment target (`-target <arch>-native.13.0`, `-F` for the SDK's
 frameworks, the SDK's `-L` last on links), `-l` de-duplication (dyld's "duplicate
 linked dylib"), the glibc 2.17 target pin, OpenMP wiring (`-I`/`-L` for
 `omp.h`/libomp, also when the caller links `-lomp`), the `ZIG_LIB_DIR`
-mirror against conda-forge zig's shared libc++ (until F4), the SONAME
+mirror against conda-forge zig's shared libc++ (kept by F4 while the feedstock patch is there), the SONAME
 injection, `-fno-sanitize=undefined`, and the zig lookup (`ZIG_BIN`,
 PATH, `python3 -m ziglang`):
 - compiler shims: `zig-cc`, `zig-cxx`, `zig-ar`, `zig-ranlib` (bash
@@ -1746,7 +2093,9 @@ windows-latest/minimal CI leg.
    `os.add_dll_directory` on R_HOME/bin/x64 (Python 3.8+ does not search
    PATH for a loaded DLL's dependencies); wheel-test.sh is unix-only;
    rzig finding zig from PyPI's ziglang (which has Windows wheels) is
-   untried on Windows.
+   untried on Windows. (F4: R builds on win-64 with PyPI's ziglang
+   through ZIG_BIN, with build.zig's atexit fix, kappa 2026-10-04;
+   packages linking `-lsynchronization` do not, What remains 8.)
 3. Not a blocker: Fortran (the unix wheels ship no flang either).
 
 Order: the Windows minimal tree first (it is what a Windows wheel would
@@ -1908,12 +2257,18 @@ the same for its C++ test package.
 
 ## Open
 
-- **One zig (F4).** Upstream zig everywhere (for conda, a repackaging of
-  the official build in our channel), or an opt-out upstreamed to the
-  conda-forge feedstock for its shared-libc++ probe. Either retires the
-  `ZIG_LIB_DIR` mirror and makes conda, pip and standalone compile the
-  same way. conda-forge's zig is also dynamically linked to conda's LLVM
-  21, so shipping it means shipping that.
+- **Both zigs (F4, redefined 2026-10-04).** Was "one zig": upstream zig
+  everywhere, or an opt-out upstreamed to the feedstock, retiring the
+  `ZIG_LIB_DIR` mirror. The user chose to keep both conda-forge's zig
+  and upstream zig (PyPI ziglang) working instead; an opt-out upstreamed
+  to the feedstock would still let the mirror go one day (one Zig
+  implementation since F4, libcxx_mirror.zig). conda-forge's zig is
+  dynamically linked to conda's LLVM 21, so shipping it means shipping
+  that. Done on linux-64 2026-10-05 (record under F4); macOS and win-64
+  still to test. Still open from it: the upstream zig report on the
+  MinGW atexit export (drafted in the F4 record, not filed), the
+  build-path strings in the shipped tree and `-lsynchronization` with
+  upstream zig on Windows (Status section, What remains 7 and 8).
 - **Names** of the base and toolchain packages, on conda and PyPI.
   Decide together with the v3 naming question (consolidation/PLAN.md,
   Phase 3); `r-base` depends on the gate above.

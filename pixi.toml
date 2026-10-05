@@ -57,6 +57,20 @@ fetch = "bash scripts/fetch-r.sh"
 # Milestone 5 (FINALIZATION.md's "Final" item), then retired — see
 # Milestone 7 in feat-legacy-retirement/.
 build = { cmd = "bash scripts/zig-build.sh", depends-on = ["fetch"] }
+# Upstream zig (feat-no-host-paths F4): R builds with this env's zig
+# (conda-forge's) and with upstream zig, the ziglang.org release, which
+# PyPI's ziglang is. fetch-zig downloads PyPI's ziglang 0.16.0 wheel for
+# this platform once (sha256 pinned in the script; no Python, it is a
+# zip), unpacks it under build/zig-upstream/ and prints its zig's path.
+# The tasks here honour ZIG_BIN, so with it they build and test with
+# that zig:
+#   ZIG_BIN="$(pixi run fetch-zig)" pixi run build   (then verify-tree, ...)
+# PowerShell: $env:ZIG_BIN = pixi run fetch-zig. Each zig gets its own
+# build/zig-cache/zig-<cksum>/ (scripts/env.sh). conda-package does not:
+# rattler-build gives the recipe a clean environment, so the conda
+# package builds with its build env's zig; nor does wheel-test, which
+# compiles with the ziglang it installs.
+fetch-zig = "bash scripts/fetch-zig.sh"
 # R's regression suite (make check's Examples/Specific/Reg targets)
 # against the installed tree, on every OS: R's own tests/Makefile on
 # linux/macOS (build.zig addCheckStep), tests/Makefile.win on Windows
