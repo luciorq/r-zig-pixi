@@ -89,10 +89,11 @@ contract = "bash scripts/zig-contract.sh"
 # kept as an alias of build for existing commands.
 install = { depends-on = ["build"] }
 # Static checks of that installed tree, run right after build (F1.6):
-# Makeconf, the compilers are rzig, the CA bundle, rpaths, the glibc and
-# macOS floors, the C++ runtime, load commands, minimal's excluded
-# libraries; Windows: Tcl/Tk and the DLL closure. Takes an optional tree
-# path (`pixi run verify-tree -- <dir>`).
+# Makeconf, the compilers are rzig, no file of R's own naming the build
+# machine, the CA bundle, rpaths, the glibc and macOS floors, the C++
+# runtime, load commands, minimal's excluded libraries; Windows: Tcl/Tk
+# and the DLL closure. Takes an optional tree path (`pixi run
+# verify-tree -- <dir>`).
 verify-tree = "bash scripts/verify-tree.sh"
 # The standalone archive (dist/R-<ver>-<flavor>-<platform>.tar.gz, Windows
 # .zip, plus its sha256): only archives the installed tree, which build
@@ -147,7 +148,7 @@ pkg-config = "*"
 # on linux-64 (conda-forge's flang until 2026-10-03) conda-forge's
 # llvm-openmp ships no omp_lib.mod, so `use omp_lib` failed there, and
 # its flang-rt ships a shared runtime with default visibility.
-# build.zig picks flang when $CONDA/bin/flang exists (FortranCompiler).
+# build.zig requires it: without $CONDA/bin/flang the build stops.
 # ~1.5 GiB closure (flang-zig + lld-zig + flang-rt-zig).
 flang-zig = "*"
 # flang-rt-zig build >= 9 (flang-pixi, 2026-10-01): static-only (no

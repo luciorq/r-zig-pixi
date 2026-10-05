@@ -204,8 +204,9 @@ def leak_scan(files: list[tuple[str, bytes]], needles: list[bytes]) -> None:
 
     etc/ (Makeconf, Renviron, ldpaths) and the bin/ scripts are what R
     and R CMD INSTALL actually interpret: a build path there breaks the
-    wheel on any other machine. Anything else (a recorded source path in
-    tools/misc/top.txt, strings in binaries) is reported, not fatal.
+    wheel on any other machine. Anything else (strings in binaries, such
+    as the vendored conda libraries' compiled-in env paths) is reported,
+    not fatal; verify-tree.sh checks R's own files byte for byte.
     """
     fatal, other = [], []
     for rel, data in files:

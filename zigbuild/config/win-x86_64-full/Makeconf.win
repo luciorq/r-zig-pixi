@@ -211,7 +211,7 @@ OBJCXX =
 OBJDUMP = $(BINPREF)objdump
 R_ARCH =
 RANLIB = $(BINPREF)ranlib
-SAFE_FFLAGS = -O2 $(if $(USE_LLVM),,@SAFE_FFLAGS_SSE@)
+SAFE_FFLAGS = -O2
 SED = sed
 ## it seems some makes (but not ours) get upset if SHELL is set.
 # SHELL = /bin/sh

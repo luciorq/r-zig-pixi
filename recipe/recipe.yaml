@@ -134,8 +134,8 @@ outputs:
         # 23.1.1, `universe` channel — the conda-package task passes it) on
         # every platform; its runtime (flang-rt-zig) is static-only. No
         # gfortran anywhere (consolidation/PLAN.md Phase 2; linux-64 left
-        # conda-forge's flang 2026-10-03). build.zig picks flang whenever
-        # the build env provides $CONDA/bin/flang.
+        # conda-forge's flang 2026-10-03). build.zig stops without
+        # $BUILD_PREFIX/bin/flang (or $CONDA/bin/flang).
         - flang-zig
         - flang-rt-zig
         - if: win

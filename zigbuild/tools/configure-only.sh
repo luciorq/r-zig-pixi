@@ -46,48 +46,37 @@ mapfile -t precious < <("$SRC_DIR/configure" --help | awk '
 test "${#precious[@]}" -gt 20 || { echo "error: could not read configure's precious variables" >&2; exit 1; }
 for v in "${precious[@]}"; do unset "$v"; done
 
+# flang (flang-pixi's flang-zig), the only Fortran compiler; env.sh stops
+# with an error when the env has none.
 FC="$(fortran_compiler)"
 CONDA="${CONDA_PREFIX:?pixi should set CONDA_PREFIX}"
-
-# gfortran 15.2 miscompiles R's complex LAPACK (cmplx.f/zgesdd) at -O2 on
-# arm64 macOS: SVD returns wrong U/V with info=0 (silent!). Verified on
-# real hardware 2026-07-17; results are correct at -O1. Cap Fortran
-# optimization with gfortran on Darwin until narrowed to a specific flag.
 FOPT="-O2"
-if [ "$OS" = macos ] && [ "$FC" = gfortran ]; then
-  FOPT="-O1"
-fi
 
 # autoconf's AC_FC_LIBRARY_LDFLAGS mangles flang's verbose link output
 # (emits a bogus '-lflang_rt.runtime:' with a trailing colon), so give
-# configure the Fortran runtime libs explicitly when FC is flang.
-FLIBS_ARGS=()
-case "$FC" in
-  flang*)
-    rt=""
-    for f in "$CONDA"/lib/clang/*/lib/*/libflang_rt.runtime.a; do
-      [ -f "$f" ] && rt="$f" && break
-    done
-    if [ -z "$rt" ]; then
-      echo "error: libflang_rt.runtime not found under $CONDA/lib/clang — is flang-rt installed?" >&2
-      exit 1
-    fi
-    FLIBS_ARGS+=("FLIBS=-L$(dirname "$rt") -lflang_rt.runtime -lm")
-    # macOS: the flang driver locates the SDK via SDKROOT (falling back to
-    # xcrun); without it every *link* it performs dies with "ld: library
-    # 'System' not found". R itself never links with flang (packages go
-    # through the zig-cc shim + FLIBS), but configure's Fortran probes do
-    # — the OpenMP one in particular — and a failed link there captured
-    # SHLIB_OPENMP_FFLAGS/R_OPENMP_FFLAGS/OPENMP_FCFLAGS as empty on the
-    # first flang-zig osx-arm64 capture (2026-09-19), silently dropping
-    # Fortran OpenMP for every user package on that platform. flang-pixi's
-    # own CI sets SDKROOT for the same reason (FLANG_PIXI_HANDOFF.md §2).
-    if [ "$OS" = macos ] && [ -z "${SDKROOT:-}" ] && command -v xcrun >/dev/null 2>&1; then
-      SDKROOT="$(xcrun --show-sdk-path 2>/dev/null || true)"
-      [ -n "$SDKROOT" ] && export SDKROOT && echo "SDKROOT=$SDKROOT (for flang's configure-time links)"
-    fi
-    ;;
-esac
+# configure the Fortran runtime libs explicitly.
+rt=""
+for f in "$CONDA"/lib/clang/*/lib/*/libflang_rt.runtime.a; do
+  [ -f "$f" ] && rt="$f" && break
+done
+if [ -z "$rt" ]; then
+  echo "error: libflang_rt.runtime not found under $CONDA/lib/clang — is flang-rt installed?" >&2
+  exit 1
+fi
+FLIBS_ARGS=("FLIBS=-L$(dirname "$rt") -lflang_rt.runtime -lm")
+# macOS: the flang driver locates the SDK via SDKROOT (falling back to
+# xcrun); without it every *link* it performs dies with "ld: library
+# 'System' not found". R itself never links with flang (packages go
+# through the zig-cc shim + FLIBS), but configure's Fortran probes do
+# — the OpenMP one in particular — and a failed link there captured
+# SHLIB_OPENMP_FFLAGS/R_OPENMP_FFLAGS/OPENMP_FCFLAGS as empty on the
+# first flang-zig osx-arm64 capture (2026-09-19), silently dropping
+# Fortran OpenMP for every user package on that platform. flang-pixi's
+# own CI sets SDKROOT for the same reason (FLANG_PIXI_HANDOFF.md §2).
+if [ "$OS" = macos ] && [ -z "${SDKROOT:-}" ] && command -v xcrun >/dev/null 2>&1; then
+  SDKROOT="$(xcrun --show-sdk-path 2>/dev/null || true)"
+  [ -n "$SDKROOT" ] && export SDKROOT && echo "SDKROOT=$SDKROOT (for flang's configure-time links)"
+fi
 
 # Per-variant configure flags. Capabilities are compile-time, so slim,
 # full and minimal are distinct configure runs in distinct objdirs.

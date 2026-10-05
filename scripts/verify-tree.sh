@@ -15,6 +15,11 @@
 #   - the compilers Makeconf names are rzig (one binary, no scripts);
 #   - Makeconf names no build path and has no rpath; CPPFLAGS and LDFLAGS
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
+#   - every OS (a tree that is not a conda env): no file of R's own names
+#     the build machine's checkout, zig's caches, the env or $HOME; the
+#     vendored conda libraries that name one are listed, and so are
+#     build.zig's verbatim copies of env files that name only $HOME's
+#     path (conda-forge's build path);
 #   - where Makeconf offers OpenMP (a tree that is not a conda env, not
 #     minimal): omp.h and libomp where rzig and the loader find them
 #     (Windows: Library/include/omp.h, Library/lib/libomp.lib and
@@ -120,6 +125,150 @@ echo "== Makeconf verified: no build path, no rpath, CPPFLAGS and LDFLAGS empty,
 # prefix) has both from its own packages, and gets neither.
 conda_tree=""
 if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
+
+# No path of the build machine in any file of R's own (feat-no-host-paths
+# PLAN.md, Goal 1), in a tree that is not a conda env: the checkout (R's
+# source, the build dir and, as env.sh keeps them, zig's caches are in
+# it), zig's caches wherever they are, the env R was built in
+# (CONDA_PREFIX), and $HOME; each as it is set and resolved, matched with
+# either separator (doubled too), and on Windows also in its drive form
+# (C:/... or C:\..., beside MSYS' /c/...) and in any case. CI's paths
+# (/home/runner/work/..., D:\a\...) are just more of these. build.zig
+# keeps them out of R's files: -ffile-prefix-map for __FILE__ and the
+# debug info (filePathFlags), no tools/misc/top.txt, fontconfig's
+# configuration without the env's directories (installFontconfig). Files
+# are read as bytes, binaries' strings included; compressed ones (R's
+# lazy-load databases, .rds files) are not looked into. Not R's own, and
+# listed, not failed:
+#   - what vendor-libs.sh vendored from the env, recognised as it
+#     recognises it (vendored_files, verify-helpers.sh). conda's
+#     libraries carry their env's path compiled in (conda's prefix
+#     replacement: libcurl's CA file, OpenSSL's directory, fontconfig's
+#     configuration, Tcl's script library, ...); they are conda's
+#     binaries, not patched, and R overrides the defaults that matter
+#     (R_ZIG_CA_BUNDLE, FONTCONFIG_PATH, TCL_LIBRARY).
+#   - a file build.zig copies from the env as it is (minimal's make, the
+#     OpenMP headers, fontconfig's conf.d, Tcl/Tk's script libraries;
+#     Windows' binutils and Tcl/Tk DLLs), recognised by its bytes (an env
+#     file's, under any name), that names $HOME's path and nothing else
+#     here: conda-forge's own build path, which is under $HOME when the
+#     build machine's user has the name of conda-forge's builder
+#     (minimal's make on macOS names /Users/runner/miniforge3/conda-bld/
+#     ..., and GitHub's macOS runners run as runner). Such a copy that
+#     names the checkout, zig's caches or the env fails: the tree uses
+#     these files as they are, so the path would leave the machine with
+#     them (fonts.conf's did, before installFontconfig rewrote it).
+# A library directly in <prefix>/lib that the env no longer has (unix;
+# the build installs only directories there) was left by an earlier
+# vendor-libs.sh run (a soname bump); it fails, named as such.
+if [ -z "$conda_tree" ]; then
+  conda_dir="${CONDA_PREFIX:?run through pixi: the env R was built in is CONDA_PREFIX}"
+  command -v cygpath > /dev/null 2>&1 && conda_dir="$(cygpath -u "$conda_dir")"
+  build_dirs=("$ROOT" "${PIXI_PROJECT_ROOT:-}" "${ZIG_GLOBAL_CACHE_DIR:-}" "${ZIG_LOCAL_CACHE_DIR:-}" "$conda_dir")
+  # $HOME, when it names a directory of its own (/home/<user>,
+  # /Users/<user>, /c/Users/<user>): "/" or "/root" would also match what
+  # names no build machine.
+  home_dirs=()
+  case "${HOME:-}" in
+    /*/[!/]*) home_dirs+=("$HOME") ;;
+    *) echo "   note: \$HOME (${HOME:-unset}) is too short to look for" ;;
+  esac
+  # Windows: MSYS' HOME need not be the user's profile directory.
+  if [ "$OS" = windows ] && [ -n "${USERPROFILE:-}" ]; then home_dirs+=("$(cygpath -u "$USERPROFILE")"); fi
+  # Each directory as it is set and resolved (Windows: also C:/..., and
+  # with long names).
+  path_forms() {
+    local d
+    for d in "$@"; do
+      [ -n "$d" ] || continue
+      printf '%s\n' "$d"
+      if [ -d "$d" ]; then (cd "$d" && pwd -P); fi
+      if [ "$OS" = windows ]; then
+        cygpath -m "$d"
+        if [ -d "$d" ]; then cygpath -m -l "$d"; fi
+      fi
+    done
+  }
+  # One ERE for the paths on stdin: trailing separators dropped, each
+  # separator either one, once or more (a newline stands in while the
+  # regex characters are escaped), duplicates once. More than once: a
+  # Windows binary can hold a path with every backslash doubled (the
+  # conda package's R.dll built in CI on 2026-09-25 named its work dir
+  # 84 times as D:\\a\\..., and no other way).
+  path_re() {
+    local f r re=""
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      r="$(printf '%s' "$f" | sed -e 's#[/\\]*$##' -e 's#[/\\]#\n#g' -e 's#[][*.^$+?(){}|]#\\&#g' -e 's#\n#[/\\\\]+#g')"
+      if [ -n "$r" ]; then re="${re:+$re|}$r"; fi
+    done < <(sort -u)
+    printf '%s\n' "$re"
+  }
+  re="$(path_forms "${build_dirs[@]}" "${home_dirs[@]}" | path_re)"
+  re_build="$(path_forms "${build_dirs[@]}" | path_re)"
+  n_paths="$(path_forms "${build_dirs[@]}" "${home_dirs[@]}" | sort -u | grep -c .)"
+  icase=()
+  [ "$OS" = windows ] && icase=(-i)
+  # The first match in file $1 of ERE $2, with what follows it.
+  first_match() {
+    grep -aoE "${icase[@]}" -e "($2)[^[:space:][:cntrl:]\"'<>]{0,72}" "$1" | head -1 || true
+  }
+  # The env file (relative to the env) whose bytes file $1 has, among the
+  # env's files of its size; fails when there is none.
+  env_copy_of() {
+    local size g
+    size="$(wc -c < "$1" | tr -d ' ')"
+    while IFS= read -r g; do
+      if cmp -s "$1" "$g"; then
+        printf '%s\n' "${g#"$conda_dir"/}"
+        return 0
+      fi
+    done < <(find "$conda_dir" -type f -size "${size}c" 2> /dev/null)
+    return 1
+  }
+  vendored_files "$TREE" "$conda_dir" > "$WORK/vendored.txt"
+  n_vendored=0
+  while IFS= read -r f; do
+    [ -L "$f" ] || n_vendored=$((n_vendored + 1))
+  done < "$WORK/vendored.txt"
+  n_all="$(find "$TREE" -type f | wc -l | tr -d ' ')"
+  grep -rlaE "${icase[@]}" -e "$re" "$TREE" > "$WORK/named.txt" || true
+  offenders=""; n_bad=0; vendored_named=""; copies_named=""; n_copies=0
+  while IFS= read -r f; do
+    rel="${f#"$TREE"/}"
+    if grep -qxF -- "$f" "$WORK/vendored.txt"; then
+      vendored_named="$vendored_named $rel"
+      continue
+    fi
+    what=""
+    if [ "$OS" != windows ] && [ "${f%/*}" = "$TREE/lib" ]; then
+      what=" (not R's: a library an earlier vendor-libs.sh run copied, which the env no longer has; remove it, or build a fresh tree)"
+    elif src="$(env_copy_of "$f")"; then
+      if ! grep -qaE "${icase[@]}" -e "$re_build" "$f"; then
+        copies_named="$copies_named
+     $rel ($src): $(first_match "$f" "$re")"
+        n_copies=$((n_copies + 1))
+        continue
+      fi
+      what=" (build.zig's copy of the env's $src, as it is)"
+    elif [ "$OS" = windows ] && [ "${f%/*}" = "$TREE/$rh/bin/x64" ]; then
+      what=" (R's own DLL, or one an earlier vendor-libs.sh run copied that the env no longer has: then remove it)"
+    fi
+    offenders="$offenders
+  $rel$what: $(first_match "$f" "$re")"
+    n_bad=$((n_bad + 1))
+  done < "$WORK/named.txt"
+  if [ -n "$offenders" ]; then
+    echo "error: $n_bad files name the build machine (the checkout, zig's caches, the env or \$HOME), R's own unless marked, first match each:$offenders" >&2
+    exit 1
+  fi
+  n_vendored_named="$(echo $vendored_named | wc -w | tr -d ' ')"
+  echo "== build paths verified: no file of R's own names the checkout, zig's caches, the env or \$HOME ($((n_all - n_vendored)) files besides vendor-libs.sh's; $n_paths distinct paths, either separator)"
+  echo "   $n_vendored files vendored from the env, $n_vendored_named of them naming one of those paths, compiled in by conda:${vendored_named:- none}"
+  if [ "$n_copies" -gt 0 ]; then
+    echo "   build.zig's verbatim copies of env files that name only \$HOME's path, conda-forge's build path: $n_copies$copies_named"
+  fi
+fi
 
 # OpenMP for packages (build.zig installOpenMP, vendor-libs.sh), wherever
 # Makeconf offers it (SHLIB_OPENMP_CFLAGS non-empty: every variant but

@@ -8,9 +8,12 @@ up to b4f97cc, CI green on every job through d233f2a "chore(ci): verify
 before package", run 37123137421; F1.7 committed as 23841a4 "feat: unify
 ci matrix", tested on every OS by hand; linux-64 on flang-zig committed
 as 2622a6d; OpenMP for packages on every OS committed as 4868515, CI
-green on all 20 jobs; F4 is done in the working tree on top of 4868515,
-tested with both zigs on linux-64, osx-arm64, osx-64 under Rosetta and
-win-64, not yet committed):
+green on all 20 jobs; F4 committed as a1edc58 "feat: accept upstream
+zig" and pushed, tested with both zigs on linux-64, osx-arm64, osx-64
+under Rosetta and win-64; What remains 6 and 7, no gfortran and no
+build-machine paths in R's files, done in the working tree on top of
+a1edc58, tested on linux-64, osx-arm64, osx-64 under Rosetta and win-64,
+not yet committed):
 - Phase A done on all five platforms (the hermetic tier-0/1 check runs in
   CI everywhere). Phase T done for conda and pip (`r-zig-slim` +
   `r-zig-toolchain`; `r-zig` + `r-zig-toolchain` wheels); the standalone
@@ -84,6 +87,26 @@ win-64, not yet committed):
   called by build.yaml and by upstream-zig.yaml (default on
   ubuntu/macos/windows-latest with upstream zig: dispatch, `v*` tags,
   PRs labelled `upstream-zig`).
+- No build-machine paths in R's files (2026-10-05, What remains 7,
+  record "Build-machine paths in R's files" after F4's): every C compile
+  of R's own gets `-ffile-compilation-dir=.` and `-ffile-prefix-map` for
+  the checkout, R's source, the env, zig's cache and zig's lib dir
+  (build.zig filePathFlags), so `__FILE__`, OpenMP's source locations and
+  the DWARF name none of them (R's long-vector error now says
+  `src/main/character.c:1806`); zig's own runtime libraries carry no
+  debug info (linkRoot); R's macOS binaries are stripped (their DWARF
+  stayed in zig's cache and the binaries named it); tools/misc/top.txt
+  is gone; fonts.conf ships without the env's directories
+  (installFontconfig). verify-tree.sh fails, on every OS, on any file of
+  R's own that names the checkout, zig's caches, the env or $HOME, and
+  lists the vendored conda libraries that name one, and build.zig's
+  verbatim copies of env files that name only $HOME's path
+  (conda-forge's build path: macOS make's /Users/runner/..., under
+  GitHub's macOS HOME). Tested on linux-64.
+- gfortran removed (2026-10-05, What remains 6, record "gfortran
+  removed" after F4's): flang is R's only Fortran compiler in build.zig,
+  env.sh, configure-only.sh and gen-subst.sh; without one the build stops
+  with one error. Tested on linux-64.
 
 The decisions that shape the code now (each has its record below):
 - The installed tree is the shipped tree (F1, on every OS since F1.7);
@@ -120,8 +143,9 @@ The decisions that shape the code now (each has its record below):
 
 What remains, in order (proposed; ask the user before starting each):
 1. F4 is done (record under F4), tested on linux-64, osx-arm64, osx-64
-   and win-64 with both zigs: run upstream-zig.yaml once on GitHub (add
-   the `upstream-zig` label to the PR), and decide whether to file the
+   and win-64 with both zigs, and upstream-zig.yaml passed on GitHub on
+   a1edc58 (run 37354940568, triggered by the PR's `upstream-zig` label:
+   ubuntu 10 min, macos 11, windows 25). Left: decide whether to file the
    drafted upstream zig report on the auto-exported atexit.
 2. Major (decided 2026-10-04): a Windows minimal variant, then a Windows
    wheel (first without compile support; compiling needs a sh/make/
@@ -133,20 +157,39 @@ What remains, in order (proposed; ask the user before starting each):
    own (F3 section).
 5. Small, open: Windows Makeconf's TCL_VERSION (86 vs conda's 86t) for
    packages that link Tcl/Tk (F1.7's record).
-6. Small: with linux-64 on flang-zig no platform uses gfortran; build.zig's
-   gfortran branch (FortranCompiler.gfortran, findGfortranLibDir, the
-   gfortran cases of linkFortranRt and the Windows Makeconf) and
-   env.sh's gfortran fallback can go.
-7. Small, open (found in F4): the shipped tree still names build-machine
-   paths that verify-tree does not check: `__FILE__` strings (59 in libR
-   naming the checkout's build/R-4.6.1/src/main/*.c, more in other
-   binaries), lib/R/library/tools/misc/top.txt, and etc/fonts/fonts.conf's
-   `<cachedir>` naming the build env. `-ffile-prefix-map` (or
-   `-fmacro-prefix-map`) would fix the first; then a verify-tree check.
+6. Done 2026-10-05 (record "gfortran removed" after F4's): build.zig,
+   env.sh, configure-only.sh, gen-subst.sh and the Windows Makeconf know
+   only flang; a missing flang stops the build with one error. Tested on
+   linux-64, macOS and Windows.
+7. Done 2026-10-05 (record "Build-machine paths in R's files" after
+   F4's): no file of R's own names the build machine (`-ffile-prefix-map`
+   for every C compile, zig's runtime libraries without debug info,
+   macOS's R binaries stripped, no tools/misc/top.txt, fonts.conf without
+   the env), and verify-tree.sh checks it on every OS. Tested on linux-64
+   (slim with both zigs, minimal and the wheel, full, the conda package),
+   osx-arm64 (slim, minimal, full), osx-64 and win-64 (and its conda
+   package).
 8. Small, open (found in F4): on Windows, packages that link
    `-lsynchronization` (Rust-based ones) build with conda-forge's zig,
    which ships prebuilt MinGW import libraries, but not with upstream
    zig 0.16.0, which has none for it.
+9. Open (found in 7): R's compressed lazy-load databases still name the
+   build machine, which no byte search sees. In a linux slim tree, 1,471
+   Rd objects in the base packages' help databases (every Rd file's
+   srcref: its path in R's source tree and the checkout as working
+   directory) and 42 objects in their code databases (the install
+   prefix: base's `.Library`, `.libPaths`' and `.popath`'s values, each
+   namespace's `path`, methods' tables). R sets the second kind again
+   when it starts and loads a package; the first is only read by help
+   tools. Upstream's make records the same. Fixing them means changing
+   how the bootstrap installs Rd objects and where it runs R (a neutral
+   prefix), with a check that reads the databases.
+10. Small, open (found in 6): rzig on Windows still resolves a
+   package's `-lgfortran`/`-lquadmath` against a gfortran on PATH
+   (windows.zig `gfortranLibDir`, kept in parity with the bash shims). No
+   toolchain of ours has gfortran; whether such a package should get
+   flang's runtime instead, or a clear error, is a package-compatibility
+   decision.
 
 How to verify (Linux here; omicron = osx-arm64 and osx-64 via Rosetta
 in ~/rz-osx64; kappa = win-64 in C:\Users\admin\r-zig-pixi; see the
@@ -931,14 +974,299 @@ workarounds into code.** In order:
       the 11 base-package DLLs) are identical between the two zigs, atexit
       exported by none; _CRT_INIT and __mingw_module_is_dll are still
       exported by the DLLs without a .def, identically under both.
-    - Not tested: linux-aarch64 (CI); the workflows on GitHub
-      (build-r.yaml, upstream-zig.yaml); on Windows a ZIG_BIN other than
+    - On GitHub: build.yaml through build-r.yaml green on all 20 jobs
+      (run 37348002704, a1edc58); upstream-zig.yaml green on its three
+      legs (run 37354940568, the PR's `upstream-zig` label).
+    - Not tested: linux-aarch64 with upstream zig; on Windows a ZIG_BIN other than
       fetch-zig's C:/ form, and build.zig's stop when a libc++.dll.a
       would be linked (no env has one); variants other than slim with
       upstream zig (minimal: linux with the PyPI zig in the
       investigation). Windows' verify-package does not check which zig
       its package compiles run (unix's does since this change); checked
       once by hand with RZIG_TRACE.
+- **Build-machine paths in R's files (2026-10-05, What remains 7).**
+  Goal 1 for the files R itself builds and installs. Measured before on
+  a linux slim tree (the main checkout's dist/R-4.6.1-slim-zig, `grep
+  -rlaF <checkout>`): 28 files named the build machine, 19 of R's own
+  and 9 vendored conda libraries. After, in a tree built from this
+  change: the 9 vendored libraries only.
+  - **R's binaries.** libR.so held 314 such strings: 305 R's source
+    (`__FILE__` and the DWARF file names), 7 the pixi env and 1 zig's
+    cache (both from zig's compiler_rt), and the compilation directory;
+    every R binary held the same kinds (stats.so 66, internet.so 9, ...),
+    and libRblas and libRlapack only compiler_rt's 8. Three causes, three
+    fixes:
+    - Clang's own paths: build.zig `filePathFlags`, the first flags of
+      every C compile of R's (addCGroup, grDevices' cairo module):
+      `-ffile-compilation-dir=.` and `-ffile-prefix-map` (clang 21:
+      macro and debug prefix map) for the checkout and R's source tree
+      (to "", so relative to "."), the env (`conda-env/`), zig's local
+      cache (`zig-cache/`: config.h and the other generated headers) and
+      zig's lib dir and libc++ mirror (`zig-lib/`: libc and clang
+      headers), each as given and as resolved, in order of length (the
+      macro map tries the longest prefix first, the debug map the last
+      flag first). That covers `__FILE__`, the OpenMP runtime's source
+      locations (`;src/main/array.c;do_colsum;1931;26;;` in libR, remapped
+      with the debug prefix map; without debug info, as on macOS now,
+      clang writes `;unknown;unknown;0;0;;` instead, except for the
+      `omp error` directive, which R does not use) and the DWARF (comp
+      dir `.`, file names like `src/main/array.c`,
+      `zig-lib/libc/include/...`, `zig-cache/o/<hash>/config.h`,
+      `conda-env/include/zlib.h`). R's
+      error messages that print `__FILE__` (R_BadLongVector, through
+      LENGTH()): `strtoi(seq_len(2^31))` said `long vectors not supported
+      yet: <checkout>/build/R-4.6.1/src/main/character.c:1806` and now
+      says `... src/main/character.c:1806` (`crossprod` likewise,
+      `src/main/array.c:1296`); upstream's make, compiling inside
+      src/main, says `character.c:1806`.
+    - zig's own runtime libraries (compiler_rt, glibc's libc_nonshared,
+      libc++, the MinGW CRT) are built with the root module's strip
+      (zig 0.16 `Compilation.compilerRtStrip`), and their DWARF names
+      zig's lib dir and global cache, which no clang flag reaches
+      (compiler_rt is Zig code). build.zig `linkRoot`: where R's code
+      keeps debug info (linux slim and full), a link's root module is a
+      stripped module of its own, one empty C file, importing the module
+      that holds R's code and every link setting; a module with no C of
+      its own (libRblas, libRlapack: Fortran objects, no debug info) is
+      simply stripped (its symbol table goes too, its exports stay).
+      Tried on a test library first: a sourceless root changes nothing
+      (std.Build names a module to zig only when it has sources, and zig
+      takes the first module it is given as the root); a root with an
+      empty C file keeps the C module's DWARF and drops compiler_rt's.
+      libR.so: 12.7 to 11.8 MiB.
+    - macOS: the DWARF of R's code stays in the object files in zig's
+      cache, and the binary names those files (N_OSO stabs: absolute
+      paths that zig's Mach-O linker, `link/MachO/Object.zig`
+      writeStabs, writes as they are; seen in a dylib cross-built from
+      linux), so no prefix map can help and the debug info never shipped
+      anyway. R's own Mach-O files are now stripped (newCMod), as
+      minimal's already were. Windows is unchanged: the
+      CodeView goes to a .pdb in zig's cache, never installed, and the
+      DLL names only its file name (seen in a cross-built test DLL).
+    - flang has no prefix-map flag and needs none: R's Fortran objects
+      carry no debug info and no file name (the 129 flang objects in this
+      worktree's zig caches: none names $HOME, none has .debug_info;
+      libRblas and libRlapack held only compiler_rt's strings before,
+      none now).
+  - **tools/misc/top.txt** is no longer installed. R's make writes the
+    source tree's absolute path there (tools/Makefile.in `$(ECHO)
+    $(abs_top_srcdir)`; Makefile.win `pwd -W`) and `make install` copies
+    it (`cp -R library`), so upstream ships it too. Its one reader,
+    `tools:::.R_top_srcdir()` (tools/R/utils.R), finds R's sources for
+    R-core's maintenance helpers (aspell over R's manuals and
+    dictionaries, the DESCRIPTION fields R-exts documents) and reads a
+    missing file as "" (`if(nzchar(system.file(...)))`), the answer for
+    a tree without R's sources; `_R_TOP_SRCDIR_` names them for whoever
+    has a copy. It is read when tools' code is lazy-loaded, so tools.rdb
+    carried the path too; now `.R_top_srcdir()` is "".
+  - **etc/fonts** (installEnvRuntime: unix <prefix>/etc/fonts, Windows
+    R_HOME/etc/fonts): build.zig `installFontconfig` writes fonts.conf
+    without the lines that name the env (`fontsConfWithoutEnv`: each is
+    a `<dir>` or `<cachedir>` element on a line of its own; any other line
+    naming the env stops the build) and leaves out conf.d/README (it only
+    says the env's share/fontconfig/conf.avail holds the conf.d files).
+    conda-forge's fontconfig 2.18 (packages unpacked for each platform):
+    linux names `<env>/share/fonts`, `<env>/fonts` and the first cache
+    `<env>/var/cache/fontconfig`; macOS only that cache; Windows none in
+    fonts.conf (README only). What remains are the system's and the
+    user's font directories (linux /usr/share/fonts; macOS
+    /System/Library/Fonts and the rest; Windows' font folders; the XDG
+    and ~/.fonts ones) and the XDG cache directory and ~/.fontconfig.
+    The launchers set FONTCONFIG_PATH to this directory (Windows:
+    etc/Renviron.site); the vendored libfontconfig names only the build
+    env's etc/fonts. With an empty HOME, fc-list through the tree's
+    configuration finds the host's 39 fonts and `fc-match sans` DejaVu
+    Sans; svg() draws the same 24,798-byte file as before.
+  - **The vendored conda libraries** keep their env's path (conda's
+    prefix replacement: libcurl's CA file, OpenSSL's directory,
+    fontconfig's configuration, krb5's, glib's, X11's, Tcl's script
+    library): conda's binaries, not patched; R overrides the defaults
+    that matter (R_ZIG_CA_BUNDLE, FONTCONFIG_PATH, TCL_LIBRARY).
+  - **The check:** verify-tree.sh, on every OS, for a tree that is not a
+    conda env, reads every file as bytes (binaries' strings included)
+    for the checkout (ROOT and PIXI_PROJECT_ROOT), zig's two caches
+    (env.sh's ZIG_*_CACHE_DIR), the env (CONDA_PREFIX) and $HOME (when
+    it has at least two components, so not "/" or "/root"; on Windows
+    also USERPROFILE, which MSYS' HOME need not be), as set and
+    resolved, with either separator, and on Windows in the drive form too
+    (cygpath -m, -l) and in any case: one ERE, so CI's /home/runner/work/
+    ... and D:\a\... are just more of them. Every file of R's own must
+    name none. Not R's own, and listed, not failed:
+    - what vendor-libs.sh vendored, recognised by the rule vendor-libs.sh
+      itself removes them by (`vendored_files` in verify-helpers.sh,
+      which both scripts use; unix: a file directly in <prefix>/lib
+      whose name the env's lib/ has; Windows: a DLL in R_HOME/bin/x64
+      whose name the env's Library/bin has);
+    - a file build.zig copies from the env as it is (minimal's make, the
+      OpenMP headers, fontconfig's conf.d, Tcl/Tk's script libraries;
+      Windows' binutils, renamed, and Tcl/Tk DLLs), recognised by its
+      bytes (cmp against the env's files of its size, under any name),
+      when $HOME is all it names. That is conda-forge's own build path
+      under a $HOME of the same user name: conda-forge's macOS make
+      (minimal's lib/R/bin/toolchain/make, both macOS builds in the lock)
+      names /Users/runner/miniforge3/conda-bld/..., and GitHub's macOS
+      runners have HOME=/Users/runner, so counting these files as R's
+      own failed both macOS minimal legs (found in review). Such a copy
+      that names the checkout, zig's caches or the env still fails,
+      marked as build.zig's copy: the tree uses these files as they are
+      (fonts.conf named the env that way before installFontconfig).
+    A library directly in <prefix>/lib that the env no longer has (a
+    soname bump; vendor-libs.sh leaves it, as it says) fails marked as
+    an earlier run's leftover, not as R's own; on Windows a DLL in
+    bin/x64 without a namesake in the env is marked "R's own, or an
+    earlier run's". It prints the counts and, on failure, each offender
+    with its first match. Compressed files (the lazy-load databases,
+    .rds) are not looked into: What remains 9. On the old slim tree (a
+    copy of the main checkout's) it failed with the 19 files of R's own;
+    on a copy of the new one with five planted defects (the checkout in
+    etc/Renviron, the env's include dir appended to splines.so, the
+    checkout written with backslashes in base's html index, $HOME in a
+    lib/ file whose name the env lacks, top.txt put back) it named
+    exactly those five. After the review's changes, on linux (no macOS
+    run): minimal with HOME=/home/conda (linux's make names
+    /home/conda/feedstock_root/..., the same collision as macOS's)
+    failed before on lib/R/bin/toolchain/make as R's own and passes now,
+    listing it as build.zig's copy of bin/make; on a copy of the slim
+    tree, the env's own fonts.conf put back fails marked as build.zig's
+    copy of etc/fonts/fonts.conf, a renamed copy of the env's make is
+    recognised under its new name, a libcurl.so.3 the env lacks fails
+    marked as a leftover, and the checkout in etc/Renviron and $HOME in
+    base's DESCRIPTION fail as R's own.
+  - Tested (linux-64, 2026-10-05, on a1edc58 plus this change and
+    "gfortran removed" below; a new worktree, cold zig caches):
+    `pixi run rzig-test` (42 unit tests; parity: 0 failed); default
+    with conda-forge's zig: build, verify-tree (1,892 files of R's own,
+    none naming the build machine; 49 vendored, 9 naming the env: libcurl,
+    libcrypto, krb5 and gssapi, pango, glib, gio, fontconfig, X11), smoke,
+    contract (Rcpp, data.table, minqa, quadprog, pak, ps), check (one
+    NOTE, tools-Ex, as before), hermetic, verify-package; the same build
+    and verify-tree with upstream zig (fetch-zig; `.comment` clang
+    21.1.0: the same counts, libR's DWARF as clean); minimal: build,
+    verify-tree (1,380 own, none; 22 vendored, 4 naming the env; the old
+    minimal tree had 11 files of R's own naming it), verify-package,
+    then `pixi run -e wheel wheel` (its note now lists only the 4
+    vendored libraries) and wheel-test; full: build, verify-tree (2,296
+    own, none; 58 vendored, 11 naming the env, libtcl8.6 and libtinfo
+    among them), smoke; the conda packages (`pixi run -e pkg
+    conda-package`: both outputs' tests passed). In the unpacked
+    r-zig-slim `_4`, no file of the package names rattler's work dir,
+    its host env or its build env (zig's lib dir) or R's source path;
+    the package built from the main checkout on 2026-10-03 had 17, 5, 16
+    and 14 such files (libR's DWARF named `$BUILD_PREFIX/lib/zig/libc/
+    glibc/io/fstat-2.32.c` and the like, from libc_nonshared; and
+    `$PREFIX/include/zlib.h`). Only rattler-build's own
+    info/recipe/*.yaml name them. Before and after, libR.so's strings
+    naming $HOME: 314 (main checkout tree) and 0 (both zigs); the whole
+    slim tree: 28 files and 9 (the vendored ones).
+    macOS on omicron (conda-forge's zig, cold caches): osx-arm64
+    rzig-test, build, verify-tree (1893 of R's own files clean; 41
+    vendored, 9 naming the env), smoke, contract, check, hermetic,
+    verify-package; minimal build and verify-tree, also with
+    HOME=/Users/runner as on GitHub's macOS runners (minimal's
+    bin/toolchain/make, a verbatim copy of conda-forge's, names
+    /Users/runner/miniforge3/conda-bld/...: listed, not failed); full
+    build and verify-tree; osx-64 under Rosetta build, verify-tree,
+    verify-package. R's Mach-O binaries have no N_OSO stabs and no debug
+    sections (stripped), libR has 56 relative `src/...` strings and no
+    absolute one; `rawToChar(raw(2^31))` reports `src/main/raw.c:68`; a
+    planted copy failed naming exactly its 3 files. fonts.conf there
+    only loses its `<cachedir>` line; R's cairo text on macOS goes
+    through pango's CoreText backend, so fontconfig reads it only with
+    PANGOCAIRO_BACKEND=fc (checked by hand: the tree's fonts.conf and
+    conf.d load, Helvetica for sans, the cache in $HOME/.cache).
+    win-64 on kappa (conda-forge's zig): rzig-test, build (the first,
+    cold attempt hit the known MSYS fork flake in winMakeImportStub's
+    `wc`; the re-run passed), verify-tree (2892 of R's own files clean;
+    43 vendored, none naming the env: conda's win-64 DLLs carry no env
+    prefix, only conda-forge's own D:\bld paths), smoke, contract,
+    check (its usual two NOTEs), hermetic, verify-package, the conda
+    package (both outputs' tests; every file of both packages scanned as
+    bytes and UTF-16: only rattler-build's info/recipe/rendered_recipe.yaml
+    names its work dir, where the published win-64 r-zig-slim _3 had 14
+    such files, R.dll alone 84 strings). Found and fixed there: the
+    check's path pattern took one character per separator, so a path
+    with doubled backslashes (`C:\\Users\\...`, the form _3's R.dll had)
+    was missed; a separator now matches once or more, and a planted
+    copy with seven forms (backslash, lower case, MSYS /c/, doubled
+    backslashes, ...) fails naming all seven. R.dll's `__FILE__` reads
+    `src\main\character.c` in the pixi build; in the conda build it
+    reads `\src\main\character.c` (leading backslash; R.dll only, not
+    the package DLLs; cosmetic, cause not established). R's Windows
+    cairo text uses Win32 fonts, not fontconfig (cairoFns.c's
+    fontconfig path is `!defined(_WIN32)`), so fonts.conf there only
+    serves fontconfig users. Not tested: linux-aarch64 (CI), the
+    openblas variants, upstream zig on macOS and Windows.
+- **gfortran removed (2026-10-05, What remains 6).** With linux-64 on
+  flang-zig (2026-10-03) no platform used gfortran, and its branch was
+  dead code that could still be taken: in an env without flang,
+  configure-only.sh would have captured a config with whatever gfortran
+  PATH had (env.sh), and build.zig would have taken its gfortran branch
+  and failed deep in a gcc lookup. Now flang is the one Fortran compiler:
+  - build.zig: `FortranCompiler` and `Ctx.fc` are gone, with
+    `findGfortranLibDir` and `Ctx.gfortran_lib_dir` (and `Ctx.arch`, used
+    only for the gcc triples), the gfortran cases of `linkFortranRt`
+    (macOS emutls/heapt/gfortran/quadmath, MinGW's libgfortran and the
+    libgcc_s import library made for it by `winMakeImportLibFor`, which
+    went too, as nothing else used it; linux libgfortran) and of
+    `fortranOne` (`-J`, macOS `-O1`, linux `-fno-tree-loop-vectorize`),
+    the subst.txt "captured with flang but built with gfortran" check,
+    and on Windows the gfortran values of FC, FLIBS, FC_VER and
+    SAFE_FFLAGS (the vendored Makeconf.win's `@SAFE_FFLAGS_SSE@` became
+    a plain `-O2`, what it always was with flang). The flang probe (the
+    build env, then the env: never PATH) stops with one error when it
+    finds none: `error: no flang in this environment (looked for
+    <env>/bin/flang): R's Fortran needs flang-pixi's flang-zig, a
+    dependency in pixi.toml and recipe/recipe.yaml`, and the build log
+    names the flang it found. Windows' bootstrap R_SYSTEM_ABI (Windows
+    has no configure to capture it) said `windows,gcc,gxx,gfortran,
+    gfortran` and now says `windows,gcc,gxx,flang,flang`. tools'
+    sotools.R reads it when tools is lazy-loaded, so the value is fixed
+    in tools.rdb, and it chooses the rows of R CMD check's table of
+    compiled-code symbols: on Windows now the 51 `windows, Fortran,
+    flang` rows (_FortranAStopStatement, _FortranAio*, _FortranARandom*,
+    rand_; upstream's LLVM build uses them too, tools/Makefile.win's
+    `windows,clang,clang++,flang,flang`) instead of the 19 gfortran ones.
+    The outcome should not change. check_so_symbols on Windows reads a
+    DLL's import table, and flang-rt-zig on win-64 is a static library,
+    so no package DLL imports a _FortranA* symbol, as none imported a
+    _gfortran_* one. With the objects' symbol tables (R CMD check sets
+    _R_SHLIB_BUILD_OBJECTS_SYMBOL_TABLES_), check_so_symbols also counts
+    the table's first four rows as found and looks for them in the
+    objects; those were gfortran's st_open, st_close, st_rewind and
+    st_write and are now abort (gcc's and gxx's rows), _assert and exit,
+    which an object calling them was already reported for through the
+    DLL's imports from the C runtime. Unix differs: its captures say
+    `ClassicFlang` (configure's name for an FC called flang), whose 11
+    rows name Classic Flang's f90io_* runtime, so there no Fortran row
+    ever matches LLVM flang's objects; on Windows the flang rows are now
+    live. Not tested: R CMD check of a Fortran package on Windows with
+    the new value.
+  - scripts/env.sh `fortran_compiler`: flang or flang-new, else
+    `error: no flang in the pixi environment: R's Fortran needs
+    flang-pixi's flang-zig (pixi.toml)`. zigbuild/tools/configure-only.sh
+    lost its gfortran `-O1` cap and its `case` on the compiler.
+    zigbuild/tools/gen-subst.sh lost the two sed expressions that
+    dropped conda's sysroot directories, which only gfortran's implicit
+    search dirs put into FLIBS and R_LD_LIBRARY_PATH (linux-aarch64).
+  - Comments in pixi.toml, recipe.yaml and contract-test.sh. Kept:
+    history (records, the recipe's build-number comments), the bash
+    shims in toolchain/ (parity-test.sh's reference), rzig's Windows
+    `-lgfortran` lookup for packages that ask for it (What remains 10),
+    and upstream's own text in the vendored Windows config.h and
+    Makeconf.win.
+  - Tested (linux-64): build.zig's probe with a CONDA_PREFIX that has no
+    flang (the error above, nothing else run), env.sh's
+    `fortran_compiler` with PATH=/usr/bin:/bin (its error, exit 1);
+    `pixi run configure` then gen-subst.sh with the new scripts:
+    linux-x86_64-slim's subst.txt, config.h, Rconfig.h and
+    GENERATED_FROM came out byte-identical to the vendored ones; and the
+    builds and checks of the record above; macOS: the same builds and
+    checks, and a build with the env's flang moved aside (the one error,
+    from build.zig and from env.sh); win-64: build, contract (quadprog
+    with the plain `SAFE_FFLAGS = -O2`), check, verify-package, the
+    conda package, `tools:::system_ABI` = `windows gcc gxx flang flang`,
+    and the no-flang error. Not tested: R CMD check of a Fortran package
+    on Windows with the new R_SYSTEM_ABI; linux-aarch64 (CI).
 
 **F1 implementation steps** (worked out 2026-10-01 from build.zig and
 zig 0.16's std.Build):
@@ -2266,9 +2594,10 @@ the same for its C++ test package.
   dynamically linked to conda's LLVM 21, so shipping it means shipping
   that. Done on linux-64 2026-10-05 (record under F4); macOS and win-64
   still to test. Still open from it: the upstream zig report on the
-  MinGW atexit export (drafted in the F4 record, not filed), the
-  build-path strings in the shipped tree and `-lsynchronization` with
-  upstream zig on Windows (Status section, What remains 7 and 8).
+  MinGW atexit export (drafted in the F4 record, not filed) and
+  `-lsynchronization` with upstream zig on Windows (Status section,
+  What remains 8); the build-path strings in the shipped tree, What
+  remains 7, are done (2026-10-05).
 - **Names** of the base and toolchain packages, on conda and PyPI.
   Decide together with the v3 naming question (consolidation/PLAN.md,
   Phase 3); `r-base` depends on the gate above.

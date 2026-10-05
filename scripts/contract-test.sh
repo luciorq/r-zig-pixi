@@ -4,7 +4,7 @@
 #   Rcpp       — C++ compile + runtime evalCpp (compiles C++ through Makeconf)
 #   data.table — plain C package
 #   minqa      — depends on Rcpp AND compiles Fortran: full mixed-toolchain
-#                test (zig C/C++ + flang/gfortran) through R's package build
+#                test (zig C/C++ + flang) through R's package build
 #   pak        — the real-world repro case behind F7.1/F7.6/F7.7 (see
 #                TODO.md): its own configure script recursively
 #                re-invokes R.exe/Rterm.exe (the access-violation crash

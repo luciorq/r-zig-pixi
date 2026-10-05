@@ -148,15 +148,13 @@ version_gt() {
     exit 1 }'
 }
 
-# flang where the env provides it (flang-pixi's flang-zig on every
-# platform, see pixi.toml), else gfortran. Same probe order as build.zig's
-# FortranCompiler selection.
+# R's Fortran compiler: flang, flang-pixi's flang-zig, on every platform
+# (pixi.toml), as build.zig requires it. No other compiler is looked for.
 fortran_compiler() {
   if command -v flang >/dev/null 2>&1; then echo flang
   elif command -v flang-new >/dev/null 2>&1; then echo flang-new
-  elif command -v gfortran >/dev/null 2>&1; then echo gfortran
   else
-    echo "error: no Fortran compiler in the pixi environment" >&2
+    echo "error: no flang in the pixi environment: R's Fortran needs flang-pixi's flang-zig (pixi.toml)" >&2
     return 1
   fi
 }

@@ -54,32 +54,23 @@ if [ "$(resolved "$PREFIX")" = "$(resolved "$CONDA")" ]; then
 fi
 
 # What an earlier run copied comes out first: every file directly in the
-# destination whose name the env also has (unix: <prefix>/lib, where the
-# build itself installs only directories; Windows: the DLLs in
-# R_HOME/bin/x64, where the build installs only R's own, R.dll, Rblas.dll
-# and the rest, none with a namesake in conda's Library/bin). The env's
-# file may have changed since (pixi update), and a copy kept because its
-# name is there would ship the old one, and load it wherever the tree's
-# copy comes before the env's; and a library the tree no longer needs
-# would ship on (package and the wheel archive the tree as it is). A
-# library the env no longer has at all (a soname bump, e.g. ICU's) is
-# not recognised here and stays; nothing needs it, and removing the tree
-# drops it.
+# destination whose name the env also has (vendored_files, verify-helpers.sh,
+# the rule verify-tree.sh also uses to tell conda's files from R's own:
+# unix <prefix>/lib, where the build itself installs only directories;
+# Windows the DLLs in R_HOME/bin/x64, where the build installs only R's
+# own, R.dll, Rblas.dll and the rest, none with a namesake in conda's
+# Library/bin). The env's file may have changed since (pixi update), and a
+# copy kept because its name is there would ship the old one, and load it
+# wherever the tree's copy comes before the env's; and a library the tree
+# no longer needs would ship on (package and the wheel archive the tree as
+# it is). A library the env no longer has at all (a soname bump, e.g.
+# ICU's) is not recognised here and stays; nothing needs it, removing the
+# tree drops it, and verify-tree.sh names it if it names the env.
 n_old=0
-if [ "$OS" = windows ]; then
-  for f in "$R_HOME_DIR"/bin/x64/*.dll; do
-    [ -f "$f" ] && [ -f "$CONDA/Library/bin/${f##*/}" ] || continue
-    rm -f "$f"
-    n_old=$((n_old + 1))
-  done
-else
-  for f in "$PREFIX"/lib/*; do
-    [ -d "$f" ] && continue
-    [ -e "$CONDA/lib/${f##*/}" ] || [ -L "$CONDA/lib/${f##*/}" ] || continue
-    rm -f "$f"
-    n_old=$((n_old + 1))
-  done
-fi
+while IFS= read -r f; do
+  rm -f "$f"
+  n_old=$((n_old + 1))
+done < <(vendored_files "$PREFIX" "$CONDA")
 [ "$n_old" = 0 ] || echo "== removed $n_old libraries an earlier run vendored"
 
 # Windows: every PE file in the tree (R's own, the toolchain's, and the

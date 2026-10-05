@@ -1,9 +1,35 @@
 # Helpers shared by verify-tree.sh, verify-bundle.sh, hermetic-check.sh
 # and vendor-libs.sh (whose Windows walk copies what needed_of names, the
-# imports verify-tree.sh then checks). Source this after env.sh (which sets
-# OS and holds MACOS_MIN, macho_minos and version_gt); do not execute it.
-# Each reads what a binary needs and where it looks for it from the file
-# itself: patchelf on linux, otool on macOS, binutils' objdump on Windows.
+# imports verify-tree.sh then checks, and which removes what
+# vendored_files names, the files verify-tree.sh counts as conda's).
+# Source this after env.sh (which sets OS and holds MACOS_MIN, macho_minos
+# and version_gt); do not execute it. Each reads what a binary needs and
+# where it looks for it from the file itself: patchelf on linux, otool on
+# macOS, binutils' objdump on Windows.
+
+# The files vendor-libs.sh vendored from the env $2 into the tree at
+# prefix $1, one path per line, recognised by name, the one rule both
+# scripts use: unix, every file or link directly in <prefix>/lib (the
+# build installs only directories there) whose name the env's lib/ has;
+# Windows, every DLL in R_HOME/bin/x64 (<prefix>/Library/lib/R/bin/x64,
+# beside R's own DLLs, none of which has a namesake in the env) whose name
+# the env's Library/bin has. A library the env no longer has (a soname
+# bump, after a `pixi update`) is not recognised, and stays in the tree
+# until the tree is removed.
+vendored_files() {
+  local f
+  if [ "$OS" = windows ]; then
+    for f in "$1"/Library/lib/R/bin/x64/*.dll; do
+      [ -f "$f" ] && [ -f "$2/Library/bin/${f##*/}" ] && printf '%s\n' "$f"
+    done
+  else
+    for f in "$1"/lib/*; do
+      [ -d "$f" ] && continue
+      { [ -e "$2/lib/${f##*/}" ] || [ -L "$2/lib/${f##*/}" ]; } && printf '%s\n' "$f"
+    done
+  fi
+  return 0
+}
 
 # The libraries a binary names, one per line: DT_NEEDED on linux; on macOS
 # its LC_*_DYLIB entries (a dylib's own install name first); on Windows the
