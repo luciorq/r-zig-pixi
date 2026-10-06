@@ -1,0 +1,40 @@
+R_LIBS_USER_default(): a user library of our own, XDG on unix
+
+The default per-user package library is told apart from any other R
+install's. Linux and macOS follow the XDG base directory spec instead of
+R's per-OS defaults (macOS's ~/Library/R in particular):
+$XDG_DATA_HOME, else ~/.local/share, then R/<platform>-zig/<x.y>, where
+<platform> is the conda subdir name (linux-64, linux-aarch64, osx-arm64,
+osx-64).
+Windows keeps LOCALAPPDATA, already the right (non-roaming) place, as
+R/win-64-zig/<x.y>. Requested directly (feat-zig-build TODO.md, F7.3).
+
+--- a/src/library/base/R/library.R
++++ b/src/library/base/R/library.R
+@@ -996,14 +996,20 @@
+         x.y <- paste(R.version$major, sep=".",
+                      strsplit(R.version$minor, ".", fixed=TRUE)[[1L]][1L])
+         if(.Platform$OS.type == "windows" && s["machine"] == "x86-64")
+-            file.path(Sys.getenv("LOCALAPPDATA"), "R", "win-library", x.y)
++            file.path(Sys.getenv("LOCALAPPDATA"), "R", "win-64-zig", x.y)
+         else if (.Platform$OS.type == "windows") # including aarch64
+             file.path(Sys.getenv("LOCALAPPDATA"), "R",
+-                      paste0(s["machine"],"-library"), x.y)
+-        else if(s["sysname"] == "Darwin")
+-            file.path(home, "Library", "R", s["machine"], x.y, "library")
+-        else
+-            file.path(home, "R", paste0(R.version$platform, "-library"), x.y)
++                      paste0("win-", s["machine"], "-zig"), x.y)
++        else {
++            xdg <- Sys.getenv("XDG_DATA_HOME")
++            data_home <- if (nzchar(xdg)) xdg else file.path(home, ".local", "share")
++            plat <- if (s["sysname"] == "Darwin")
++                        paste0("osx-", if (s["machine"] == "arm64") "arm64" else "64", "-zig")
++                    else if (s["sysname"] == "Linux")
++                        paste0("linux-", if (s["machine"] == "x86_64") "64" else s["machine"], "-zig")
++                    else paste0(R.version$platform, "-zig")
++            file.path(data_home, "R", plat, x.y)
++        }
+     }
+ 
+     R_LIBS_SITE_default <- file.path(R.home(), "site-library")

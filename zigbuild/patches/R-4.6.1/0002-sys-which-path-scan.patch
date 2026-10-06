@@ -1,0 +1,47 @@
+Sys.which(): scan PATH in R
+
+Upstream runs `which` (the path configure found, @WHICH@, so the
+capture machine's) through /bin/sh once per name. This scans PATH in R,
+as Windows' do_syswhich does in C: the first match that is executable
+and not a directory, like `which`; a name containing "/" is checked as
+given. feat-no-host-paths PLAN.md, phase A2.
+
+--- a/src/library/base/R/unix/system.unix.R
++++ b/src/library/base/R/unix/system.unix.R
+@@ -113,27 +113,18 @@
+ ## Some people try to use this with NA inputs (PR#15147)
+ Sys.which <- function(names)
+ {
++    ## r-zig: PATH scan in R (no /bin/sh, no `which`)
+     res <- character(length(names)); names(res) <- names
+-    ## hopefully configure found [/usr]/bin/which
+-    which <- "@WHICH@"
+-    if (!nzchar(which)) {
+-        warning("'which' was not found on this platform")
+-        return(res)
+-    }
++    path <- Sys.getenv("PATH")
++    dirs <- if (nzchar(path)) strsplit(path, ":", fixed = TRUE)[[1L]] else character()
++    dirs[!nzchar(dirs)] <- "."
+     for(i in seq_along(names)) {
+         if(is.na(names[i])) {res[i] <- NA; next}
+-        ## Quoting was added in 3.0.0
+-        ans <- suppressWarnings(system(paste(which, shQuote(names[i])),
+-                                       intern = TRUE, ignore.stderr = TRUE))
+-        ## Solaris' which gives 'no foo in ...' message on stdout,
+-        ## GNU which does it on stderr
+-        if(grepl("solaris", R.version$os)) {
+-            tmp <- strsplit(ans[1], " ", fixed = TRUE)[[1]]
+-            if(identical(tmp[1:3], c("no", i, "in"))) ans <- ""
+-        }
+-        res[i] <- if(length(ans)) ans[1] else ""
+-        ## final check that this is a real path and not an error message
+-        if(!file.exists(res[i])) res[i] <- ""
++        if(!nzchar(names[i])) next
++        cand <- if(grepl("/", names[i], fixed = TRUE)) names[i]
++                else file.path(dirs, names[i])
++        ok <- file.access(cand, 1L) == 0L & !dir.exists(cand)
++        if(any(ok)) res[i] <- cand[ok][1L]
+     }
+     res
+ }

@@ -35,7 +35,7 @@
 #define FC_LEN_T size_t
 
 /* Version of Fortran Compiler */
-#define FC_VER "flang version 22.1.8 (https://github.com/conda-forge/clangdev-feedstock ea395ac6404d6e02629177af708e8855d6389063)"
+#define FC_VER "flang version 23.1.1"
 
 /* Define to 1 if you have the `access' function. */
 #define HAVE_ACCESS 1
@@ -1151,7 +1151,7 @@
 #define STDC_HEADERS 1
 
 /* Define if you have C/C++/Fortran OpenMP support for package code. */
-/* #undef SUPPORT_OPENMP */
+#define SUPPORT_OPENMP 1
 
 /* Define to enable provoking compile errors on write barrier violation. */
 /* #undef TESTING_WRITE_BARRIER */

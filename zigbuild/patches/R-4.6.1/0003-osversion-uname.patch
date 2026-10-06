@@ -1,0 +1,21 @@
+osVersion from Sys.info(), not `uname -a` through the shell
+
+utils' .onLoad computes osVersion at every start by running
+Sys.which("uname") and system("uname -a") only to learn the OS name.
+Sys.info() is the same uname(2) call, in-process (webR patches this
+function too); the "uname -a" text the code below parses is rebuilt from
+it. feat-no-host-paths PLAN.md, phase A2.
+
+--- a/src/library/utils/R/sessionInfo.R
++++ b/src/library/utils/R/sessionInfo.R
+@@ -23,8 +23,8 @@
+     ## Now try to figure out the OS we are running under
+     if (.Platform$OS.type == "windows") {
+         win.version()
+-    } else if (nzchar(Sys.which('uname'))) { ## we could try /usr/bin/uname
+-        uname <- system("uname -a", intern = TRUE)
++    } else if (!is.null(s <- Sys.info())) { ## r-zig: uname(2) in-process
++        uname <- paste(s[c("sysname", "nodename", "release", "version", "machine")], collapse = " ")
+         os <- sub(" .*", "", uname)
+         switch(os,
+                "Linux" =

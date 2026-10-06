@@ -5,9 +5,10 @@
 . "$(dirname "$0")/env.sh"
 
 if [ "$OS" = windows ]; then
-  # gnuwin32 builds in-tree; capability profile differs from unix slim
-  # (jpeg/tiff/tcltk forced on, no cairo device yet — see TODO.md), so
-  # assert numerics + core libs only.
+  # Windows R has one profile (jpeg/tiff/tcltk always on, no slim
+  # switches), so: numerics, the core libraries, and the cairo devices
+  # actually drawing (winCairo.dll, loaded on first use: capabilities()
+  # said TRUE while it could not load, F1.7).
   # R_TEST_R_BIN: test a different build's Rscript.exe (e.g. the zig-build
   # prefix's) instead of the in-tree gnuwin32 default.
   R_BIN="${R_TEST_R_BIN:-$SRC_DIR/bin/x64/Rscript.exe}"
@@ -26,6 +27,10 @@ if [ "$OS" = windows ]; then
     caps <- capabilities()
     print(caps)
     stopifnot(caps[["png"]], caps[["iconv"]], caps[["libcurl"]], caps[["cairo"]])
+    f <- tempfile(fileext = ".svg"); svg(f); plot(1:10); invisible(dev.off())
+    g <- tempfile(fileext = ".png"); png(g, type = "cairo"); plot(1:10); invisible(dev.off())
+    stopifnot(file.size(f) > 1000, file.size(g) > 1000)
+    cat("cairo devices OK\n")
   '
   echo "Smoke test passed (windows/$VARIANT)."
   exit 0
@@ -75,6 +80,9 @@ R_SMOKE_VARIANT="$VARIANT" R_SMOKE_BLAS="$BLAS" "$R_BIN" --vanilla --quiet -e '
   } else {
     # slim and full: headless cairo graphics, full i18n plumbing.
     stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]])
+    f <- tempfile(fileext = ".svg"); svg(f); plot(1:10); invisible(dev.off())
+    g <- tempfile(fileext = ".png"); png(g, type = "cairo"); plot(1:10); invisible(dev.off())
+    stopifnot(file.size(f) > 1000, file.size(g) > 1000)
     if (variant == "slim") {
       stopifnot(!caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]])
     } else {

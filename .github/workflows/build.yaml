@@ -1,7 +1,7 @@
 name: build-r
 
 # Docs-only changes never touch the build: skip the whole matrix for
-# them (a full run is ~30 min of runner time across 16 jobs). Note the
+# them (a full run is 20 jobs: 15 build legs, 5 conda packages). Note the
 # consequence for branch protection: a docs-only PR reports no build-r
 # checks at all, so don't mark them "required" or such PRs can't merge.
 # `[skip ci]` in a commit message also works for a one-off.
@@ -34,16 +34,22 @@ jobs:
   # Only build path: `zig build` alone (no autoconf, no make, no
   # gnuwin32) — see .github/devdocs/feat-zig-build/. The autoconf/gnuwin32
   # legacy jobs that used to sit alongside this one were retired in
-  # Milestone 7 — see .github/devdocs/feat-legacy-retirement/.
+  # Milestone 7 — see .github/devdocs/feat-legacy-retirement/. One job for
+  # every OS, Windows included (feat-no-host-paths F1.7): the same steps in
+  # the same order everywhere, on the tree `zig build` installs, which is
+  # the tree that ships.
+  # The steps themselves are in build-r.yaml, which upstream-zig.yaml
+  # calls too (the same legs with upstream zig, F4): one step list. A leg
+  # reads "<os> / <env>": this job is named after the runner, the called
+  # one after the env.
   build:
-    name: ${{ matrix.os }} / ${{ matrix.env }}
+    name: ${{ matrix.os }}
     # Gated behind ENABLE_HOSTED_JOBS (repo Settings > Actions > Variables)
     # — an emergency kill switch more than a cost control now: the repo
     # is public, so hosted standard runners are free with no minute caps
     # (the gate's original reason, a private-repo minute budget, is gone).
     # Toggle with `gh variable set ENABLE_HOSTED_JOBS --body false`.
     if: vars.ENABLE_HOSTED_JOBS == 'true'
-    runs-on: ${{ matrix.os }}
     # The arch axis arrived with the repo going public (2026-09-03):
     # GitHub-hosted arm64-linux (ubuntu-24.04-arm) and Intel-macOS
     # (macos-15-intel) runners are free for public repos, dissolving the
@@ -66,88 +72,42 @@ jobs:
           - os: ubuntu-24.04-arm
             env: openblas
           # minimal: the r-zig Python wheel's variant (pixi.toml
-          # [feature.minimal]). linux-64 only until the other platforms'
-          # zigbuild/config/<plat>-minimal dirs are vendored — gen-config's
-          # minimal legs produce them; add each OS here once its dir lands.
+          # [feature.minimal]); unix only. linux-x86_64's vendored config
+          # was captured locally, the other three by gen-config's minimal
+          # legs (run 36151245208, 2026-09-25).
           - os: ubuntu-latest
             env: minimal
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.10.0
-        with:
-          # minimal also needs the python-only `wheel` env for its last steps
-          environments: ${{ matrix.env == 'minimal' && 'minimal wheel' || matrix.env }}
-          cache: true
-      - name: Build R (zig build alone, no autoconf/make)
-        run: pixi run -e ${{ matrix.env }} build
-      - name: Smoke test
-        run: pixi run -e ${{ matrix.env }} smoke
-      - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
-        run: pixi run -e ${{ matrix.env }} contract
-      - name: Regression suite (Examples/Specific/Reg)
-        run: pixi run -e ${{ matrix.env }} check
-      # Standalone bundle: reuses this job's already-built prefix (cheap).
-      # Only the default (slim) and minimal variants are packaged in CI for
-      # now — full/openblas relocation is exercised manually, not automated
-      # yet. minimal's bundle is the wheel's input, so it can't be skipped.
-      - name: Package + verify standalone bundle
-        if: matrix.env == 'default' || matrix.env == 'minimal'
-        run: pixi run -e ${{ matrix.env }} verify-package
-      # The r-zig wheel: the tree verify-package just packaged, zipped with
-      # the r_zig Python package, then pip-installed into a fresh venv
-      # (ziglang from PyPI) and used with the pixi env scrubbed away —
-      # including R CMD INSTALL of a C/C++ package through ziglang.
-      - name: Build + test the r-zig wheel
-        if: matrix.env == 'minimal'
-        run: |
-          pixi run -e wheel wheel
-          pixi run -e wheel wheel-test
-      - name: Upload the r-zig wheel
-        if: matrix.env == 'minimal'
-        uses: actions/upload-artifact@v4
-        with:
-          name: r-zig-wheel-${{ matrix.os }}
-          path: dist/wheel/*.whl
-          if-no-files-found: error
-
-  # `zig build` on Windows — no `check` step (make-check parity was never
-  # in scope for Windows, see FINALIZATION.md F6: addCheckStep is only
-  # wired into the unix build() path). The package-compilation contract
-  # (Makeconf.win wiring, a real R.exe CMD dispatcher, native gcc.exe/
-  # g++.exe wrappers) IS done — see FINALIZATION.md F7 — so `contract`
-  # runs here same as linux/macOS.
-  build-windows:
-    name: windows-latest / default
-    # Gated behind ENABLE_HOSTED_JOBS — see `build` job above for details.
-    if: vars.ENABLE_HOSTED_JOBS == 'true'
-    runs-on: windows-latest
-    # 60, not 180: this leg takes ~20 min when healthy, and windows-latest's
-    # MSYS process spawning flakes ("cygheap read copy failed") have twice
-    # turned a build into a silent hang (2026-09-20) — fail fast, re-run.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.10.0
-        with:
-          environments: default
-          cache: true
-      # --verbose: zig build prints nothing until it finishes, so a hung
-      # step leaves an empty log; with it the last command started is the
-      # last line, which is the diagnosis.
-      - name: Build R (zig build alone, no autoconf/make/gnuwin32)
-        run: pixi run build -- --verbose
-      - name: Smoke test
-        run: pixi run smoke
-      - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
-        run: pixi run contract
-      - name: Package + verify standalone bundle
-        run: pixi run verify-package
+          - os: ubuntu-24.04-arm
+            env: minimal
+          - os: macos-latest
+            env: minimal
+          - os: macos-15-intel
+            env: minimal
+          # Windows: one variant only (R's Windows build has no slim/
+          # minimal switches; no wheel, no openblas), so only `default`.
+          # build_args: zig build prints nothing until it finishes, so a
+          # hung step leaves an empty log; with --verbose the last command
+          # started is the last line, which is the diagnosis.
+          # timeout: windows-latest's MSYS process spawning flakes
+          # ("cygheap read copy failed") have twice turned a build into a
+          # silent hang (2026-09-20). The leg took ~20 min when healthy
+          # before it ran R's regression suite; 90 leaves room for that and
+          # still fails a hang long before the 180 of the other legs.
+          - os: windows-latest
+            env: default
+            build_args: "-- --verbose"
+            timeout: 90
+    uses: ./.github/workflows/build-r.yaml
+    with:
+      os: ${{ matrix.os }}
+      env: ${{ matrix.env }}
+      build_args: ${{ matrix.build_args }}
+      timeout: ${{ matrix.timeout || 180 }}
 
   # conda-forge-style package (rattler-build) — always the slim variant
   # regardless of matrix.env above, since recipe/build.sh never sets
   # R_BUILD_VARIANT. A from-scratch build in its own isolated sandbox, so
-  # it can't reuse the `build`/`build-windows` jobs' prefixes; that
+  # it can't reuse the `build` job's prefixes; that
   # roughly doubles per-platform CI time, which is the tradeoff for
   # catching a recipe regression before a real release. All 5 platforms
   # on GitHub-hosted runners — the self-hosted gamma/omicron/kappa fleet
@@ -181,7 +141,7 @@ jobs:
     # 90, not 300: the longest leg (win-64, from-scratch rattler-build
     # sandbox) takes ~15 min when healthy; windows-latest's MSYS spawn
     # flake has hung a build inside this sandbox before (2026-09-20),
-    # where build-windows's --verbose/60-min guard doesn't reach. Fail
+    # where the build job's Windows --verbose guard doesn't reach. Fail
     # fast, re-run the leg.
     timeout-minutes: 90
     steps:
@@ -195,7 +155,7 @@ jobs:
       # rattler-build's own test phase runs with a literal unexpanded
       # %PREFIX% on PATH on Windows, so it can never exercise the
       # Library/bin/{R,Rscript}.bat shims a real install relies on (see
-      # recipe/recipe.yaml's win test comment + scripts/stage.sh). This
+      # recipe/recipe.yaml's win test comment + build.zig's Library/bin/*.bat). This
       # is the regression check for that: a genuinely fresh pixi project
       # installing straight from the just-built local channel, invoking
       # bare `Rscript` the same way a real user would. (Was disabled on

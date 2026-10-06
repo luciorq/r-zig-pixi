@@ -22,10 +22,18 @@ pixi add r-zig-slim
 pixi run Rscript -e 'R.version.string'
 ```
 
-Package compilation (`install.packages(...)`) works out of the box in the
-installed environment — the Zig toolchain ships as a runtime dependency of
-the package itself, so CRAN packages with C/C++/Fortran source compile
-without any extra system setup.
+`r-zig-slim` is R alone: it runs R and installs packages that need no
+compiling (R-only source packages and binary packages). To compile CRAN
+packages with C/C++/Fortran sources, add the toolchain, which brings zig,
+flang, make (and on Windows the POSIX userland) and pins the exact
+`r-zig-slim` build:
+
+```bash
+pixi add r-zig-toolchain
+```
+
+Without it, installing a package with compiled code stops with a message
+naming `r-zig-toolchain`.
 
 ### Build the conda package yourself
 
@@ -33,7 +41,8 @@ without any extra system setup.
 pixi run -e pkg conda-package
 ```
 
-Produces `dist/conda/<platform>/r-zig-slim-*.conda` via `rattler-build`,
+Produces `dist/conda/<platform>/r-zig-slim-*.conda` and
+`r-zig-toolchain-*.conda` via `rattler-build`,
 using this repo's own recipe (`recipe/recipe.yaml`). Useful for testing a
 change to the build before publishing, or for producing a package for a
 platform not published upstream.
@@ -54,9 +63,10 @@ typically run once per machine/OS as part of a release.
 For iterating on the build itself rather than consuming a package:
 
 ```bash
-pixi run build   # zig build, no autoconf/make/gnuwin32
-pixi run smoke   # quick sanity check
-pixi run check   # R's own regression suite (linux/macOS)
+pixi run build         # zig build, no autoconf/make/gnuwin32
+pixi run verify-tree   # static checks of the installed tree (Makeconf, rpaths, floors)
+pixi run smoke         # quick sanity check
+pixi run check         # R's own regression suite
 ```
 
 Three variants are available as pixi environments: `default` (slim —
@@ -65,21 +75,56 @@ and tiff devices), and `minimal` (smaller than slim: also no cairo/png,
 ICU, OpenMP or libdeflate; linux/macOS only). `minimal` is the variant
 the Python wheel wraps.
 
+### Build with upstream zig
+
+The environment's zig is conda-forge's build. R builds just as well with
+upstream zig (the [ziglang.org](https://ziglang.org/download/) release,
+which the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package
+is), and the project keeps both working; upstream zig is the reference.
+`pixi run fetch-zig` downloads PyPI's `ziglang` 0.16.0 wheel for this
+platform once (checksum-pinned; a wheel is a zip, so no Python is
+involved), unpacks it under `build/zig-upstream/` and prints its zig's
+path. The tasks that run zig, `build`, `check`, `rzig-test` and the two
+that compile packages with the built tree (`contract`, `verify-package`),
+take it from `ZIG_BIN`; the other checks look at the tree it built:
+
+```bash
+export ZIG_BIN="$(pixi run fetch-zig)"   # PowerShell: $env:ZIG_BIN = pixi run fetch-zig
+pixi run build && pixi run verify-tree && pixi run smoke && pixi run contract && pixi run verify-package
+```
+
+The build prints the zig it uses (`r-zig: zig = ...`); unset `ZIG_BIN`
+to go back to the environment's. Each zig keeps its own cache in
+`build/zig-cache/`, so switching between them never mixes their objects.
+The conda package (`pixi run -e pkg conda-package`) always builds with
+its recipe's zig, conda-forge's: rattler-build gives the recipe a clean
+environment, without `ZIG_BIN`. `wheel-test` always compiles with the
+`ziglang` it installs into its venv, which is upstream zig already.
+
 ### Build R as a Python wheel
 
 ```bash
-pixi run -e minimal verify-package   # build, stage, vendor libs, verify
-pixi run -e wheel wheel              # -> dist/wheel/r_zig-4.6.1-py3-none-<platform>.whl
-pixi run -e wheel wheel-test         # pip-install it into a fresh venv and use it
+pixi run -e minimal build            # the installed tree, libraries vendored
+pixi run -e minimal verify-tree      # its static checks
+pixi run -e minimal verify-package   # archive it, check the archive relocated
+pixi run -e wheel wheel              # -> dist/wheel/r_zig-4.6.1-*.whl and r_zig_toolchain-4.6.1-*.whl
+pixi run -e wheel wheel-test         # pip-install them into a fresh venv and use them
 ```
 
 The wheel (`r-zig`, import name `r_zig`) is the whole relocatable
 `minimal` tree plus console scripts `R`/`Rscript` and `r_zig.r_home()` for
-embedders such as rpy2. `install.packages()` compiles C/C++ packages with
-the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package, a wheel
-dependency, and GNU make is bundled, so no system compiler is needed. Linux
+embedders such as rpy2; it installs packages that need no compiling. For
+packages with C/C++ code, `pip install r-zig-toolchain` adds the compiler
+front (rzig) and GNU make, with the PyPI
+[`ziglang`](https://pypi.org/project/ziglang/) package as the compiler, so
+no system compiler is needed.
+ziglang is an upstream zig build, which links its own libc++ statically,
+so compiled C++ packages need no C++ runtime (with conda-forge's zig,
+which would link conda's shared libc++, rzig keeps it static). Linux
 wheels are `manylinux2014` (glibc 2.17). Packages with Fortran sources need
-a Fortran compiler, which neither the wheel nor ziglang provides.
+a Fortran compiler, which neither the wheel nor ziglang provides: R's FC,
+the toolchain's `zig-fc`, runs an LLVM `flang` found on PATH and stops
+with a message when there is none.
 Details: `.github/devdocs/feat-wheel-minimal/PLAN.md`.
 
 ### Older Linux HPC servers
@@ -93,13 +138,24 @@ distributions than the build machine, without a separate build variant.
 
 Everything runs on GitHub-hosted runners: `build` (ubuntu-latest,
 ubuntu-24.04-arm, macos-latest, macos-15-intel × slim/full, plus the
-linux openblas variants), `build-windows`, and `conda-package` for all
+linux openblas variants, minimal on all four, and windows-latest's one
+variant; the same steps in the same order on every OS, on the installed
+tree, which is the tree the standalone archive packs), and
+`conda-package` for all
 five subdirs (linux-64, linux-aarch64, osx-arm64, osx-64, win-64), which
 publishes to the `universe` channel on prefix.dev via OIDC trusted
 publishing on every push to `main`. There is no self-hosted fleet — the
 former gamma/omicron/kappa runners were decommissioned in September 2026
 and fully removed on 2026-09-24. Docs-only changes (`*.md`,
 `.github/devdocs/`) skip the workflow.
+
+`upstream-zig` runs the same `build` steps (`.github/workflows/build-r.yaml`,
+shared by both workflows) on `default` for ubuntu-latest, macos-latest
+and windows-latest with upstream zig (`pixi run fetch-zig`). It is a
+release gate, not per-commit CI: it runs on demand (`gh workflow run
+upstream-zig.yaml`), for `v*` tags, and on pull requests labelled
+`upstream-zig`. Every commit already compiles packages with upstream
+zig through the wheel tests, whose compiler is PyPI's `ziglang`.
 
 The whole matrix is gated behind one repo variable, an emergency kill
 switch rather than a cost control (hosted runners are free for this

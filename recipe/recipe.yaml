@@ -1,20 +1,20 @@
 context:
   version: "4.6.1"
 
-package:
-  name: r-zig-slim
+recipe:
+  name: r-zig
   version: ${{ version }}
 
 source:
-  # R sources from CRAN plus this repo's build scripts/toolchain shims —
-  # the recipe is a consumer of the same scripts pixi tasks use.
+  # R sources from CRAN plus this repo's build scripts — the recipe is a
+  # consumer of the same scripts pixi tasks use. The compilers in
+  # R_HOME/bin/toolchain are rzig (zigbuild/tools/rzig/), built by zig
+  # build; the bash shims in toolchain/ only serve configure-only.sh.
   - url: https://cran.r-project.org/src/base/R-4/R-${{ version }}.tar.gz
     sha256: 4da6e61d2c0aac5f14a2e7e432cb5fcc269efe83da4293050ba7f03dff4e2cf4
     target_directory: R-src
   - path: ../scripts
     target_directory: scripts
-  - path: ../toolchain
-    target_directory: toolchain
   # build.zig/zigbuild/: scripts/zig-build.sh's own build system (recipe/
   # build.sh drives it since Milestone 5's default-path swap). Without
   # these explicitly listed, a local `rattler-build build` still
@@ -112,335 +112,394 @@ build:
   # back to `python3 -m ziglang` — plus package-standalone.sh's whole-token
   # Makeconf stripping. Package-compilation behavior on the channel only
   # changes if these files are republished.
-  number: 3
-  script: build.sh
+  # 3 → 4 (2026-09-30): split into r-zig-slim (R) and r-zig-toolchain
+  # (lib/R/bin/toolchain plus the compiler run dependencies), phase T of
+  # feat-no-host-paths; libc++ static everywhere; FLIBS names the static
+  # flang runtime. linux-64's Fortran moved from conda-forge's flang to
+  # flang-zig (2026-10-03) before build 4 was published, so it rides here.
+  number: 4
 
-requirements:
-  build:
-    - zig 0.16.*
-    # Fortran — same per-platform split as pixi.toml: conda-forge flang on
-    # linux-64; flang-pixi's zig-built flang-zig (LLVM 23.1.1, `universe`
-    # channel — the conda-package task passes it) everywhere else: macOS
-    # (gfortran silently miscompiles R's complex LAPACK at -O2 on arm64;
-    # conda-forge has no macOS flang), win-64 (the only MinGW-ABI flang)
-    # and linux-aarch64 (no conda-forge flang). No gfortran anywhere
-    # (consolidation/PLAN.md Phase 2). build.zig picks flang whenever the
-    # build env provides $CONDA/bin/flang.
-    - if: linux64
-      then:
-        - flang
-        - flang-rt_linux-64
-    - if: not linux64
-      then:
+outputs:
+  # One build (scripts/zig-build.sh), two packages split by
+  # directory: the toolchain package owns R_HOME/bin/toolchain, which
+  # Makeconf points at, and the compiler run dependencies; everything else
+  # is R. Without the toolchain, installing a package that has compiled
+  # code stops with the preflight message (zigbuild/patches/) naming it.
+  - staging:
+      name: r-zig-build
+    requirements:
+      build:
+        - zig 0.16.*
+        # Fortran, as pixi.toml: flang-pixi's zig-built flang-zig (LLVM
+        # 23.1.1, `universe` channel — the conda-package task passes it) on
+        # every platform; its runtime (flang-rt-zig) is static-only. No
+        # gfortran anywhere (consolidation/PLAN.md Phase 2; linux-64 left
+        # conda-forge's flang 2026-10-03). build.zig stops without
+        # $BUILD_PREFIX/bin/flang (or $CONDA/bin/flang).
         - flang-zig
         - flang-rt-zig
-    - if: win
-      then:
-        - binutils_impl_win-64  # x86_64-w64-mingw32-nm/-dlltool for build.zig's import-stub steps
-    - make >=4.4
-    - pkg-config
-    - if: linux
-      then:
-        - patchelf
-    - if: unix
-      then:
-        - bash
-        - coreutils
-        - sed
-        - grep
-        - gawk
-        - which
-        # unzip: build.zig shells out to it directly for share/zoneinfo
-        # (zoneinfo.zip); gzip: grDevices' afm compression; tar/zip: not
-        # invoked by the R build itself but kept for parity with pixi.
-        # toml's own [target.unix.dependencies] set this recipe otherwise
-        # mirrors — real gap found via a real `pixi run -e pkg
-        # conda-package` run ("failed to spawn ... unzip: FileNotFound"),
-        # since the old autoconf path apparently never needed them in the
-        # rattler-build sandbox specifically (or was never exercised there).
-        - unzip
-        - gzip
-        - tar
-        - zip
-    # gnuwin32 has no `configure`/autoconf step, so none of the unix
-    # GNU-text-tool deps above apply — instead it needs the msys
-    # userland to run at all (native make can't spawn the extensionless
-    # zig shim scripts) plus uutils for the coreutils build.sh itself
-    # uses. m2-bash is also what runs *this* build.sh in the first place
-    # (rattler-build has no bld.bat here, same as conda-build convention).
-    - if: win
-      then:
-        - uutils-coreutils
-        - m2-bash
-        - m2-make
-        - m2-coreutils
-        - m2-diffutils
-        - m2-findutils
-        - m2-texinfo
-        - m2-which
-        - m2-tar
-        - m2-gzip
-        - m2-sed
-        - m2-grep
-        - m2-gawk
-        - m2-unzip
-        - m2-zip
-  host:
-    # `which`: also needed here, not just build: — build.zig bakes an
-    # absolute "$CONDA_PREFIX/bin/which" path into R's own Sys.which()
-    # fallback (the @WHICH@ subst-table entry, substituted from whatever
-    # $CONDA_PREFIX/ctx.conda resolves to at build time), and recipe/
-    # build.sh points $CONDA_PREFIX at $PREFIX (host), not $BUILD_PREFIX —
-    # unlike the old autoconf path, which found `which` via a plain $PATH
-    # search (which already includes both build_env and host_env bins in
-    # a rattler-build script), this vendored-config-replay design needs
-    # the tool to exist at the SAME prefix its own path substitution
-    # points at. Found via a real `pixi run -e pkg conda-package` run:
-    # bootstrap's very first `library(utils)` load failed with ".onLoad
-    # failed ... error in running command" — traced to Sys.which() calling
-    # a `which` binary that didn't exist under $PREFIX/bin at all (only
-    # under $BUILD_PREFIX/bin, a plain build: dependency). stage.sh's own
-    # `bin/toolchain/which` rewrite (see TODO.md's gotcha catalog) fixes
-    # this up for the FINAL installed package; this fixes the bootstrap
-    # phase itself, before stage.sh has run. Unix-only: this @WHICH@
-    # subst-table mechanism is part of installStaticTree/mkRbase, which
-    # buildWindows() doesn't use at all (no bin/R front script on Windows,
-    # per F6.0 — Rscript.exe is the only front-end there).
-    # `sed`: same exact bug, confirmed by a real failure one step later
-    # ("$PREFIX/bin/sed: No such file or directory" from bin/R's own
-    # @SED@-substituted SED= line, R.sh.in's front-end argument parser).
-    # `grep`: not yet hit by a real failure, but SED's sibling GREP/EGREP/
-    # FGREP subst entries use the identical "@ZR_CONDA@/bin/grep[-flags]"
-    # pattern — added proactively rather than waiting for the next
-    # whack-a-mole round trip; AWK is a bare "gawk" (PATH-resolved, no
-    # baked absolute path) so it isn't part of this class of bug.
-    - if: unix
-      then:
-        - which
-        - sed
-        - grep
-    # Fortran runtime: linked into libR (statically for flang's
-    # libflang_rt.runtime.a on every platform, see build.zig's
-    # linkFortranRt), must be in host too
-    - if: linux64
-      then:
-        - flang-rt_linux-64
-    - if: not linux64
-      then:
-        - flang-rt-zig
-    # build.zig copies the binutils tools (windres/ld/nm/dlltool/...) from
-    # $PREFIX/Library/bin into lib/R/bin/toolchain for the package-
-    # compilation contract, so they must be in *host* too (gfortran used
-    # to drag them in here; conda-package win-64 failed with "unable to
-    # update file from ...x86_64-w64-mingw32-windres.exe: FileNotFound"
-    # the moment it left).
-    - if: win
-      then:
-        - binutils_impl_win-64
-    - zlib
-    - bzip2
-    - xz
-    - liblzma-devel
-    - pcre2
-    - libcurl
-    - icu
-    - tzdata
-    - libdeflate
-    - llvm-openmp
-    - cairo
-    - expat
-    - pango
-    - fontconfig
-    - freetype
-    - libpng
-    - glib
-    # pango/cairo only pull in libharfbuzz (the runtime .so) as their own
-    # transitive run dependency, not the headers — the vendored
-    # CAIRO_CPPFLAGS build.zig applies unconditionally references
-    # <include>/harfbuzz/hb.h directly (pango-coverage.h's own #include),
-    # a real gap only surfaced once zig-build.sh started compiling the
-    # cairo module unconditionally in the rattler-build sandbox (found via
-    # a real "'hb.h' file not found" error, verified with a real `pixi run
-    # -e pkg conda-package` run) — the equivalent pixi.toml dev env never
-    # hit this because something else in its much larger dependency graph
-    # happens to pull the headers package in transitively too. Build-time
-    # only: end users don't need hb.h, and libharfbuzz.so is already
-    # pulled in at runtime via pango's own run dependency.
-    - harfbuzz
-    # conda-forge's linux cairo needs xorg proto headers even though R
-    # builds --with-x=no (pkg-config chain, not an actual X11 dep)
-    - if: linux
-      then:
-        - xorg-xorgproto
-    # discovered via `ldd`/`otool -L` on the actual built bin/exec/R +
-    # libR — the full runtime closure, not just pixi.toml's direct deps
-    - if: linux
-      then:
-        - zstd
-        - libiconv
-        - libstdcxx
-        - libgcc
-    - if: osx
-      then:
-        - libiconv
-    # gnuwin32 has no capability off-switches (unlike unix's
-    # --without-jpeglib etc.), so Windows R unconditionally links the
-    # jpeg/tiff bitmap devices, the tcltk package, and NLS — these are
-    # genuinely linked-at-runtime deps here, not just build inputs
-    - if: win
-      then:
-        - libjpeg-turbo
-        - libtiff
-        - tk
-        - gettext
-  run:
-    # R's own shared libraries (libR, base packages like stats/utils via
-    # pcre2/icu, cairo devices, ...) are runtime-loaded — every *runtime*
-    # lib from host: must be repeated here, or R fails to initialize in a
-    # freshly solved env (host: alone is build-time only). xorg-xorgproto
-    # and liblzma-devel are headers-only (pkg-config/build inputs),
-    # intentionally omitted here.
-    - zlib
-    - bzip2
-    - xz
-    - pcre2
-    - libcurl
-    - icu
-    - tzdata
-    - libdeflate
-    - llvm-openmp
-    - cairo
-    - expat
-    - pango
-    - fontconfig
-    - freetype
-    - libpng
-    - glib
-    - if: linux
-      then:
-        - zstd
-        - libiconv
-        - libstdcxx
-        - libgcc
-    - if: osx
-      then:
-        - libiconv
-    - if: win
-      then:
-        - libjpeg-turbo
-        - libtiff
-        - tk
-        - gettext
-        # bash.exe: the native gcc.exe/g++.exe forwarder stubs (win-exec-
-        # forward.c) exec into toolchain/zig-cc(xx) via bash at runtime —
-        # m2-bash was build:-only until this was found via a real
-        # `install.packages()` failure (glue/cli probing `cc --version`):
-        # every package-compilation invocation was silently failing on a
-        # freshly `pixi add`-installed package because bash.exe simply
-        # didn't exist in the env at all, not just because the forwarder's
-        # old baked-in path was wrong (see build.zig's winCompilerWrapper).
-        - m2-bash
-        # sed/grep/gawk/coreutils/make/which/find: real CRAN packages' own
-        # `configure` scripts (autoconf-generated, arbitrary — not
-        # something this project controls) lean on these heavily; m2-bash
-        # alone only gets the shell *interpreter* present, not the tools
-        # the script's own body calls. Found via a real, reproduced
-        # `install.packages("pak")` failure on a freshly-installed
-        # package: `./configure: line 62: sed: command not found` —
-        # `sed.exe` genuinely didn't exist anywhere in the installed env
-        # (these were build:-only, same gap m2-bash had). `make` also
-        # needed here, separately from build:'s own `make >=4.4` below —
-        # `R CMD SHLIB`/`INSTALL` shells out to it to actually drive
-        # compilation for any package with a Makevars or multiple source
-        # files, not just packages with a configure script.
-        # texinfo/diffutils/tar/gzip/unzip/zip stay build:-only —
-        # documentation-generation and archive tools a package's own
-        # `configure`/compile step essentially never needs; add if a real
-        # failure ever proves otherwise, same discipline as everything
-        # else in this list.
-        - m2-sed
-        - m2-grep
-        - m2-gawk
-        - m2-coreutils
-        - m2-make
-        - m2-which
-        - m2-findutils
-    # package compilation works out of the box: Makeconf records the
-    # bundled zig shims; these provide the actual compilers. The Fortran
-    # compiler must be the one R itself was built with (CRAN's own rule —
-    # module files and runtime ABI differ between flang and gfortran), so
-    # this mirrors the build: split exactly. osx-arm64's flang-zig closure
-    # is ~1.5 GiB (flang-zig + lld-zig + flang-rt-zig), the accepted cost
-    # of correct complex LAPACK at -O2 there (flang-pixi docs/11).
-    - zig 0.16.*
-    - if: linux64
-      then:
-        - flang
-        - flang-rt_linux-64
-    - if: not linux64
-      then:
-        - flang-zig
-        - flang-rt-zig
-    - make >=4.4
-
-tests:
-  # Mirrors scripts/smoke-test.sh's actual assertions (numerics: LAPACK
-  # solve/qr, BLAS matmul, fft round-trip; pcre2 regex; zlib compression;
-  # the slim capability profile) rather than a stripped-down subset — a
-  # conda package is a distribution artifact, and this is the one check
-  # that runs in a truly isolated env (no dev pixi env masking a gap).
-  # Windows keeps smoke-test.sh's own relaxed set: gnuwin32 has no slim/
-  # full off-switches, so tcltk/jpeg/tiff/NLS are TRUE despite this being
-  # r-zig-slim — asserting them FALSE here would be a false expectation,
-  # not a real regression check.
-  - script:
-      content:
         - if: win
           then:
-            # Neither %PREFIX% (verified via an `echo %PATH%` probe) nor
-            # $PREFIX (verified for real: a real CI run got this far and
-            # cmd.exe choked trying to literally run a program named
-            # "$PREFIX/Library/...", exit 9009 — bash syntax means
-            # nothing to cmd.exe) reliably expand in rattler-build's
-            # Windows test sandbox. Bare `Rscript` was never actually
-            # testing what its own comment used to claim either (PATH-
-            # based invocation of the Library/bin/{R,Rscript}.bat shims
-            # is covered by the separate fresh-env consume test instead —
-            # build.yml / feat-prefix-publish devdocs — where PATH is
-            # genuinely expanded, against a real installed env). So: a
-            # relative path back to the test env root instead of any
-            # PREFIX substitution at all. The test's own cwd is always
-            # <test_run_env>/etc/conda/test-files/r-zig-slim/0 (fixed —
-            # PKG_NAME is a constant "r-zig-slim", "0" is the single
-            # test-script index rattler-build assigns), 5 levels below
-            # <test_run_env>, so 5 `..` reaches Library/lib/R directly,
-            # dialect-agnostic since it's plain relative path syntax.
-            #
-            # A real .R file, not inline `-e '...'`: cmd.exe has NO
-            # concept of single quotes as a quoting mechanism — they're
-            # just literal characters — so every cmd.exe metacharacter
-            # inside the "quoted" R code (`%*%`'s `%`, `<-`'s `<`) was
-            # being actively interpreted (`%...%` as variable expansion,
-            # `<` as input redirection) rather than protected. Found by
-            # inspecting the actual generated test/conda_build.bat
-            # directly (its own content was correct — `Rscript -e
-            # 'm <- matrix(...); ... %*% ...'`, verbatim from this
-            # recipe) and reproducing the corruption independently at
-            # cmd.exe's OWN runtime parsing stage, not YAML rendering.
-            # bin/x64: the same hardcoded R_ARCH="x64" convention
-            # build.zig's buildWindows() has throughout (bin/x64,
-            # libs/x64, modules/x64, etc/x64) — see
-            # feat-cross-platform-standardization/PLAN.md's explicit
-            # win-arm64 non-goal. Fixing just this one literal without
-            # also fixing build.zig's dozen would be cosmetic, not real
-            # readiness; revisit together if win-arm64 is ever attempted.
-            - 'echo PATHDEBUG=%PATH%'
-            - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-win.R'
-          else:
-            - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
-    files:
-      recipe:
-        - test-win.R
+            - binutils_impl_win-64  # x86_64-w64-mingw32-nm/-dlltool for build.zig's import-stub steps
+        - make >=4.4
+        - pkg-config
+        - if: linux
+          then:
+            - patchelf
+        - if: unix
+          then:
+            - bash
+            - coreutils
+            - sed
+            - grep
+            - gawk
+            - which
+            # unzip: build.zig shells out to it directly for share/zoneinfo
+            # (zoneinfo.zip); gzip: grDevices' afm compression; tar/zip: not
+            # invoked by the R build itself but kept for parity with pixi.
+            # toml's own [target.unix.dependencies] set this recipe otherwise
+            # mirrors — real gap found via a real `pixi run -e pkg
+            # conda-package` run ("failed to spawn ... unzip: FileNotFound"),
+            # since the old autoconf path apparently never needed them in the
+            # rattler-build sandbox specifically (or was never exercised there).
+            - unzip
+            - gzip
+            - tar
+            - zip
+            # zig-build.sh applies R's source patches (zigbuild/patches/)
+            - patch
+        # gnuwin32 has no `configure`/autoconf step, so none of the unix
+        # GNU-text-tool deps above apply — instead it needs the msys
+        # userland to run at all (native make can't spawn the extensionless
+        # zig shim scripts) plus uutils for the coreutils build.sh itself
+        # uses. m2-bash is also what runs *this* build.sh in the first place
+        # (rattler-build has no bld.bat here, same as conda-build convention).
+        - if: win
+          then:
+            - uutils-coreutils
+            - m2-bash
+            - m2-make
+            - m2-coreutils
+            - m2-diffutils
+            - m2-findutils
+            - m2-texinfo
+            - m2-which
+            - m2-tar
+            - m2-gzip
+            - m2-sed
+            - m2-grep
+            - m2-gawk
+            - m2-unzip
+            - m2-zip
+            - m2-patch  # zigbuild/patches/; conda-forge has no win-64 `patch`
+      host:
+        # `which`: also needed here, not just build: — build.zig bakes an
+        # absolute "$CONDA_PREFIX/bin/which" path into R's own Sys.which()
+        # fallback (the @WHICH@ subst-table entry, substituted from whatever
+        # $CONDA_PREFIX/ctx.conda resolves to at build time), and recipe/
+        # build.sh points $CONDA_PREFIX at $PREFIX (host), not $BUILD_PREFIX —
+        # unlike the old autoconf path, which found `which` via a plain $PATH
+        # search (which already includes both build_env and host_env bins in
+        # a rattler-build script), this vendored-config-replay design needs
+        # the tool to exist at the SAME prefix its own path substitution
+        # points at. Found via a real `pixi run -e pkg conda-package` run:
+        # bootstrap's very first `library(utils)` load failed with ".onLoad
+        # failed ... error in running command" — traced to Sys.which() calling
+        # a `which` binary that didn't exist under $PREFIX/bin at all (only
+        # under $BUILD_PREFIX/bin, a plain build: dependency). stage.sh's own
+        # `bin/toolchain/which` rewrite (see TODO.md's gotcha catalog) fixes
+        # this up for the FINAL installed package; this fixes the bootstrap
+        # phase itself, before stage.sh has run. Unix-only: this @WHICH@
+        # subst-table mechanism is part of installStaticTree/mkRbase, which
+        # buildWindows() doesn't use at all (no bin/R front script on Windows,
+        # per F6.0 — Rscript.exe is the only front-end there).
+        # `sed`: same exact bug, confirmed by a real failure one step later
+        # ("$PREFIX/bin/sed: No such file or directory" from bin/R's own
+        # @SED@-substituted SED= line, R.sh.in's front-end argument parser).
+        # `grep`: not yet hit by a real failure, but SED's sibling GREP/EGREP/
+        # FGREP subst entries use the identical "@ZR_CONDA@/bin/grep[-flags]"
+        # pattern — added proactively rather than waiting for the next
+        # whack-a-mole round trip; AWK is a bare "gawk" (PATH-resolved, no
+        # baked absolute path) so it isn't part of this class of bug.
+        - if: unix
+          then:
+            - which
+            - sed
+            - grep
+        # Fortran runtime: linked into libR (statically for flang's
+        # libflang_rt.runtime.a on every platform, see build.zig's
+        # linkFortranRt), must be in host too
+        - flang-rt-zig
+        # build.zig copies the binutils tools (windres/ld/nm/dlltool/...) from
+        # $PREFIX/Library/bin into lib/R/bin/toolchain for the package-
+        # compilation contract, so they must be in *host* too (gfortran used
+        # to drag them in here; conda-package win-64 failed with "unable to
+        # update file from ...x86_64-w64-mingw32-windres.exe: FileNotFound"
+        # the moment it left).
+        - if: win
+          then:
+            - binutils_impl_win-64
+        - zlib
+        - bzip2
+        - xz
+        - liblzma-devel
+        - pcre2
+        - libcurl
+        - icu
+        - tzdata
+        - libdeflate
+        # 23, as pixi.toml, so the conda build uses the libomp CI tests.
+        # Its run export (>= the host version, 23.1.2 today) is the only
+        # bound r-zig-slim's run gets (below).
+        - llvm-openmp 23.*
+        - cairo
+        - expat
+        - pango
+        - fontconfig
+        - freetype
+        - libpng
+        - glib
+        # pango/cairo only pull in libharfbuzz (the runtime .so) as their own
+        # transitive run dependency, not the headers — the vendored
+        # CAIRO_CPPFLAGS build.zig applies unconditionally references
+        # <include>/harfbuzz/hb.h directly (pango-coverage.h's own #include),
+        # a real gap only surfaced once zig-build.sh started compiling the
+        # cairo module unconditionally in the rattler-build sandbox (found via
+        # a real "'hb.h' file not found" error, verified with a real `pixi run
+        # -e pkg conda-package` run) — the equivalent pixi.toml dev env never
+        # hit this because something else in its much larger dependency graph
+        # happens to pull the headers package in transitively too. Build-time
+        # only: end users don't need hb.h, and libharfbuzz.so is already
+        # pulled in at runtime via pango's own run dependency.
+        - harfbuzz
+        # conda-forge's linux cairo needs xorg proto headers even though R
+        # builds --with-x=no (pkg-config chain, not an actual X11 dep)
+        - if: linux
+          then:
+            - xorg-xorgproto
+        # discovered via `ldd`/`otool -L` on the actual built bin/exec/R +
+        # libR — the full runtime closure, not just pixi.toml's direct deps
+        - if: linux
+          then:
+            - zstd
+            - libiconv
+            - libstdcxx
+            - libgcc
+        - if: osx
+          then:
+            - libiconv
+        # gnuwin32 has no capability off-switches (unlike unix's
+        # --without-jpeglib etc.), so Windows R unconditionally links the
+        # jpeg/tiff bitmap devices, the tcltk package, and NLS — these are
+        # genuinely linked-at-runtime deps here, not just build inputs.
+        # tk 8.6, as pixi.toml: tcltk.dll links tcl86t/tk86t; an unpinned
+        # solve picks tk 9.0 (tcl90.dll), and the link fails.
+        - if: win
+          then:
+            - libjpeg-turbo
+            - libtiff
+            - tk 8.6.*
+            - gettext
+    build:
+      # A staging output is not a package: rattler-build sets no PKG_NAME
+      # or PKG_VERSION for it, so pass what build.sh and zig-build.sh read.
+      script:
+        file: build.sh
+        env:
+          R_VERSION: ${{ version }}
+          R_ZIG_CONDA_BUILD: "1"
+
+  - package:
+      name: r-zig-slim
+    inherit: r-zig-build
+    build:
+      files:
+        exclude:
+          - lib/R/bin/toolchain/**
+          - Library/lib/R/bin/toolchain/**
+    requirements:
+      run:
+        # R's own shared libraries (libR, base packages like stats/utils via
+        # pcre2/icu, cairo devices, ...) are runtime-loaded — every *runtime*
+        # lib from host: must be repeated here, or R fails to initialize in a
+        # freshly solved env (host: alone is build-time only). xorg-xorgproto
+        # and liblzma-devel are headers-only (pkg-config/build inputs),
+        # intentionally omitted here.
+        - zlib
+        - bzip2
+        - xz
+        - pcre2
+        - libcurl
+        - icu
+        - tzdata
+        - libdeflate
+        # unpinned: host's run export sets the floor, and a newer libomp
+        # runs code built against an older omp.h, so a ceiling would only
+        # clash with packages built against the next LLVM's llvm-openmp
+        - llvm-openmp
+        - cairo
+        - expat
+        - pango
+        - fontconfig
+        - freetype
+        - libpng
+        - glib
+        - if: linux
+          then:
+            - zstd
+            - libiconv
+            - libstdcxx
+            - libgcc
+        - if: osx
+          then:
+            - libiconv
+            # build.zig's deployment target (macos_min): every Mach-O says
+            # minos 13.0, so refuse older macOS at solve time rather than
+            # at load time. r-zig-toolchain gets it through its exact pin.
+            - __osx >=13.0
+        - if: win
+          then:
+            - libjpeg-turbo
+            - libtiff
+            - tk 8.6.*
+            - gettext
+    tests:
+      # Mirrors scripts/smoke-test.sh's actual assertions (numerics: LAPACK
+      # solve/qr, BLAS matmul, fft round-trip; pcre2 regex; zlib compression;
+      # the slim capability profile) rather than a stripped-down subset — a
+      # conda package is a distribution artifact, and this is the one check
+      # that runs in a truly isolated env (no dev pixi env masking a gap).
+      # Windows keeps smoke-test.sh's own relaxed set: gnuwin32 has no slim/
+      # full off-switches, so tcltk/jpeg/tiff/NLS are TRUE despite this being
+      # r-zig-slim — asserting them FALSE here would be a false expectation,
+      # not a real regression check.
+      - script:
+          content:
+            - if: win
+              then:
+                # Neither %PREFIX% (verified via an `echo %PATH%` probe) nor
+                # $PREFIX (verified for real: a real CI run got this far and
+                # cmd.exe choked trying to literally run a program named
+                # "$PREFIX/Library/...", exit 9009 — bash syntax means
+                # nothing to cmd.exe) reliably expand in rattler-build's
+                # Windows test sandbox. Bare `Rscript` was never actually
+                # testing what its own comment used to claim either (PATH-
+                # based invocation of the Library/bin/{R,Rscript}.bat shims
+                # is covered by the separate fresh-env consume test instead —
+                # build.yml / feat-prefix-publish devdocs — where PATH is
+                # genuinely expanded, against a real installed env). So: a
+                # relative path back to the test env root instead of any
+                # PREFIX substitution at all. The test's own cwd is always
+                # <test_run_env>/etc/conda/test-files/r-zig-slim/0 (fixed —
+                # PKG_NAME is a constant "r-zig-slim", "0" is the single
+                # test-script index rattler-build assigns), 5 levels below
+                # <test_run_env>, so 5 `..` reaches Library/lib/R directly,
+                # dialect-agnostic since it's plain relative path syntax.
+                #
+                # A real .R file, not inline `-e '...'`: cmd.exe has NO
+                # concept of single quotes as a quoting mechanism — they're
+                # just literal characters — so every cmd.exe metacharacter
+                # inside the "quoted" R code (`%*%`'s `%`, `<-`'s `<`) was
+                # being actively interpreted (`%...%` as variable expansion,
+                # `<` as input redirection) rather than protected. Found by
+                # inspecting the actual generated test/conda_build.bat
+                # directly (its own content was correct — `Rscript -e
+                # 'm <- matrix(...); ... %*% ...'`, verbatim from this
+                # recipe) and reproducing the corruption independently at
+                # cmd.exe's OWN runtime parsing stage, not YAML rendering.
+                # bin/x64: the same hardcoded R_ARCH="x64" convention
+                # build.zig's buildWindows() has throughout (bin/x64,
+                # libs/x64, modules/x64, etc/x64) — see
+                # feat-cross-platform-standardization/PLAN.md's explicit
+                # win-arm64 non-goal. Fixing just this one literal without
+                # also fixing build.zig's dozen would be cosmetic, not real
+                # readiness; revisit together if win-arm64 is ever attempted.
+                - 'echo PATHDEBUG=%PATH%'
+                - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-win.R'
+                - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-preflight.R'
+              else:
+                - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
+                - $PREFIX/bin/Rscript test-preflight.R
+        files:
+          recipe:
+            - test-win.R
+            - test-preflight.R
+
+
+  - package:
+      name: r-zig-toolchain
+    # Without the staging host's run exports (cairo, icu, libcurl, ...):
+    # this package only adds compilers; R's libraries come with r-zig-slim.
+    inherit:
+      from: r-zig-build
+      run_exports: false
+    build:
+      files:
+        - lib/R/bin/toolchain/**
+        - Library/lib/R/bin/toolchain/**
+    requirements:
+      run:
+        # exactly the R build whose Makeconf names this directory
+        - ${{ pin_subpackage("r-zig-slim", exact=True) }}
+        - if: win
+          then:
+            # bash.exe: packages' own configure scripts and make's recipe
+            # shell. (Until rzig, gcc.exe/g++.exe also ran the zig-cc shim
+            # through it; m2-bash was build:-only until a real
+            # `install.packages()` failure, glue/cli probing `cc --version`,
+            # showed every compile failing in a freshly installed env.)
+            - m2-bash
+            # sed/grep/gawk/coreutils/make/which/find: real CRAN packages' own
+            # `configure` scripts (autoconf-generated, arbitrary — not
+            # something this project controls) lean on these heavily; m2-bash
+            # alone only gets the shell *interpreter* present, not the tools
+            # the script's own body calls. Found via a real, reproduced
+            # `install.packages("pak")` failure on a freshly-installed
+            # package: `./configure: line 62: sed: command not found` —
+            # `sed.exe` genuinely didn't exist anywhere in the installed env
+            # (these were build:-only, same gap m2-bash had). `make` also
+            # needed here, separately from build:'s own `make >=4.4` below —
+            # `R CMD SHLIB`/`INSTALL` shells out to it to actually drive
+            # compilation for any package with a Makevars or multiple source
+            # files, not just packages with a configure script.
+            # texinfo/diffutils/tar/gzip/unzip/zip stay build:-only —
+            # documentation-generation and archive tools a package's own
+            # `configure`/compile step essentially never needs; add if a real
+            # failure ever proves otherwise, same discipline as everything
+            # else in this list.
+            - m2-sed
+            - m2-grep
+            - m2-gawk
+            - m2-coreutils
+            - m2-make
+            - m2-which
+            - m2-findutils
+        # package compilation works out of the box: Makeconf records the
+        # bundled compiler front (rzig, R_HOME/bin/toolchain); these provide
+        # the actual compilers. The Fortran
+        # compiler must be the one R itself was built with (CRAN's own rule —
+        # module files and runtime ABI differ between Fortran compilers), so
+        # this mirrors the build exactly. flang-zig's closure is ~1.5 GiB
+        # (flang-zig + lld-zig + flang-rt-zig), the accepted cost of one
+        # Fortran toolchain everywhere (on osx-arm64, of correct complex
+        # LAPACK at -O2; flang-pixi docs/11).
+        - zig 0.16.*
+        - flang-zig
+        - flang-rt-zig
+        - make >=4.4
+    tests:
+      - script:
+          content:
+            - if: win
+              then:
+                - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-toolchain.R'
+              else:
+                - $PREFIX/bin/Rscript test-toolchain.R
+        files:
+          recipe:
+            - test-toolchain.R
+    about:
+      summary: Compilers for r-zig-slim (zig, flang, make and R_HOME/bin/toolchain's compiler front)
 
 about:
   homepage: https://www.r-project.org

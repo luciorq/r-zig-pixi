@@ -1,0 +1,18 @@
+R_CleanTempDir(): always R_unlink(), no rm through the shell
+
+At exit R removed its session temp directory with `rm -Rf` through
+R_system(), so every exit started /bin/sh and rm. R_unlink() is already
+the fallback for paths with shell-special characters, and what Windows
+uses. feat-no-host-paths PLAN.md, phase A2.
+
+--- a/src/main/platform.c
++++ b/src/main/platform.c
+@@ -2057,7 +2057,7 @@
+ 		hasspecial = 1;
+ 		break;
+ 	    }
+-	if (!hasspecial) {
++	if (0 && !hasspecial) { /* r-zig: always R_unlink(), no rm through the shell */
+ 	    /* rm -Rf may be optimized for specific file-systems.
+ 	       Some file systems allow to delete directory trees without
+ 	       explicit/synchronous traversal so that deletion appears to be

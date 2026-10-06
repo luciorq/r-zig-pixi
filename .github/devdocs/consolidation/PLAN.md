@@ -157,6 +157,10 @@ linux-aarch64 / osx-64. Each platform: build.zig flang branch → local
 validation vs bar → flip pixi.toml + recipe defaults → CI green →
 publish. linux-64 stays on conda-forge flang as the parity reference
 (flang-pixi's own framing) until there's a reason to move it.
+*(Moved 2026-10-03: linux-64 uses flang-zig + flang-rt-zig too, for one
+runtime model everywhere (static, hidden-visibility runtime;
+`use omp_lib`). Record: feat-no-host-paths/PLAN.md, "linux-64 on
+flang-zig".)*
 
 **Phase 3 — downstream + distribution.**
 r-zig-packages: resume once r-zig-slim ships ≥3 platforms from hosted

@@ -1,0 +1,121 @@
+name: build-r leg
+
+# One build leg: the same steps in the same order on every OS (feat-no-
+# host-paths F1.7), on the tree `zig build` installs, which is the tree
+# that ships. Called by build.yaml's matrix (the env's zig, conda-forge's)
+# and by upstream-zig.yaml (upstream zig, F4), so both run exactly these
+# steps. No concurrency group here: a called workflow shares its caller's
+# `github` context, and the callers keep their own.
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: The runner (runs-on)
+        type: string
+        required: true
+      env:
+        description: The pixi environment (default, full, openblas, minimal)
+        type: string
+        required: true
+      build_args:
+        description: Extra arguments for `pixi run build`
+        type: string
+        default: ""
+      timeout:
+        description: The job's timeout, in minutes
+        type: number
+        default: 180
+      zig:
+        description: "conda: the env's zig; upstream: PyPI's ziglang, the ziglang.org release (pixi run fetch-zig)"
+        type: string
+        default: conda
+
+jobs:
+  # Named after the env (the caller names its job after the runner, so a
+  # leg reads "<os> / <env>"), plus the zig when it is not the env's.
+  build:
+    name: ${{ inputs.zig == 'upstream' && format('{0} (upstream zig)', inputs.env) || inputs.env }}
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: ${{ inputs.timeout }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          # minimal also needs the python-only `wheel` env for its last steps
+          environments: ${{ inputs.env == 'minimal' && 'minimal wheel' || inputs.env }}
+          cache: true
+      # Upstream zig (feat-no-host-paths F4): PyPI's ziglang 0.16.0, the
+      # ziglang.org release, sha256-pinned (scripts/fetch-zig.sh). ZIG_BIN
+      # makes every step below build, compile and test with it instead of
+      # the env's zig: zig-build.sh and rzig's tests (scripts/env.sh), rzig
+      # (R's compilers), and verify-package's compiles under env -i.
+      - name: Upstream zig (ZIG_BIN)
+        if: inputs.zig == 'upstream'
+        shell: bash
+        run: |
+          zig="$(pixi run -e ${{ inputs.env }} fetch-zig)"
+          echo "ZIG_BIN=$zig" >> "$GITHUB_ENV"
+      # rzig, the compilers zig build installs into R_HOME/bin/toolchain
+      # (feat-no-host-paths F3): unit tests on this OS; on linux also the
+      # parity test against the bash shims for every OS's command lines.
+      - name: rzig tests
+        run: pixi run -e ${{ inputs.env }} rzig-test
+      # `zig build` installs the tree that ships (feat-no-host-paths F1,
+      # F1.7), with the runtime data it needs from the env (the CA bundle,
+      # fontconfig's configuration, Windows' Tcl/Tk), and zig-build.sh
+      # then copies the env's shared libraries into it (vendor-libs.sh;
+      # Windows: conda's DLLs into bin/x64). Every check below runs on
+      # that tree, and the archive is made from it last (F1.6).
+      - name: Build R (zig build alone, no autoconf/make)
+        run: pixi run -e ${{ inputs.env }} build ${{ inputs.build_args }}
+      # Static checks of the installed tree, before anything runs it:
+      # Makeconf, the compilers are rzig, the CA bundle, relative rpaths,
+      # the glibc and macOS floors, the C++ runtime, load commands,
+      # minimal's excluded libraries; Windows: the Tcl/Tk runtime and the
+      # DLL closure (scripts/verify-tree.sh). The variants CI packages.
+      - name: Verify the installed tree (Makeconf, rzig, libraries, floors)
+        if: inputs.env == 'default' || inputs.env == 'minimal'
+        run: pixi run -e ${{ inputs.env }} verify-tree
+      - name: Smoke test
+        run: pixi run -e ${{ inputs.env }} smoke
+      - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
+        run: pixi run -e ${{ inputs.env }} contract
+      - name: Regression suite (Examples/Specific/Reg)
+        run: pixi run -e ${{ inputs.env }} check
+      # Tiers 0/1 (feat-no-host-paths): a copy of the installed tree starts
+      # R and installs source R-only and binary packages with an empty
+      # environment and only its own bin/ on PATH (unix: plus /bin/sh, and
+      # on linux strace fails any other program; Windows: bin\x64 plus
+      # System32).
+      - name: Hermetic tier 0/1 check (installed tree, empty environment)
+        if: inputs.env == 'default' || inputs.env == 'minimal'
+        run: pixi run -e ${{ inputs.env }} hermetic
+      # Standalone archive: package-standalone.sh only archives this job's
+      # installed tree (cheap). Only the default (slim; Windows' one
+      # variant) and minimal variants are packaged in CI for now —
+      # full/openblas relocation is exercised manually, not automated yet.
+      # minimal's tree is the wheel's input, so it can't be skipped.
+      # verify-package checks the archive itself: extracted elsewhere, R
+      # and packages compiled with it run with nothing from the build env
+      # (unix: env -i, TLS with the shipped CA bundle; Windows: rzig's dry
+      # runs, and OpenMP C and Fortran packages built with the tree alone)
+      # (scripts/verify-bundle.sh).
+      - name: Package + verify the standalone archive (relocated)
+        if: inputs.env == 'default' || inputs.env == 'minimal'
+        run: pixi run -e ${{ inputs.env }} verify-package
+      # The r-zig wheel: the minimal tree verify-package just packaged,
+      # zipped with the r_zig Python package, then pip-installed into a
+      # fresh venv (ziglang from PyPI) and used with the pixi env scrubbed
+      # away — including R CMD INSTALL of a C/C++ package through ziglang.
+      - name: Build + test the r-zig wheel
+        if: inputs.env == 'minimal'
+        run: |
+          pixi run -e wheel wheel
+          pixi run -e wheel wheel-test
+      - name: Upload the r-zig wheel
+        if: inputs.env == 'minimal'
+        uses: actions/upload-artifact@v4
+        with:
+          name: r-zig-wheel-${{ inputs.os }}
+          path: dist/wheel/*.whl
+          if-no-files-found: error

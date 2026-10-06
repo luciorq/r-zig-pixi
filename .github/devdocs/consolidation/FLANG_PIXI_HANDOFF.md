@@ -80,3 +80,146 @@ Order that matches value and risk: osx-64 (same mechanism as osx-arm64, runtime 
 ## 5. Where to look in flang-pixi
 
 `docs/11` interface contract (items 5–8 added 2026-09-19 for the Windows legs) · `docs/10` status log (every finding, dated; the 2026-09-19 entries cover finclude, OpenMP, the two win-arm64 diagnoses) · `docs/14` publishing runbook + the live file list on universe · `docs/06` recipe conventions (why standalone rattler-build, not pixi-build) · `docs/13` zig-feedstock glibc coupling · `scripts/ci-smoke.sh`, `ci-omp.sh`, `ci-abi.sh`, `pe-resolve-imports.py`, `check-stdlib-floor.py` (all reusable as-is) · `tests/openmp/*.f90` (OpenMP smoke sources).
+
+## 6. The conda-forge zig is not upstream zig — reconciled with r-zig-pixi's findings (2026-10-01; first written 2026-09-30, flang-pixi docs/16)
+
+Measured on zig-feedstock build 19; corrected and extended after this
+branch's own measurements (PLAN.md "flang-pixi handoff §6, reconciled" and
+"Packaging (phase T)"). Facts, then what flang-pixi recommends.
+
+**libc++**
+- conda-forge's zig prefers a *shared* libc++ whenever
+  `<zig lib dir>/../../lib/libc++.{1.dylib,so.1}` exists (patch
+  `Lld.zig-prefer-shared-libcxx`, native-arch links only, no opt-out:
+  `-static-libstdc++` is ignored, `-stdlib=` stripped by the wrappers).
+  Always true on macOS (`zig_impl_osx-*` run-depends on `libcxx 21.*`), true
+  on Linux the moment a `libcxx` package enters the env, never on Windows
+  today (no `libc++.dll.a` there).
+- The `ZIG_LIB_DIR` mirror defeats it: a **real** directory `<mirror>/lib/zig`
+  whose entries are symlinks into the env's `lib/zig`. The probe is an
+  `access()` on `<lib dir>/../../lib/<name>`, and the kernel resolves `..`
+  after following symlinks, so a symlinked `lib/zig` would point the probe
+  straight back into the env. Both projects use the same construction;
+  flang-pixi's four build scripts have since 2026-09-30, r-zig-pixi's
+  `zig-build.sh` and shims too.
+- **`zig build`'s local cache is not keyed on the probe's outcome** (found
+  by r-zig-pixi): a warm cache hands back shared-libc++ link outputs after
+  the mirror is switched on, so a mirror build needs its own
+  `ZIG_LOCAL_CACHE_DIR` or a cold cache. Plain `zig cc` follows
+  `ZIG_LIB_DIR` on every call. (flang-pixi builds in fresh rattler-build
+  work dirs, so it never saw this.)
+- flang-pixi's packages are static libc++ on all six subdirs (published
+  2026-09-30; universe pruned to exactly the 18 live files). The macOS
+  binaries depend on `libSystem` only and the packages no longer depend on
+  `libcxx`. Exceptions crossing from a package into code built against a
+  different libc++ are catchable only as `catch(...)`: known, accepted.
+
+**The flang runtime: link the archive by path, and keep the dylib off the
+line (2026-10-01).** The clang resource dir (`lib/clang/23/lib/darwin` on
+macOS, `lib/clang/23/lib/<triple>` on Linux) holds both
+`libflang_rt.runtime.a` and the shared library, and `lib/` symlinks both.
+Two traps, both measured:
+- `-L<dir> -lflang_rt.runtime` takes the shared one on macOS (zig and the
+  flang driver alike; the driver also records an absolute rpath to the env's
+  `lib`), so packages built that way load only inside the build env. Your
+  archive-path `FLIBS` is the right rule.
+- **Apple's `ld` cannot link the archive while the dylib is reachable.**
+  zig-built dylibs export `___dso_handle` (Apple-built ones do not;
+  `libflang_rt.runtime.dylib` does). The flang driver always adds
+  `-lflang_rt.runtime` plus the resource dir, so `flang -shared obj
+  <dir>/libflang_rt.runtime.a` through Apple's `ld` (R's
+  `SHLIB_FCLD=$(FC)` on macOS) fails: `ld: fixup error
+  (kind=arm64_adrp_lo12) at '__GLOBAL__sub_I_external_unit.cpp' … target
+  '___dso_handle'`, with `_4` and `_8` alike. It links when the dylib is off
+  the search path (archive-only dir first on `-L`), with `-fuse-ld=lld`,
+  and under zig's own linker. If your Fortran packages currently link, check
+  which linker and search path they really use; the robust fix is on the
+  flang-pixi side (next bullet).
+- **Done 2026-10-01 (evening): flang-rt build 9** — static-only (no
+  `.so`/`.dylib` on any subdir) with hidden visibility, on universe as
+  linux-64 `zig_501841f_9`, linux-aarch64 `zig_852aba2_9`, osx-arm64
+  `zig_eb63498_9`, osx-64 `zig_79df4ff_9` (Windows unchanged: `_4` win-64,
+  `_7` win-arm64, always static-only). Verified from universe: on osx-arm64
+  the flang driver through Apple's `ld` links the archive path and
+  `-lflang_rt.runtime` alike, results depend on `libSystem` only, and a
+  Fortran dylib exports 2–4 symbols (was 828); on linux-64 a Fortran `.so`
+  exports 2 (was 1,238). Re-lock with `build-number >= 9` and drop any
+  version-script workaround; `FLIBS` may keep the archive path.
+- Your `_4` numbers: the 88 members at 13.0 are flang-rt `_4`; `_8` (on
+  universe since 2026-09-30) is 11.0 throughout — re-lock to see it. The
+  macOS dylib depends on `libSystem` only (no libc++).
+
+**Runtime symbols re-exported by Fortran packages (your question).**
+Measured: a Fortran `.so` linking the archive statically exports 1,238
+symbols on Linux (1,142 runtime: `_Fortran*`, `_ZN7Fortran*`, CFI_*, …) and
+828 on macOS (808 runtime). flang-pixi's view: hide them, at build time.
+Link-time options are uneven — Linux: a version script through zig+lld
+works (`{ global: *; local: _Fortran*; _ZN7Fortran*; _ZNK7Fortran*;
+_ZT[VIS]N7Fortran*; };` leaves 25 exports; `--exclude-libs` is rejected by
+zig); macOS: zig's Mach-O linker *accepts and ignores*
+`-exported_symbols_list` and rejects `-unexported_symbols_list` and
+`-hidden-l`, so nothing at link time works under zig there. flang-rt has no
+visibility option of its own (hidden only for CUDA offload objects), so
+build 9 compiles the runtime with `-fvisibility=hidden
+-fvisibility-inlines-hidden`; consumers export nothing of it without doing
+anything (measured above). Code that wants the runtime's C API (`CFI_*`)
+must link the archive itself.
+
+**macOS deployment target and flang — closed (2026-10-01, both sides).**
+- A flang-compiled object carries `minos` = the host SDK's version (26.0 on
+  omicron) unless told otherwise. `-mmacosx-version-min=13.0`,
+  `-mmacos-version-min=13.0`, `--target=arm64-apple-macosx13.0` and
+  `MACOSX_DEPLOYMENT_TARGET=13.0` all give 13.0, for objects and flang's own
+  links. The flag beats the env var (flag 11.0 + env 13.0 → 11.0, silently)
+  and the last flag wins. Your choice — the flag in R's build and inside
+  Makeconf's `FC` — is right.
+- zig's Mach-O linker stamps the link's floor over newer objects without a
+  word; Apple's `ld` warns and does the same. flang's own macOS link runs
+  Apple's `ld` and needs `SDKROOT` (`-fuse-ld=lld` works but still needs
+  the SDK's `libSystem.tbd`): the Xcode CLT is a requirement of any tier
+  that links Fortran on macOS.
+- `-target <arch>-native.13.0` (literal `native` + `MAJOR.MINOR`) is
+  verified at the binary level on osx-arm64, no macOS 13 load test yet:
+  `minos 13.0`, no `LC_RPATH` per `-L`, the SDK's headers and libSystem;
+  at link time add `-F$SDK/System/Library/Frameworks` and
+  `-L$SDK/usr/lib` LAST (SDK `-L` first silently binds `-lz`/`-liconv`/
+  `-lcurl` to the SDK's `.tbd` stubs against conda's headers; a missing SDK
+  `-L` is what produced the conda-forge zig panic and upstream's libobjc
+  error). The `-fvisibility=hidden -O3` crash did not reproduce.
+  `<arch>-macos.13.0` stays unusable (loses `usr/include`: `net/if_media.h`,
+  libDER). conda-forge zig still links the shared libc++ with any pinned
+  target unless the mirror is on. The same form works on the conda-forge
+  zig 0.17 dev snapshot (measured 2026-10-01 on omicron).
+
+**Windows, corrected.** r-zig-pixi's shims call `x86_64-w64-mingw32-zig.exe`
+from `zig_impl_win-64` — the real zig binary (`zig.bat` only forwards to
+it), whose default target is `x86_64-windows…-gnu`, the gnu ABI. The MSVC
+default and the flag dropping belong to the `zig_win-64` wrappers
+(`x86_64-w64-mingw32-zig-cc.exe`/`-cxx.exe`, ~200 KB) only; those fail with
+`WindowsSdkNotFound` on a machine without Visual Studio unless given
+`-target x86_64-windows-gnu`. The host's Windows 11 version reaches
+neither the PE header versions (6.0) nor `_WIN32_WINNT` (0x0a00). The
+arm64 `__C_specific_handler` entry in zig's kernel32 import library is
+still present in build 19 (§3).
+
+**Wrapper flag drops (the `zig_win-64`/`zig_linux-64`/`zig_osx-*` `-cc`/
+`-cxx` wrappers only):** `-march=`, `-mtune=`, `-ftree-vectorize`,
+`-fstack-protector*`, `-fno-plt`, `-fdebug-prefix-map=`, `-stdlib=`,
+`-lgcc_s`, `-lgcc_eh`, `-Wl,-rpath-link*`; `-static-libstdc++` is reported
+unused. Plain zig honours them all. Keep plain zig behind the shims.
+
+**Lockfile notes (r-zig-pixi's):** `libcxx 21.1.8` sits in every macOS R
+build env through `zig_impl_osx-*` and cannot be dropped; `23.1.2` only in
+the Python-only `wheel` env (irrelevant). Mixed zig builds (`_19` in
+minimal, `_15` elsewhere): unify on `_19`, the build all of this was
+measured on.
+
+**Shipping zig means shipping conda LLVM 21** (`libllvm21`,
+`libclang-cpp21.1`; `vc14_runtime`+`ucrt` on Windows; `libcxx` on macOS):
+the conda zig binary is dynamically linked, unlike upstream's.
+
+**rattler-build pitfalls r-zig-pixi hit (not seen in flang-pixi, which has
+no staging outputs or `path:` sources):** the staging-output `build_cache`
+key does not hash `path:` sources, so local rebuilds after editing them
+reuse the old output (delete `<output-dir>/build_cache`); a staging output
+gets no `PKG_NAME`/`PKG_VERSION`, pass them via `script: {file, env}`.

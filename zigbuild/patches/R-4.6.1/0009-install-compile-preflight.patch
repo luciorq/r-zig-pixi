@@ -1,0 +1,42 @@
+R CMD INSTALL: compile preflight (the toolchain is a separate package)
+
+A package needs the toolchain when it has compiled code (src/) or a
+configure script. Without bin/toolchain/zig-cc (the toolchain package
+fills that directory, Makeconf points at it, and a package manager can
+leave it behind empty) and without the compiler Makeconf's CC names (an
+unstaged build tree names the repo's toolchain/zig-cc directly), stop
+with one message naming the package to install, from
+R_ZIG_TOOLCHAIN_HINT (each distribution sets it in etc/Renviron),
+instead of failing deep in configure or make. A user Makevars (their own
+compiler) or R_ZIG_NO_PREFLIGHT skips the check. Inserted before the
+configure step; binary packages never reach it. feat-no-host-paths
+PLAN.md, phase T.
+
+--- a/src/library/tools/R/install.R
++++ b/src/library/tools/R/install.R
+@@ -1273,6 +1273,25 @@
+             }
+ 	}
+ 
++        ## r-zig: compile preflight (the toolchain is a separate package)
++        if (((install_libs && dir.exists("src") &&
++              length(dir("src", all.files = TRUE)) > 2L) ||
++             (use_configure && (file.exists("configure") ||
++                                (WINDOWS && (file.exists("configure.win") ||
++                                             file.exists("configure.ucrt")))))) &&
++            !file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")) &&
++            ## the compiler Makeconf names, when it is a plain path (an
++            ## unstaged build tree names the repo's toolchain/zig-cc)
++            !tryCatch({
++                cc <- grep("^CC *=", readLines(file.path(R.home("etc"), "Makeconf")), value = TRUE)
++                cc <- strsplit(sub("^CC *= *", "", cc[1L]), " ", fixed = TRUE)[[1L]][1L]
++                file.exists(gsub("$(R_HOME)", R.home(), cc, fixed = TRUE))
++            }, error = function(e) FALSE) &&
++            !length(makevars_user()) && !nzchar(Sys.getenv("R_ZIG_NO_PREFLIGHT")))
++            pkgerrmsg(paste0("this package has compiled code, and the r-zig toolchain is not installed: ",
++                             Sys.getenv("R_ZIG_TOOLCHAIN_HINT",
++                                        "install the r-zig toolchain package for this R")),
++                      pkg_name)
+         if (use_configure) {
+             if (WINDOWS) {
+                 if (file.exists(f <- "./configure.ucrt") ||

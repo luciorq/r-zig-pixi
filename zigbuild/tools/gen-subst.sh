@@ -45,22 +45,12 @@ mkdir -p "$OUT_DIR"
 #    continued entry ends its physical line in `"\` and the next physical
 #    line starts with `"`; loop until a line ends in a bare `"`.
 #
-#    The last two sed expressions drop every conda cross-toolchain
-#    *sysroot* directory (`<conda>/<triple>/sysroot/{lib64,usr/lib64,...}`)
-#    from the captured values — both as `-L` link flags (FLIBS,
-#    FLIBS_IN_SO, FCLIBS) and as `:`-separated runtime entries
-#    (R_LD_LIBRARY_PATH). On gfortran platforms (linux-aarch64 today)
-#    autoconf's AC_FC_LIBRARY_LDFLAGS copies gfortran's implicit search
-#    dirs verbatim, and conda-forge's sysroot package ships a complete
-#    glibc runtime there (lib64/libc.so.6, ld-linux-*.so, libm.so.6, from
-#    the CentOS-era sysroot). R's etc/ldpaths exports R_LD_LIBRARY_PATH
-#    into LD_LIBRARY_PATH, so with those entries kept every R process
-#    loaded the sysroot's libc.so.6 under the host's ld.so and died in
-#    startup — the "SIGILL/SIGSEGV at 'R bootstrap: tools sysdata'"
-#    failure on ubuntu-24.04-arm. Those dirs are only meaningful to gcc's
-#    own --sysroot link step; zig cc brings its own libc, and libgfortran
-#    lives in the retained lib/gcc/<triple>/<ver> entry, so dropping them
-#    loses nothing at link time either. linux-64 (flang) never had them.
+#    (Two more expressions used to drop conda's cross-toolchain sysroot
+#    directories, which autoconf copied from gfortran's implicit search
+#    dirs into FLIBS and R_LD_LIBRARY_PATH on linux-aarch64. They went
+#    with gfortran: flang's runtime is given to configure explicitly
+#    (configure-only.sh), so FLIBS and R_LD_LIBRARY_PATH name only its
+#    directory, and R's etc/ldpaths is build.zig's, not configure's.)
 #
 #    The final expression turns flang's runtime directory — the clang
 #    resource dir, `<conda>/lib/clang/<LLVM major>/lib/<subdir>` as it
@@ -94,10 +84,13 @@ awk '
       -e "s|$PREFIX|@ZR_PREFIX@|g" \
       -e "s|$TOOLCHAIN|@ZR_TOOLCHAIN@|g" \
       -e "s|$ROOT|@ZR_ROOT@|g" \
-      -e 's| -L[^ "]*/sysroot/[^ "]*||g' \
-      -e 's|:[^:"]*/sysroot/[^:"]*||g' \
       -e 's|@ZR_CONDA@/lib/clang/[0-9][0-9]*/lib/[^ ":]*|@ZR_FLANGRT_DIR@|g' \
   > "$OUT_DIR/subst.txt"
+
+# Entries that record the capturing machine's installed tools (texinfo,
+# bison, conda's ld/nm, a browser) rather than R or the platform: fixed
+# values, so two captures of one platform/variant are identical anywhere.
+bash "$(dirname "$0")/normalize-subst.sh" "$OS" "$OUT_DIR/subst.txt"
 
 echo "wrote $OUT_DIR/subst.txt ($(wc -l < "$OUT_DIR/subst.txt") entries)"
 

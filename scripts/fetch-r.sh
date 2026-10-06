@@ -46,4 +46,7 @@ tar -xzf "$TARBALL" -C "$BUILD_DIR" || {
   [ "$OS" = windows ] && [ -f "$SRC_DIR/configure" ]
 }
 test -f "$SRC_DIR/configure"
+# Pristine: no patches applied yet (zig-build.sh applies zigbuild/patches/
+# to a tree with this empty stamp and extracts any other tree again).
+: > "$SRC_DIR/.r-zig-patches"
 echo "Done."

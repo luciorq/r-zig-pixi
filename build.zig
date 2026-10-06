@@ -8,9 +8,9 @@
 //!      subst.txt — the S-table dumped from a known-good config.status run;
 //!      slim and full are separate dirs since capabilities are compile-time),
 //!   2. C compiles natively through zig's Compile steps (zig cc semantics:
-//!      -fno-sanitize=undefined, -std=gnu23), Fortran through per-platform
-//!      Run steps (flang on linux, gfortran on macOS — zig has no Fortran
-//!      frontend of its own on either),
+//!      -fno-sanitize=undefined, -std=gnu23), Fortran through Run steps
+//!      (flang, flang-pixi's flang-zig on every platform — zig has no
+//!      Fortran frontend of its own),
 //!   3. the R-level base-package bootstrap (share/make/basepkg.mk logic)
 //!      runs as a sequenced chain of Run steps invoking the freshly built R.
 //!
@@ -33,44 +33,43 @@
 //!
 //! Everything installs directly into the final prefix (zig build --prefix):
 //! <prefix>/lib/R is R_HOME, <prefix>/bin holds the launchers — the same
-//! layout make install produces, so stage.sh/package-standalone.sh work
-//! downstream unchanged (verified F4.1).
+//! layout make install produces. That tree is the one that ships
+//! (feat-no-host-paths F1, F1.7): scripts/vendor-libs.sh adds the env's
+//! shared libraries after the build, and package-standalone.sh only
+//! archives it.
 
 const std = @import("std");
 const rspec = @import("zigbuild/rspec.zig");
+// rzig, the compiler front installed as R_HOME/bin/toolchain/zig-cc etc.
+// (feat-no-host-paths F3), and the floors it shares with R's own build.
+const rzig_build = @import("zigbuild/tools/rzig/build.zig");
+const floors = @import("zigbuild/tools/rzig/floors.zig");
+// The static-libc++ mirror against conda-forge zig's shared one, rzig's
+// for packages and R's own build's (staticLibcxxLibDir).
+const libcxx_mirror = @import("zigbuild/tools/rzig/libcxx_mirror.zig");
 
 const r_version = "4.6.1";
 
-/// F5/F6: linux uses flang + ELF (.so/DT_NEEDED/RUNPATH); macOS uses
-/// gfortran + Mach-O (.dylib/install_name/@rpath — patchelf doesn't apply
-/// at all, and per FINALIZATION.md F5.2 all Mach-O rpath/codesign surgery
-/// is left to stage.sh, not duplicated here); windows uses MinGW gfortran
-/// + PE/COFF (.dll, no "lib" prefix on R's own core libs — see
-/// FINALIZATION.md F6.0/F6.1a for the CLI-only scoping decision: no
-/// Rgui.exe/Rterm.exe/R.exe/Rcmd.exe, just R.dll+Rblas.dll+Rlapack.dll+
-/// Rgraphapp.dll+Riconv.dll+Rscript.exe).
+/// macOS deployment target of everything this build links, and of the
+/// packages compiled through rzig (which spells it "<arch>-native.13.0"):
+/// one definition, zigbuild/tools/rzig/floors.zig. See the target comment
+/// in build().
+const macos_min: std.SemanticVersion = floors.macos;
+
+/// F5/F6: linux is ELF (.so/DT_NEEDED/RUNPATH); macOS is Mach-O
+/// (.dylib/install_name/@rpath); windows is MinGW PE/COFF (.dll, no "lib"
+/// prefix on R's own core libs — see FINALIZATION.md F6.0/F6.1a for the
+/// CLI-only scoping decision: no Rgui.exe, just R.dll+Rblas.dll+
+/// Rlapack.dll+Rgraphapp.dll+Riconv.dll and the console front-ends). The
+/// Fortran compiler is flang on all three (fortranOne).
 const Os = enum { linux, macos, windows };
 
 /// CPU architecture, orthogonal to `Os`. Only used generically for
-/// `zigbuild/config/<platform>-<variant>/` directory-name construction
-/// and a handful of downstream Fortran-runtime/gcc-root lookups
-/// (findFlangRt, the macOS gcc-root switch, fortranOne's compiler
-/// selection) — deliberately NOT threaded through Windows' MinGW-prefix/
-/// R_ARCH machinery, which has no arch dimension built in today at all
-/// (see .github/devdocs/feat-cross-platform-standardization/PLAN.md
-/// Phase 2's explicit non-goal).
-/// The Fortran compiler is a per-platform *dependency* decision made in
-/// pixi.toml (and recipe.yaml), not a build.zig platform table: whichever
-/// of the two the pixi env provides is what R gets compiled with. flang-
-/// pixi's zig-built `flang-zig` + `flang-rt-zig` (LLVM 23.1.1, published
-/// to the `universe` channel for every subdir) is being adopted platform
-/// by platform (consolidation/PLAN.md Phase 2 — osx-arm64 first, because
-/// gfortran 15/16 silently miscompiles R's complex LAPACK there at -O2);
-/// gfortran stays the fallback on each platform until that platform
-/// passes build + `check`'s lapack.R + the full contract suite at -O2.
-/// Same probe order as scripts/env.sh's fortran_compiler().
-const FortranCompiler = enum { flang, gfortran };
-
+/// `zigbuild/config/<platform>-<variant>/` directory-name construction —
+/// deliberately NOT threaded through Windows' MinGW-prefix/R_ARCH
+/// machinery, which has no arch dimension built in today at all (see
+/// .github/devdocs/feat-cross-platform-standardization/PLAN.md Phase 2's
+/// explicit non-goal).
 const Arch = enum {
     x86_64,
     aarch64,
@@ -109,7 +108,6 @@ const Ctx = struct {
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     os: Os,
-    arch: Arch,
     dylib_ext: []const u8, // ".so" (linux) or ".dylib" (macOS) — R_DYLIB_EXT;
     // only libR/libRblas/libRlapack use this. Packages/modules always use
     // SHLIB_EXT, which is ".so" on every platform R supports.
@@ -128,21 +126,73 @@ const Ctx = struct {
     // `@BUILD_DEVCAIRO_TRUE@ cairodevice`). Both false for minimal only.
     openmp: bool,
     devcairo: bool,
-    fc: FortranCompiler, // which Fortran compiler this build uses — decided by what the pixi env provides, see build()
-    flangrt_dir: []const u8, // conda clang resource dir holding libflang_rt.runtime.a (fc == .flang; "" otherwise)
-    gfortran_lib_dir: []const u8, // conda gcc versioned lib dir with libgfortran (fc == .gfortran; "" otherwise)
+    flangrt_dir: []const u8, // conda clang resource dir holding libflang_rt.runtime.a (findFlangRt)
+    toolchain_hint: []const u8, // -Dtoolchain-hint, "" when unset
+    sdk: []const u8, // macOS: the installed SDK's root (xcrun); "" elsewhere
+    // The zig lib dir of R's links, null for zig's own: a mirror of it
+    // where conda-forge's zig would link a shared libc++
+    // (staticLibcxxLibDir). Set on every unix link (addSharedLib, R.bin);
+    // always null on Windows, whose links leave it alone.
+    zig_lib_dir: ?std.Build.LazyPath,
+    prefix_is_env: bool, // the install prefix is the env R is built in (the conda build): samePhysicalDir
+    // Every C compile of R's own starts with these (addCGroup, the cairo
+    // module): no directory of the build machine in __FILE__, the debug
+    // info or the OpenMP source locations (filePathFlags).
+    path_flags: []const []const u8,
+    // An empty C file, the code of linkRoot's stripped root modules.
+    empty_c: std.Build.LazyPath,
     subst: std.StringHashMap([]const u8),
+    // Makeconf's own values for the keys that name the build environment
+    // (loadSubstFile, makeconfValue): substituted over `subst` into
+    // etc/Makeconf only.
+    mk_subst: std.StringHashMap([]const u8),
     geninc: std.Build.LazyPath, // generated headers dir (config.h, Rconfig.h, ...)
     libR: *std.Build.Step.Compile,
     rblas: ?*std.Build.Step.Compile, // null when blas == .openblas
     rlapack: ?*std.Build.Step.Compile, // null when blas == .openblas
+    // rzig for R's target: the compilers Makeconf names (installRzig)
+    rzig: std.Build.LazyPath, // rzig_build.Artifacts.bin
+
+    /// Link a library this build makes (libR, libRblas, libRlapack). Off
+    /// Windows by its file: `linkLibrary` would also add the library's
+    /// zig-cache directory as an rpath (std.Build does that for every
+    /// linked dynamic artifact), a build-machine path in what ships.
+    /// Windows links the import library and has no rpaths.
+    fn linkSibling(ctx: *const Ctx, mod: *std.Build.Module, lib: *std.Build.Step.Compile) void {
+        if (ctx.os == .windows) mod.linkLibrary(lib) else mod.addObjectFile(lib.getEmittedBin());
+    }
+
+    /// Where an artifact is installed, for its rpaths.
+    const RDir = enum { rlib, modules, exec, pkglibs };
+
+    /// The rpaths of an artifact: R_HOME/lib and <prefix>/lib, relative to
+    /// its own directory ($ORIGIN on ELF, @loader_path on Mach-O). conda
+    /// and the standalone tree share that layout (<prefix>/lib/R and
+    /// <prefix>/lib), so these are final: nothing rewrites them after the
+    /// build (feat-no-host-paths PLAN.md, F1.2). No absolute rpath is
+    /// added anywhere; the R this build runs finds the env's libraries
+    /// through buildLdPath. No-op on Windows.
+    fn relRPaths(ctx: *const Ctx, mod: *std.Build.Module, where: RDir) void {
+        const origin = switch (ctx.os) {
+            .linux => "$ORIGIN",
+            .macos => "@loader_path",
+            .windows => return,
+        };
+        const rel: [2][]const u8 = switch (where) {
+            .rlib => .{ "", "/../.." },
+            .modules => .{ "/../lib", "/../.." },
+            .exec => .{ "/../../lib", "/../../.." },
+            .pkglibs => .{ "/../../../lib", "/../../../.." },
+        };
+        for (rel) |r| mod.addRPathSpecial(ctx.b.fmt("{s}{s}", .{ origin, r }));
+    }
 
     /// Link the BLAS provider: internal libRblas.so or system openblas.
     fn linkBlas(ctx: *const Ctx, mod: *std.Build.Module) void {
         if (ctx.blas == .openblas) {
             mod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
         } else {
-            mod.linkLibrary(ctx.rblas.?);
+            ctx.linkSibling(mod, ctx.rblas.?);
         }
     }
     /// Link the LAPACK provider: internal libRlapack.so or system openblas
@@ -151,7 +201,7 @@ const Ctx = struct {
         if (ctx.blas == .openblas) {
             mod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
         } else {
-            mod.linkLibrary(ctx.rlapack.?);
+            ctx.linkSibling(mod, ctx.rlapack.?);
         }
     }
 
@@ -175,6 +225,19 @@ const Ctx = struct {
         };
     }
 
+    /// Library search path for the R this build runs (bootstrap, `verify
+    /// Rscript`, `zig build check`), set as R_LD_LIBRARY_PATH, which the
+    /// installed etc/ldpaths honours and turns into LD_LIBRARY_PATH or
+    /// DYLD_FALLBACK_LIBRARY_PATH inside bin/R (after macOS's SIP has
+    /// dropped DYLD_* from the environment of the /bin/sh it runs under).
+    /// The env's lib dir is a build-time need only: nothing installed
+    /// records it (feat-no-host-paths PLAN.md, F1.1). Null on Windows,
+    /// which finds DLLs through PATH and the exe's directory.
+    fn buildLdPath(ctx: *const Ctx) ?[]const u8 {
+        if (ctx.os == .windows) return null;
+        return ctx.absSub("{s}/lib:{s}", .{ ctx.rhome, ctx.condaDir("lib") });
+    }
+
     /// Add {conda}/lib (Library/lib on Windows) as a library search path
     /// and, on unix/macOS only — rpath is a real ELF/Mach-O concept with
     /// no Windows/PE analogue (PE's DLL search is PATH/same-directory
@@ -184,7 +247,20 @@ const Ctx = struct {
     fn addCondaLibPath(ctx: *const Ctx, mod: *std.Build.Module) void {
         const lib_dir = ctx.condaDir("lib");
         mod.addLibraryPath(.{ .cwd_relative = lib_dir });
-        if (ctx.os != .windows) mod.addRPath(.{ .cwd_relative = lib_dir });
+    }
+
+    /// macOS: the two SDK search dirs a deployment-target link leaves out
+    /// (see the target comment in build()): -F for -framework, and usr/lib
+    /// for the SDK-only libraries (libresolv, libobjc's dependencies). Call
+    /// it last on a module, once every other -L is in: zig searches library
+    /// dirs in the order they were added, and the SDK's usr/lib also has
+    /// .tbd stubs for libz, libiconv and libcurl, so ahead of conda's lib
+    /// dir those -l flags would bind the SDK's older libraries without a
+    /// word. No-op off macOS.
+    fn addSdkPaths(ctx: *const Ctx, mod: *std.Build.Module) void {
+        if (ctx.sdk.len == 0) return;
+        mod.addFrameworkPath(.{ .cwd_relative = ctx.absSub("{s}/System/Library/Frameworks", .{ctx.sdk}) });
+        mod.addLibraryPath(.{ .cwd_relative = ctx.absSub("{s}/usr/lib", .{ctx.sdk}) });
     }
 
     /// R_HOME install-dir for `sub` — "Library/lib/R/<sub>" on Windows
@@ -234,6 +310,12 @@ pub fn build(b: *std.Build) !void {
 
     var variant = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal (unix only)") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
+    // What the compile preflight (scripts/zig-build.sh's install.R patch)
+    // tells someone without the toolchain package to install: written into
+    // etc/Renviron (Windows: etc/Renviron.site). zig-build.sh passes the
+    // conda one for the conda build; the wheel sets its own; empty means R's
+    // generic message.
+    const toolchain_hint = b.option([]const u8, "toolchain-hint", "R_ZIG_TOOLCHAIN_HINT default written into etc/Renviron") orelse "";
 
     const native = b.resolveTargetQuery(.{});
     const os: Os = switch (native.result.os.tag) {
@@ -246,10 +328,11 @@ pub fn build(b: *std.Build) !void {
         },
     };
     // On real Windows hardware, native target resolution defaults to the
-    // MSVC ABI — this whole toolchain (conda-forge MinGW gfortran,
+    // MSVC ABI — this whole toolchain (flang-zig's MinGW target,
     // x86_64-w64-mingw32-* binutils, .dll.a import libraries) is built on
-    // the GNU/MinGW ABI instead (matches the existing toolchain/zig-cc
-    // shim's own `-target x86_64-windows-gnu`), so re-resolve explicitly.
+    // the GNU/MinGW ABI instead (what `zig cc` itself defaults to there,
+    // and so what rzig's gcc.exe compiles packages for), so re-resolve
+    // explicitly.
     //
     // On Linux, pin the glibc floor to 2.17 (RHEL/CentOS 7 era, ~2013) —
     // zig cross-links against its own bundled old-glibc stubs for this,
@@ -263,7 +346,7 @@ pub fn build(b: *std.Build) !void {
     // (libcurl.so.4 checked directly via `objdump -T`) already cap out at
     // GLIBC_2.17 themselves — conda-forge deliberately builds against an
     // old sysroot for exactly this reason, so the non-zig-compiled
-    // dependencies (conda libs, gfortran's own runtime) were already
+    // dependencies (conda libs) were already
     // compatible; only this project's own zig-compiled code defaulted to
     // the host's (much newer) native glibc before this.
     // .cpu_model = .baseline everywhere (not native): these artifacts
@@ -276,29 +359,38 @@ pub fn build(b: *std.Build) !void {
     // implicit search dirs put conda's aarch64 *sysroot* lib64, which
     // ships its own libc.so.6/ld-linux, on R_LD_LIBRARY_PATH, so every
     // R process loaded a foreign glibc under the host ld.so and died in
-    // startup with SIGILL or SIGSEGV. See gen-subst.sh's sysroot filter.
+    // startup with SIGILL or SIGSEGV. No platform uses gfortran any more.
     // Baseline stays on its own merits.)
     //
-    // macOS + minimal: the same floor idea as glibc 2.17, as a deployment
-    // target. A native macOS query makes zig stamp every binary's
-    // LC_BUILD_VERSION minos with the *build host's* version (min = max =
-    // detected), so a wheel built on a macOS 15.x runner would claim to
-    // need 15.x — and make-wheel.py derives the wheel tag from exactly that.
-    // 13.0 is zig 0.16's own supported floor (std.Target's default macOS
-    // range); ziglang, the wheel's compiler dependency, needs 12. The
-    // price of a non-native OS query is building against zig's bundled
-    // Darwin headers/libSystem stubs instead of the SDK — fine for this
-    // profile: the only SDK-only headers R includes are under HAVE_AQUA
-    // (devQuartz.c), and without cairo no -framework is linked. slim/full
-    // keep the native query (their cairo stack links frameworks).
+    // macOS: the same floor idea as glibc 2.17, as a deployment target
+    // (macos_min, 13.0). A native macOS query makes zig stamp every
+    // binary's LC_BUILD_VERSION minos with the *build host's* version, so
+    // a tree built on macOS 26 claims to need 26 (and make-wheel.py derives
+    // the wheel tag from exactly that). 13.0 is zig 0.16's own supported
+    // floor (std.Target's default macOS range); ziglang, the wheel's
+    // compiler dependency, needs 12. The query names no OS tag, only
+    // os_version_min (the "<arch>-native.13.0" the shims pass): zig then
+    // treats the OS as non-native, so it stamps 13.0 and records no rpath
+    // per -L directory, while the ABI still counts as native, so headers
+    // and libSystem come from the installed SDK (std.Target.Query's
+    // isNativeOs requires os_version_min == null; LibCDirs.detect looks
+    // for the SDK when isNativeAbi). The non-native link searches neither
+    // the SDK's frameworks nor its usr/lib, so ctx.addSdkPaths adds both
+    // back. "<arch>-macos.13.0" (an explicit OS tag) would lose the SDK
+    // altogether. Verified on omicron 2026-10-01 for every Mach-O under
+    // lib/R (feat-no-host-paths PLAN.md, "macOS deployment target").
     const target = if (os == .windows)
         b.resolveTargetQuery(.{ .abi = .gnu, .cpu_model = .baseline })
     else if (os == .linux)
-        b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = .{ .major = 2, .minor = 17, .patch = 0 }, .cpu_model = .baseline })
-    else if (variant == .minimal)
-        b.resolveTargetQuery(.{ .cpu_model = .baseline, .os_version_min = .{ .semver = .{ .major = 13, .minor = 0, .patch = 0 } } })
+        b.resolveTargetQuery(.{ .abi = .gnu, .glibc_version = floors.glibc, .cpu_model = .baseline })
     else
-        b.resolveTargetQuery(.{ .cpu_model = .baseline });
+        b.resolveTargetQuery(.{ .cpu_model = .baseline, .os_version_min = .{ .semver = macos_min } });
+    // The installed SDK, asked the way zig itself asks
+    // (std.zig.system.darwin.getSdk); "" off macOS.
+    const sdk: []const u8 = if (os == .macos)
+        std.mem.trim(u8, b.run(&.{ "/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path" }), " \t\r\n")
+    else
+        "";
     // gnuwin32 has no slim/full switch at all (jpeg/tiff/tcltk are always
     // on — "slim==full on Windows", a pre-existing project convention);
     // -Dvariant is meaningless there, force .full regardless of what was
@@ -357,35 +449,40 @@ pub fn build(b: *std.Build) !void {
         else => b.fmt("{s}/lib/R", .{install_prefix}),
     };
 
-    // Fortran compiler = whatever the env provides, flang preferred (see
-    // FortranCompiler). Probed on disk rather than via PATH so a stray host
-    // flang can never be picked up; printed once so a build log always says
-    // which compiler R's Fortran was built with. In a rattler-build sandbox
-    // the *compilers* (build: deps) live in $BUILD_PREFIX while $CONDA_PREFIX
-    // is the host env that only holds the runtime (flang-rt) — found via a
-    // real conda-package failure on osx-arm64 ("gfortran gcc root not
-    // found"): probing the host prefix alone silently fell back to
-    // gfortran. Same split scripts/env.sh honours for PATH.
-    const fc: FortranCompiler = blk: {
+    // R's Fortran compiler is flang, flang-pixi's zig-built flang-zig, on
+    // every platform (pixi.toml, recipe.yaml; consolidation/PLAN.md Phase
+    // 2, gfortran gone since 2026-10-03). Looked for on disk, in the env
+    // and, in a rattler-build sandbox, in $BUILD_PREFIX, where the
+    // compilers (build: deps) live while $CONDA_PREFIX is the host env
+    // with only the runtime (flang-rt-zig); never on PATH, so a host
+    // flang is never mistaken for it. fortranOne runs `flang` by name: the
+    // env's bin dirs lead PATH (scripts/env.sh; pixi's activation on
+    // Windows). Printed once, so a build log always says which flang
+    // built R's Fortran. Without one the build stops here, with one error.
+    const flang_bin: []const u8 = blk: {
+        var probed = std.ArrayList(u8).empty;
         const prefixes = [_]?[]const u8{ b.graph.environ_map.get("BUILD_PREFIX"), conda };
         for (prefixes) |maybe| {
             const pfx = maybe orelse continue;
-            const flang_bin = switch (os) {
+            const cand = switch (os) {
                 .windows => b.fmt("{s}/Library/bin/flang.exe", .{pfx}),
                 else => b.fmt("{s}/bin/flang", .{pfx}),
             };
-            std.Io.Dir.cwd().access(io, flang_bin, .{}) catch continue;
-            break :blk .flang;
+            std.Io.Dir.cwd().access(io, cand, .{}) catch {
+                try probed.appendSlice(arena, b.fmt(" {s}", .{cand}));
+                continue;
+            };
+            break :blk cand;
         }
-        break :blk .gfortran;
+        std.debug.print("error: no flang in this environment (looked for{s}): R's Fortran needs flang-pixi's flang-zig, a dependency in pixi.toml and recipe/recipe.yaml\n", .{probed.items});
+        return error.MissingFlang;
     };
-    std.debug.print("r-zig: Fortran compiler = {s} ({s})\n", .{ @tagName(fc), platform });
+    std.debug.print("r-zig: Fortran compiler = flang ({s}; {s})\n", .{ flang_bin, platform });
 
     var ctx = Ctx{
         .b = b,
         .target = target,
         .os = os,
-        .arch = arch,
         .dylib_ext = dylib_ext,
         .variant = variant,
         .blas = blas,
@@ -395,39 +492,45 @@ pub fn build(b: *std.Build) !void {
         .prefix = install_prefix,
         .rhome = rhome,
         .config_dir = config_dir,
-        // Windows keeps these defaults (its compile graph never passes
-        // `.openmp = true` and builds its own cairo device); unix overwrites
-        // both from subst.txt right after loadSubstTable below.
+        .toolchain_hint = toolchain_hint,
+        .sdk = sdk,
+        .zig_lib_dir = try staticLibcxxLibDir(b, io, os),
+        .prefix_is_env = samePhysicalDir(io, arena, install_prefix, conda),
+        // Windows keeps these defaults. Its compile graph never passes
+        // `.openmp = true`, so R itself has no OpenMP there, and `openmp`
+        // decides only what packages get: etc/x64/Makeconf's
+        // SHLIB_OPENMP_*FLAGS (@OPENMP@, installWindowsCompilerContract)
+        // and the files their compiles and links need (installOpenMP). It
+        // builds its own cairo device. unix overwrites both from subst.txt
+        // right after loadSubstTable below.
         .openmp = true,
         .devcairo = true,
-        .fc = fc,
-        .flangrt_dir = if (fc == .flang) try findFlangRt(b, io, conda, os) else "",
-        .gfortran_lib_dir = if (fc == .gfortran) switch (os) {
-            .windows => try findGfortranLibDir(b, io, b.fmt("{s}/Library/lib/gcc/x86_64-w64-mingw32", .{conda}), "libgfortran.dll.a"),
-            .macos => switch (arch) {
-                .aarch64 => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/arm64-apple-darwin20.0.0", .{conda}), "libgfortran.a"),
-                // osx-64 triple verified by real package inspection
-                // (gfortran_impl_osx-64-15.2.0's own lib/gcc/ layout, not
-                // guessed) — see feat-cross-platform-standardization/
-                // DRY_RUN_NEW_PLATFORMS.md §2. darwin13.4.0 is genuinely
-                // different from arm64's darwin20.0.0 above; both come
-                // straight from what conda-forge ships.
-                .x86_64 => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/x86_64-apple-darwin13.4.0", .{conda}), "libgfortran.a"),
-            },
-            // conda-forge's own custom sysroot triples (`<arch>-conda-linux-gnu`,
-            // NOT the generic <arch>-unknown-linux-gnu) — verified by real
-            // package inspection, see DRY_RUN_NEW_PLATFORMS.md §2.
-            .linux => switch (arch) {
-                .x86_64 => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/x86_64-conda-linux-gnu", .{conda}), "libgfortran.a"),
-                .aarch64 => try findGfortranLibDir(b, io, b.fmt("{s}/lib/gcc/aarch64-conda-linux-gnu", .{conda}), "libgfortran.a"),
-            },
-        } else "",
+        .flangrt_dir = try findFlangRt(b, io, conda, os),
+        .path_flags = &.{},
+        .empty_c = b.addWriteFiles().add("empty.c", "/* linkRoot: no code of its own */\ntypedef int r_zig_link_root;\n"),
         .subst = std.StringHashMap([]const u8).init(arena),
+        .mk_subst = std.StringHashMap([]const u8).init(arena),
         .geninc = undefined,
         .libR = undefined,
         .rblas = undefined,
         .rlapack = undefined,
+        .rzig = undefined,
     };
+    ctx.path_flags = try filePathFlags(&ctx, io);
+
+    // rzig (zigbuild/tools/rzig/main.zig): the compiler front Makeconf
+    // names, for R's own target (glibc floor, deployment target,
+    // windows-gnu), installed under the toolchain names by installRzig.
+    // `zig build rzig-test` runs its unit tests on the build machine.
+    {
+        const rz = rzig_build.add(b, b.path("zigbuild/tools/rzig"), target, rzig_build.default_optimize);
+        ctx.addSdkPaths(rz.exe.root_module);
+        ctx.rzig = rz.bin;
+        const inst = installRzig(&ctx);
+        b.getInstallStep().dependOn(inst);
+        b.step("rzig", "Build rzig and install it as the compilers in R_HOME/bin/toolchain").dependOn(inst);
+        b.step("rzig-test", "Run rzig's unit tests").dependOn(&b.addRunArtifact(rz.tests).step);
+    }
 
     try checkConfigFreshness(b, io, config_dir);
 
@@ -442,6 +545,14 @@ pub fn build(b: *std.Build) !void {
     if (os == .windows) return buildWindows(&ctx, io);
 
     try loadSubstTable(&ctx, io, config_dir);
+    // Makeconf's CPPFLAGS and LDFLAGS are empty in every distribution
+    // (feat-no-host-paths F3b): the compilers, rzig, add the environment's
+    // -I and -L, and for a conda env the rpath into its lib dir
+    // (zigbuild/tools/rzig/environment.zig). An empty assignment still
+    // overrides a CPPFLAGS or LDFLAGS in the environment, as R's own did.
+    // R's own build keeps the absolute values (ctx.subst).
+    try ctx.mk_subst.put("CPPFLAGS", "");
+    try ctx.mk_subst.put("LDFLAGS", "");
     // openblas has no vendored config of its own (F3.2: a link-time swap),
     // so it inherits the internal-BLAS S-table — and with it a Makeconf
     // telling packages `-lRblas`/`-lRlapack`, libraries this flavor never
@@ -457,6 +568,15 @@ pub fn build(b: *std.Build) !void {
     }
     ctx.openmp = ctx.subst.get("R_OPENMP_CFLAGS").?.len > 0;
     ctx.devcairo = ctx.subst.get("BUILD_DEVCAIRO_TRUE").?.len == 0;
+    // FC is the toolchain's Fortran front, rzig's zig-fc (feat-no-host-
+    // paths F3c, zigbuild/tools/rzig/fortran.zig), as CC and CXX are its
+    // zig-cc and zig-cxx: it runs the flang on PATH, on macOS with the
+    // floor packages' Fortran objects get (floors.zig, as fortranOne's;
+    // FC carried it before), and links a USE_FC_TO_LINK package
+    // (SHLIB_FCLD = $(FC)) through zig with the static runtime, which
+    // flang's own driver cannot find. Makeconf only: R's own build runs
+    // flang itself (fortranOne).
+    try ctx.mk_subst.put("FC", "$(R_HOME)/bin/toolchain/zig-fc");
 
     // ------------------------------------------------------------------
     // Generated headers (what config.status + src/include/Makefile make)
@@ -507,12 +627,14 @@ pub fn build(b: *std.Build) !void {
         for (blas_fixed) |o| rblas_mod.addObjectFile(o);
         for (blas_free) |o| rblas_mod.addObjectFile(o);
         linkFortranRt(&ctx, rblas_mod);
+        ctx.relRPaths(rblas_mod, .rlib);
         ctx.rblas = addSharedLib(&ctx, "Rblas", rblas_mod);
 
         const rlapack_mod = newCMod(&ctx);
         for (lapack_objs.items) |o| rlapack_mod.addObjectFile(o);
-        rlapack_mod.linkLibrary(ctx.rblas.?);
+        ctx.linkSibling(rlapack_mod, ctx.rblas.?);
         linkFortranRt(&ctx, rlapack_mod);
+        ctx.relRPaths(rlapack_mod, .rlib);
         ctx.rlapack = addSharedLib(&ctx, "Rlapack", rlapack_mod);
     }
 
@@ -547,6 +669,7 @@ pub fn build(b: *std.Build) !void {
     ctx.linkBlas(libR_mod);
     linkFortranRt(&ctx, libR_mod);
     linkCoreLibs(&ctx, libR_mod);
+    ctx.relRPaths(libR_mod, .rlib);
     ctx.libR = addSharedLib(&ctx, "R", libR_mod);
 
     // ------------------------------------------------------------------
@@ -556,22 +679,16 @@ pub fn build(b: *std.Build) !void {
     rbin_mod.addIncludePath(ctx.geninc);
     rbin_mod.addIncludePath(ctx.path("src/include"));
     addCGroup(&ctx, rbin_mod, "src/main", &.{"Rmain.c"}, .{ .openmp = true });
-    rbin_mod.linkLibrary(ctx.libR);
+    ctx.linkSibling(rbin_mod, ctx.libR);
     ctx.linkBlas(rbin_mod);
     linkOmp(&ctx, rbin_mod);
-    const rbin = b.addExecutable(.{ .name = "R.bin", .root_module = rbin_mod });
+    ctx.relRPaths(rbin_mod, .exec);
+    ctx.addSdkPaths(rbin_mod); // last: see addSdkPaths
+    const rbin = b.addExecutable(.{ .name = "R.bin", .root_module = linkRoot(&ctx, rbin_mod) });
     rbin.rdynamic = true; // MAIN_LDFLAGS = -Wl,--export-dynamic
+    rbin.each_lib_rpath = false; // see addSharedLib
+    rbin.zig_lib_dir = ctx.zig_lib_dir; // see addSharedLib
     macHeaderpad(&ctx, rbin);
-
-    const rscript_mod = newCMod(&ctx);
-    rscript_mod.addIncludePath(ctx.geninc);
-    rscript_mod.addIncludePath(ctx.path("src/include"));
-    // "we need to build at install time to capture the correct rhome"
-    addCGroup(&ctx, rscript_mod, "src/unix", &.{"Rscript.c"}, .{
-        .extra = &.{ctx.absSub("-DR_HOME=\"{s}\"", .{ctx.rhome})},
-    });
-    const rscript = b.addExecutable(.{ .name = "Rscript", .root_module = rscript_mod });
-    macHeaderpad(&ctx, rscript);
 
     // ------------------------------------------------------------------
     // Loadable modules: modules/lapack.so, modules/internet.so
@@ -584,20 +701,22 @@ pub fn build(b: *std.Build) !void {
     if (ctx.blas == .openblas) {
         lapmod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
     } else {
-        lapmod.linkLibrary(ctx.rlapack.?);
-        lapmod.linkLibrary(ctx.rblas.?);
+        ctx.linkSibling(lapmod, ctx.rlapack.?);
+        ctx.linkSibling(lapmod, ctx.rblas.?);
     }
-    lapmod.linkLibrary(ctx.libR);
+    ctx.linkSibling(lapmod, ctx.libR);
     linkFortranRt(&ctx, lapmod);
     linkOmp(&ctx, lapmod);
+    ctx.relRPaths(lapmod, .modules);
     const mod_lapack = addSharedLib(&ctx, "mod_lapack", lapmod);
 
     const inetmod = newCMod(&ctx);
     inetmod.addIncludePath(ctx.geninc);
     inetmod.addIncludePath(ctx.path("src/include"));
     addCGroup(&ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{ .openmp = true });
-    inetmod.linkLibrary(ctx.libR);
+    ctx.linkSibling(inetmod, ctx.libR);
     inetmod.linkSystemLibrary("curl", .{ .use_pkg_config = .no });
+    ctx.relRPaths(inetmod, .modules);
     const mod_internet = addSharedLib(&ctx, "mod_internet", inetmod);
 
     // ------------------------------------------------------------------
@@ -615,8 +734,8 @@ pub fn build(b: *std.Build) !void {
         if (ctx.blas == .openblas) {
             m.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
         } else {
-            m.linkLibrary(ctx.rlapack.?);
-            m.linkLibrary(ctx.rblas.?);
+            ctx.linkSibling(m, ctx.rlapack.?);
+            ctx.linkSibling(m, ctx.rblas.?);
         }
         linkFortranRt(&ctx, m);
         linkOmp(&ctx, m);
@@ -680,6 +799,9 @@ pub fn build(b: *std.Build) !void {
         // and `@TCLTK_LIBS@ @LIBM@` — geninc/src/include are the zig
         // equivalent of the first two -I's.
         const m = newCMod(&ctx);
+        // library/tcltk/libs/tcltk.so, as newPkgMod's: R_HOME/lib and
+        // <prefix>/lib, where vendor-libs.sh puts libtcl and libtk.
+        ctx.relRPaths(m, .pkglibs);
         m.addIncludePath(ctx.geninc);
         m.addIncludePath(ctx.path("src/include"));
         var extra = std.ArrayList([]const u8).empty;
@@ -687,7 +809,33 @@ pub fn build(b: *std.Build) !void {
         var it = std.mem.tokenizeScalar(u8, ctx.subst.get("TCLTK_CPPFLAGS").?, ' ');
         while (it.next()) |tok| try extra.append(arena, tok);
         addCGroup(&ctx, m, "src/library/tcltk/src", &rspec.tcltk_c, .{ .extra = extra.items });
-        applyLinkFlags(&ctx, m, ctx.subst.get("TCLTK_LIBS").?);
+        // linux: conda-forge's libtcl8.6.so and libtk8.6.so carry no
+        // DT_SONAME, and for such a library lld records in DT_NEEDED the
+        // path it was given, which zig makes the env's absolute one. So
+        // tcltk.so named the build machine, vendor-libs.sh's walk (ldd, by
+        // name) never copied the two, and anywhere else library(tcltk)
+        // failed in dyn.load. The link takes copies that carry their own
+        // file name as DT_SONAME instead (patchelf, in the cache, used for
+        // this link only, never installed): tcltk.so then needs them by
+        // name, through its relative rpath in <prefix>/lib, where
+        // vendor-libs.sh copies the env's. (macOS: their install names are
+        // @rpath/..., nothing to do.)
+        var libs = std.ArrayList(u8).empty;
+        var lt = std.mem.tokenizeScalar(u8, ctx.subst.get("TCLTK_LIBS").?, ' ');
+        while (lt.next()) |tok| {
+            if (ctx.os == .linux and (std.mem.eql(u8, tok, "-ltcl8.6") or std.mem.eql(u8, tok, "-ltk8.6"))) {
+                const so = b.fmt("lib{s}.so", .{tok[2..]});
+                const named = b.addSystemCommand(&.{ "patchelf", "--set-soname", so, "--output" });
+                named.setName(b.fmt("{s} with DT_SONAME", .{so}));
+                const copy = named.addOutputFileArg(so);
+                named.addFileArg(.{ .cwd_relative = ctx.absSub("{s}/lib/{s}", .{ ctx.conda, so }) });
+                m.addObjectFile(copy);
+            } else {
+                try libs.appendSlice(arena, tok);
+                try libs.append(arena, ' ');
+            }
+        }
+        applyLinkFlags(&ctx, m, libs.items);
         applyLinkFlags(&ctx, m, ctx.subst.get("LIBM").?);
         try pkg_libs.append(arena, .{ .pkg = "tcltk", .lib = addSharedLib(&ctx, "pkg_tcltk", m) });
     }
@@ -703,6 +851,7 @@ pub fn build(b: *std.Build) !void {
         cairo_mod.addIncludePath(ctx.path("src/include"));
         {
             var flags = std.ArrayList([]const u8).empty;
+            try flags.appendSlice(arena, ctx.path_flags);
             try flags.appendSlice(arena, &.{ "-std=gnu23", "-fno-sanitize=undefined", "-O2", "-DHAVE_CONFIG_H" });
             if (ctx.openmp) try flags.append(arena, "-fopenmp");
             var it = std.mem.tokenizeScalar(u8, ctx.subst.get("CAIRO_CPPFLAGS").?, ' ');
@@ -722,7 +871,8 @@ pub fn build(b: *std.Build) !void {
                 .flags = flags.items,
             });
         }
-        cairo_mod.linkLibrary(ctx.libR);
+        ctx.linkSibling(cairo_mod, ctx.libR);
+        ctx.relRPaths(cairo_mod, .pkglibs);
         applyLinkFlags(&ctx, cairo_mod, ctx.subst.get("CAIRO_LIBS").?);
         // full only: rbitmap.c's HAVE_JPEG/HAVE_TIFF branches (from the
         // per-variant config.h) need libjpeg/libtiff — CAIRO_LIBS doesn't
@@ -745,24 +895,42 @@ pub fn build(b: *std.Build) !void {
     const libR_name = ctx.absSub("libR{s}", .{ctx.dylib_ext});
     const libRblas_name = ctx.absSub("libRblas{s}", .{ctx.dylib_ext});
     const libRlapack_name = ctx.absSub("libRlapack{s}", .{ctx.dylib_ext});
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, ctx.libR.getEmittedBin(), libR_name), lib_dir, libR_name).step);
-    if (ctx.rblas) |rblas| b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rblas.getEmittedBin(), libRblas_name), lib_dir, libRblas_name).step);
-    if (ctx.rlapack) |rlapack| b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rlapack.getEmittedBin(), libRlapack_name), lib_dir, libRlapack_name).step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, mod_lapack.getEmittedBin(), "lapack.so"), modules_dir, "lapack.so").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, mod_internet.getEmittedBin(), "internet.so"), modules_dir, "internet.so").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(fixRpath(&ctx, rbin.getEmittedBin(), "R.bin"), .{ .custom = "lib/R/bin/exec" }, "R").step);
-    const rscript_fixed = fixRpath(&ctx, rscript.getEmittedBin(), "Rscript");
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript_fixed, .{ .custom = "lib/R/bin" }, "Rscript").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rscript_fixed, .{ .custom = "bin" }, "Rscript").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.libR.getEmittedBin(), lib_dir, libR_name).step);
+    if (ctx.rblas) |rblas| b.getInstallStep().dependOn(&b.addInstallFileWithDir(rblas.getEmittedBin(), lib_dir, libRblas_name).step);
+    if (ctx.rlapack) |rlapack| b.getInstallStep().dependOn(&b.addInstallFileWithDir(rlapack.getEmittedBin(), lib_dir, libRlapack_name).step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_lapack.getEmittedBin(), modules_dir, "lapack.so").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(mod_internet.getEmittedBin(), modules_dir, "internet.so").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rbin.getEmittedBin(), .{ .custom = "lib/R/bin/exec" }, "R").step);
+    // Rscript: the POSIX sh emulator, not the compiled Rscript, which
+    // embeds R_HOME as a build path (F1.4). bin/R likewise is a
+    // trampoline into lib/R/bin/R.
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/Rscript"), .{ .custom = "lib/R/bin" }, "Rscript").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/Rscript"), .{ .custom = "bin" }, "Rscript").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/R"), .{ .custom = "bin" }, "R").step);
+    // Next to the compilers Makeconf names ($(R_HOME)/bin/toolchain, rzig:
+    // installRzig, from build()), for minimal (the wheel's tree) GNU make:
+    // a pip-installed R has no other make (python:*-slim images ship
+    // none); conda-forge's links libc only. The r-zig-toolchain packages
+    // own this directory.
+    if (ctx.variant == .minimal) {
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("bin/make") }, .{ .custom = "lib/R/bin/toolchain" }, "make").step);
+    }
+    // OpenMP for packages: llvm-openmp's headers in <prefix>/include
+    // (libomp itself is vendored into <prefix>/lib, libR needs it).
+    try installOpenMP(&ctx, io);
+    // The env's runtime data, for a tree that is not the env: the CA
+    // bundle (etc/Renviron names it, finalRenviron), fontconfig's
+    // configuration, and in full Tcl/Tk's script libraries.
+    try installEnvRuntime(&ctx, io);
     // ------------------------------------------------------------------
     // Static R_HOME payload: headers, etc/, bin scripts, share/, doc/,
     // and every base package's R code / DESCRIPTION / NAMESPACE / data.
     // ------------------------------------------------------------------
     const libstage = try installStaticTree(&ctx, io);
     for (pkg_libs.items) |pl| {
-        _ = libstage.addCopyFile(fixRpath(&ctx, pl.lib.getEmittedBin(), ctx.absSub("{s}.so", .{pl.pkg})), ctx.absSub("{s}/libs/{s}.so", .{ pl.pkg, pl.pkg }));
+        _ = libstage.addCopyFile(pl.lib.getEmittedBin(), ctx.absSub("{s}/libs/{s}.so", .{ pl.pkg, pl.pkg }));
     }
-    if (mod_cairo) |mc| _ = libstage.addCopyFile(fixRpath(&ctx, mc.getEmittedBin(), "cairo.so"), "grDevices/libs/cairo.so");
+    if (mod_cairo) |mc| _ = libstage.addCopyFile(mc.getEmittedBin(), "grDevices/libs/cairo.so");
 
     // ------------------------------------------------------------------
     // Bootstrap: sequenced R runs (the R-level half make used to drive)
@@ -806,10 +974,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     try ctx.subst.put("VERSION", r_version);
     try ctx.subst.put("PACKAGE_VERSION", r_version);
     try ctx.subst.put("CC_VER", "zig cc (LLVM/clang, MinGW target)");
-    try ctx.subst.put("FC_VER", switch (ctx.fc) {
-        .flang => "flang (flang-pixi flang-zig, MinGW target)",
-        .gfortran => "gfortran (conda-forge, MinGW target)",
-    });
+    try ctx.subst.put("FC_VER", "flang (flang-pixi flang-zig, MinGW target)");
     try ctx.subst.put("RMATH_HAVE_WORKING_LOG1P", "# define HAVE_WORKING_LOG1P 1");
     // libgnuintl.h.in's 4 tokens — gnuwin32's own Makefile.win generates
     // libgnuintl.h from this .in via the exact same 4 sed substitutions
@@ -1124,13 +1289,16 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // icudt.lib, verified present in the pixi env's Library/lib).
     applyLinkFlags(ctx, r_final_mod, ctx.subst.get("WIN_R_DLL_LIBS").?);
     linkFortranRt(ctx, r_final_mod);
-    // No Windows compile group currently sets `.openmp = true` (appl_c/
-    // nmath_c above omit it, unlike the unix pipeline), so nothing emits
-    // -fopenmp or references libomp/libgomp symbols yet — linking it here
-    // was speculative copy-paste from linkOmp's unix use and just breaks the
-    // link (conda-forge ships no LLVM libomp on Windows, only GCC's
-    // libgomp, which isn't ABI-compatible with clang's default OpenMP
-    // codegen anyway). Revisit if/when Windows OpenMP support is added.
+    // R itself is built without OpenMP on Windows, as upstream: gnuwin32's
+    // config.h leaves HAVE_OPENMP off ("has it, but it is too slow to be
+    // usable", said of GCC's libgomp under MinGW-w64), and R's own OpenMP
+    // threads (R_num_math_threads) default to 1 on every platform anyway.
+    // So no Windows compile group sets `.openmp = true` and R.dll links no
+    // libomp (no linkOmp here). Packages get OpenMP all the same:
+    // etc/x64/Makeconf offers SHLIB_OPENMP_*FLAGS = -fopenmp, and rzig
+    // links them against conda-forge's LLVM libomp (llvm-openmp, the
+    // release unix uses), which a standalone tree carries (installOpenMP;
+    // libomp.dll from vendor-libs.sh).
     const libR = addSharedLib(ctx, "R", r_final_mod);
     ctx.libR = libR;
     ctx.rblas = rblas;
@@ -1182,43 +1350,8 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     applyLinkFlags(ctx, inetmod, ctx.subst.get("WIN_INTERNET_LIBS").?);
     const mod_internet = addSharedLib(ctx, "mod_internet", inetmod);
 
-    // ------------------------------------------------------------------
-    // Package-compilation contract: native "gcc.exe"/"g++.exe" wrappers.
-    // R's own Windows system()/CreateProcess call (do_system in sys-
-    // win32.c -> runcmd_timeout -> pcreate -> CreateProcess with
-    // lpApplicationName=NULL) only ever auto-appends ".exe" when
-    // resolving a bare command name from the command line it's given —
-    // it does NOT consult PATHEXT the way cmd.exe does, so it can never
-    // find a bash-script "gcc"/"g++" shim (extensionless, or even a
-    // ".bat" wrapper around one), no matter where on PATH it sits or
-    // whether Makeconf's BINPREF points at it directly. Confirmed
-    // empirically on kappa: `system("gcc --version")` silently resolved
-    // to conda-forge's OWN real gcc.exe elsewhere on PATH instead of a
-    // prepended shim — meaning package compilation on Windows (both this
-    // build AND the legacy gnuwin32 one, which has the identical bare
-    // `CC = $(BINPREF)$(CCBASE)` line) never actually exercised zig at
-    // all. Fixed with a real PE executable: zigbuild/tools/win-exec-
-    // forward.c just re-execs the existing toolchain/zig-cc(xx) shim via
-    // bash, unmodified — every actual compiler-flag decision (SONAME
-    // injection, -fno-sanitize=undefined, MinGW -l search fixes, OpenMP
-    // wiring) stays in that one shared bash script, not duplicated here.
-    // BASH_PATH/SCRIPT_PATH are NOT baked in as compile-time absolute
-    // paths anymore (they used to be: ctx.conda-derived bash.exe path +
-    // a worktree-absolute toolchain/zig-cc path). A conda/pixi package
-    // builds inside a rattler-build sandbox (torn down right after) and
-    // installs into a completely different prefix on the end user's
-    // machine — any absolute path baked in at compile time is guaranteed
-    // wrong post-install (found via a real "had status 1" failure from
-    // glue/cli's own `cc --version` compiler probe on a real installed
-    // package; `strings` on the shipped gcc.exe showed the baked bash.exe/
-    // zig-cc paths literally pointing into the rattler-build sandbox's own
-    // temp directory, neither of which exists once the package lands
-    // anywhere else). win-exec-forward.c now resolves both at runtime
-    // instead: the script by its own install directory (GetModuleFileName),
-    // bash.exe via the *runtime* CONDA_PREFIX env var. Only the bare
-    // script filename is baked in here.
-    const win_gcc_exe = winCompilerWrapper(ctx, "gcc", "zig-cc");
-    const win_gxx_exe = winCompilerWrapper(ctx, "g++", "zig-cxx");
+    // (The package-compilation contract's gcc.exe and g++.exe are rzig,
+    // installed from build() by installRzig.)
 
     // ------------------------------------------------------------------
     // Rscript.exe — the ONLY front-end built (F6.0): same unix/Rscript.c
@@ -1384,7 +1517,14 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // string-concat: RHome + "/etc/Rcmd_environ").
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.path("src/gnuwin32/fixed/etc/Rcmd_environ"), ctx.rhomeInstallDir("etc"), "Rcmd_environ").step);
 
-    try installWindowsCompilerContract(ctx, io, win_gcc_exe, win_gxx_exe);
+    try installWindowsCompilerContract(ctx, io);
+    // OpenMP for packages (R itself has none on Windows, see R.dll's link
+    // above): llvm-openmp's headers and libomp.lib.
+    try installOpenMP(ctx, io);
+    // The env's runtime data, for a tree that is not the env (Tcl/Tk and
+    // fontconfig's configuration), and etc/Renviron.site (in the conda
+    // build: MY_TCLTK, the env's Tcl/Tk).
+    try installEnvRuntime(ctx, io);
 
     // ------------------------------------------------------------------
     // Base-package shared libs (library/<pkg>/libs/x64/<pkg>.dll — R's
@@ -1448,7 +1588,15 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         // entirely: conda-forge's Windows env doesn't ship it at all here
         // (no webp/libwebp lib file anywhere in Library/lib).
         applyLinkFlags(ctx, m, ctx.subst.get("WIN_BITMAP_LIBS").?);
-        grdevices_lib = addSharedLib(ctx, "pkg_grDevices", m);
+        // Named grDevices, not pkg_grDevices as the other package DLLs
+        // are: winCairo.dll imports it, and a PE import names the DLL by
+        // the file name it was linked as; the loader then matches it
+        // against the installed grDevices.dll's name. With the pkg_ name,
+        // winCairo.dll never loaded ("unable to load winCairo.dll" from
+        // svg(), cairo_pdf() and png(type = "cairo"), while
+        // capabilities("cairo") said TRUE); found by verify-tree.sh's DLL
+        // closure check (F1.7).
+        grdevices_lib = addSharedLib(ctx, "grDevices", m);
         try win_pkg_libs.append(b.allocator, .{ .pkg = "grDevices", .lib = grdevices_lib.? });
     }
 
@@ -1559,6 +1707,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         m.linkLibrary(libR);
         try win_pkg_libs.append(b.allocator, .{ .pkg = "parallel", .lib = addSharedLib(ctx, "pkg_parallel", m) });
     }
+    try win_pkg_libs.append(b.allocator, .{ .pkg = "tcltk", .lib = winTcltkLib(ctx, libR) });
 
     // ------------------------------------------------------------------
     // library/ + share/ + doc/ + bootstrap: without this, Rscript.exe can
@@ -1572,41 +1721,44 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const top = b.step("r", "Build R.dll+Rblas+Rlapack+Rgraphapp+Riconv+Rscript.exe (Windows, CLI-only — F6.0)");
     top.dependOn(boot_step);
     b.default_step = top;
+    addCheckStepWindows(ctx, top);
+}
+
+/// library/tcltk/libs/x64/tcltk.dll, from src/library/tcltk/src/
+/// Makefile.win: its three sources, -DWin32, Tcl/Tk 8.6 from the env
+/// (conda-forge's is the threaded build, tcl86t/tk86t: WIN_TCLTK_LIBS,
+/// which also names user32 for tcltk_win.c's foreground-window calls).
+/// Windows R is always built with tcltk (capabilities("tcltk") is TRUE)
+/// and the package's R code is installed, so without the DLL
+/// library(tcltk) failed with "DLL 'tcltk' not found"; make check's
+/// tcltk examples found it (addCheckStepWindows).
+fn winTcltkLib(ctx: *Ctx, libR: *std.Build.Step.Compile) *std.Build.Step.Compile {
+    const m = newPkgMod(ctx, "src/library/tcltk/src", &rspec.win_tcltk_c, .{ .extra = &.{"-DWin32"} });
+    m.linkLibrary(libR);
+    applyLinkFlags(ctx, m, ctx.subst.get("WIN_TCLTK_LIBS").?);
+    return addSharedLib(ctx, "pkg_tcltk", m);
 }
 
 const WinPkgLib = struct { pkg: []const u8, lib: *std.Build.Step.Compile };
 
 /// Package-compilation contract on Windows: bundles a real toolchain into
-/// Library/lib/R/bin/toolchain/ (gcc.exe/g++.exe — the native forwarder
-/// wrappers built above; the MinGW binutils, plain copies from the conda
-/// env) and installs etc/x64/Makeconf (subst of the vendored gnuwin32
+/// Library/lib/R/bin/toolchain/ (gcc.exe/g++.exe — rzig, installed by
+/// installRzig; the MinGW binutils, plain copies from the conda env) and
+/// installs etc/x64/Makeconf (subst of the vendored gnuwin32
 /// Makeconf.win) with BINPREF pointed at that directory — so
 /// `$(BINPREF)$(CCBASE)` etc. resolve to real, absolute, working paths
 /// rather than a bare name that Windows would resolve to whatever
-/// unrelated compiler happens to be on PATH. gfortran is NOT bundled here
-/// (see the FC replacement below) — it internally locates its own f951
-/// backend relative to its own install location, so a standalone copy
-/// breaks it; FC points straight at the conda env's original gfortran.exe
-/// instead.
-fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build.Step.Compile, win_gxx_exe: *std.Build.Step.Compile) !void {
+/// unrelated compiler happens to be on PATH. flang is NOT bundled here
+/// (see the FC replacement below) — it locates its own pieces relative to
+/// its own install location, so a standalone copy breaks it; FC is rzig's
+/// zig-fc.exe, which runs the flang on PATH.
+fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     const b = ctx.b;
     const toolchain_dir: std.Build.InstallDir = ctx.rhomeInstallDir("bin/toolchain");
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_gcc_exe.getEmittedBin(), toolchain_dir, "gcc.exe").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_gxx_exe.getEmittedBin(), toolchain_dir, "g++.exe").step);
-    // zig-cc/zig-cxx installed directly alongside the forwarder stubs above
-    // (not left to scripts/stage.sh's later, separate copy) — win-exec-
-    // forward.c now resolves SCRIPT_NAME relative to its own install
-    // directory at runtime, so the script must already be co-located here
-    // right after `zig build install`, before stage.sh ever runs (the
-    // contract test exercises gcc.exe/g++.exe against exactly this state).
-    // stage.sh's own `cp "$TOOLCHAIN"/zig-*` copy becomes a harmless no-op
-    // overwrite for Windows once this runs first.
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("toolchain/zig-cc"), toolchain_dir, "zig-cc").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("toolchain/zig-cxx"), toolchain_dir, "zig-cxx").step);
 
     // Real conda-forge MinGW binutils — plain copies, no wrapper needed
-    // (already real .exe files, and none of them have gfortran's own
-    // relative-lookup problem). They ship only under the
+    // (already real .exe files that find nothing relative to where they
+    // are installed, unlike flang, below). They ship only under the
     // x86_64-w64-mingw32- prefix.
     for ([_][]const u8{ "ar", "ranlib", "nm", "dlltool", "strip", "as", "ld", "windres" }) |t| {
         const src: std.Build.LazyPath = .{ .cwd_relative = ctx.absSub("{s}/Library/bin/x86_64-w64-mingw32-{s}.exe", .{ ctx.conda, t }) };
@@ -1626,14 +1778,13 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     // its own templates, not a bespoke replaceOwned loop — the same
     // unification Phase 4 already did for this file's link-flag
     // siblings (CAIRO_LIBS etc., loaded via loadSubstFile above).
-    const toolchain_abs = ctx.absSub("{s}/Library/lib/R/bin/toolchain", .{ctx.prefix});
-    // ctx.conda may carry native backslash separators — this ends up
-    // embedded in a Makefile variable, not a C string literal, so it
-    // wouldn't break the *build* the same way,
-    // but normalize anyway for consistency with every other path this
-    // build.zig bakes in.
-    const conda_fwd = std.mem.replaceOwned(u8, b.allocator, ctx.conda, "\\", "/") catch @panic("OOM");
-    try ctx.subst.put("BINPREF", b.fmt("{s}/", .{toolchain_abs}));
+    // The four values that would name a place (feat-no-host-paths F1.5), as
+    // unix's Makeconf writes them (makeconfValue): R_HOME-relative, bare or empty,
+    // never the build machine's paths, so the Windows zip and the conda
+    // package carry the same file. They go into etc/x64/Makeconf only
+    // (`mk`), not ctx.subst.
+    var mk = std.StringHashMap([]const u8).init(b.allocator);
+    try mk.put("BINPREF", "$(R_HOME)/bin/toolchain/");
     // IMPDIR = bin/x64, not the vendored template's bare "bin" — real
     // gnuwin32 value (`bin$(R_ARCH)`, confirmed against a real generated
     // Makeconf on kappa) — LIBR/BLAS_LIBS/LAPACK_LIBS all key off it to
@@ -1641,77 +1792,94 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io, win_gcc_exe: *std.Build
     // not directly under bin/ (found via a real "unable to find dynamic
     // system library 'R'" link error).
     try ctx.subst.put("IMPDIR", "bin/x64");
-    // LDFLAGS: empty in both the vendored template AND a real generated
+    // LDFLAGS: empty, as in the vendored template and a real generated
     // Makeconf (gnuwin32 provides external-library search paths via
-    // MkRules.local's LOCAL_SOFT, sourced only at R's OWN build time —
-    // nothing sources it for package builds afterward). CRAN packages
-    // routinely link bare "-lz"/"-lpng" etc. expecting *some* global
-    // search path to exist; point it at the conda env directly (found
-    // via a real "unable to find dynamic system library 'z'" link error
-    // compiling data.table). Previously applied via a bare
-    // `"LDFLAGS ="` substring replace, which also silently matched
-    // (and corrupted) 12 unrelated variables whose names happen to END
-    // in "LDFLAGS =" too (DYLIB_LDFLAGS, SHLIB_CXXLDFLAGS,
-    // SHLIB_CXX17LDFLAGS, SHLIB_FCLDFLAGS, SHLIB_LDFLAGS, ...) — confirmed
-    // by simulating the old replace against the real vendored file. Never
-    // caused an observed failure (an extra, unused `-L` flag on a
-    // shared-lib link line is harmless to zig cc/lld), but a real latent
-    // bug this token-anchored substitution fixes as a side effect, not
-    // just a mechanism cleanup.
-    try ctx.subst.put("LDFLAGS", b.fmt("-L\"{s}/Library/lib\"", .{conda_fwd}));
-    // FC: NOT routed through BINPREF/toolchain like CC/CXX — gfortran
-    // internally locates its own backend (f951) relative to its OWN
-    // install location (a libexec/gcc/... tree alongside the real
-    // binary), so a standalone copy elsewhere breaks it ("cannot
-    // execute 'f951': CreateProcess: No such file or directory",
-    // found via a real minqa compile failure). Point FC straight at
-    // the conda env's own gfortran.exe — the same absolute location
-    // fortranOne's own bare "gfortran" PATH lookup already resolves
-    // to successfully when building R itself.
-    // flang has the same "stays in its package dir" rule: the driver
-    // reads flang.cfg (intrinsic-module path, -fuse-ld=lld) relative to
-    // its own location — a copied flang.exe fails on every `use`.
-    try ctx.subst.put("FC", switch (ctx.fc) {
-        .flang => b.fmt("\"{s}/Library/bin/flang.exe\"", .{conda_fwd}),
-        .gfortran => b.fmt("\"{s}/Library/bin/gfortran.exe\"", .{conda_fwd}),
-    });
+    // MkRules.local's LOCAL_SOFT, sourced only at R's OWN build time).
+    // CRAN packages routinely link bare "-lz"/"-lpng" etc. expecting
+    // *some* global search path to exist (data.table: "unable to find
+    // dynamic system library 'z'"): rzig (gcc.exe) adds the environment's
+    // -L<prefix>/Library/lib and -idirafter <prefix>/Library/include, as
+    // on unix (zigbuild/tools/rzig/environment.zig, F3b). Token-anchored
+    // (@LDFLAGS@), unlike an earlier bare "LDFLAGS =" substring replace
+    // that also matched DYLIB_LDFLAGS, SHLIB_LDFLAGS and ten more.
+    try mk.put("LDFLAGS", "");
+    // FC: rzig's zig-fc.exe (installRzig; MSYS make and sh find it by the
+    // name without .exe), as on unix (F3c): it runs the flang on PATH (an
+    // activated env has Library/bin there) and links a USE_FC_TO_LINK
+    // package through zig with the static runtime and libc++. flang
+    // itself is not copied into bin/toolchain: its driver finds its own
+    // pieces (flang.cfg and its intrinsic modules) relative to where it is
+    // installed. Fortran that calls into R under USE_FC_TO_LINK needs
+    // $(LIBR) in PKG_LIBS (install.R drops it from that link), as with
+    // upstream's gfortran.
+    try mk.put("FC", "$(R_HOME)/bin/toolchain/zig-fc");
     // FLIBS: what R CMD SHLIB appends to every package link that has
     // Fortran sources (tools:::.SHLIB → shlib_libadd "$(FLIBS)"); the
-    // link itself goes through SHLIB_LD = the zig-cc shim, not the Fortran
-    // driver, so the runtime must be spelled out here. flang: its runtime
-    // archive from the clang resource dir (resolved at build time, same
-    // as unix's @ZR_FLANGRT_DIR@) plus zig's libc++ — libflang_rt.runtime
-    // is C++ and PE refuses unresolved symbols (flang-pixi handoff: only
-    // Linux's archive is libc++-free). gfortran: empty, as gnuwin32
-    // always had it — the zig-cc shim resolves -lgfortran/-lquadmath from
-    // gcc's private libdir when a package asks for them.
-    try ctx.subst.put("FLIBS", switch (ctx.fc) {
-        .flang => b.fmt("-L\"{s}\" -lflang_rt.runtime -lc++", .{std.mem.replaceOwned(u8, b.allocator, ctx.flangrt_dir, "\\", "/") catch @panic("OOM")}),
-        .gfortran => "",
-    });
-    // SAFE_FFLAGS (what CRAN Fortran packages such as quadprog put in
-    // PKG_FFLAGS): gnuwin32 adds gfortran's x87-avoidance switches unless
-    // USE_LLVM, whose flang already defaults to SSE2 on x86_64 and rejects
-    // them ("flang: error: unknown argument: '-msse2'"). Our flang build
-    // is not USE_LLVM (that also switches CC to clang), so the vendored
-    // Makeconf.win's `-msse2 -mfpmath=sse` became @SAFE_FFLAGS_SSE@, keyed
-    // on the Fortran compiler actually in use.
-    try ctx.subst.put("SAFE_FFLAGS_SSE", switch (ctx.fc) {
-        .flang => "",
-        .gfortran => "-msse2 -mfpmath=sse",
-    });
+    // link itself goes through SHLIB_LD = gcc.exe (rzig), not the Fortran
+    // driver, so the runtime must be spelled out here: flang's runtime,
+    // which rzig resolves to the archive of the flang on PATH (as on
+    // unix), plus zig's libc++ — libflang_rt.runtime is C++ and PE refuses
+    // unresolved symbols (flang-pixi handoff: only Linux's archive is
+    // libc++-free).
+    try mk.put("FLIBS", "-lflang_rt.runtime -lc++");
+    // (SAFE_FFLAGS, what CRAN Fortran packages such as quadprog put in
+    // PKG_FFLAGS, is a plain -O2 in the vendored Makeconf.win: gnuwin32
+    // adds gfortran's x87-avoidance switches `-msse2 -mfpmath=sse` unless
+    // USE_LLVM, and flang, which defaults to SSE2 on x86_64, rejects them
+    // ("flang: error: unknown argument: '-msse2'"). Our build is not
+    // USE_LLVM, which also switches CC to clang.)
     try ctx.subst.put("CSTD", "-std=gnu2x");
     try ctx.subst.put("EOPTS", "");
     try ctx.subst.put("SANOPTS", "");
-    try ctx.subst.put("OPENMP", "-fopenmp");
+    // SHLIB_OPENMP_*FLAGS, from the same value that decides whether the
+    // tree carries omp.h and libomp for them (installOpenMP).
+    try ctx.subst.put("OPENMP", if (ctx.openmp) "-fopenmp" else "");
     try ctx.subst.put("PTHREAD", "-pthread");
     try ctx.subst.put("SYMPAT", "'s/^.* [BCDRT] / /p'");
 
     const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
-    const mkc = try gnuwin32O3ToO2(b, try substitute(ctx, raw));
+    var mkc = try gnuwin32O3ToO2(b, try substituteWith(ctx, raw, &mk));
+    // Tcl/Tk headers and libraries where the standalone tree has them
+    // (installEnvRuntime installs R_HOME/Tcl); inside a conda env this is
+    // unused.
+    mkc = try replaceLine(b, mkc, "TCL_HOME", "TCL_HOME = $(R_HOME)/Tcl");
+    try assertNoBuildPath(ctx, "etc/x64/Makeconf", raw, mkc);
     const mkc_wf = b.addWriteFiles();
     const mkc_out = mkc_wf.add("Makeconf", mkc);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(mkc_out, ctx.rhomeInstallDir("etc/x64"), "Makeconf").step);
+
+    // Library/bin/R.bat and Rscript.bat: a conda env's activation puts
+    // Library/bin on PATH, never Library/lib/R/bin/x64, so without these
+    // `R`/`Rscript` are not found in an installed env.
+    const bat_wf = b.addWriteFiles();
+    for ([_][]const u8{ "R", "Rscript" }) |exe| {
+        _ = bat_wf.add(b.fmt("{s}.bat", .{exe}), b.fmt("@echo off\r\n\"%~dp0..\\lib\\R\\bin\\x64\\{s}.exe\" %*\r\n", .{exe}));
+    }
+    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+        .source_dir = bat_wf.getDirectory(),
+        .install_dir = .{ .custom = "Library/bin" },
+        .install_subdir = "",
+    }).step);
+    // (etc/Renviron.site, with the compile preflight's hint: installEnvRuntime)
+}
+
+/// `text` with the line starting `key` (then spaces or `=`) replaced by
+/// `line`; unchanged when there is none.
+fn replaceLine(b: *std.Build, text: []const u8, key: []const u8, line: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    var first = true;
+    while (it.next()) |l| {
+        if (!first) try out.append(b.allocator, '\n');
+        first = false;
+        const rest = if (std.mem.startsWith(u8, l, key)) std.mem.trimStart(u8, l[key.len..], " ") else "";
+        if (std.mem.startsWith(u8, l, key) and std.mem.startsWith(u8, rest, "=")) {
+            try out.appendSlice(b.allocator, line);
+        } else {
+            try out.appendSlice(b.allocator, l);
+        }
+    }
+    return out.items;
 }
 
 /// gnuwin32's src/gnuwin32/fixed/Makefile installs etc/Makeconf through
@@ -1847,41 +2015,6 @@ fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win
     return libstage;
 }
 
-/// Build a proper, complete dlltool-generated import library for `dllname`
-/// covering exactly `symbols` — same dlltool mechanism as winMakeImportStub
-/// below, but from a hardcoded symbol list rather than an object's own
-/// exports. First tried extracting the individual archive members that
-/// define these symbols straight out of conda-forge's real libgcc_s.a
-/// (`-lgcc_s`/`-lgcc`/`-lgcc_eh` in any combination couldn't get lld-link to
-/// resolve them at all) — that got Rlapack.dll to LINK, but the resulting
-/// R.dll then failed to LOAD at runtime with STATUS_DLL_NOT_FOUND:
-/// hand-assembling fragments of an import library skips whatever else
-/// dlltool normally bundles alongside each symbol's thunk (e.g.
-/// null-descriptor/null-thunk terminator members marking the end of the
-/// import directory), which the real Windows loader needs even though
-/// lld-link's own linking didn't complain. Generating a fresh, complete
-/// import lib through dlltool's normal path avoids relying on the internal
-/// structure of a real DLL's own import archive at all.
-fn winMakeImportLibFor(ctx: *const Ctx, dllname: []const u8, symbols: []const []const u8, out_stem: []const u8) std.Build.LazyPath {
-    const b = ctx.b;
-    var def_body = std.ArrayList(u8).empty;
-    def_body.appendSlice(b.allocator, "EXPORTS\n") catch @panic("OOM");
-    for (symbols) |s| {
-        def_body.appendSlice(b.allocator, s) catch @panic("OOM");
-        def_body.append(b.allocator, '\n') catch @panic("OOM");
-    }
-    const wf = b.addWriteFiles();
-    const def = wf.add(b.fmt("{s}.def", .{out_stem}), def_body.items);
-    const run = b.addSystemCommand(&.{
-        "x86_64-w64-mingw32-dlltool", "--dllname", dllname, "--input-def",
-    });
-    run.addFileArg(def);
-    run.addArg("--output-lib");
-    const implib = run.addOutputFileArg(b.fmt("{s}.dll.a", .{out_stem}));
-    run.setName(b.fmt("win import lib for {s} ({s})", .{ dllname, out_stem }));
-    return implib;
-}
-
 /// PE/COFF (unlike ELF/Mach-O) refuses to link a DLL with unresolved
 /// symbols, so R.dll's mutual dependency with Rblas.dll/Rgraphapp.dll
 /// needs breaking the same way gnuwin32's own make build does: derive an
@@ -1979,10 +2112,123 @@ fn addCheckStep(ctx: *Ctx, io: std.Io, r_top: *std.Build.Step) !void {
         run.addDirectoryArg(dir.path(b, "tests"));
         run.addArg(target);
         run.setEnvironmentVariable("TZ", "UTC");
+        if (ctx.buildLdPath()) |p| run.setEnvironmentVariable("R_LD_LIBRARY_PATH", p);
         run.has_side_effects = true;
         run.step.dependOn(&chmod_w.step);
         check.dependOn(&run.step);
     }
+}
+
+/// Windows: the same three targets through R's own tests/Makefile.win,
+/// as src/gnuwin32/Makefile's `check` runs it (`make -C ../../tests -f
+/// Makefile.win check`, i.e. these three plus Internet, left out as on
+/// unix: it needs the network, and upstream ignores its failures).
+///
+/// Makefile.win expects to sit in R_HOME/tests, because R builds in
+/// place on Windows: it sets R_HOME = .., includes ../src/gnuwin32/
+/// MkRules and ../share/make/vars.mk, and runs $(R_HOME)/$(BINDIR)/Rterm
+/// (BINDIR = bin/x64); tests/Examples/Makefile.win includes $(R_HOME)/
+/// src/gnuwin32/MkRules. So the check runs in a stand-in for that tree,
+/// as addCheckStep writes a top_builddir with a bin/R wrapper: R's
+/// tests directory, src/gnuwin32/MkRules (MkRules.rules alone, which is
+/// what src/gnuwin32/Makefile makes it from when there is no
+/// MkRules.local), share/make/vars.mk, and bin/x64/Rterm, R and Rcmd,
+/// scripts that run the installed tree's .exe of that name (MSYS sh
+/// finds the script first and honours its #!). The Makefiles then run
+/// unmodified. Setting R_HOME on make's command line instead does not
+/// work: it reaches the Examples sub-make through MAKEFLAGS, whose
+/// include then looks for src/gnuwin32/MkRules in the installed tree.
+///
+/// The stand-in is made fresh on every run, in the output directory of
+/// a first step (removed, then copied again): the files written here
+/// (a WriteFiles in the zig cache, which make never writes to) plus R's
+/// tests directory, copied from the R source. make writes into that
+/// copy, so each run starts from R's own files and nothing an earlier
+/// run wrote; the copy stays after the run, for reading a failed test's
+/// .Rout.fail. make must not run in the WriteFiles directory itself:
+/// zig does not look at it again on a cache hit, so its outputs would
+/// stay there for every later run, and would even count as up to date
+/// (the .R files keep the tarball's dates), skipping those tests.
+/// (b.tmpPath would also give a fresh directory, but zig 0.16's build
+/// runner never deletes those, so each run would leave a copy behind.)
+/// If an earlier run's Rterm.exe is still running and holds a file in
+/// the copy, the first step fails until that process ends.
+///
+/// Two make variables say what unix's tests/Makefile gets from configure
+/// when the recommended packages are not installed (they are not built
+/// here) and Makefile.win always assumes they are: test-src-sloppy-b
+/// empty (eval-etc-2.R, which needs Matrix) and test-src-reg3 =
+/// reg-plot-latin1.R (reg-tests-3.R and reg-examples3.R need MASS,
+/// survival and Matrix).
+///
+/// test-Examples compares each base package's example output with R's
+/// <pkg>-Ex.Rout.save, as unix's tests/Examples/Makefile does with
+/// srcdir=$(srcdir). Upstream finds them in R_HOME/tests/Examples
+/// (testInstalledPackages' default srcdir), the directory make runs the
+/// examples in; the installed tree has no tests directory, as on unix.
+/// tests/Examples/Makefile.win has no srcdir to set; TEST_DONTTEST is
+/// the one variable it puts into its R call, so it carries the argument:
+/// `FALSE,srcdir=getwd()`, that same directory, here the fresh copy of
+/// R's tests/Examples (unix's Makefile, too, passes srcdir only while
+/// TEST_DONTTEST is FALSE, its default). No path is spelled out: the
+/// MSYS runtime takes quotes, single ones too, out of make's Windows
+/// command line, and R needs a path quoted. A difference prints a NOTE
+/// with the diff, as on unix; only R_STRICT_PACKAGE_CHECK=TRUE makes it
+/// fail.
+///
+/// The environment is pixi's, as for the build, and the tree is the one
+/// that ships (F1.7): R.dll's DLLs are in bin/x64, which Windows searches
+/// before PATH (zig-build.sh runs vendor-libs.sh before and after zig
+/// build), and Tcl/Tk in R_HOME/Tcl (installEnvRuntime). MY_TCLTK and
+/// TCL_LIBRARY are removed, as a user's would be absent: with MY_TCLTK
+/// set, tcltk's .onLoad (src/library/tcltk/R/windows/zzz.R) never looks
+/// at R_HOME/Tcl, and TCL_LIBRARY would point Tcl at other scripts. So
+/// the tcltk examples load the tree's own Tcl/Tk.
+///
+/// No TZ, as in upstream's tests/Makefile.win: Sys.timezone() then asks
+/// Windows (registryTZ.c, built for Windows only), which test-TimeZone's
+/// timezone.R checks; with TZ set it only returns TZ. (Unix sets
+/// TZ=UTC.)
+///
+/// The targets run one after another, as test-all-basics runs them,
+/// since they share the tests directory; stdin is empty, so nothing in
+/// them can wait for input.
+fn addCheckStepWindows(ctx: *Ctx, r_top: *std.Build.Step) void {
+    const b = ctx.b;
+
+    const wf = b.addWriteFiles();
+    _ = wf.addCopyFile(ctx.path("src/gnuwin32/MkRules.rules"), "src/gnuwin32/MkRules");
+    _ = wf.addCopyFile(ctx.path("share/make/vars.mk"), "share/make/vars.mk");
+    for ([_][]const u8{ "Rterm", "R", "Rcmd" }) |exe| {
+        _ = wf.add(b.fmt("bin/x64/{s}", .{exe}), b.fmt("#!/bin/sh\nexec \"{s}/bin/x64/{s}.exe\" \"$@\"\n", .{ ctx.rhome, exe }));
+    }
+
+    const fresh = b.addSystemCommand(&.{ "sh", "-c", "rm -rf \"$3\" && cp -R \"$1\" \"$3\" && cp -R \"$2\" \"$3/tests\"", "check-tree" });
+    fresh.setName("check: fresh tests tree");
+    fresh.addDirectoryArg(wf.getDirectory());
+    fresh.addDirectoryArg(ctx.path("tests"));
+    const tests = fresh.addOutputDirectoryArg("check").path(b, "tests");
+    fresh.has_side_effects = true;
+    fresh.step.dependOn(r_top);
+
+    const check = b.step("check", "Run R's regression suite (Examples/Specific/Reg) against the zig-built R");
+    var last = &fresh.step;
+    for ([_][]const u8{ "test-Examples", "test-Specific", "test-Reg" }) |target| {
+        const run = b.addSystemCommand(&.{ "make", "-f", "Makefile.win", "test-src-sloppy-b=", "test-src-reg3=reg-plot-latin1.R" });
+        if (std.mem.eql(u8, target, "test-Examples")) {
+            run.addArg("TEST_DONTTEST=FALSE,srcdir=getwd()");
+        }
+        run.addArg(target);
+        run.setName(b.fmt("make check: {s}", .{target}));
+        run.setCwd(tests);
+        run.setStdIn(.{ .bytes = "" });
+        run.removeEnvironmentVariable("MY_TCLTK");
+        run.removeEnvironmentVariable("TCL_LIBRARY");
+        run.has_side_effects = true;
+        run.step.dependOn(last);
+        last = &run.step;
+    }
+    check.dependOn(last);
 }
 
 /// Like substFile, but with a caller-supplied `srcdir` (each generated
@@ -1999,6 +2245,41 @@ fn substFileTests(ctx: *Ctx, io: std.Io, rel: []const u8, srcdir_val: []const u8
 // ----------------------------------------------------------------------
 // helpers
 // ----------------------------------------------------------------------
+
+/// The zig lib dir R's links get (Ctx.zig_lib_dir; std.Build passes it as
+/// --zig-lib-dir, Step/Compile.zig). libc++ is static everywhere (decided
+/// 2026-09-30), and R itself links it on macOS (flang's runtime is C++,
+/// linkFortranRt). Upstream zig always links its own; conda-forge's zig
+/// links a shared one whenever one sits in <lib dir>/../../lib (every
+/// macOS env, any env with `libcxx`), unless its lib dir is a mirror with
+/// nothing beside it: zigbuild/tools/rzig/libcxx_mirror.zig, which rzig
+/// uses for packages, made here in zig build's local cache (which env.sh
+/// keeps one of per zig). Where the probe would fire the mirror is always
+/// used, so no shared-libc++ link ever enters that cache. Null otherwise,
+/// so upstream zig builds with its own lib dir. On Windows symlink
+/// mirrors cannot be made (no win-64 env has libc++.dll.a): stop instead.
+fn staticLibcxxLibDir(b: *std.Build, io: std.Io, os: Os) !?std.Build.LazyPath {
+    const lib_dir = b.graph.zig_lib_directory.path orelse ".";
+    if (os == .windows) {
+        if (try libcxx_mirror.sharedLibcxx(io, b.allocator, lib_dir, .windows)) |p| {
+            std.debug.print("error: {s} would make zig link a shared libc++; remove the libcxx package from this env\n", .{p});
+            return error.SharedLibcxx;
+        }
+        return null;
+    }
+    const cache = try b.cache_root.handle.realPathFileAlloc(io, ".", b.allocator);
+    switch (try libcxx_mirror.prepare(io, b.allocator, lib_dir, b.fmt("{s}/r-zig", .{cache}))) {
+        .none => return null,
+        .failed => |m| {
+            std.debug.print("error: could not make {s}, the zig lib dir mirror for a static libc++ (remove it if an interrupted build left it)\n", .{m});
+            return error.LibcxxMirror;
+        },
+        .ready => |mirror| {
+            std.debug.print("r-zig: static libc++ (zig lib dir {s} mirrored to {s})\n", .{ lib_dir, mirror });
+            return .{ .cwd_relative = mirror };
+        },
+    }
+}
 
 /// Locate the directory holding libflang_rt.runtime.a: the clang resource
 /// dir, `$CONDA/lib/clang/<major>/lib/<subdir>/` (`$CONDA/Library/lib/
@@ -2033,54 +2314,8 @@ fn findFlangRt(b: *std.Build, io: std.Io, conda: []const u8, os: Os) ![]const u8
             return cand;
         }
     }
-    std.debug.print("error: libflang_rt.runtime.a not found under {s}/*/lib/* — is flang-rt (flang-rt_linux-64 / flang-rt-zig) installed?\n", .{clang_root});
+    std.debug.print("error: libflang_rt.runtime.a not found under {s}/*/lib/* — is flang-rt-zig installed?\n", .{clang_root});
     return error.FlangRtNotFound;
-}
-
-/// gfortran's runtime libs (libgfortran/libquadmath/libemutls_w/...) live
-/// under a gcc-version-specific subdirectory of `gcc_root` (Windows:
-/// $CONDA/Library/lib/gcc/x86_64-w64-mingw32/<gcc-version>/; macOS:
-/// $CONDA/lib/gcc/arm64-apple-darwin20.0.0/<gcc-version>/) — not directly
-/// on the default library search path. Found via a real link error on
-/// Windows ("unable to find dynamic system library 'gfortran'"); the same
-/// class of bug hit macOS later (F7.4, 2026-07-29): the macOS side used to
-/// take this path straight from the vendored FLIBS string in subst.txt
-/// (`-L.../lib/gcc/arm64-apple-darwin20.0.0/15.2.0`, captured once on
-/// omicron), which broke the moment conda-forge's gcc_impl_osx-arm64
-/// package moved past 15.2.0 (a real rattler-build sandbox — which always
-/// solves fresh, unlike the dev pixi env's locked/cached solve — resolved
-/// 16.1.0 instead, and the stale hardcoded 15.2.0 path silently didn't
-/// exist there: "unable to find dynamic system library 'emutls_w'").
-/// Scan for the single installed gcc version rather than hardcoding it, on
-/// both platforms, since it tracks whatever gcc_impl_win-64/gfortran_win-64
-/// (or osx-arm64) build conda-forge currently ships — `marker` is the file
-/// used to confirm a given version subdirectory is the right one (differs
-/// by platform: Windows' import-lib naming vs macOS's static-lib naming).
-fn findGfortranLibDir(b: *std.Build, io: std.Io, gcc_root: []const u8, marker: []const u8) ![]const u8 {
-    // On failure, always print WHICH gcc_root was probed: the triple
-    // segment of that path is hardcoded per (os, arch) at the call
-    // sites, and conda-forge triples do move (the version segment one
-    // level down already broke once — F7.4, 15.2.0 → 16.1.0). A bare
-    // GfortranLibNotFound with no path forces rediscovery from scratch;
-    // naming the stale path makes the fix a one-line triple bump. The
-    // triples stay hardcoded deliberately (ground-truth pins from real
-    // package inspection, DRY_RUN_NEW_PLATFORMS.md §2) — a lib/gcc/*
-    // scan could silently pick the wrong triple when a cross toolchain
-    // coexists in the same env, since both would ship the marker file.
-    var dir = std.Io.Dir.cwd().openDir(io, gcc_root, .{ .iterate = true }) catch {
-        std.debug.print("error: gfortran gcc root not found at '{s}' — conda-forge triple moved? (see findGfortranLibDir)\n", .{gcc_root});
-        return error.GfortranLibNotFound;
-    };
-    defer dir.close(io);
-    var it = dir.iterate();
-    while (try it.next(io)) |ent| {
-        if (ent.kind != .directory) continue;
-        const cand = b.fmt("{s}/{s}", .{ gcc_root, ent.name });
-        std.Io.Dir.cwd().access(io, b.fmt("{s}/{s}", .{ cand, marker }), .{}) catch continue;
-        return cand;
-    }
-    std.debug.print("error: no versioned subdir of '{s}' contains '{s}' (see findGfortranLibDir)\n", .{ gcc_root, marker });
-    return error.GfortranLibNotFound;
 }
 
 fn newCMod(ctx: *const Ctx) *std.Build.Module {
@@ -2117,11 +2352,23 @@ fn newCMod(ctx: *const Ctx) *std.Build.Module {
         .link_libc = true,
         .pic = true,
         .sanitize_c = .off,
-        // minimal ships inside a wheel, where size is the point: without
-        // this, ReleaseFast still carries full DWARF (libR.so 12.6 MiB).
-        // slim/full keep theirs — conda-forge's own libraries ship
-        // unstripped too, and a conda env is where debugging happens.
-        .strip = if (ctx.variant == .minimal) true else null,
+        // Debug info, where the binary carries it: linux (ELF embeds the
+        // DWARF) keeps it for slim and full, remapped by filePathFlags so
+        // it names no directory of the build machine; zig's own runtime
+        // libraries leave theirs out (linkRoot). minimal ships inside a
+        // wheel, where size is the point: without this, ReleaseFast still
+        // carries full DWARF (libR.so 12.6 MiB). macOS strips: its DWARF
+        // stays in the object files in zig's cache, and the binary only
+        // names them (N_OSO entries, absolute paths into the build
+        // machine's cache, which zig's Mach-O linker writes as they are).
+        // Windows as before (unset): the debug info goes to a .pdb beside
+        // each DLL in zig's cache, which nothing installs, and the DLL
+        // names only that file's name.
+        .strip = switch (ctx.os) {
+            .linux => ctx.variant == .minimal,
+            .macos => true,
+            .windows => null,
+        },
     });
     // LDFLAGS from Makeconf: -L$CONDA/lib -Wl,-rpath,$CONDA/lib on every
     // link (addCondaLibPath skips the rpath half on Windows — see its
@@ -2162,29 +2409,35 @@ fn winCmdFrontend(ctx: *Ctx, libR: *std.Build.Step.Compile, rgraphapp: *std.Buil
     return b.addExecutable(.{ .name = name, .root_module = mod });
 }
 
-/// A minimal native PE wrapper (see zigbuild/tools/win-exec-forward.c) that
-/// re-execs `script_name` (a bare filename, resolved at runtime relative to
-/// this executable's own install directory) via bash.exe (resolved at
-/// runtime from the CONDA_PREFIX environment variable), forwarding argv
-/// unmodified — the real "gcc.exe"/"g++.exe" Makeconf.win's BINPREF points
-/// at (see the package-compilation-contract comment in buildWindows for why
-/// a bash script alone, even with an absolute path, can't be found by R's
-/// own system() call).
-fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, script_name: []const u8) *std.Build.Step.Compile {
+/// rzig into R_HOME/bin/toolchain under the names Makeconf uses
+/// (feat-no-host-paths F3): one binary, a copy per name, dispatching on
+/// the name it was started as. The r-zig-toolchain packages own this
+/// directory; the compile preflight (zigbuild/patches/, install.R) looks
+/// for its zig-cc on every OS.
+///   unix:    zig-cc, zig-cxx (CC/CXX/OBJC/OBJCXX), zig-fc (FC), zig-ar,
+///            zig-ranlib
+///   Windows: gcc.exe, g++.exe (Makeconf.win's $(BINPREF)gcc and g++),
+///            zig-fc.exe (FC, which names it without .exe), and zig-cc,
+///            zig-cxx for the preflight. A real PE executable
+///            is what R's Windows system() can run: it resolves a bare
+///            command name by appending ".exe" only, never through
+///            PATHEXT (found on kappa: `system("gcc --version")` reached an
+///            unrelated gcc.exe on PATH). AR/RANLIB there are the MinGW
+///            binutils (installWindowsCompilerContract).
+/// Before rzig these were bash scripts (toolchain/), and on Windows a C
+/// forwarder that ran them through the env's bash; rzig needs neither
+/// bash nor CONDA_PREFIX to compile.
+fn installRzig(ctx: *const Ctx) *std.Build.Step {
     const b = ctx.b;
-    const m = b.createModule(.{
-        .target = ctx.target,
-        .optimize = .ReleaseFast,
-        .link_libc = true,
-    });
-    m.addCSourceFile(.{
-        .file = b.path("zigbuild/tools/win-exec-forward.c"),
-        .flags = &.{
-            "-std=gnu23",
-            b.fmt("-DSCRIPT_NAME=\"{s}\"", .{script_name}),
-        },
-    });
-    return b.addExecutable(.{ .name = name, .root_module = m });
+    const step = b.step("install-rzig", "Install rzig into R_HOME/bin/toolchain");
+    const names: []const []const u8 = switch (ctx.os) {
+        .windows => &.{ "gcc.exe", "g++.exe", "zig-fc.exe", "zig-cc", "zig-cxx" },
+        else => &.{ "zig-cc", "zig-cxx", "zig-fc", "zig-ar", "zig-ranlib" },
+    };
+    for (names) |n| {
+        step.dependOn(&b.addInstallFileWithDir(ctx.rzig, ctx.rhomeInstallDir("bin/toolchain"), n).step);
+    }
+    return step;
 }
 
 /// Every shared lib/module/package .so in this build (base packages don't
@@ -2198,8 +2451,39 @@ fn winCompilerWrapper(ctx: *const Ctx, name: []const u8, script_name: []const u8
 /// knob (found via FINALIZATION.md F5.1's first real build attempt, not
 /// anticipated in the spec).
 fn addSharedLib(ctx: *const Ctx, name: []const u8, mod: *std.Build.Module) *std.Build.Step.Compile {
-    const lib = ctx.b.addLibrary(.{ .linkage = .dynamic, .name = name, .root_module = mod });
+    ctx.addSdkPaths(mod); // last: every caller has added its -L dirs by now
+    // Windows, for upstream zig (the ziglang.org release, PyPI's ziglang):
+    // a DLL without a .def file exports every global symbol (LLD's MinGW
+    // auto-export) except the C runtime's, which LLD knows by their GNU
+    // object names (dllcrt2.o), not zig's (dllcrt2.obj). So the DLL's own
+    // atexit (mingw's crtdll.c) is exported too, and an exe that calls
+    // atexit and links the DLL's import library fails with "duplicate
+    // symbol: atexit" against its own CRT object's (crtexe.c): Rterm.exe
+    // and Rscript.exe (rterm.c's atexit(restore_cp)) with Rgraphapp's.
+    // -exclude-symbols in the object's .drectve section is the directive
+    // gcc and clang emit for a hidden symbol on MinGW. conda-forge's zig
+    // hides atexit by accident (feedstock patches mingw-crtexe-no-atexit,
+    // ucrtbase-export-atexit-alias), and there this is a no-op. Packages
+    // are not affected: R links them with a .def file of their own.
+    // (feat-no-host-paths PLAN.md, F4: the upstream report's draft.)
+    if (ctx.os == .windows) {
+        const wf = ctx.b.addWriteFiles();
+        mod.addCSourceFile(.{ .file = wf.add("no_crt_exports.c",
+            \\__asm__(".section .drectve,\"yni\"\n\t.ascii \" -exclude-symbols:atexit\"\n\t.text");
+            \\
+        ), .flags = &.{} });
+    }
+    const lib = ctx.b.addLibrary(.{ .linkage = .dynamic, .name = name, .root_module = linkRoot(ctx, mod) });
+    // conda-forge's zig: a lib dir it finds no shared libc++ beside
+    // (staticLibcxxLibDir)
+    lib.zig_lib_dir = ctx.zig_lib_dir;
     if (ctx.os == .macos) lib.linker_allow_shlib_undefined = true;
+    // A native target would otherwise turn every -L directory (the env's
+    // lib dir, flang's) into an absolute rpath; relRPaths sets the ones
+    // that ship. Redundant with macOS's deployment-target query (a
+    // non-native OS gets no implicit rpaths), kept so a target change
+    // can't bring them back.
+    lib.each_lib_rpath = false;
     macHeaderpad(ctx, lib);
     return lib;
 }
@@ -2224,6 +2508,108 @@ fn macHeaderpad(ctx: *const Ctx, c: *std.Build.Step.Compile) void {
     if (ctx.os == .macos) c.headerpad_max_install_names = true;
 }
 
+/// The flags that keep the build machine's directories out of what R's C
+/// compiles record (feat-no-host-paths PLAN.md, Goal 1): __FILE__, which
+/// R's own error messages print ("long vectors not supported yet:
+/// src/main/character.c:1806", where upstream's make build prints
+/// "character.c:1806"), the OpenMP runtime's source locations, and the
+/// debug info's file names and compilation directory (linux slim and
+/// full keep debug info, newCMod). clang's -ffile-prefix-map (both
+/// -fmacro-prefix-map and -fdebug-prefix-map) rewrites a path that starts
+/// with OLD; the compilation directory is "." (-ffile-compilation-dir,
+/// not clang's getcwd, which a symlinked checkout would not match):
+///   the checkout                    -> ""           (relative to ".")
+///   R's source tree                 -> ""           (src/main/array.c)
+///   the env (CONDA_PREFIX; the
+///   conda build's host prefix)      -> conda-env/   (its include/)
+///   zig's local cache               -> zig-cache/   (config.h, Rconfig.h, ...)
+///   zig's lib dir, and the mirror
+///   staticLibcxxLibDir gives links  -> zig-lib/     (libc and clang headers)
+/// The R source tree, the cache and conda's env are inside the checkout
+/// in a pixi build, while rattler-build's host and build envs (where its
+/// zig lives) are not. Each directory is mapped as it is given (std.Build
+/// names the caches and zig's lib dir relative to the checkout) and as it
+/// resolves. The longest OLD a path starts with wins: clang tries the
+/// macro map's entries longest first and the debug map's last flag
+/// first, so the flags go in order of length. The separator after OLD
+/// keeps /x/env from matching /x/env2; on a Windows host clang matches
+/// either separator and any case. flang has no such flag; R's Fortran
+/// objects record no path (no debug info, and no statement whose runtime
+/// call carries the file name).
+fn filePathFlags(ctx: *const Ctx, io: std.Io) ![]const []const u8 {
+    const b = ctx.b;
+    const a = b.allocator;
+    const Map = struct {
+        old: []const u8,
+        new: []const u8,
+        fn shorter(_: void, x: @This(), y: @This()) bool {
+            return x.old.len < y.old.len;
+        }
+    };
+    var maps = std.ArrayList(Map).empty;
+    const mirror: ?[]const u8 = if (ctx.zig_lib_dir) |lp| switch (lp) {
+        .cwd_relative => |p| p,
+        else => null,
+    } else null;
+    const dirs = [_]struct { ?[]const u8, []const u8 }{
+        .{ b.build_root.path, "" },
+        .{ ctx.src_abs, "" },
+        .{ ctx.conda, "conda-env/" },
+        .{ b.cache_root.path, "zig-cache/" },
+        .{ b.graph.zig_lib_directory.path, "zig-lib/" },
+        .{ mirror, "zig-lib/" },
+    };
+    for (dirs) |d| {
+        const dir = d[0] orelse continue;
+        const real = std.Io.Dir.cwd().realPathFileAlloc(io, dir, a) catch dir;
+        for ([_][]const u8{ dir, real }) |form| {
+            const trimmed = std.mem.trimEnd(u8, form, "/\\");
+            if (trimmed.len == 0 or std.mem.eql(u8, trimmed, ".")) continue;
+            try maps.append(a, .{ .old = b.fmt("{s}/", .{trimmed}), .new = d[1] });
+        }
+    }
+    std.mem.sort(Map, maps.items, {}, Map.shorter);
+    var flags = std.ArrayList([]const u8).empty;
+    try flags.append(a, "-ffile-compilation-dir=.");
+    for (maps.items) |m| try flags.append(a, b.fmt("-ffile-prefix-map={s}={s}", .{ m.old, m.new }));
+    return flags.items;
+}
+
+/// The root module of one of R's links (addSharedLib, bin/exec/R). zig
+/// builds its own runtime libraries (compiler_rt, glibc's
+/// libc_nonshared, libc++, the MinGW CRT) with the root module's strip
+/// (Compilation.compilerRtStrip in zig 0.16), and their debug info names
+/// zig's lib dir and global cache, which -ffile-prefix-map does not
+/// reach (compiler_rt is Zig code). Where R's own code keeps its debug
+/// info (`mod.strip == false`: linux slim and full, newCMod), the root
+/// is a stripped module of its own whose only code is an empty C file
+/// (std.Build names to zig only a module with sources, and zig takes the
+/// first one it is given as the root), with `mod`, which holds R's code
+/// and every link setting, as its import. A module with no C source of
+/// its own (libRblas, libRlapack: Fortran objects, which carry no debug
+/// info) is simply stripped. Elsewhere `mod` is the root.
+fn linkRoot(ctx: *const Ctx, mod: *std.Build.Module) *std.Build.Module {
+    if (mod.strip != false) return mod;
+    const has_c = for (mod.link_objects.items) |o| switch (o) {
+        .c_source_file, .c_source_files => break true,
+        else => {},
+    } else false;
+    if (!has_c) {
+        mod.strip = true;
+        return mod;
+    }
+    const root = ctx.b.createModule(.{
+        .target = mod.resolved_target,
+        .optimize = mod.optimize,
+        .link_libc = true,
+        .pic = true,
+        .strip = true,
+    });
+    root.addCSourceFile(.{ .file = ctx.empty_c, .flags = &.{} });
+    root.addImport("r_code", mod);
+    return root;
+}
+
 const CGroupOpts = struct {
     openmp: bool = false,
     extra: []const []const u8 = &.{}, // %S → srcdir, %C → conda
@@ -2232,6 +2618,7 @@ const CGroupOpts = struct {
 fn addCGroup(ctx: *const Ctx, mod: *std.Build.Module, dir: []const u8, files: []const []const u8, opts: CGroupOpts) void {
     const b = ctx.b;
     var flags = std.ArrayList([]const u8).empty;
+    flags.appendSlice(b.allocator, ctx.path_flags) catch @panic("OOM");
     flags.appendSlice(b.allocator, &.{ "-std=gnu23", "-fno-sanitize=undefined", "-O2", "-fpic", "-DHAVE_CONFIG_H" }) catch @panic("OOM");
     if (opts.openmp and ctx.openmp) flags.append(b.allocator, "-fopenmp") catch @panic("OOM");
     for (opts.extra) |f| {
@@ -2247,6 +2634,7 @@ fn addCGroup(ctx: *const Ctx, mod: *std.Build.Module, dir: []const u8, files: []
 fn newPkgMod(ctx: *const Ctx, dir: []const u8, files: []const []const u8, opts: CGroupOpts) *std.Build.Module {
     const b = ctx.b;
     const m = newCMod(ctx);
+    ctx.relRPaths(m, .pkglibs); // library/<pkg>/libs/<pkg>.so
     m.addIncludePath(ctx.geninc);
     m.addIncludePath(ctx.path("src/include"));
     // Same psignal.h/trioremap.h need as r_core_mod/rscript_mod — any base
@@ -2295,94 +2683,23 @@ fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {
     mod.linkSystemLibrary("omp", .{ .use_pkg_config = .no });
 }
 
-/// Link the Fortran runtime: flang_rt.runtime on linux (found by
-/// findFlangRt's clang-resource-dir search); gfortran's own runtime libs
-/// on macOS (`-lemutls_w -lheapt_w -lgfortran -lquadmath` — gfortran's
-/// private libdir convention, distinct from flang's single
-/// clang-resource-dir .a file) — same gcc-version-specific-subdirectory
-/// shape as Windows below, so the `-L` path is resolved the same way
-/// (findGfortranLibDir), not taken from the vendored FLIBS string anymore
-/// (F7.4, 2026-07-29: that path goes stale the moment conda-forge bumps
-/// its gcc_impl_osx-arm64 package — see findGfortranLibDir's own comment
-/// for the real failure this caused). Still reuses FLIBS for the `-l`
-/// library *names* (those don't change with the gcc version), just not
-/// its embedded `-L` path.
+/// Link the Fortran runtime: flang's, one runtime archive on every
+/// platform (flang-pixi docs/11 contract #2), in the clang resource dir
+/// findFlangRt found, linked *statically*, explicitly: flang-rt-zig >= 9
+/// ships no shared runtime, but a flang-rt that does (older flang-rt-zig
+/// on macOS, conda-forge's) must not hand every standalone bundle an
+/// rpath dependency to vendor. The runtime is C++ (docs/11 Q5): on macOS
+/// and Windows zig's own libc++ is linked into the module, so libR,
+/// libRblas and libRlapack stay self-contained instead of relying on
+/// `-undefined dynamic_lookup` (macOS) finding some libc++ in the process
+/// at load time; flang-pixi's handoff measured that only the Linux
+/// archives are libc++-free (their sole C++-runtime reference is
+/// __cxa_atexit).
 fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
-    switch (ctx.fc) {
-        // flang: one runtime archive everywhere (flang-pixi docs/11
-        // contract #2), linked *statically* — that is what linux-64 has
-        // always ended up with (no DT_NEEDED on libflang_rt.runtime in
-        // libRlapack.so), now explicit so macOS, where flang-rt-zig ships
-        // a .dylib beside the .a, doesn't silently pick the dylib and hand
-        // every standalone bundle an @rpath dependency to vendor. The
-        // runtime is C++ (docs/11 Q5): on macOS link zig's own libc++ into
-        // the module so libR/libRblas/libRlapack stay self-contained
-        // instead of relying on `-undefined dynamic_lookup` finding some
-        // libc++ in the process at load time.
-        .flang => {
-            mod.addLibraryPath(.{ .cwd_relative = ctx.flangrt_dir });
-            mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no, .preferred_link_mode = .static });
-            mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
-            // flang-pixi's handoff measured it: only the Linux archives are
-            // libc++-free (their sole C++-runtime reference is __cxa_atexit).
-            if (ctx.os == .macos or ctx.os == .windows) mod.link_libcpp = true;
-        },
-        .gfortran => switch (ctx.os) {
-            .linux => {
-                mod.addLibraryPath(.{ .cwd_relative = ctx.gfortran_lib_dir });
-                mod.linkSystemLibrary("gfortran", .{ .use_pkg_config = .no });
-                mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
-            },
-            .macos => {
-                mod.addLibraryPath(.{ .cwd_relative = ctx.gfortran_lib_dir });
-                mod.linkSystemLibrary("emutls_w", .{ .use_pkg_config = .no });
-                mod.linkSystemLibrary("heapt_w", .{ .use_pkg_config = .no });
-                mod.linkSystemLibrary("gfortran", .{ .use_pkg_config = .no });
-                mod.linkSystemLibrary("quadmath", .{ .use_pkg_config = .no });
-            },
-            // No real `configure` capture on Windows (F6) to pull FLIBS from
-            // — conda-forge's MinGW gfortran runtime libs, standard names,
-            // found on the default library search path already set up by
-            // newCMod (Library/lib); unverified against a real config.status,
-            // revisit if link errors surface a different need.
-            .windows => {
-                // libgfortran.dll.a/libquadmath.dll.a (dynamic import stubs for
-                // the real libgfortran-5.dll/libquadmath-0.dll runtime, both
-                // present in Library/bin) live in a gcc-version-specific
-                // subdirectory, not directly on the default Library/lib search
-                // path — add it explicitly (found via a real link error).
-                mod.addLibraryPath(.{ .cwd_relative = ctx.gfortran_lib_dir });
-                mod.linkSystemLibrary("gfortran", .{ .use_pkg_config = .no });
-                mod.linkSystemLibrary("quadmath", .{ .use_pkg_config = .no });
-                // libgfortran.a itself references __gthr_win32_create/_join/_self
-                // (MinGW's generic-thread glue), __emutls_get_address
-                // (emulated-TLS helper), and _Unwind_GetIPInfo/_Unwind_Backtrace
-                // (libbacktrace) — needed only by Rlapack.dll's f90-module LAPACK
-                // code specifically (Rblas.dll/R.dll's plain f77 objects never
-                // pull in libgfortran's error/async-I/O runtime that references
-                // them). All are real exports of the actual libgcc_s_seh-1.dll
-                // runtime (present in Library/bin) but `-lgcc_s`/`-lgcc`/
-                // `-lgcc_eh` in any combination couldn't get lld-link to resolve
-                // them, and hand-extracting the individual archive members that
-                // define them (tried first) got everything to LINK but produced
-                // an R.dll that failed to LOAD at runtime (STATUS_DLL_NOT_FOUND)
-                // — an incomplete/malformed import table, missing whatever else
-                // a real dlltool-built import archive bundles alongside each
-                // symbol's thunk. Generating a fresh, complete import library
-                // through dlltool's normal path (same mechanism as the R_stub
-                // import lib above) sidesteps both problems at once.
-                const gthr_lib = winMakeImportLibFor(ctx, "libgcc_s_seh-1.dll", &.{
-                    "__gthr_win32_create",
-                    "__gthr_win32_join",
-                    "__gthr_win32_self",
-                    "__emutls_get_address",
-                    "_Unwind_GetIPInfo",
-                    "_Unwind_Backtrace",
-                }, "gthr_win32_lib");
-                mod.addObjectFile(gthr_lib);
-            },
-        },
-    }
+    mod.addLibraryPath(.{ .cwd_relative = ctx.flangrt_dir });
+    mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no, .preferred_link_mode = .static });
+    mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
+    if (ctx.os == .macos or ctx.os == .windows) mod.link_libcpp = true;
 }
 
 /// Tokenize a "-L/x -lfoo ..." string into module link calls.
@@ -2391,7 +2708,6 @@ fn applyLinkFlags(ctx: *const Ctx, mod: *std.Build.Module, flags: []const u8) vo
     while (it.next()) |tok| {
         if (std.mem.startsWith(u8, tok, "-L")) {
             mod.addLibraryPath(.{ .cwd_relative = ctx.b.dupe(tok[2..]) });
-            mod.addRPath(.{ .cwd_relative = ctx.b.dupe(tok[2..]) });
         } else if (std.mem.startsWith(u8, tok, "-l")) {
             mod.linkSystemLibrary(ctx.b.dupe(tok[2..]), .{ .use_pkg_config = .no });
         } else if (std.mem.eql(u8, tok, "-framework")) {
@@ -2404,95 +2720,31 @@ fn applyLinkFlags(ctx: *const Ctx, mod: *std.Build.Module, flags: []const u8) vo
     }
 }
 
-/// F2.3: zig's linker adds a RUNPATH entry for the build/zig-cache path of
-/// every sibling artifact a module links against (e.g. libR.so -> the
-/// zig-cache location it found libRblas.so at) — harmless in place (it's
-/// relative, so it only resolves if a process happens to run with that
-/// exact cwd, which never happens outside `zig build` itself) but it's
-/// grit the make build never had, and stage.sh's downstream rpath rewrite
-/// shouldn't have to clean up zig-specific debris it didn't create. Strip
-/// every non-absolute RUNPATH entry, keeping the real conda/flang-rt ones.
-fn fixRpath(ctx: *const Ctx, in: std.Build.LazyPath, out_name: []const u8) std.Build.LazyPath {
-    // macOS (F5.2): patchelf is ELF-only. Mach-O's equivalent grit (zig
-    // may add a load-command referencing the zig-cache path of a sibling
-    // artifact) is handled by stage.sh's existing install_name_tool +
-    // mandatory ad-hoc re-codesign pass instead of duplicating Mach-O
-    // surgery here — per FINALIZATION.md F5.2, leave it there.
-    if (ctx.os == .macos) return in;
-
-    const b = ctx.b;
-    const run = b.addSystemCommand(&.{
-        "sh",        "-c",
-        \\set -e
-        \\rp="$(patchelf --print-rpath "$1")"
-        \\newrp="$(printf '%s' "$rp" | tr ':' '\n' | grep '^/' | tr '\n' ':' | sed 's/:$//')"
-        \\cp "$1" "$2"
-        \\chmod u+w "$2"
-        \\patchelf --set-rpath "$newrp" "$2"
-        ,
-        "fix-rpath",
-    });
-    run.setName(b.fmt("fix-rpath {s}", .{out_name}));
-    run.addFileArg(in);
-    return run.addOutputFileArg(out_name);
-}
-
 const FortranOut = struct { obj: std.Build.LazyPath, mods: std.Build.LazyPath };
 
 fn fortranOne(ctx: *const Ctx, dir: []const u8, file: []const u8, mod_deps: []const std.Build.LazyPath) FortranOut {
     const b = ctx.b;
-    // Compiler per ctx.fc (a pixi.toml dependency decision — see
-    // FortranCompiler). flang: -module-dir sets/searches the module output
-    // dir; gfortran: -J does the same job. gfortran-darwin -O2 miscompiles
-    // complex LAPACK (zgesdd — silent wrong SVD, found on real hardware in
-    // an earlier milestone); cap gfortran at -O1 there, exactly like
-    // configure-only.sh's FOPT logic. flang is -O2 everywhere — removing
-    // that cap on osx-arm64 is the whole point of adopting it.
-    // Windows' own Makeconf.win default is -O3, but the complex-LAPACK
-    // miscompile risk found on gfortran-darwin is unverified either way
-    // on MinGW gfortran (or gfortran-linux-aarch64) — cautious -O2 for a
-    // first working build; revisit via `make check` (F1.1-equivalent)
-    // before trusting -O3 there.
-    const fc = ctx.fc;
-    const compiler = switch (fc) {
-        .flang => "flang",
-        .gfortran => "gfortran",
-    };
-    const opt = if (fc == .gfortran and ctx.os == .macos) "-O1" else "-O2";
-    const moddir_flag = switch (fc) {
-        .flang => "-module-dir",
-        .gfortran => "-J",
-    };
+    // flang (found in build()), -O2 on every platform, as configure-only.sh
+    // captures it; -module-dir sets and searches the module output dir.
+    // Windows' own Makeconf.win default is -O3; -O2 there too (R's check
+    // passes with it, -O3 was never tried). (gfortran, which flang
+    // replaced everywhere, had to be capped at -O1 on macOS: it silently
+    // miscompiled R's complex LAPACK, zgesdd, at -O2.)
     // -fpic is meaningless on Windows (PE has no PIC distinction; flang
     // reports it as an unused argument on every file) — omit it there.
-    const run = b.addSystemCommand(&.{ compiler, opt, "-c" });
+    const run = b.addSystemCommand(&.{ "flang", "-O2", "-c" });
     if (ctx.os != .windows) run.addArg("-fpic");
-    // gfortran on Linux: never emit glibc libmvec vector-math calls.
-    // gfortran's driver auto-adds `-fpre-include=<sysroot>/usr/include/
-    // finclude/math-vector-fortran.h` whenever the sysroot's glibc is new
-    // enough to ship it (>= 2.30 on x86_64; aarch64 libmvec exists only
-    // from glibc 2.38), and that header marks log/exp/sin/... as having
-    // SIMD variants — so -O2's loop vectoriser turns LAPACK's
-    // fixed-trip-count loops into calls to `_ZGVnN2v_log` & co. Those
-    // symbols live in libmvec.so.1, which zig's glibc-2.17 link stubs (the
-    // floor we ship against) do not have and cannot have, so the calls
-    // stay undefined and libRlapack.so refuses to load ("undefined symbol:
-    // _ZGVnN2v_log", found in the linux-aarch64 conda-package job: rattler-
-    // build solved sysroot 2.39 + gfortran 16 while the pixi lockfile's
-    // 2.28 + gfortran 15 had no such header, which is why `pixi run build`
-    // never showed it). `-fpre-include=/dev/null` does NOT override the
-    // driver's automatic one (both end up on the f951 line — verified),
-    // `-nostdinc` would also drop the intrinsic-module dir, so disable the
-    // one pass that creates the calls: loop vectorisation. Cost is
-    // negligible for reference BLAS/LAPACK at -O2's very-cheap cost model;
-    // the openblas variant exists for real performance.
-    if (fc == .gfortran and ctx.os == .linux) run.addArg("-fno-tree-loop-vectorize");
-    run.setName(b.fmt("{s} {s}/{s}", .{ compiler, dir, file }));
+    // macOS: flang stamps its objects with the host SDK's version (minos
+    // 26.0 on a macOS 26 machine) unless given the floor, and zig's link
+    // relabels them 13.0 without a word. The flag rather than
+    // MACOSX_DEPLOYMENT_TARGET: flang lets the flag win over the variable.
+    if (ctx.os == .macos) run.addArg(floors.macos_min_flag);
+    run.setName(b.fmt("flang {s}/{s}", .{ dir, file }));
     run.addFileArg(ctx.path(b.fmt("{s}/{s}", .{ dir, file })));
     run.addArg("-o");
     const stem = file[0..std.mem.lastIndexOfScalar(u8, file, '.').?];
     const obj = run.addOutputFileArg(b.fmt("{s}.o", .{stem}));
-    run.addArg(moddir_flag);
+    run.addArg("-module-dir");
     const mods = run.addOutputDirectoryArg("mods");
     for (mod_deps) |d| run.addPrefixedDirectoryArg("-I", d);
     return .{ .obj = obj, .mods = mods };
@@ -2584,22 +2836,27 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
         const key = line[3..key_end];
         var val: []const u8 = line[key_end + 4 ..];
         if (val.len > 0 and val[val.len - 1] == '"') val = val[0 .. val.len - 1];
-        var v = try std.mem.replaceOwned(u8, b.allocator, val, "@ZR_CONDA@", ctx.conda);
+        // Tools configure found in the env become bare names, looked up on
+        // PATH when used (phase A5); the compilers (rzig) are
+        // R_HOME/bin/toolchain, where build.zig installs them (F1.4, F3).
+        // Neither records a path of the build machine.
+        var v = try std.mem.replaceOwned(u8, b.allocator, val, "@ZR_CONDA@/bin/", "");
+        v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_CONDA@", ctx.conda);
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_SRC@", ctx.src_abs);
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_OBJ@", ctx.rhome);
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_PREFIX@", ctx.prefix);
-        v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_TOOLCHAIN@", b.pathFromRoot("toolchain"));
+        v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_TOOLCHAIN@", "$(R_HOME)/bin/toolchain");
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_ROOT@", b.pathFromRoot("."));
         // flang's runtime dir (see gen-subst.sh): resolved by findFlangRt at
-        // build time so the LLVM major never gets baked into Makeconf. A
-        // vendored config captured with flang but built in a gfortran env
-        // (or vice versa) is a real mismatch — fail loudly, not with a
-        // silently empty `-L`.
+        // build time so the LLVM major never gets baked into Makeconf.
         if (std.mem.indexOf(u8, v, "@ZR_FLANGRT_DIR@") != null) {
-            if (ctx.flangrt_dir.len == 0) {
-                std.debug.print("error: {s}/subst.txt was captured with flang (S[\"{s}\"] uses @ZR_FLANGRT_DIR@) but this env selected {s} — regenerate the vendored config for this env's Fortran compiler (pixi run configure + gen-subst.sh)\n", .{ config_dir, key, @tagName(ctx.fc) });
-                return error.FortranConfigMismatch;
-            }
+            // FLIBS/FLIBS_IN_SO name the static archive, not `-L<dir>
+            // -lflang_rt.runtime`: the dir also holds the shared runtime,
+            // which a native macOS link prefers (linux's pinned target
+            // already took the .a). libR links it statically too, and a
+            // compiled Fortran package has to load without the toolchain,
+            // so no rpath into it can be relied on (feat-no-host-paths).
+            v = try std.mem.replaceOwned(u8, b.allocator, v, "-L@ZR_FLANGRT_DIR@ -lflang_rt.runtime", "@ZR_FLANGRT_DIR@/libflang_rt.runtime.a");
             v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_FLANGRT_DIR@", ctx.flangrt_dir);
         }
         // config.status escapes for awk: \$ → $ and \" → " (checked: no
@@ -2607,6 +2864,352 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
         v = try std.mem.replaceOwned(u8, b.allocator, v, "\\$", "$");
         v = try std.mem.replaceOwned(u8, b.allocator, v, "\\\"", "\"");
         try ctx.subst.put(try b.allocator.dupe(u8, key), v);
+        // Makeconf's form of a value that names the build environment
+        // (CPPFLAGS, LDFLAGS, LIBS_PKGS, FLIBS_IN_SO, TCLTK_*, the
+        // R_CONFIG_ARGS comment): see makeconfValue.
+        for ([_][]const u8{ "@ZR_CONDA@", "@ZR_PREFIX@", "@ZR_FLANGRT_DIR@" }) |ph| {
+            if (std.mem.indexOf(u8, val, ph) != null) {
+                try ctx.mk_subst.put(try b.allocator.dupe(u8, key), try makeconfValue(ctx, val));
+                break;
+            }
+        }
+    }
+}
+
+/// etc/Makeconf's form of a subst.txt value (feat-no-host-paths F1.5): the
+/// tree that ships carries no path of the machine that built it. The
+/// environment is written $(R_HOME)/../.., which make expands where it
+/// runs: the conda env, the standalone prefix, the wheel's r_zig/R (on
+/// Windows R_HOME is <prefix>/Library/lib/R, so it is <prefix>/Library).
+/// The flang runtime is -lflang_rt.runtime, which rzig (zig-cc and
+/// zig-cxx) turns into the static archive of the flang on PATH, whatever
+/// its LLVM major. R's own build keeps the absolute values in ctx.subst.
+fn makeconfValue(ctx: *const Ctx, raw: []const u8) ![]const u8 {
+    const a = ctx.b.allocator;
+    var v = try std.mem.replaceOwned(u8, a, raw, "@ZR_CONDA@/bin/", "");
+    // No rpath into the environment, and no CPPFLAGS/LDFLAGS (set empty in
+    // build()): rzig adds them, the rpath for a conda env only
+    // (zigbuild/tools/rzig/environment.zig, F3b). So the `# configure`
+    // comment line (R_CONFIG_ARGS) loses its 'CPPFLAGS=…' and 'LDFLAGS=…'
+    // words too, which would name flags the file does not use; the file is
+    // the same in the conda package, the standalone tree and the wheel.
+    v = try std.mem.replaceOwned(u8, a, v, " -Wl,-rpath,@ZR_CONDA@/lib", "");
+    for ([_][]const u8{ " 'CPPFLAGS=", " 'LDFLAGS=" }) |word| {
+        const i = std.mem.indexOf(u8, v, word) orelse continue;
+        const end = std.mem.indexOfScalarPos(u8, v, i + word.len, '\'') orelse continue;
+        v = try std.mem.concat(a, u8, &.{ v[0..i], v[end + 1 ..] });
+    }
+    v = try std.mem.replaceOwned(u8, a, v, "-L@ZR_FLANGRT_DIR@ -lflang_rt.runtime", "-lflang_rt.runtime");
+    v = try std.mem.replaceOwned(u8, a, v, "@ZR_CONDA@", "$(R_HOME)/../..");
+    v = try std.mem.replaceOwned(u8, a, v, "@ZR_PREFIX@", "$(R_HOME)/../..");
+    v = try std.mem.replaceOwned(u8, a, v, "@ZR_TOOLCHAIN@", "$(R_HOME)/bin/toolchain");
+    v = try std.mem.replaceOwned(u8, a, v, "\\$", "$");
+    v = try std.mem.replaceOwned(u8, a, v, "\\\"", "\"");
+    return v;
+}
+
+/// Whether two paths name the same directory, by real path (what
+/// vendor-libs.sh's `pwd -P` compares). One that does not resolve, such as
+/// an install prefix not made yet, names another.
+fn samePhysicalDir(io: std.Io, a: std.mem.Allocator, x: []const u8, y: []const u8) bool {
+    const rx = std.Io.Dir.cwd().realPathFileAlloc(io, x, a) catch return false;
+    const ry = std.Io.Dir.cwd().realPathFileAlloc(io, y, a) catch return false;
+    return std.mem.eql(u8, rx, ry);
+}
+
+fn pathExists(io: std.Io, p: []const u8) bool {
+    std.Io.Dir.cwd().access(io, p, .{}) catch return false;
+    return true;
+}
+
+/// OpenMP for packages, in a tree that is not the env R is built in (the
+/// standalone archive, the dev tree), from the env's llvm-openmp: what
+/// R CMD SHLIB's $(SHLIB_OPENMP_*FLAGS) compiles and links need, as a
+/// conda env with llvm-openmp has it. Nothing when the profile has no
+/// OpenMP (minimal: Makeconf offers none) or the prefix is the env (the
+/// conda build: llvm-openmp is a run dependency there, and owns these
+/// paths; the same test as vendor-libs.sh's).
+///   - The headers (omp.h and the ones beside it; win-64's llvm-openmp
+///     ships only omp.h and ompx.h) into the environment's include/,
+///     where rzig looks (zigbuild/tools/rzig/environment.zig: R's own
+///     environment is <prefix>, <prefix>/Library on Windows): its omp.h
+///     is what makes rzig add -lomp to a -fopenmp link, and packages'
+///     OpenMP probes (data.table's includes omp.h with no flag) find it.
+///   - Windows: libomp.lib into <prefix>/Library/lib, the environment's
+///     lib/, where rzig's -L points and windows.libs resolves -lomp.
+/// libomp itself comes with the env's other shared libraries, from
+/// vendor-libs.sh after the build: on unix because libR links it (into
+/// <prefix>/lib); on Windows, where none of R's own DLLs imports it,
+/// because the tree has libomp.lib (into R_HOME/bin/x64, the directory of
+/// R's executables, where the loader finds a package DLL's import of it).
+/// Phase T's standalone toolchain archive takes the headers and the import
+/// library over.
+fn installOpenMP(ctx: *const Ctx, io: std.Io) !void {
+    if (!ctx.openmp or ctx.prefix_is_env) return;
+    const b = ctx.b;
+    const include: std.Build.InstallDir = .{ .custom = if (ctx.os == .windows) "Library/include" else "include" };
+    inline for (.{ "omp.h", "ompx.h", "omp-tools.h", "ompt.h" }) |h| {
+        const src = ctx.condaDir("include/" ++ h);
+        if (pathExists(io, src)) {
+            b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = src }, include, h).step);
+        } else if (comptime std.mem.eql(u8, h, "omp.h")) {
+            std.debug.print("error: {s} is missing (llvm-openmp not in the env?); the tree ships it for packages' OpenMP\n", .{src});
+            return error.MissingOpenMP;
+        }
+    }
+    if (ctx.os == .windows) {
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("lib/libomp.lib") }, .{ .custom = "Library/lib" }, "libomp.lib").step);
+    }
+}
+
+/// The runtime data a tree that is not the env R is built in needs from
+/// that env, installed with the tree as the OpenMP headers are
+/// (feat-no-host-paths F1.7: the installed tree is the shipped tree on
+/// every OS, and package-standalone.sh only archives it). The env's
+/// shared libraries come after the build instead, from
+/// scripts/vendor-libs.sh, since which ones is a walk over what the built
+/// binaries need. The conda build (ctx.prefix_is_env) gets none of it:
+/// the env's own packages (ca-certificates, fontconfig, tk) provide it
+/// where conda-forge's libraries look for it. Windows' tcltk is the one
+/// exception, below.
+///   - unix: the env's CA bundle as R_HOME/etc/ca-bundle.crt, which
+///     etc/Renviron names (finalRenviron); the build fails without it.
+///     fontconfig's configuration as <prefix>/etc/fonts, without the
+///     env's own directories (installFontconfig), when the env has one
+///     (minimal has no fontconfig). full (the variant that builds
+///     tcltk): Tcl's and Tk's script libraries and Tcl's modules as
+///     <prefix>/lib/{tcl8.6,tk8.6,tcl8}, beside the libtcl and libtk
+///     vendor-libs.sh copies, the layout of a Tcl install; etc/Renviron
+///     points TCL_LIBRARY at the first (finalRenviron).
+///   - Windows: the Tcl/Tk runtime in R_HOME/Tcl, where tcltk's .onLoad
+///     loads it from (Tcl/bin as library.dynam's DLLpath, Tcl/lib as
+///     TCLLIBPATH); the build fails without it, tcltk is always built
+///     there. fontconfig's configuration (installFontconfig) as
+///     R_HOME/etc/fonts, which
+///     etc/Renviron.site points FONTCONFIG_PATH at. etc/Renviron.site is
+///     written here, for the conda build too: it carries the compile
+///     preflight's hint (Windows R reads Renviron.site, not etc/Renviron,
+///     which finalRenviron writes for unix), and in the conda build
+///     MY_TCLTK: tcltk's .onLoad (src/library/tcltk/R/windows/zzz.R)
+///     stops with "Tcl/Tk support files were not installed" unless
+///     R_HOME/Tcl/bin exists or MY_TCLTK names the directory of the Tcl/Tk
+///     DLLs, which in a conda env is the tk package's Library/bin
+///     (tcl86t.dll finds its scripts in Library/lib relative to itself).
+///     `R --vanilla` skips Renviron.site, and on Windows no other file R
+///     reads at startup, so there library(tcltk) needs MY_TCLTK set by
+///     hand.
+fn installEnvRuntime(ctx: *const Ctx, io: std.Io) !void {
+    const b = ctx.b;
+    const fonts = !ctx.prefix_is_env and pathExists(io, ctx.condaDir("etc/fonts"));
+    if (ctx.os != .windows) {
+        if (ctx.prefix_is_env) return;
+        // TLS trust. The vendored libcurl and OpenSSL are conda-forge's,
+        // built with this env's paths compiled in (libcurl's default CA
+        // file is <env>/ssl/cacert.pem, OpenSSL's directory <env>/ssl):
+        // outside this machine every HTTPS request failed with "libcurl
+        // error code 77: error adding trust anchors from file" (found
+        // 2026-09-28; the wheel, built from this tree, had the same). Ship
+        // the env's Mozilla bundle and set R_ZIG_CA_BUNDLE: R's libcurl.c,
+        // patched (zigbuild/patches/), then takes CURL_CA_BUNDLE if the
+        // user set one, else SSL_CERT_FILE, else the system's bundle, else
+        // this file, and passes it to curl as CURLOPT_CAINFO, so the
+        // compiled-in path is never used. Not CURL_CA_BUNDLE itself:
+        // Renviron exports to every program R starts, and curl or Python's
+        // requests would drop their own trust for this frozen copy.
+        // Interim fix: the per-platform curl in
+        // .github/devdocs/feat-no-host-paths/PLAN.md ("libcurl") replaces
+        // it. Windows needs none of this: conda-forge's curl there uses
+        // Schannel, the Windows certificate store.
+        const ca = ctx.condaDir("ssl/cacert.pem");
+        const ca_size = if (std.Io.Dir.cwd().statFile(io, ca, .{})) |st| st.size else |_| 0;
+        if (ca_size == 0) {
+            std.debug.print("error: {s} is missing or empty (ca-certificates not in the env?); the tree ships it as etc/ca-bundle.crt\n", .{ca});
+            return error.MissingCaBundle;
+        }
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ca }, ctx.rhomeInstallDir("etc"), "ca-bundle.crt").step);
+        if (fonts) try installFontconfig(ctx, io, .{ .custom = "etc/fonts" });
+        // tcltk (full). conda-forge's libtcl has the env's lib/tcl8.6
+        // compiled in as its script library, and R starts Tcl with no
+        // executable name to search from (Tcl_FindExecutable(NULL)), so
+        // off this machine Tcl_Init found no init.tcl and library(tcltk)
+        // failed. Tk's library and the modules (tcl8: msgcat, which
+        // `clock` needs, http, ...) are found beside Tcl's: Tcl's auto_path
+        // and module roots include [file dirname [info library]].
+        if (ctx.variant == .full) {
+            inline for (.{ "tcl8.6", "tk8.6", "tcl8" }) |d| {
+                if (!pathExists(io, ctx.condaDir("lib/" ++ d))) {
+                    std.debug.print("error: {s} is missing (tk not in the env?); the tree ships it as lib/{s}\n", .{ ctx.condaDir("lib/" ++ d), d });
+                    return error.MissingTclTk;
+                }
+                try installEnvDir(ctx, io, ctx.condaDir("lib/" ++ d), .{ .custom = "lib/" ++ d }, &.{});
+            }
+        }
+        return;
+    }
+    var site = std.ArrayList(u8).empty;
+    if (ctx.toolchain_hint.len > 0) {
+        try site.appendSlice(b.allocator, b.fmt("R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{s}'}}\n", .{ctx.toolchain_hint}));
+    }
+    if (ctx.prefix_is_env) {
+        // R_HOME is <env>/Library/lib/R, so this is <env>/Library/bin.
+        // Renviron expands a nested default only when it is a whole ${...}
+        // term, hence the helper variable (as finalRenviron's MAKE).
+        try site.appendSlice(b.allocator, "R_ZIG_TCLTK=${R_HOME}/../../bin\nMY_TCLTK=${MY_TCLTK-${R_ZIG_TCLTK}}\n");
+    } else {
+        inline for (.{ "bin/tcl86t.dll", "bin/tk86t.dll", "lib/tcl8.6", "lib/tk8.6", "lib/tcl8" }) |sub| {
+            if (!pathExists(io, ctx.condaDir(sub))) {
+                std.debug.print("error: {s} is missing (tk not in the env?); the tree ships Tcl/Tk in R_HOME/Tcl\n", .{ctx.condaDir(sub)});
+                return error.MissingTclTk;
+            }
+        }
+        // The DLLs only in Tcl/bin, CRAN's layout: a copy in bin/x64 wins
+        // the search order and then looks for init.tcl relative to itself
+        // (vendor-libs.sh keeps them out of bin/x64).
+        inline for (.{ "tcl86t.dll", "tk86t.dll" }) |dll| {
+            b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("bin/" ++ dll) }, ctx.rhomeInstallDir("Tcl/bin"), dll).step);
+        }
+        // tcl8 holds Tcl's modules (msgcat, which `clock` needs, http,
+        // platform, tcltest); Tcl looks for them under the parent of its
+        // script library, Tcl/lib.
+        inline for (.{ "tcl8.6", "tk8.6", "tcl8" }) |d| {
+            try installEnvDir(ctx, io, ctx.condaDir("lib/" ++ d), ctx.rhomeInstallDir("Tcl/lib/" ++ d), &.{});
+        }
+        if (fonts) {
+            try installFontconfig(ctx, io, ctx.rhomeInstallDir("etc/fonts"));
+            try site.appendSlice(b.allocator, "FONTCONFIG_PATH=${R_HOME}/etc/fonts\n");
+        }
+    }
+    if (site.items.len > 0) {
+        const site_wf = b.addWriteFiles();
+        const f = site_wf.add("Renviron.site", site.items);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(f, ctx.rhomeInstallDir("etc"), "Renviron.site").step);
+    }
+}
+
+/// Install every file under `src`, a directory of the env, into `dest`,
+/// following symlinks: conda-forge's fontconfig links etc/fonts/conf.d/
+/// *.conf to ../../../share/fontconfig/conf.avail, which a tree outside
+/// the env does not have, and std.Build's InstallDir skips symlinks
+/// altogether; so each arrives as the file it names. A link to nothing,
+/// or to a directory, is left out, and so are the paths in `except`
+/// (relative to `src`, `/`-separated).
+fn installEnvDir(ctx: *const Ctx, io: std.Io, src: []const u8, dest: std.Build.InstallDir, except: []const []const u8) !void {
+    const b = ctx.b;
+    var dir = try std.Io.Dir.cwd().openDir(io, src, .{ .iterate = true });
+    defer dir.close(io);
+    var it = try dir.walk(b.allocator);
+    defer it.deinit();
+    walk: while (try it.next(io)) |e| {
+        const rel = try std.mem.replaceOwned(u8, b.allocator, e.path, "\\", "/");
+        for (except) |x| if (std.mem.eql(u8, rel, x)) continue :walk;
+        const from = b.fmt("{s}/{s}", .{ src, e.path });
+        switch (e.kind) {
+            .file => {},
+            .sym_link => {
+                const st = std.Io.Dir.cwd().statFile(io, from, .{}) catch continue;
+                if (st.kind != .file) continue;
+            },
+            else => continue,
+        }
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = from }, dest, b.dupe(e.path)).step);
+    }
+}
+
+/// fontconfig's configuration, for a tree that is not the env
+/// (installEnvRuntime): the env's etc/fonts (Library/etc/fonts on
+/// Windows), without the env. conda-forge builds fontconfig with the env
+/// as its prefix, so its fonts.conf names <env>/share/fonts and <env>/fonts
+/// as font directories and <env>/var/cache/fontconfig as the first cache
+/// (linux; macOS only the cache; Windows none), and conf.d/README says the
+/// env's share/fontconfig/conf.avail holds the conf.d files. fonts.conf is
+/// installed without those lines (fontsConfWithoutEnv), README not at all
+/// (fontconfig reads only conf.d's *.conf files, and this tree's are
+/// copies, not links into conf.avail). What remains are the system's and
+/// the user's font directories and caches: /usr/share/fonts on linux,
+/// /System/Library/Fonts and the rest on macOS, Windows' font folders,
+/// then the XDG ones and ~/.fonts; the cache in the XDG cache directory
+/// (~/.cache/fontconfig) and ~/.fontconfig. The launchers point
+/// FONTCONFIG_PATH here (zigbuild/launchers/; Windows: etc/Renviron.site),
+/// since the vendored libfontconfig names only the build env's etc/fonts.
+fn installFontconfig(ctx: *const Ctx, io: std.Io, dest: std.Build.InstallDir) !void {
+    const b = ctx.b;
+    const src = ctx.condaDir("etc/fonts");
+    try installEnvDir(ctx, io, src, dest, &.{ "fonts.conf", "conf.d/README" });
+    const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/fonts.conf", .{src}), b.allocator, .limited(1024 * 1024));
+    const wf = b.addWriteFiles();
+    const conf = wf.add("fonts.conf", try fontsConfWithoutEnv(ctx, io, raw));
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(conf, dest, "fonts.conf").step);
+}
+
+/// `raw`, an env's fonts.conf, without the lines that name the env (as
+/// written, or resolved, with either separator). Each is one <dir> or
+/// <cachedir> element on a line of its own, as fontconfig writes the file
+/// (fonts.conf.in); a line naming the env that is not one of those stops
+/// the build, so a change in fontconfig's format cannot ship the env's
+/// path or a broken file.
+fn fontsConfWithoutEnv(ctx: *const Ctx, io: std.Io, raw: []const u8) ![]u8 {
+    const b = ctx.b;
+    const a = b.allocator;
+    var forms = std.ArrayList([]const u8).empty;
+    const real = std.Io.Dir.cwd().realPathFileAlloc(io, ctx.conda, a) catch ctx.conda;
+    for ([_][]const u8{ ctx.conda, real }) |p| {
+        try forms.append(a, p);
+        try forms.append(a, try std.mem.replaceOwned(u8, a, p, "\\", "/"));
+        try forms.append(a, try std.mem.replaceOwned(u8, a, p, "/", "\\"));
+    }
+    var out = std.ArrayList(u8).empty;
+    var lines = std.mem.splitScalar(u8, raw, '\n');
+    var first = true;
+    while (lines.next()) |line| {
+        const names_env = for (forms.items) |f| {
+            if (std.mem.indexOf(u8, line, f) != null) break true;
+        } else false;
+        if (names_env) {
+            const t = std.mem.trim(u8, line, " \t\r");
+            const element = (std.mem.startsWith(u8, t, "<dir") and std.mem.endsWith(u8, t, "</dir>")) or
+                (std.mem.startsWith(u8, t, "<cachedir") and std.mem.endsWith(u8, t, "</cachedir>"));
+            if (!element) {
+                std.debug.print("error: the env's fonts.conf names it outside a <dir> or <cachedir> line of its own:\n  {s}\n", .{line});
+                return error.FontconfigNamesEnv;
+            }
+            continue;
+        }
+        if (!first) try out.append(a, '\n');
+        first = false;
+        try out.appendSlice(a, line);
+    }
+    return out.items;
+}
+
+/// Fail the build when an installed text file (etc/Makeconf, libR.pc)
+/// names the machine that built it: the conda env, the install prefix,
+/// the R source, this checkout, rattler-build's build prefix, or a
+/// subst.txt placeholder nothing replaced. Comment lines count: R CMD
+/// config and humans read them too. Measured against the template the
+/// text came from: only what substitution added counts, so a prefix of
+/// /usr/local does not trip over Makeconf.in's own "/usr/local/lib"
+/// comment (no rule about the characters around a match could tell that
+/// from a leaked <prefix>/lib).
+fn assertNoBuildPath(ctx: *const Ctx, name: []const u8, template: []const u8, text: []const u8) !void {
+    const b = ctx.b;
+    var needles = std.ArrayList([]const u8).empty;
+    for ([_][]const u8{ ctx.conda, ctx.prefix, ctx.src_abs, b.pathFromRoot("."), b.graph.environ_map.get("BUILD_PREFIX") orelse "" }) |p| {
+        if (p.len == 0) continue;
+        try needles.append(b.allocator, p);
+        // Windows paths appear with either separator
+        try needles.append(b.allocator, try std.mem.replaceOwned(u8, b.allocator, p, "\\", "/"));
+    }
+    try needles.append(b.allocator, "@ZR_");
+    for (needles.items) |n| {
+        if (std.mem.count(u8, text, n) <= std.mem.count(u8, template, n)) continue;
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |line| {
+            if (std.mem.indexOf(u8, line, n) != null) {
+                std.debug.print("error: {s} names a build path ({s}):\n  {s}\n", .{ name, n, line });
+                break;
+            }
+        }
+        return error.BuildPathInInstalledFile;
     }
 }
 
@@ -2652,6 +3255,11 @@ fn loadSubstTable(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
 /// config.status-style substitution: replace @KEY@ tokens found in the map,
 /// leave unknown tokens untouched.
 fn substitute(ctx: *const Ctx, content: []const u8) ![]u8 {
+    return substituteWith(ctx, content, null);
+}
+
+/// substitute(), looking keys up in `overlay` first (etc/Makeconf: ctx.mk_subst).
+fn substituteWith(ctx: *const Ctx, content: []const u8, overlay: ?*const std.StringHashMap([]const u8)) ![]u8 {
     const b = ctx.b;
     var out = std.ArrayList(u8).empty;
     var i: usize = 0;
@@ -2660,7 +3268,7 @@ fn substitute(ctx: *const Ctx, content: []const u8) ![]u8 {
             if (std.mem.indexOfScalarPos(u8, content, i + 1, '@')) |j| {
                 const key = content[i + 1 .. j];
                 if (key.len > 0 and key.len < 64 and isVarName(key)) {
-                    if (ctx.subst.get(key)) |val| {
+                    if ((if (overlay) |o| o.get(key) else null) orelse ctx.subst.get(key)) |val| {
                         try out.appendSlice(b.allocator, val);
                         i = j + 1;
                         continue;
@@ -2832,7 +3440,16 @@ fn stageLibraryPayload(ctx: *const Ctx, io: std.Io, libstage: *std.Build.Step.Wr
     // package-specific extras
     _ = libstage.addCopyFile(ctx.path("src/library/base/inst/CITATION"), "base/CITATION");
     _ = libstage.addCopyDirectory(ctx.path("src/library/base/demo"), "base/demo", .{ .exclude_extensions = &.{"00Index"} });
-    _ = libstage.add("tools/misc/top.txt", b.fmt("{s}\n", .{ctx.src_abs}));
+    // No tools/misc/top.txt: R's make writes the source tree's absolute
+    // path there (tools/Makefile.in, `$(ECHO) $(abs_top_srcdir)`;
+    // Makefile.win `pwd -W`) and make install ships it, a path of the
+    // build machine. Its one reader, tools:::.R_top_srcdir() (utils.R),
+    // locates R's sources for R-core's maintenance helpers (aspell over
+    // R's manuals and dictionaries, R-exts' DESCRIPTION fields), and reads
+    // a missing file as "" (`if(nzchar(system.file(...)))`), the answer
+    // for a tree without R's sources; _R_TOP_SRCDIR_ names them for
+    // whoever has a copy. The value is read once, when tools' code is
+    // lazy-loaded during the bootstrap, so it is "" in tools.rdb too.
     _ = libstage.add("tools/misc/wre.txt", try makeWreTxt(ctx, io));
     _ = libstage.addCopyDirectory(ctx.path("src/library/utils/inst/Sweave"), "utils/Sweave", .{});
     _ = libstage.addCopyDirectory(ctx.path("src/library/utils/inst/doc"), "utils/doc", .{});
@@ -2873,13 +3490,20 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     // lib/pkgconfig/libR.pc (src/unix/Makefile.in install-pc; sed-style
     // tokens, not @VAR@ substitution)
     {
-        var pc = try readSrcFile(ctx, io, "src/unix/libR.pc.in");
-        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rhome", ctx.rhome);
-        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rincludedir", b.fmt("{s}/include", .{ctx.rhome}));
+        // Relative to the .pc file (pkg-config's ${pcfiledir}), as
+        // Makeconf is to R_HOME: <prefix>/lib/pkgconfig/../R is R_HOME.
+        // @others is upstream's $(MAIN_LDFLAGS) $(LDFLAGS) minus LDFLAGS,
+        // the build env's -L/-rpath (libR is in ${rlibdir}, which no env
+        // rpath ever covered).
+        const pc_in = try readSrcFile(ctx, io, "src/unix/libR.pc.in");
+        var pc = pc_in;
+        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rhome", "${pcfiledir}/../R");
+        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rincludedir", "${rhome}/include");
         pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@rarch", "");
         pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@libsprivate", "");
-        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@others", b.fmt("-Wl,--export-dynamic{s} -L{s}/lib -Wl,-rpath,{s}/lib", .{ if (ctx.openmp) " -fopenmp" else "", ctx.conda, ctx.conda }));
+        pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@others", std.mem.trim(u8, ctx.subst.get("MAIN_LDFLAGS") orelse "", " "));
         pc = try std.mem.replaceOwned(u8, b.allocator, pc, "@VERSION", r_version);
+        try assertNoBuildPath(ctx, "lib/pkgconfig/libR.pc", pc_in, pc);
         const pc_wf = b.addWriteFiles();
         _ = pc_wf.add("libR.pc", pc);
         inst.dependOn(&b.addInstallDirectory(.{
@@ -2893,9 +3517,12 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     _ = stage.addCopyFile(ctx.path("doc/html/index-default.html"), "doc/html/index.html");
 
     // --- etc/ ---
-    _ = stage.add("etc/Renviron", try substFile(ctx, io, "etc/Renviron.in"));
-    _ = stage.add("etc/ldpaths", try substFile(ctx, io, "etc/ldpaths.in"));
-    _ = stage.add("etc/Makeconf", try substFile(ctx, io, "etc/Makeconf.in"));
+    _ = stage.add("etc/Renviron", try finalRenviron(ctx, try substFile(ctx, io, "etc/Renviron.in")));
+    _ = stage.add("etc/ldpaths", ldpaths(ctx));
+    const makeconf_in = try readSrcFile(ctx, io, "etc/Makeconf.in");
+    const makeconf = try substituteWith(ctx, makeconf_in, &ctx.mk_subst);
+    try assertNoBuildPath(ctx, "etc/Makeconf", makeconf_in, makeconf);
+    _ = stage.add("etc/Makeconf", makeconf);
     _ = stage.add("etc/javaconf", try substFile(ctx, io, "etc/javaconf.in"));
     _ = stage.addCopyFile(ctx.path("etc/repositories"), "etc/repositories");
 
@@ -2931,15 +3558,6 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     // share/ and doc/ wholesale from the source tree
     installCommonPayload(ctx);
 
-    // prefix/bin/R: same front script (make install copies Rexecbindir/R there)
-    const bin_wf = b.addWriteFiles();
-    _ = bin_wf.add("R", r_front);
-    inst.dependOn(&b.addInstallDirectory(.{
-        .source_dir = bin_wf.getDirectory(),
-        .install_dir = .{ .custom = "bin" },
-        .install_subdir = "",
-    }).step);
-
     // utils iconvlist (basepkg iconvlist target: `iconv -l`)
     const iconv_run = b.addSystemCommand(&.{ "iconv", "-l" });
     const iconv_out = iconv_run.captureStdOut(.{});
@@ -2948,30 +3566,132 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     return libstage;
 }
 
-/// bin/R: R.sh.in substituted, then the four install-time seds make applies
-/// (R_HOME_DIR first occurrence + R_SHARE_DIR/R_INCLUDE_DIR/R_DOC_DIR).
+/// bin/R: R.sh.in substituted, with the lines make install rewrites set
+/// to the values that ship (F1.4): R_HOME_DIR found from the script's own
+/// location (one symlink hop at a time with plain `readlink`, POSIX sh,
+/// see zigbuild/launchers/R), R_SHARE_DIR/R_INCLUDE_DIR/R_DOC_DIR under it,
+/// and R.sh.in's lib64 probe (`if test "${R_HOME_DIR}" = "<prefix>/lib/R"`,
+/// which runs `uname -m`) dropped: a self-located R_HOME_DIR matches it on
+/// the build machine only.
 fn makeRFrontScript(ctx: *const Ctx, io: std.Io) ![]u8 {
     const b = ctx.b;
     const raw = try substFile(ctx, io, "src/scripts/R.sh.in");
+    const home_line =
+        \\R_HOME_DIR=$(_s="$0"; while [ -h "$_s" ]; do case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac; _d=$(cd -P "${_d:-/}" && pwd); _s=$(readlink "$_s"); case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac; done; case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac; cd -P "${_d:-/}/.." && pwd)
+    ;
     var out = std.ArrayList(u8).empty;
     var lines = std.mem.splitScalar(u8, raw, '\n');
     var home_done = false;
+    var in_probe = false;
     var first = true;
     while (lines.next()) |line| {
+        if (in_probe) {
+            if (std.mem.eql(u8, line, "fi")) in_probe = false;
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "if test \"${R_HOME_DIR}\" = \"")) {
+            in_probe = true;
+            continue;
+        }
         if (!first) try out.append(b.allocator, '\n');
         first = false;
         if (!home_done and std.mem.indexOf(u8, line, "R_HOME_DIR=") != null) {
-            try out.appendSlice(b.allocator, b.fmt("R_HOME_DIR=\"{s}\"", .{ctx.rhome}));
+            try out.appendSlice(b.allocator, home_line);
             home_done = true;
         } else if (std.mem.startsWith(u8, line, "R_SHARE_DIR=")) {
-            try out.appendSlice(b.allocator, b.fmt("R_SHARE_DIR=\"{s}/share\"", .{ctx.rhome}));
+            try out.appendSlice(b.allocator, "R_SHARE_DIR=\"${R_HOME_DIR}/share\"");
         } else if (std.mem.startsWith(u8, line, "R_INCLUDE_DIR=")) {
-            try out.appendSlice(b.allocator, b.fmt("R_INCLUDE_DIR=\"{s}/include\"", .{ctx.rhome}));
+            try out.appendSlice(b.allocator, "R_INCLUDE_DIR=\"${R_HOME_DIR}/include\"");
         } else if (std.mem.startsWith(u8, line, "R_DOC_DIR=")) {
-            try out.appendSlice(b.allocator, b.fmt("R_DOC_DIR=\"{s}/doc\"", .{ctx.rhome}));
+            try out.appendSlice(b.allocator, "R_DOC_DIR=\"${R_HOME_DIR}/doc\"");
         } else {
             try out.appendSlice(b.allocator, line);
         }
+    }
+    return out.items;
+}
+
+/// etc/ldpaths: R_HOME/lib only (the env's or a vendored lib dir is found
+/// through the binaries' relative rpaths). DYLD_FALLBACK_LIBRARY_PATH on
+/// macOS, LD_LIBRARY_PATH elsewhere. R_LD_LIBRARY_PATH from the
+/// environment wins, which is how this build runs its own R
+/// (Ctx.buildLdPath).
+fn ldpaths(ctx: *const Ctx) []const u8 {
+    return switch (ctx.os) {
+        .macos =>
+        \\: "${R_LD_LIBRARY_PATH=${R_HOME}/lib}"
+        \\if [ -z "${DYLD_FALLBACK_LIBRARY_PATH}" ]; then
+        \\  DYLD_FALLBACK_LIBRARY_PATH="${R_LD_LIBRARY_PATH}"
+        \\else
+        \\  DYLD_FALLBACK_LIBRARY_PATH="${R_LD_LIBRARY_PATH}:${DYLD_FALLBACK_LIBRARY_PATH}"
+        \\fi
+        \\export DYLD_FALLBACK_LIBRARY_PATH
+        \\
+        ,
+        else =>
+        \\: "${R_LD_LIBRARY_PATH=${R_HOME}/lib}"
+        \\LD_LIBRARY_PATH="${R_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH}"
+        \\export LD_LIBRARY_PATH
+        \\
+        ,
+    };
+}
+
+/// etc/Renviron as it ships (phase A4, F1.4): untar() and unzip() use R's
+/// internal code (installing a package without compiling runs no tar or
+/// unzip), printing goes to a bare `lpr`, minimal's MAKE is the bundled
+/// GNU make, the compile preflight's hint comes from -Dtoolchain-hint, and
+/// a tree that is not the env names its CA bundle and, in full, Tcl's
+/// script library (installEnvRuntime).
+/// `${X-default}` keeps a value set in the environment, as upstream's
+/// Renviron does. The tool defaults PAGER/R_BROWSER/... come from the
+/// normalized configure table (zigbuild/tools/normalize-subst.sh).
+fn finalRenviron(ctx: *const Ctx, raw: []const u8) ![]u8 {
+    const b = ctx.b;
+    var out = std.ArrayList(u8).empty;
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, raw, "\n"), '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "TAR=")) {
+            try out.appendSlice(b.allocator, "TAR=${TAR-'internal'}");
+        } else if (std.mem.startsWith(u8, line, "R_UNZIPCMD=")) {
+            try out.appendSlice(b.allocator, "R_UNZIPCMD=${R_UNZIPCMD-'internal'}");
+        } else if (std.mem.startsWith(u8, line, "R_PRINTCMD=")) {
+            try out.appendSlice(b.allocator, "R_PRINTCMD=${R_PRINTCMD-'lpr'}");
+        } else if (std.mem.startsWith(u8, line, "MAKE=") and ctx.variant == .minimal) {
+            // Renviron expands a nested default only when it is a whole
+            // ${...} term, hence the helper variable.
+            try out.appendSlice(b.allocator, "R_ZIG_MAKE=${R_HOME}/bin/toolchain/make\nMAKE=${MAKE-${R_ZIG_MAKE}}");
+        } else {
+            try out.appendSlice(b.allocator, line);
+        }
+        try out.append(b.allocator, '\n');
+    }
+    if (ctx.toolchain_hint.len > 0) {
+        try out.appendSlice(b.allocator, b.fmt("R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{s}'}}\n", .{ctx.toolchain_hint}));
+    }
+    // etc/Renviron, not Renviron.site: `R --vanilla`/`Rscript --vanilla`
+    // imply --no-environ, which skips Renviron.site but still reads this
+    // file. Why R_ZIG_CA_BUNDLE and not CURL_CA_BUNDLE: installEnvRuntime.
+    if (!ctx.prefix_is_env) {
+        try out.appendSlice(b.allocator,
+            \\## r-zig: fallback trust anchors (read by the patched libcurl.c).
+            \\R_ZIG_CA_BUNDLE=${R_HOME}/etc/ca-bundle.crt
+            \\
+        );
+    }
+    // full: Tcl's script library, which installEnvRuntime installs as
+    // <prefix>/lib/tcl8.6 (R_HOME is <prefix>/lib/R); the vendored libtcl
+    // names only the build env's. A Tcl that R starts gets this too, and
+    // skips it when its version differs (init.tcl requires its exact
+    // patchlevel, and Tcl moves on to its own). The helper variable: see
+    // MAKE above.
+    if (!ctx.prefix_is_env and ctx.variant == .full) {
+        try out.appendSlice(b.allocator,
+            \\## r-zig: Tcl's script library, shipped in the tree (tcltk).
+            \\R_ZIG_TCL_LIBRARY=${R_HOME}/../tcl8.6
+            \\TCL_LIBRARY=${TCL_LIBRARY-${R_ZIG_TCL_LIBRARY}}
+            \\
+        );
     }
     return out.items;
 }
@@ -3106,6 +3826,7 @@ const Boot = struct {
         run.setEnvironmentVariable("LC_ALL", "C");
         run.setEnvironmentVariable("R_DEFAULT_PACKAGES", "NULL");
         run.setEnvironmentVariable("R_ENABLE_JIT", "0");
+        if (self.ctx.buildLdPath()) |p| run.setEnvironmentVariable("R_LD_LIBRARY_PATH", p);
         run.has_side_effects = true;
         run.step.dependOn(self.last);
         self.last = &run.step;
@@ -3150,7 +3871,9 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
         var argv = std.ArrayList([]const u8).empty;
         try argv.appendSlice(b.allocator, &.{ "chmod", "+x" });
         try argv.append(b.allocator, b.fmt("{s}/bin/R", .{ctx.prefix}));
+        try argv.append(b.allocator, b.fmt("{s}/bin/Rscript", .{ctx.prefix}));
         try argv.append(b.allocator, b.fmt("{s}/bin/R", .{rhome}));
+        try argv.append(b.allocator, b.fmt("{s}/bin/Rscript", .{rhome}));
         for (rspec.scripts_s) |s| try argv.append(b.allocator, b.fmt("{s}/bin/{s}", .{ rhome, s }));
         for (rspec.scripts_b) |s| try argv.append(b.allocator, b.fmt("{s}/bin/{s}", .{ rhome, s }));
         _ = boot.cmd("chmod scripts", argv.items);
@@ -3229,9 +3952,11 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
         // config.status to capture on Windows anyway (F6.1) — only read by
         // tools/R/sotools.R (informational ABI-compatibility string for
         // compiled-package loading, not load-bearing for base bootstrap).
-        // Shape matches configure's own gcc/gfortran-detected pattern
-        // ("<os>,<cc>,<cxx>,<fc>,<fc>"); revisit if a real value is needed.
-        run.setEnvironmentVariable("R_SYSTEM_ABI", ctx.subst.get("R_SYSTEM_ABI") orelse "windows,gcc,gxx,gfortran,gfortran");
+        // Shape matches configure's own pattern ("<os>,<cc>,<cxx>,<fc>,
+        // <fc>"): zig's clang is GCC-compatible, as unix's captures say
+        // (gcc,gxx), and the Fortran compiler is flang, spelled as
+        // tools/Makefile.win spells it for an LLVM build.
+        run.setEnvironmentVariable("R_SYSTEM_ABI", ctx.subst.get("R_SYSTEM_ABI") orelse "windows,gcc,gxx,flang,flang");
     }
     // tools/Makefile.in's `all` ends with .install_package_description —
     // unlike other mkdesc2 users this is not optional: it writes
@@ -3391,6 +4116,7 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
             "set.seed(1); m <- matrix(rnorm(64), 8); s <- svd(m); stopifnot(max(abs(s$u %*% diag(s$d) %*% t(s$v) - m)) < 1e-9); cat('zig-built R OK:', R.version.string, '\\n')",
         });
         run.setEnvironmentVariable("TZ", "UTC");
+        if (ctx.buildLdPath()) |p| run.setEnvironmentVariable("R_LD_LIBRARY_PATH", p);
     }
 
     return boot.last;

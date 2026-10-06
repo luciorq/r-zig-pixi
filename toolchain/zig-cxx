@@ -10,11 +10,80 @@ else
   ZIG=(python3 -m ziglang)
 fi
 
+# Static libc++ everywhere: defeat conda-forge zig's shared-libc++ probe
+# with a ZIG_LIB_DIR mirror. See zig-cc for the rationale.
+r_zig_static_libcxx() {
+  local zl="${ZIG_LIB_DIR:-}" d m key e i
+  if [ -z "$zl" ] && [ "${ZIG[0]}" != python3 ]; then
+    d="${ZIG[0]%/*}"; [ "$d" = "${ZIG[0]}" ] && d=.
+    [ -f "$d/../lib/zig/std/std.zig" ] && zl="$d/../lib/zig"
+  fi
+  [ -n "$zl" ] && [ -d "$zl" ] || return 0
+  for e in libc++.1.dylib libc++.dylib libc++.so.1 libc++.so; do
+    [ -e "$zl/../../lib/$e" ] && break
+    e=""
+  done
+  [ -n "$e" ] || return 0
+  zl="$(cd "$zl" && pwd -P)"
+  key="$( { echo "$zl"; ls "$zl"; } | cksum | cut -d' ' -f1)"
+  m="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/r-zig/zig-lib-$key"
+  if [ ! -e "$m/.complete" ]; then
+    if mkdir -p "${m%/*}" 2>/dev/null && mkdir "$m" 2>/dev/null; then
+      mkdir -p "$m/lib/zig" && for e in "$zl"/*; do ln -s "$e" "$m/lib/zig/"; done && : > "$m/.complete"
+    else
+      i=0; while [ ! -e "$m/.complete" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+    fi
+  fi
+  if [ -e "$m/.complete" ]; then
+    export ZIG_LIB_DIR="$m/lib/zig"
+  else
+    echo "zig-cxx: could not prepare $m; this link may use a shared libc++" >&2
+  fi
+}
+case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*) ;; *) r_zig_static_libcxx ;; esac
+
 # Linux glibc floor: see zig-cc's own comment for the full rationale.
 target=()
+sdkL=()
 if [[ "$(uname -s 2>/dev/null)" == "Linux" ]]; then
   target=(-target "$(uname -m)-linux-gnu.2.17")
 fi
+# macOS deployment-target floor (13.0) and the two SDK search dirs: see
+# zig-cc's comment.
+if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
+  case "$(uname -m)" in arm64|aarch64) _arch=aarch64 ;; *) _arch=x86_64 ;; esac
+  target=(-target "$_arch-native.13.0")
+  _sdk="$(/usr/bin/xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+  if [ -n "$_sdk" ]; then
+    target+=("-F$_sdk/System/Library/Frameworks")
+    sdkL=("-L$_sdk/usr/lib")
+  fi
+fi
+
+# Fortran runtime (-lflang_rt.runtime in Makeconf's FLIBS): the static
+# archive of the flang on PATH, once; dropped without one. See zig-cc.
+case " $* " in
+  *" -lflang_rt.runtime "*)
+    _frt=""
+    if _rd="$(flang -print-resource-dir 2>/dev/null)" && [ -n "$_rd" ]; then
+      _rd="${_rd%$'\r'}"; _rd="${_rd//\\//}"
+      for _c in "$_rd"/lib/*/libflang_rt.runtime.a; do
+        if [ -f "$_c" ]; then _frt="$_c"; break; fi
+      done
+      [ -n "$_frt" ] || echo "${0##*/}: warning: no libflang_rt.runtime.a under $_rd/lib/*/; dropping -lflang_rt.runtime" >&2
+    fi
+    _a=()
+    for a in "$@"; do
+      if [ "$a" = -lflang_rt.runtime ]; then
+        [ -n "$_frt" ] && _a+=("$_frt")
+        _frt=""
+        continue
+      fi
+      _a+=("$a")
+    done
+    set -- "${_a[@]}"
+    ;;
+esac
 
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*)
@@ -72,11 +141,19 @@ if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
 fi
 # OpenMP: see zig-cc for rationale.
 omp=()
-if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
-  case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*) inc="$CONDA_PREFIX/Library/include"; lib="$CONDA_PREFIX/Library/lib";;
-    *)            inc="$CONDA_PREFIX/include";         lib="$CONDA_PREFIX/lib";;
-  esac
+_ob=""
+if [[ " $* " == *"-fopenmp"* ]]; then
+  _s="${BASH_SOURCE[0]//\\//}"   # the Windows forwarder passes C:\...\zig-cc
+  _ob="${_s%/*}/../../../.."
+  if [ ! -f "$_ob/include/omp.h" ]; then
+    case "$(uname -s 2>/dev/null)" in
+      MINGW*|MSYS*) _ob="${CONDA_PREFIX:+$CONDA_PREFIX/Library}" ;;
+      *)            _ob="${CONDA_PREFIX:-}" ;;
+    esac
+  fi
+fi
+if [ -n "$_ob" ]; then
+  inc="$_ob/include"; lib="$_ob/lib"
   omp+=(-I"$inc")
   linking=true
   for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) linking=false; break;; esac; done
@@ -90,6 +167,8 @@ if [[ " $* " == *"-fopenmp"* && -n "${CONDA_PREFIX:-}" ]]; then
     else
       omp+=(-L"$lib" -lomp)
     fi
+  elif $linking; then
+    omp+=(-L"$lib")   # the caller's -lomp still needs its directory (see zig-cc)
   fi
 fi
 
@@ -116,8 +195,15 @@ case "$(uname -s 2>/dev/null)" in
       esac
       _dedup+=("$a")
     done
-    set -- "${_dedup[@]}"
+    set -- "${_dedup[@]}" "${omp[@]}"
+    omp=()
+    # No implicit rpaths: the non-native target above records none for
+    # -L directories, so the -L flags pass through untouched. The SDK -L
+    # is for links only.
+    _link=true
+    for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) _link=false; break;; esac; done
+    $_link || sdkL=()
     ;;
 esac
 
-exec "${ZIG[@]}" c++ -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}"
+exec "${ZIG[@]}" c++ -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}" "${sdkL[@]}"

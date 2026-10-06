@@ -4,7 +4,7 @@
 #   Rcpp       — C++ compile + runtime evalCpp (compiles C++ through Makeconf)
 #   data.table — plain C package
 #   minqa      — depends on Rcpp AND compiles Fortran: full mixed-toolchain
-#                test (zig C/C++ + flang/gfortran) through R's package build
+#                test (zig C/C++ + flang) through R's package build
 #   pak        — the real-world repro case behind F7.1/F7.6/F7.7 (see
 #                TODO.md): its own configure script recursively
 #                re-invokes R.exe/Rterm.exe (the access-violation crash
@@ -30,8 +30,9 @@ if [ "$OS" = windows ]; then
   # prefix's) instead of the in-tree gnuwin32 default.
   R_BIN="${R_TEST_R_BIN:-$SRC_DIR/bin/x64/Rscript.exe}"
   test -x "$R_BIN" || R_BIN="$SRC_DIR/bin/Rscript.exe"
-  # package builds read CC=gcc etc from etc/x64/Makeconf — the zig shim
-  # names must be on PATH, as during the gnuwin32 build
+  # package builds read CC=$(BINPREF)gcc etc from etc/x64/Makeconf, and
+  # BINPREF names R_HOME/bin/toolchain/ (rzig's gcc.exe and g++.exe); the
+  # gnuwin32 build's win-toolchain dir below is a leftover, empty today
   export PATH="$BUILD_DIR/win-toolchain:$PATH"
 else
   # R_TEST_R_BIN: test a different build's Rscript (e.g. the zig-build
@@ -73,11 +74,21 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   # only when compiled with OpenMP. (Do NOT assert getDTthreads() > 1 —
   # its default is 50% of cores, which is 1 on small CI runners.)
   # minimal is built without OpenMP and its Makeconf offers none, so there
-  # the proof runs the other way: data.table must come out single-threaded.
+  # the proof runs the other way: the profile property is the empty
+  # SHLIB_OPENMP_* flags. data.table follows them on linux, but on macOS
+  # its configure probes -Xclang -fopenmp itself and links -lomp, which
+  # succeeds wherever a libomp is reachable (conda llvm-openmp in the dev
+  # env, whose -L and rpath rzig adds: pixi.toml sets R_ZIG_EXTRA_ENV).
+  # That is the package opting in, not R offering OpenMP, so there it is
+  # reported only.
   th_info <- capture.output(getDTthreads(verbose = TRUE))
   cat(th_info, sep = "\n")
   if (Sys.getenv("R_CONTRACT_VARIANT") == "minimal") {
-    stopifnot(!any(grepl("OpenMP version", th_info)))
+    mk <- readLines(file.path(R.home("etc"), "Makeconf"))
+    omp <- grep("^SHLIB_OPENMP_(C|CXX|F)FLAGS *=", mk, value = TRUE)
+    stopifnot(length(omp) == 3L, all(grepl("= *$", omp)))
+    if (Sys.info()[["sysname"]] != "Darwin")
+      stopifnot(!any(grepl("OpenMP version", th_info)))
   } else {
     stopifnot(any(grepl("OpenMP version", th_info)))
   }
@@ -85,12 +96,13 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   stopifnot(max(abs(fit$par - c(3, 3))) < 1e-4)
   # quadprog: a *pure-Fortran* package (no C/C++ sources at all) — the one
   # shape minqa cannot cover, since its C++ sends the link through
-  # SHLIB_CXXLD. Here R CMD SHLIB compiles every file with $(FC) (flang on
-  # every platform since Phase 2) and links through SHLIB_LD, the zig-cc
-  # shim, with $(FLIBS) appended — the resolved-at-build-time flang
-  # runtime dir, the runtime archive/dylib, and on Windows libc++. (R
-  # only links via the Fortran driver itself when a package opts in with
-  # USE_FC_TO_LINK in Makevars; that path is not exercised here.)
+  # SHLIB_CXXLD. Here R CMD SHLIB compiles every file with $(FC), the
+  # zig-fc of rzig (F3c: the flang on PATH, on every platform since Phase 2),
+  # and links through SHLIB_LD, the zig-cc of rzig (gcc.exe on Windows),
+  # with $(FLIBS) appended — -lflang_rt.runtime, which rzig resolves to
+  # the static runtime archive, and on Windows libc++. (R only links via
+  # $(FC) itself when a package opts in with USE_FC_TO_LINK in Makevars;
+  # verify-bundle.sh and the recipe test build such a package.)
   # minimize (1/2) t(x) D x - t(d) x subject to x >= 0, with D = 2I and
   # d = (2, 6): the solution is x = (1, 3). (No apostrophes in this R
   # program: it sits inside a single-quoted shell string.)
@@ -113,11 +125,115 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
     apps <- ps::ps_apps()
     stopifnot(is.data.frame(apps))
   }
+  # Makeconf names no build path and no environment (feat-no-host-paths
+  # F1.5, F3b): FLIBS is the bare runtime rzig resolves, CPPFLAGS and
+  # LDFLAGS are empty (the compilers, rzig, add the environment -I, -L and
+  # conda rpath), CC is rzig, and FC its zig-fc (F3c; zig-fc.exe on
+  # Windows, named without .exe). --no-user-files: the shipped Makeconf
+  # alone, whatever personal Makevars this machine has.
+  cfg <- function(v) tools::Rcmd(c("config", "--no-user-files", v), stdout = TRUE)
+  cc1 <- strsplit(trimws(cfg("CC")), " +")[[1]][1]
+  fc1 <- strsplit(trimws(cfg("FC")), " +")[[1]][1]
+  stopifnot(grepl("-lflang_rt.runtime", cfg("FLIBS"), fixed = TRUE),
+            !grepl("libflang_rt", cfg("FLIBS"), fixed = TRUE),
+            identical(trimws(cfg("CPPFLAGS")), ""),
+            identical(trimws(cfg("LDFLAGS")), ""),
+            basename(dirname(cc1)) == "toolchain",
+            sub(".exe$", "", basename(cc1)) %in% c("zig-cc", "gcc"),
+            basename(dirname(fc1)) == "toolchain",
+            sub(".exe$", "", basename(fc1)) == "zig-fc")
   cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
   cat("data.table grouped aggregation: OK\n")
   cat("minqa (Rcpp-dependent + package Fortran) bobyqa: OK\n")
-  cat("quadprog (pure Fortran: flang compile, FLIBS link through the zig-cc shim) solve.QP: OK\n")
+  cat("quadprog (pure Fortran: zig-fc compile, FLIBS link through rzig) solve.QP: OK\n")
+  cat("R CMD config FC:", fc1, "OK\n")
   cat("pak (recursive R.exe invocation + mbedtls quoted -D flags): OK\n")
   cat("ps (process introspection", if (ps::ps_os_type()[["MACOS"]]) "+ apps.m Objective-C ps_apps()" else "", "): OK\n")
 '
+# The environments rzig compiled those against (feat-no-host-paths F3b):
+# the tree's own (R_HOME/../..), then the pixi env, which pixi.toml names
+# in R_ZIG_EXTRA_ENV. A link line as rzig would run it: both -L before the
+# -o, an rpath only into the pixi env (a conda env; the tree is not), the
+# headers after the caller's arguments in the same order. Windows: the
+# environments are <root>/Library, headers by -idirafter, no rpath.
+if [ -n "${R_ZIG_EXTRA_ENV:-}" ]; then
+  rhome="$("$R_BIN" --vanilla -e 'cat(normalizePath(R.home(), winslash = "/"))')"
+  own="$(cd "$rhome/../.." && pwd -P)"
+  env_root="$R_ZIG_EXTRA_ENV"
+  [ "$OS" = windows ] && env_root="$(cygpath -u "$env_root")"
+  extra="$(cd "$env_root" && pwd -P)"
+  tc="$rhome/bin/toolchain/zig-cc"
+  if [ "$OS" = windows ]; then
+    own="$(cygpath -m "$own")"; extra="$(cygpath -m "$extra")/Library"; tc="$rhome/bin/toolchain/gcc.exe"
+  fi
+  argv="$(cd "$LIB" && RZIG_PRINT_ARGV=1 "$tc" -shared -o rzig-contract.so a.o -lz)"
+  # Never fails (set -e, pipefail): a missing flag is an empty position,
+  # which the checks below report with the argv.
+  at() { printf '%s\n' "$argv" | grep -nixF -- "$1" | head -1 | cut -d: -f1 || true; }
+  o="$(at -o)" lo="$(at "-L$own/lib")" le="$(at "-L$extra/lib")"
+  bad=""
+  { [ -n "$o" ] && [ -n "$lo" ] && [ -n "$le" ] && [ "$lo" -lt "$le" ] && [ "$le" -lt "$o" ]; } || bad="$bad order-of-L"
+  if [ "$OS" = windows ]; then
+    printf '%s\n' "$argv" | grep -q -- '-rpath' && bad="$bad rpath"
+    ie="$(at "$extra/include")"
+    { [ -n "$ie" ] && [ "$ie" -gt "$o" ] && [ "$(printf '%s\n' "$argv" | sed -n "$((ie - 1))p")" = -idirafter ]; } || bad="$bad idirafter"
+  else
+    re="$(at "-Wl,-rpath,$extra/lib")" ie="$(at "-I$extra/include")"
+    { [ -n "$re" ] && [ "$re" = $((le + 1)) ]; } || bad="$bad extra-rpath"
+    [ -z "$(at "-Wl,-rpath,$own/lib")" ] || bad="$bad own-rpath"
+    { [ -n "$ie" ] && [ "$ie" -gt "$o" ]; } || bad="$bad extra-include"
+    if [ -d "$own/include" ]; then
+      io="$(at "-I$own/include")"
+      { [ -n "$io" ] && [ "$io" -lt "$ie" ]; } || bad="$bad own-include"
+    fi
+  fi
+  if [ -n "$bad" ]; then
+    printf '%s\n' "$argv" >&2
+    echo "error: rzig's environment flags (own $own, extra $extra):$bad" >&2
+    exit 1
+  fi
+  echo "rzig environments: $own, then $extra (R_ZIG_EXTRA_ENV): -L before -o, headers after, rpath into conda envs only: OK"
+fi
+# Static libc++ everywhere (decided 2026-09-30): no compiled package may
+# depend on a shared C++ runtime. zig links its own libc++ statically, but
+# conda-forge's zig switches to a shared one whenever a libc++ sits beside
+# it (always in a macOS conda env; on linux with any `libcxx` package);
+# rzig (R_HOME/bin/toolchain's zig-cc and zig-cxx) defeats that with a
+# ZIG_LIB_DIR mirror.
+if [ "$OS" = linux ] || [ "$OS" = macos ]; then
+  shared_cxx=""
+  for so in "$LIB"/*/libs/*.so; do
+    if [ "$OS" = linux ]; then
+      hit="$(patchelf --print-needed "$so" 2>/dev/null | grep -E '^lib(c\+\+|stdc\+\+)\.so' || true)"
+    else
+      hit="$(otool -L "$so" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -E '(^|/)lib(c\+\+|stdc\+\+)[.0-9]*\.dylib$' || true)"
+    fi
+    [ -z "$hit" ] || shared_cxx="$shared_cxx ${so#$LIB/}->$hit"
+  done
+  if [ -n "$shared_cxx" ]; then
+    echo "error: compiled packages depend on a shared C++ runtime:$shared_cxx" >&2
+    exit 1
+  fi
+  echo "C++ runtime: static in every compiled package"
+fi
+# macOS: every compiled package at or below the deployment target rzig
+# passes (MACOS_MIN), and the SDK's lib dir last on its link lines:
+# data.table's zlib.h comes from the env, so its libz must too, not the
+# SDK's older stub in /usr/lib.
+if [ "$OS" = macos ]; then
+  bad=""
+  for so in "$LIB"/*/libs/*.so; do
+    m="$(macho_minos "$so")"
+    if [ -z "$m" ] || version_gt "$m" "$MACOS_MIN"; then bad="$bad ${so#$LIB/}=${m:-none}"; fi
+  done
+  if [ -n "$bad" ]; then
+    echo "error: compiled packages above the macOS $MACOS_MIN floor:$bad" >&2
+    exit 1
+  fi
+  if otool -L "$LIB/data.table/libs/data_table.so" | grep -q '/usr/lib/libz\.'; then
+    echo "error: data.table linked the SDK's libz stub (the SDK -L is not last on rzig's link line)" >&2
+    exit 1
+  fi
+  echo "macOS floor: every compiled package at minos <= $MACOS_MIN"
+fi
 echo "Contract test passed ($VARIANT/$OS)."

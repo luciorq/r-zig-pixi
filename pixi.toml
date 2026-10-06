@@ -2,10 +2,9 @@
 authors = ["luciorq <luciorqueiroz@gmail.com>"]
 # `universe` (prefix.dev, public) carries flang-pixi's zig-built Fortran
 # toolchain (flang-zig / flang-rt-zig / lld-zig, LLVM 23.1.1) for every
-# subdir — the only Fortran compiler for R on osx-arm64 that gets complex
-# LAPACK right at -O2 (gfortran silently miscompiles zgesdd there) and the
-# only MinGW-ABI flang for win-64 at all. Listed after conda-forge: its
-# package names never collide with conda-forge's, so priority is moot.
+# subdir: R's Fortran compiler on all of them (see [dependencies]).
+# Listed after conda-forge: its package names never collide with
+# conda-forge's, so priority is moot.
 channels = ["conda-forge", "https://prefix.dev/universe"]
 name = "r-zig-pixi"
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
@@ -14,9 +13,8 @@ version = "0.1.0"
 # Everything needed to build R comes from conda-forge through this manifest.
 # No system compilers, no system shells, no system libraries.
 # C/C++ toolchain: zig (zig cc / zig c++ / zig ar / zig ranlib) on every platform.
-# Fortran: LLVM flang — conda-forge's on linux-64, flang-pixi's zig-built
-#          flang-zig (universe channel) everywhere else (osx-arm64,
-#          osx-64, win-64, linux-aarch64). No gfortran anywhere.
+# Fortran: LLVM flang, flang-pixi's zig-built flang-zig + flang-rt-zig
+#          (universe channel), on every platform. No gfortran anywhere.
 #
 # Two build variants, mapped to pixi environments:
 #   default -> "slim": headless. cairo+png graphics, ICU, pcre2, libcurl,
@@ -36,6 +34,21 @@ R_VERSION = "4.6.1"
 # resolves a task to the default environment when every environment
 # offering it gets it from the same feature. Every build environment
 # lists this feature in [environments] below.
+# Dev and test runs compile packages against the dev tree, which is the
+# tree that ships: its compilers (rzig) add the include/ and lib/ of the
+# environment R is installed in, which for the dev tree is dist/R-*-zig,
+# not this pixi env. R_ZIG_EXTRA_ENV names one more environment for rzig
+# to add after it (feat-no-host-paths F3b, zigbuild/tools/rzig/
+# environment.zig): the pixi env's headers and libraries, and an rpath
+# into them (it is a conda env), as R installed into a conda env has
+# them. rzig never reads CONDA_PREFIX itself; on Windows it appends
+# /Library. Checks of the shipped tree alone run under env -i.
+[feature.pipeline.activation.env]
+R_ZIG_EXTRA_ENV = "$CONDA_PREFIX"
+
+[feature.pipeline.target.win-64.activation.env]
+R_ZIG_EXTRA_ENV = "%CONDA_PREFIX%"
+
 [feature.pipeline.tasks]
 fetch = "bash scripts/fetch-r.sh"
 # Only build path: `zig build` alone (no autoconf, no make, no gnuwin32)
@@ -44,22 +57,64 @@ fetch = "bash scripts/fetch-r.sh"
 # Milestone 5 (FINALIZATION.md's "Final" item), then retired — see
 # Milestone 7 in feat-legacy-retirement/.
 build = { cmd = "bash scripts/zig-build.sh", depends-on = ["fetch"] }
-# R's regression suite (Examples/Specific/Reg) against the zig build —
-# linux/macOS only, no `check` step exists in the Windows compile graph
-# (addCheckStep is only wired into the unix build() path; make-check
-# parity was never in scope for Windows — see FINALIZATION.md F6).
+# Upstream zig (feat-no-host-paths F4): R builds with this env's zig
+# (conda-forge's) and with upstream zig, the ziglang.org release, which
+# PyPI's ziglang is. fetch-zig downloads PyPI's ziglang 0.16.0 wheel for
+# this platform once (sha256 pinned in the script; no Python, it is a
+# zip), unpacks it under build/zig-upstream/ and prints its zig's path.
+# The tasks here honour ZIG_BIN, so with it they build and test with
+# that zig:
+#   ZIG_BIN="$(pixi run fetch-zig)" pixi run build   (then verify-tree, ...)
+# PowerShell: $env:ZIG_BIN = pixi run fetch-zig. Each zig gets its own
+# build/zig-cache/zig-<cksum>/ (scripts/env.sh). conda-package does not:
+# rattler-build gives the recipe a clean environment, so the conda
+# package builds with its build env's zig; nor does wheel-test, which
+# compiles with the ziglang it installs.
+fetch-zig = "bash scripts/fetch-zig.sh"
+# R's regression suite (make check's Examples/Specific/Reg targets)
+# against the installed tree, on every OS: R's own tests/Makefile on
+# linux/macOS (build.zig addCheckStep), tests/Makefile.win on Windows
+# (addCheckStepWindows, which lists what it leaves out and why). The
+# tree's own libraries and Tcl/Tk: build put them in it (F1.7).
 check = { cmd = "bash scripts/zig-build.sh check", depends-on = ["fetch"] }
 # smoke/contract/install/package/verify-package all resolve the zig
 # prefix themselves (mirroring zig-build.sh's own $FLAVOR-based prefix
 # derivation) so callers don't need to know it.
 smoke = "bash scripts/zig-smoke.sh"
-# contract (R CMD SHLIB/INSTALL via Makeconf) is unix-only for now — the
-# Windows package-compilation contract (Makeconf.win, a compiled R.exe
-# front-end) is explicitly deferred, see FINALIZATION.md F6.1/F6.2.
+# contract: CRAN packages compiled with the installed tree through its
+# Makeconf (R CMD SHLIB/INSTALL: Rcpp, data.table, minqa + OpenMP), on
+# every OS (Windows: etc/x64/Makeconf and R.exe's CMD dispatcher).
 contract = "bash scripts/zig-contract.sh"
-install = { cmd = "bash scripts/zig-stage.sh", depends-on = ["build"] }
+# `zig build` installs the final tree (feat-no-host-paths PLAN.md, F1);
+# kept as an alias of build for existing commands.
+install = { depends-on = ["build"] }
+# Static checks of that installed tree, run right after build (F1.6):
+# Makeconf, the compilers are rzig, no file of R's own naming the build
+# machine, the CA bundle, rpaths, the glibc and macOS floors, the C++
+# runtime, load commands, minimal's excluded libraries; Windows: Tcl/Tk
+# and the DLL closure. Takes an optional tree path (`pixi run
+# verify-tree -- <dir>`).
+verify-tree = "bash scripts/verify-tree.sh"
+# The standalone archive (dist/R-<ver>-<flavor>-<platform>.tar.gz, Windows
+# .zip, plus its sha256): only archives the installed tree, which build
+# made complete on every OS (F1.7: zig build installs the env's runtime
+# data, vendor-libs.sh its shared libraries).
 package = { cmd = "bash scripts/zig-package.sh", depends-on = ["install"] }
+# The archive's own checks: extracted elsewhere, R and packages compiled
+# with it run with nothing from the build env (unix: env -i, TLS with the
+# shipped CA bundle; Windows: rzig's dry runs, and OpenMP C and Fortran
+# packages built with the tree alone, loaded with PATH = bin\x64 +
+# System32).
 verify-package = { cmd = "bash scripts/zig-verify-package.sh", depends-on = ["package"] }
+# Tier 0/1 with an empty environment and only the tree's own programs on
+# PATH (unix: <tree>/bin, strace on linux; Windows: bin\x64 plus
+# System32): start R, install without compiling. Runs on a copy of the
+# installed tree, the tree that ships, so it needs no `package` first.
+hermetic = "bash scripts/hermetic-check.sh"
+# rzig, the compilers in R_HOME/bin/toolchain (zigbuild/tools/rzig/): its
+# unit tests here, and on linux the parity test against the bash shims in
+# toolchain/ for every OS's command lines. Needs no R build.
+rzig-test = "bash zigbuild/tools/rzig/test.sh"
 clean = "bash scripts/clean.sh"
 # Not part of the build path (zig-build.sh never calls this) — exists
 # solely so zigbuild/tools/gen-subst.sh has a config.status to replay
@@ -85,6 +140,24 @@ ci-rerun-failed = "gh run rerun --failed $(gh run list --workflow=build.yaml --l
 zig = "0.16.*"
 make = ">=4.4"
 pkg-config = "*"
+# Fortran: flang-pixi's zig-built LLVM flang (23.1.1, `universe`) on every
+# platform, one runtime model everywhere. Why flang-zig and no other
+# flang: on osx-arm64 gfortran silently miscompiles R's complex LAPACK
+# (zgesdd) at -O2; conda-forge has no flang for macOS or linux-aarch64,
+# and its win-64 flang targets MSVC, which R's MinGW build cannot link;
+# on linux-64 (conda-forge's flang until 2026-10-03) conda-forge's
+# llvm-openmp ships no omp_lib.mod, so `use omp_lib` failed there, and
+# its flang-rt ships a shared runtime with default visibility.
+# build.zig requires it: without $CONDA/bin/flang the build stops.
+# ~1.5 GiB closure (flang-zig + lld-zig + flang-rt-zig).
+flang-zig = "*"
+# flang-rt-zig build >= 9 (flang-pixi, 2026-10-01): static-only (no
+# .so/.dylib) and built with hidden visibility, so a Fortran package
+# exports 2-4 symbols instead of re-exporting the whole runtime (~830 on
+# macOS, ~1,240 on linux) and -lflang_rt.runtime can only mean the
+# archive. Also ships omp_lib.mod (`use omp_lib`). win-64 overrides it
+# below (no build 9 there).
+flang-rt-zig = { version = "*", build-number = ">=9" }
 # --- portable userland (fetch/extract tools; coreutils are per-target below) ---
 curl = "*"
 # --- core libraries R links against (slim profile) ---
@@ -97,7 +170,17 @@ libcurl = "*"
 icu = "*"
 tzdata = "*"
 libdeflate = "*"  # faster lazyload compression; was only transitive via libtiff
-llvm-openmp = "*"  # zig cc does -fopenmp codegen but ships no libomp/omp.h
+# OpenMP: zig cc does -fopenmp codegen but ships no libomp or omp.h, so
+# conda-forge's LLVM libomp, on every platform: R (unix) and packages
+# link it, never libgomp (which libgcc still brings into the linux and
+# win-64 envs). 23: the LLVM major of flang-zig/flang-rt-zig, whose
+# omp_lib.mod `use omp_lib` compiles against, so every platform builds
+# and tests with one libomp release. Unpinned, the lock kept 22.1.8 on
+# unix by inertia while win-64 needed 23.1.1 (flang-rt-zig build 4).
+# recipe/recipe.yaml pins the same in host only: a newer libomp runs
+# code built against an older one, so r-zig-slim's run dependency has no
+# upper bound.
+llvm-openmp = "23.*"
 # --- headless graphics: cairo + png only in slim ---
 cairo = "*"
 expat = "*"
@@ -130,29 +213,24 @@ tar = "*"
 gzip = "*"
 unzip = "*"
 zip = "*"
+patch = "*"  # zig-build.sh applies zigbuild/patches/ (m2-patch on win-64)
 
 # Rust coreutils everywhere conda-forge ships them; GNU coreutils on linux-aarch64.
-# Fortran compiler per target: flang where available, gfortran otherwise.
 [target.linux-64.dependencies]
-flang = "*"
-flang-rt_linux-64 = "*"  # Fortran runtime lib is a separate package
 uutils-coreutils = "*"
 patchelf = "*"  # rpath rewriting for relocatable installs
 
-# win-64 Fortran: flang-pixi's zig-built, MinGW-ABI flang (flang-zig,
-# LLVM 23.1.1, `universe` channel) — the only flang that emits objects
-# R's gnuwin32 build and zig cc's -windows-gnu target can link
-# (conda-forge's win flang targets MSVC; see FLANG_PIXI_HANDOFF.md).
-# Replaces conda-forge's MinGW gfortran (gcc_impl_win-64) — Phase 2,
+# win-64: flang-zig is the MinGW-ABI flang (see [dependencies]); it
+# replaced conda-forge's MinGW gfortran (gcc_impl_win-64), Phase 2,
 # platform 2. binutils_impl_win-64 used to arrive through gfortran and
 # is what provides the x86_64-w64-mingw32-nm/-dlltool that build.zig's
 # import-stub steps call; keep it explicitly.
 [target.win-64.dependencies]
-flang-zig = "*"
-# build >= 4: ships omp_lib.mod + the libatomic/libomp link shims flang's
-# MinGW driver needs for -fopenmp (flang-pixi handoff); it requires
-# llvm-openmp >= 23.1.1, which an unconstrained re-solve would otherwise
-# dodge by keeping the older locked llvm-openmp and picking build 2.
+# flang-rt-zig: win-64 has no build 9 (its runtime was always
+# static-only). build >= 4: ships omp_lib.mod + the libatomic/libomp
+# link shims flang's MinGW driver needs for -fopenmp (flang-pixi
+# handoff). It requires llvm-openmp >= 23.1.1, which the 23.* pin in
+# [dependencies] meets.
 flang-rt-zig = { version = "*", build-number = ">=4" }
 binutils_impl_win-64 = "*"
 uutils-coreutils = "*"
@@ -161,7 +239,10 @@ uutils-coreutils = "*"
 # carries these (parity caveat, tracked in TODO.md)
 libjpeg-turbo = "*"
 libtiff = "*"
-tk = "*"
+# Tcl/Tk 8.6: tcltk.dll links tcl86t/tk86t (WIN_TCLTK_LIBS) and R_HOME/Tcl
+# is 8.6's layout (build.zig installEnvRuntime); conda-forge's tk 9.0 has
+# other names (tcl90.dll, tcl9tk90.dll). recipe/recipe.yaml pins the same.
+tk = "8.6.*"
 gettext = "*"
 m2-bash = "*"
 m2-make = "*"
@@ -177,41 +258,28 @@ m2-grep = "*"
 m2-gawk = "*"
 m2-unzip = "*"
 m2-zip = "*"
+m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no win-64 `patch`
 
-# osx-64 Fortran: flang-zig as well (Phase 2, platform 3) — conda-forge
-# ships no flang for macOS at all; validated under Rosetta on omicron.
 [target.osx-64.dependencies]
-flang-zig = "*"
-flang-rt-zig = "*"
 uutils-coreutils = "*"
 
-# osx-arm64 Fortran: flang-pixi's zig-built flang (LLVM 23.1.1) from the
-# `universe` channel — first platform converged under consolidation/
-# PLAN.md Phase 2. Replaces gfortran, which silently miscompiles R's
-# complex LAPACK (zgesdd) at -O2 on arm64-darwin and forced a global -O1
-# cap on every Fortran routine in R; flang builds at -O2. build.zig picks
-# flang automatically when $CONDA/bin/flang exists (see FortranCompiler).
-# ~1.5 GiB closure (flang-zig + lld-zig + flang-rt-zig).
 [target.osx-arm64.dependencies]
-flang-zig = "*"
-flang-rt-zig = "*"
 uutils-coreutils = "*"
 
-# linux-aarch64 Fortran: flang-zig (Phase 2, platform 4 — the last one);
-# conda-forge ships no flang for linux-aarch64. flang-pixi cross-builds
-# this one from linux-64 and smoke-tests it on the hosted arm runner —
-# which is also the only hardware r-zig-pixi has for it (configs captured
-# by gen-config.yaml's ubuntu-24.04-arm legs, validated by build-r's).
+# linux-aarch64: flang-pixi cross-builds its flang-zig from linux-64 and
+# smoke-tests it on the hosted arm runner, which is also the only
+# hardware r-zig-pixi has for it (configs captured by gen-config.yaml's
+# ubuntu-24.04-arm legs, validated by build.yaml's).
 [target.linux-aarch64.dependencies]
-flang-zig = "*"
-flang-rt-zig = "*"
 coreutils = "*"
 patchelf = "*"
 
 # --- optional capabilities (compile-time: only via the 'full' environment) ---
 
 [feature.tcltk.dependencies]
-tk = "*"
+# 8.6: the vendored config links -ltcl8.6 -ltk8.6, and the tree ships
+# lib/tcl8.6 (build.zig installEnvRuntime); see win-64 above.
+tk = "8.6.*"
 
 [feature.img-formats.dependencies]
 libjpeg-turbo = "*"
@@ -245,7 +313,7 @@ R_BLAS = "openblas"
 # the libgomp/libomp that numpy/scipy/torch wheels bring. libdeflate is
 # dropped too (lazy-load compression falls back to zlib). What remains is
 # only what R's configure requires: pcre2, libcurl, zlib/bzip2/xz (plus
-# libiconv on linux-64, see below). pdf()/postscript() still work;
+# libiconv, see below). pdf()/postscript() still work;
 # png()/svg()/cairo_pdf() do not.
 #
 # ICU still reaches the wheel, but only through libcurl: conda-forge's
@@ -253,17 +321,19 @@ R_BLAS = "openblas"
 # ICU, which needs libstdc++. That is 14 of the wheel's ~49 MiB. Pinning
 # `libcurl = "<8.21"` below would drop it, at the cost of an older curl
 # (8.20.0 is from 2026-04-29). Left unpinned on purpose: that is a
-# security-vs-size call. verify-bundle.sh reports these libraries and
+# security-vs-size call. verify-tree.sh reports these libraries and
 # fails only if R's own binaries link them.
 #
 # What guarantees the profile is configure-only.sh's explicit --without-*/
-# --disable-* switches: on linux-64, flang's own LLVM closure still drags
-# icu, llvm-openmp and libiconv (via libxml2) into this env. It is its
-# own environment with no-default-feature anyway, not a feature layered
-# on top of default, so the graphics stack is not even installed and the
-# CI download is smaller. The cost is that the toolchain lines below
-# duplicate [dependencies] and the per-target Fortran sections: keep
-# them in sync. (The tasks are shared through [feature.pipeline.tasks].)
+# --disable-* switches: the toolchain's own closure still drags icu and
+# libiconv (conda-forge zig's LLVM, through libxml2) and llvm-openmp
+# (flang-rt-zig) into this env. It is its own environment with
+# no-default-feature anyway, not a feature layered on top of default, so
+# the graphics stack is not even installed and the CI download is
+# smaller. The cost is that the toolchain lines below duplicate
+# [dependencies] (Fortran included) and the per-target coreutils
+# sections: keep them in sync. (The tasks are shared through
+# [feature.pipeline.tasks].)
 # Unix only: gnuwin32 has no switches for any of this (Windows is always
 # full, see build.zig).
 #
@@ -298,33 +368,28 @@ tar = "*"
 gzip = "*"
 unzip = "*"
 zip = "*"
+patch = "*"
+flang-zig = "*"
+flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see [dependencies]
 
 [feature.minimal.target.linux-64.dependencies]
-flang = "*"
-flang-rt_linux-64 = "*"
 uutils-coreutils = "*"
 patchelf = "*"
 
 [feature.minimal.target.linux-aarch64.dependencies]
-flang-zig = "*"
-flang-rt-zig = "*"
 coreutils = "*"
 patchelf = "*"
 
 [feature.minimal.target.osx-64.dependencies]
-flang-zig = "*"
-flang-rt-zig = "*"
 uutils-coreutils = "*"
 
 [feature.minimal.target.osx-arm64.dependencies]
-flang-zig = "*"
-flang-rt-zig = "*"
 uutils-coreutils = "*"
 
 # Wheel assembly + test: only Python (stdlib zipfile/hashlib, venv, pip).
 # Not the build env: python's own closure (readline, tk, sqlite, ...)
 # has no business being visible to R's configure. The input is the
-# minimal build's staged, vendored tree (`pixi run -e minimal package`);
+# minimal build's installed, vendored tree (`pixi run -e minimal build`);
 # R_BUILD_VARIANT is set here too so env.sh derives the same
 # dist/R-<ver>-minimal-zig prefix.
 [feature.wheel]
@@ -364,7 +429,11 @@ python = ">=3.9"
 # (never hit the bug there; just a slightly simpler directory name).
 # -c: rattler-build does not read the workspace channels; `universe` is
 # where flang-zig/flang-rt-zig (osx-arm64 Fortran) come from.
-conda-package = "rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id -c conda-forge -c https://prefix.dev/universe"
+# rm: rattler-build restores the staging output (the R build) from
+# dist/conda/build_cache under a key that does not hash the recipe's
+# `path:` sources (scripts/, zigbuild/, build.zig), so a local rebuild
+# after editing them silently reused the old build (2026-09-30).
+conda-package = "rm -rf dist/conda/build_cache && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id -c conda-forge -c https://prefix.dev/universe"
 
 # Channel administration: list/delete published package files. Neither
 # rattler-build nor pixi has CLI support for either operation (upload-

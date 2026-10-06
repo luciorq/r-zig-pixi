@@ -1,0 +1,58 @@
+name: upstream-zig
+
+# R built with upstream zig (feat-no-host-paths F4): the project builds
+# with conda-forge's zig (the env's, what build.yaml tests on every
+# commit) and with upstream zig, the ziglang.org release, which PyPI's
+# ziglang is. These legs run build.yaml's steps (build-r.yaml, one step
+# list) on the default env with ZIG_BIN from `pixi run fetch-zig`. A gate,
+# not per-commit CI (the user, F4: "treat it as major release gate
+# or an integration test"): on demand, for release tags, and on pull
+# requests labelled `upstream-zig`. Every commit already compiles packages
+# with upstream zig: build.yaml's minimal legs test the r-zig wheel, whose
+# compiler is PyPI's ziglang.
+on:
+  workflow_dispatch:
+  push:
+    # (path filters do not apply to tags)
+    tags: ["v*"]
+  pull_request:
+    types: [labeled, synchronize, opened, reopened]
+    paths-ignore:
+      - "**/*.md"
+      - ".github/devdocs/**"
+      - "LICENSE"
+
+# One run per ref, a newer one cancelling the older, as build.yaml. A pull
+# request event that runs nothing here (another label added) gets a group
+# of its own, so that it cannot cancel a run of the legs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ (github.event.action == 'labeled' && github.event.label.name != 'upstream-zig') && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    # ENABLE_HOSTED_JOBS: build.yaml's kill switch. A pull request runs the
+    # legs only with the label, and a `labeled` event only for this label.
+    if: >-
+      vars.ENABLE_HOSTED_JOBS == 'true' &&
+      (github.event_name != 'pull_request' ||
+       (contains(github.event.pull_request.labels.*.name, 'upstream-zig') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'upstream-zig')))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+          # as build.yaml's Windows leg (--verbose, 90 minutes)
+          - os: windows-latest
+            build_args: "-- --verbose"
+            timeout: 90
+    uses: ./.github/workflows/build-r.yaml
+    with:
+      os: ${{ matrix.os }}
+      env: default
+      build_args: ${{ matrix.build_args }}
+      timeout: ${{ matrix.timeout || 180 }}
+      zig: upstream

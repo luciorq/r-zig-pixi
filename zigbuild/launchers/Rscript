@@ -1,0 +1,56 @@
+#!/bin/sh
+# Rscript for <prefix>/bin and <prefix>/lib/R/bin (installed by build.zig;
+# feat-no-host-paths PLAN.md, F1.4). R's compiled Rscript embeds R_HOME
+# as a build path, so this emulates it in POSIX sh, finding R_HOME from
+# its own location. Arguments are rebuilt in "$@" itself, POSIX sh having
+# no arrays: each original argument is shifted off the front and its
+# translation appended at the end, so after the loop "$@" holds only the
+# translations. As Rscript does, with -e the first non-option starts the
+# script's arguments; without -e it is the file.
+_s="$0"
+while [ -h "$_s" ]; do
+  case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
+  _d="$(cd -P "${_d:-/}" && pwd)"
+  _s="$(readlink "$_s")"
+  case "$_s" in (/*) ;; (*) _s="$_d/$_s" ;; esac
+done
+case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
+here="$(cd -P "${_d:-/}" && pwd)"
+case "$here" in
+  */lib/R/bin) R_HOME="${here%/bin}" ;;
+  *)           R_HOME="$(cd "$here/../lib/R" && pwd)" ;;
+esac
+export R_HOME
+prefix="$(cd "$R_HOME/../.." && pwd)"
+if [ -d "$prefix/etc/fonts" ]; then
+  FONTCONFIG_PATH="$prefix/etc/fonts"; export FONTCONFIG_PATH
+fi
+if [ $# -eq 0 ]; then
+  echo "Usage: Rscript [options] file [args]" >&2
+  echo "   or: Rscript [options] -e expr [-e expr2 ...] [args]" >&2
+  exit 1
+fi
+n=$#
+set -- "$@" --no-echo --no-restore
+opts=yes; expr=no
+while [ "$n" -gt 0 ]; do
+  a="$1"; shift; n=$((n - 1))
+  if [ "$opts" = no ]; then
+    set -- "$@" "$a"
+    continue
+  fi
+  case "$a" in
+    -e)
+      [ "$n" -gt 0 ] || { echo "Rscript: -e requires an expression" >&2; exit 1; }
+      set -- "$@" -e "$1"; shift; n=$((n - 1)); expr=yes ;;
+    --default-packages=*) R_DEFAULT_PACKAGES="${a#*=}"; export R_DEFAULT_PACKAGES ;;
+    --version) exec "$R_HOME/bin/R" --version ;;
+    -*) set -- "$@" "$a" ;;
+    *)
+      opts=no
+      if [ "$expr" = yes ]; then set -- "$@" --args "$a"
+      else set -- "$@" -f "$a"; [ "$n" -gt 0 ] && set -- "$@" --args
+      fi ;;
+  esac
+done
+exec "$R_HOME/bin/R" "$@"
