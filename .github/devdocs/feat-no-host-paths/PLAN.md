@@ -882,6 +882,8 @@ workarounds into code.** In order:
     pre-F4 caches (build/zig-cache/global, local) are never read again.
     The lock has two conda-forge builds of zig 0.16.0 on linux-64
     (default `_15`, minimal `_19`): they get separate caches too.
+    (Since chore-lock-and-ci-refresh, 2026-10-06, every environment has
+    `_20`: the R environments are one solve group; its PLAN.md.)
   - **Tested (linux-64, 2026-10-05, on 4868515 plus these changes).**
     - conda-forge's zig, cold caches: `pixi run rzig-test` (42 unit tests,
       parity 0 failed), build, verify-tree, smoke, contract, check,
@@ -2577,7 +2579,9 @@ minimal, openblas, pkg), `23.1.2` only in `wheel`, the Python-only env
 (`libpython` needs `libcxx >=20`; solved on its own). Nothing built or
 shipped comes from `wheel`, so it does not matter here. Also seen: the
 minimal env has conda-forge zig build `_19` (the build §6 measured),
-the others `_15`.
+the others `_15` (all `_20` since chore-lock-and-ci-refresh,
+2026-10-06, whose solve group keeps one build per package across the R
+environments; wheel stays out of it).
 
 **Adopted:** `contract-test.sh` fails on linux if any compiled package's
 `.so` has `NEEDED libc++.so*`/`libstdc++.so*`; `verify-bundle.sh` does

@@ -478,11 +478,35 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 [feature.pkg.target.linux-aarch64.tasks]
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/linux-aarch64/*.conda"
 
+# The R environments are one solve group, "r": pixi solves them together,
+# per platform, so a package they share is the same version and build in
+# all of them, while each still installs only what its own dependencies
+# reach (pixi's manifest reference, [environments]: "the different
+# environments contain different subsets of the solve-groups dependencies
+# set"). Solved apart, each kept what its own last solve had picked:
+# zig_impl 0.16.0 _15 in default against _19 in minimal, libomp 22.1.8
+# against 23.1.2 until the 23.* pin. The group aligns them without
+# pinning a build number (consolidation PLAN.md, convention 2).
+# The group adds no other environment's specs, but the one build it keeps
+# of a shared package brings that build's own dependencies, so an
+# environment can still gain packages. In this lock (2026-10-06, compared
+# with solving each apart) minimal gained none; on linux, full and
+# full-openblas kept gawk 5.4.1 and with it gmp and mpfr, which the other
+# R envs already had. A re-lock that keeps an older build can add more:
+# `pixi lock` with the old lock's preferences kept default's pkg-config
+# _1009, which brought libglib and libffi (linux-aarch64, osx-arm64) and
+# libgcc-ng and libstdcxx-ng (linux) into minimal. After a re-lock, check
+# minimal's packages with `pixi list -e minimal --platform <p> --frozen`;
+# verify-tree checks only what R links. minimal has no win-64, so the
+# group's win-64 solve leaves minimal's features out. wheel stays out: it
+# is Python-only and nothing in it builds or links R, and in the group its
+# python (libpython needs libcxx >= 20) would share versions with R's
+# build envs, where zig holds libcxx at 21.* on macOS.
 [environments]
-pkg = ["pkg", "pipeline"]
-default = ["pipeline"]
-full = ["tcltk", "img-formats", "repl", "nls", "full-build", "pipeline"]
-openblas = ["openblas", "pipeline"]
-full-openblas = ["tcltk", "img-formats", "repl", "nls", "full-build", "openblas", "pipeline"]
-minimal = { features = ["minimal", "pipeline"], no-default-feature = true }
+pkg = { features = ["pkg", "pipeline"], solve-group = "r" }
+default = { features = ["pipeline"], solve-group = "r" }
+full = { features = ["tcltk", "img-formats", "repl", "nls", "full-build", "pipeline"], solve-group = "r" }
+openblas = { features = ["openblas", "pipeline"], solve-group = "r" }
+full-openblas = { features = ["tcltk", "img-formats", "repl", "nls", "full-build", "openblas", "pipeline"], solve-group = "r" }
+minimal = { features = ["minimal", "pipeline"], no-default-feature = true, solve-group = "r" }
 wheel = { features = ["wheel"], no-default-feature = true }

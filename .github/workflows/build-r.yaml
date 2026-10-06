@@ -38,9 +38,15 @@ jobs:
     runs-on: ${{ inputs.os }}
     timeout-minutes: ${{ inputs.timeout }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.10.0
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.11.0
         with:
+          # The pixi that wrote pixi.lock, bumped with it (pixi.lock's
+          # format 7 needs pixi 0.68 or newer). Unset, setup-pixi installs
+          # the newest pixi on every run, and its cache key hashes the pixi
+          # binary, so each pixi release would also drop every cached env.
+          # build.yaml and gen-config.yaml pin the same version.
+          pixi-version: v0.81.0
           # minimal also needs the python-only `wheel` env for its last steps
           environments: ${{ inputs.env == 'minimal' && 'minimal wheel' || inputs.env }}
           cache: true
@@ -114,7 +120,7 @@ jobs:
           pixi run -e wheel wheel-test
       - name: Upload the r-zig wheel
         if: inputs.env == 'minimal'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: r-zig-wheel-${{ inputs.os }}
           path: dist/wheel/*.whl
