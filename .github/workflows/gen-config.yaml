@@ -70,9 +70,10 @@ jobs:
             variant: minimal
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.10.0
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.11.0
         with:
+          pixi-version: v0.81.0  # as build-r.yaml, which says why
           environments: ${{ matrix.env }}
           cache: true
       - name: Run real configure (autoconf, configure-only)
@@ -84,7 +85,7 @@ jobs:
         run: pixi run -e ${{ matrix.env }} bash zigbuild/tools/gen-subst.sh
       - name: Show generated config dir
         run: ls -la zigbuild/config/${{ matrix.platform }}-${{ matrix.variant }}/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: config-${{ matrix.platform }}-${{ matrix.variant }}
           path: zigbuild/config/${{ matrix.platform }}-${{ matrix.variant }}/
