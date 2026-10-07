@@ -318,10 +318,16 @@ resolved under the environment
 (`${R_HOME}/../../bin/`; on Windows `Library/bin`, with the m2 tools in
 `Library/usr/bin`). Tier 3 stays bare everywhere.
 
-Vendored in the standalone tree today: `bzip2`, `gzip`, `make`, `nm`,
-`sed`, `tar`, `unzip`, `which`, `zip`, plus the zig shims. After A and
-T, the base vendors nothing; the wheel's toolchain package ships make
-(pip has no other way to provide it) and the shims.
+Vendored in the standalone tree (A and T done; corrected 2026-10-06):
+no tool outside `R_HOME/bin/toolchain`. That directory holds rzig under
+the compiler names (unix: zig-cc, zig-cxx, zig-fc, zig-ar, zig-ranlib;
+Windows: gcc.exe, g++.exe, zig-fc.exe, zig-cc, zig-cxx, plus the MinGW
+binutils ar, ranlib, nm, dlltool, strip, as, ld and windres) and, in
+minimal, `make`. Before A and T it was `bzip2`, `gzip`, `make`
+(minimal only), `nm`, `realpath` (not in minimal), `sed`, `tar`,
+`unzip`, `which`, `zip`, plus the zig shims. The wheel's
+toolchain package ships make (pip has no other way to provide it) and
+rzig.
 
 ## Packaging (phase T)
 

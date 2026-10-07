@@ -3411,16 +3411,9 @@ fn stageLibraryPayload(ctx: *const Ctx, io: std.Io, libstage: *std.Build.Step.Wr
             const s4 = std.mem.eql(u8, pkg, "methods") or std.mem.eql(u8, pkg, "stats4");
             const with_os = std.mem.eql(u8, pkg, "base") or std.mem.eql(u8, pkg, "utils") or
                 std.mem.eql(u8, pkg, "grDevices") or std.mem.eql(u8, pkg, "parallel");
-            var all_r = try concatRSources(ctx, io, b.fmt("{s}/R", .{pkg_src}), if (with_os) os_subdir else null, if (s4) pkg else null);
-            if (std.mem.eql(u8, pkg, "base")) {
-                // mkRbase: substitute configure's @WHICH@ — only appears in
-                // R/unix/system.unix.R (real value comes from vendored
-                // config.status, which only exists on unix/macOS); Windows's
-                // R/windows/-only concatenation never even includes that
-                // file, so the token is never actually present there — the
-                // "which" fallback is a no-op in that case, not a real value.
-                all_r = try std.mem.replaceOwned(u8, b.allocator, all_r, "@WHICH@", ctx.subst.get("WHICH") orelse "which");
-            }
+            // (base: mkRbase's one substitution, configure's @WHICH@ in
+            // R/unix/system.unix.R, is gone with patch 0002's Sys.which.)
+            const all_r = try concatRSources(ctx, io, b.fmt("{s}/R", .{pkg_src}), if (with_os) os_subdir else null, if (s4) pkg else null);
             _ = libstage.add(b.fmt("{s}/R/{s}", .{ pkg, pkg }), all_r);
         }
 

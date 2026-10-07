@@ -91,36 +91,93 @@ makes the commits (hand over the commands); docs-only commits get
 
 ## Phase 0 — measurements (no code changes)
 
-- [ ] omicron: list and size `lib/R/bin/toolchain` of the osx-arm64 slim
-      and minimal trees; `strings` the minimal make for build paths
-- [ ] kappa: list and size `Library/lib/R/bin/toolchain` of the win-64
-      tree; `needed_of R.dll` shows whether R.dll imports zstd.dll
-- [ ] Every OS: sha256 of rzig in slim, full and minimal trees of one
-      platform (expected identical)
-- [ ] Every OS: gzip -6 and xz -6 sizes of upstream zig plus make, as
-      they would sit in bin/toolchain
+Done 2026-10-06. The details and the method are in PLAN.md, "Phase 0
+measurements".
+
+The trees, all existing ones read in place:
+- linux-64: the main checkout's dist/ (2026-10-02/03);
+- osx-arm64: omicron's ~/r-zig-pixi/dist (2026-10-04, 4868515's
+  sources, pixi.lock f743e74f…);
+- win-64: kappa's dist (the same sources and lock);
+- osx-64 and linux-aarch64: no tree exists, so build 4's
+  r-zig-toolchain packages stand in.
+
+Downloads and tools came from pixi.lock e9f17d31…9513.
+
+- [x] omicron: `lib/R/bin/toolchain` of the osx-arm64 trees.
+      - slim and full: rzig ×5 at 306,416 B, 1,532,080 B raw, 591,854
+        gzip -6.
+      - minimal: the same plus make (267,120 B), 1,799,200 B raw,
+        708,972 gzip -6.
+      - linux-64 for comparison: slim 2,036,800 B raw (rzig 407,360);
+        minimal 2,350,456 B (make 313,656).
+      - `strings` of minimal's make, which is pixi.lock's package file
+        byte for byte: macOS names
+        `/Users/runner/miniforge3/conda-bld/make_<ts>/_h_env_placehold…/include|lib`;
+        linux names `/home/conda/feedstock_root/…/_h_env_placehold…/include|lib|share/locale`.
+      - These are dead compiled-in defaults, since the package records
+        no prefix placeholder. None names our build machine.
+- [x] kappa: `Library/lib/R/bin/toolchain` of the win-64 tree.
+      - rzig ×5 at 746,496 B and the 8 binutils at 13,642,752 B
+        together: 17,375,232 B raw, 7,394,501 B zip -6.
+      - The binutils equal build 4's.
+      - R.dll imports zstd.dll itself (`objdump -p`), and so do tiff.dll
+        and all the binutils. zstd.dll stays in base.
+- [x] rzig's sha256 across flavors: identical.
+      - linux-64 slim = minimal (b4320d5e…; no full tree on linux).
+      - osx-arm64 slim = full = minimal (fe70b0ec…).
+      - win-64: one flavor, five equal copies.
+      - Conda's macOS packages differ per copy: rattler-build re-signs
+        each copy under its own name.
+- [x] Every OS: upstream zig plus make, as they would sit in
+      bin/toolchain. Shown as gzip -6 / xz -6 / zstd -19, with rzig and
+      zig's licence texts included:
+      - linux-64: 87.5 / 57.6 / 61.6 MB;
+      - linux-aarch64: 84.5 / 53.1 / 59.3 MB;
+      - osx-arm64: 86.6 / 54.2 / 60.1 MB;
+      - osx-64: 90.7 / 59.8 / 63.5 MB;
+      - win-64 (binutils, no make): 94.7 / 60.3 / 64.3 MB, zip -6
+        106.8 MB.
+      - zig alone on linux-64: 86.6 / 57.4 / 61.3 MB.
+      - make alone: 0.12-0.17 MB gzip on unix. win-64's make.exe is
+        17.1 MB unstripped (4.8 MB gzip), 288 KB stripped.
 - [x] flang's set: sizes per subdir measured by flang-pixi (docs/19 §2,
       2026-10-06); not repeated
-- [ ] omicron: what `xcrun --sdk macosx --show-sdk-path` does when the
-      Command Line Tools are absent (if a machine or account without them
-      exists; else note it as untested)
+- [x] omicron: `xcrun --sdk macosx --show-sdk-path` without the Command
+      Line Tools. The real state is untested: omicron has the CLT (26.4)
+      and removing them is not safe. Simulated instead with an empty
+      DEVELOPER_DIR:
+      - xcrun exits 1 at once, with empty stdout and "invalid
+        DEVELOPER_DIR path" on stderr;
+      - rzig drops the SDK's `-F`/`-L` silently;
+      - plain C compiles, links and runs;
+      - `-framework CoreFoundation` fails ("unable to find framework").
+      - The install dialog could not be observed.
 
 ## Phase 1 — recipe host which/sed/grep cleanup
 
-- [ ] recipe.yaml: delete the `if: unix` host entries which/sed/grep
+PLAN.md's "Phase 1 record" (under Design 11) has the details.
+
+- [x] recipe.yaml: delete the `if: unix` host entries which/sed/grep
       (lines 224-228) and their comment (196-223)
-- [ ] build.zig mkRbase: delete the `@WHICH@` substitution (3416-3422)
-- [ ] verify-tree.sh: correct the "nm/realpath/sed/... for bin/libtool
+- [x] build.zig mkRbase: delete the `@WHICH@` substitution (3416-3422)
+- [x] verify-tree.sh: correct the "nm/realpath/sed/... for bin/libtool
       and javareconf" comment (455-461) to what bin/toolchain holds
-- [ ] feat-no-host-paths PLAN.md: correct "Vendored in the standalone
+- [x] feat-no-host-paths PLAN.md: correct "Vendored in the standalone
       tree today" (321-324)
 - [ ] `pixi run -e pkg conda-package` passes on linux-64, osx-arm64,
       osx-64 (omicron) and win-64 (kappa), both packages' tests included
-- [ ] File lists of r-zig-slim and r-zig-toolchain equal build 4's; etc/
+      (linux-64 passed 2026-10-06; omicron and kappa not run)
+- [x] File lists of r-zig-slim and r-zig-toolchain equal build 4's; etc/
       and base's R code equal build 4's; no `/bin/which`, `/bin/sed`,
-      `/bin/grep` in either package
-- [ ] Optional: drop `which` from the staging build requirements; the
-      same conda-package runs pass
+      `/bin/grep` in either package (linux-64, 2026-10-06. Besides the
+      file lists: the toolchain is byte-identical, and slim differs
+      only in build directories, dates and conda-forge's newer
+      harfbuzz run-export floor)
+- [x] Optional: drop `which` from the staging build requirements; the
+      same conda-package runs pass (dropped: an execve trace of the
+      linux-64 run shows nothing running `which`; the macOS runs above
+      still have to pass)
 - [ ] CI: the five conda-package jobs green
 
 ## Phase 2 — the split, with today's contents

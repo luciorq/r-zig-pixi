@@ -25,6 +25,24 @@ decisions). Also checked here: whether Windows FLIBS still needs
 the channel's build 4, whose r-zig-toolchain takes flang-pixi's newest
 flang-zig and flang-rt-zig unpinned ("What exists today").
 
+**Phase 0 measured 2026-10-06** (no code changes; "Phase 0
+measurements" below, after "Other facts"). It answers three open
+questions:
+- rzig is byte-identical across the flavors of a platform;
+- R.dll imports zstd.dll itself;
+- what xcrun and rzig do with no usable developer directory, simulated
+  on omicron.
+
+It also replaces the toolchain size estimates with measurements per
+platform: upstream zig, conda-forge's make and rzig, as they would sit
+in bin/toolchain. The decisions are untouched.
+
+**Phase 1 implemented 2026-10-06** (the recipe cleanup, Design 11;
+uncommitted). On linux-64 conda-package passes, and both packages equal
+build 4's apart from build directories, dates and conda-forge's newer
+harfbuzz floor ("Phase 1 record" under Design 11). omicron, kappa and
+CI are still to run.
+
 Two other items overlap with this one:
 - Item 2, the Windows minimal variant and the Windows wheel. Its blocker
   is the sh/make/coreutils userland that package compilation needs on
@@ -122,7 +140,11 @@ Not in this PR (proposed):
   gate, but there is no release job.
 - `R_HOME/bin/toolchain` in the tree:
   - unix: rzig as zig-cc, zig-cxx, zig-fc, zig-ar and zig-ranlib
-    (build.zig:2412-2440). On linux-64 each copy is 407,360 B and static.
+    (build.zig:2412-2440). On linux-64 each copy is static: 407,360 B
+    in the trees of 2026-10-02/03, and 407,872 B in build 4's
+    r-zig-toolchain (HEAD's rzig sources). In the trees of 4868515's
+    sources each copy is 306,416 B on osx-arm64 and 746,496 B on win-64
+    (build 4: 306,416-306,432 and 747,008; Phase 0 measurements).
   - minimal also holds GNU make, conda-forge's 4.4.1
     (build.zig:910-917), and minimal's Renviron names it as `MAKE`
     (build.zig:3660-3664). slim and full have `MAKE=${MAKE-'make'}`,
@@ -130,8 +152,8 @@ Not in this PR (proposed):
   - Windows: rzig as gcc.exe, g++.exe, zig-fc.exe, zig-cc and zig-cxx.
     It also holds plain copies of conda-forge's MinGW binutils: ar,
     ranlib, nm, dlltool, strip, as, ld and windres (build.zig:1744-1764).
-    They are GPL-3.0-only, about 13.7 MB together, and all import
-    zstd.dll.
+    They are GPL-3.0-only and 13,642,752 B together. All of them import
+    zstd.dll, and so does R.dll (Phase 0 measurements).
 - Outside that directory, for packages:
   - the OpenMP headers omp.h, ompx.h, omp-tools.h and ompt.h in
     `<prefix>/include`. On Windows they go in `Library/include`, and
@@ -224,13 +246,13 @@ Not in this PR (proposed):
 
 | Need | linux | macOS | Windows |
 |---|---|---|---|
-| zig, upstream 0.16.0 | ziglang.org tar.xz 55.5 MB (aarch64 51.2 MB); PyPI wheel 97.9 MB. Unpacked 390 MB: the binary is about 170 MB and static, lib/ is 225 MB. Measured here: gzip -6 86.6 MB, zstd -19 61.3 MB | tar.xz 52.2 MB (arm64) / 57.4 MB (x86_64); wheel 97.3 / 101.2 MB | zip 97.2 MB; wheel 98.7 MB |
-| make | slim/full: the host's. minimal: in the tree (conda-forge 4.4.1, 300 KB, links libc only, RPATH `$ORIGIN/../lib`) | slim/full: `/usr/bin/make`, which on a Mac without the Command Line Tools is a stub that offers to install them | install.R runs `make` from PATH; conda gets m2-make |
+| zig, upstream 0.16.0 | ziglang.org tar.xz 55.5 MB (aarch64 51.2 MB); PyPI wheel 97.9 MB (aarch64 95.0 MB). Unpacked 356.9 MB (390 MiB on disk): the binary is 172.6 MB and static, lib/ 184.2 MB (225 MiB on disk). Measured: gzip -6 86.6 MB, xz -6 57.4 MB, zstd -19 61.3 MB (aarch64: 83.6 / 52.8 / 59.1 MB) | tar.xz 52.2 MB (arm64) / 57.4 MB (x86_64); wheel 97.3 / 101.2 MB. gzip -6 85.9 / 89.9 MB, xz -6 54.0 / 59.5 MB, zstd -19 59.8 / 63.2 MB | zip 97.2 MB; wheel 98.7 MB. Our zip -6 98.9 MB, gzip -6 87.3 MB, xz -6 58.2 MB, zstd -19 62.1 MB |
+| make | slim/full: the host's. minimal: in the tree (conda-forge 4.4.1, 313,656 B, aarch64 436,424 B; links libc and libdl, GLIBC_2.17 at most, RPATH `$ORIGIN/../lib`; about 141 KB gzip -6) | slim/full: `/usr/bin/make`, which on a Mac without the Command Line Tools is a stub that offers to install them. minimal: conda-forge's, 267,120 B (osx-64: 251,736 B), libSystem only | install.R runs `make` from PATH; conda gets m2-make. conda-forge's native make.exe is 17.1 MB unstripped (4.8 MB gzip -6), 288 KB stripped |
 | sh and the POSIX tools | the host's | the host's | none. Options: the m2 set (about 16 MB compressed with its dependencies), or busybox-w32 (busybox64u.exe, 675,840 B, GPL-2.0-only) plus a native GNU make |
 | flang (flang-zig + flang-rt-zig 23.1.1) | full package 124.5 MB download, 1.07 GB installed. The compile set (Design 5) is 210 MB raw, 43.9 MB zstd -19, 62.2 MB gzip -9 (aarch64: 195.9 / 41.3 / 58.9). Our 279 MB / 63 MB of 2026-10-05 included lld, which is not needed | flang-zig 98.7 / 106.4 MB download; the set is 143.9 / 157.3 MB raw, 30.5 / 35.0 MB zstd | flang-zig 205.7 MB plus lld-zig 108.2 MB download; the set is 190.1 MB raw, 40.1 MB zstd. flang-rt-zig build 4 is 8.7 MB |
 | omp.h, libomp.lib | in the tree | in the tree | in the tree |
 | binutils | not needed: rzig runs zig's ar and ranlib | not needed | in the tree. nm is used on every DLL link (winshlib.mk) |
-| SDK | none | rzig runs `xcrun --sdk macosx --show-sdk-path`; frameworks need the SDK | none |
+| SDK | none | rzig runs `xcrun --sdk macosx --show-sdk-path`; frameworks need the SDK. With no usable developer directory (simulated), xcrun exits 1 at once, and rzig compiles without the SDK flags: plain C links, `-framework` fails | none |
 
 Sources:
 - https://ziglang.org/download/index.json and
@@ -240,7 +262,9 @@ Sources:
 - pixi.lock's m2-* entries;
 - https://frippery.org/busybox/;
 - zigbuild/tools/rzig/darwin.zig:31-55;
-- build/R-4.6.1/share/make/winshlib.mk:7-26.
+- build/R-4.6.1/share/make/winshlib.mk:7-26;
+- "Phase 0 measurements" below (2026-10-06): the make sizes and
+  linkage, the measured zig sizes, and the SDK simulation.
 
 ### Other facts the design depends on
 
@@ -322,6 +346,185 @@ Sources:
   COPYING. feat-wheel-minimal/PLAN.md:130-135 lists third-party licence
   texts as an open prerequisite for publishing the wheel.
 
+### Phase 0 measurements (2026-10-06)
+
+TODO.md's phase 0, measured with no code change. Sizes are in bytes;
+MB means 10^6 bytes.
+
+Compression method: each tree goes through `tar --sort=name` and then
+one of gzip 1.14 `-6 -n`, xz 5.8.3 `-6 -T1` or zstd 1.5.7 `-19 -T1`;
+win-64 also gets Info-ZIP 3.0 `zip -r -6`. These tools come from the
+default env, installed from pixi.lock sha256
+e9f17d315fd52ccf58db6a9840379e787e5c51ad80406982f907faa2dc1b9513
+(main 6cc4ba6, this branch's afd59a2).
+
+**The trees.** All of them already existed; none was rebuilt.
+- **linux-64:** the main checkout's dist/. rzig was installed
+  2026-10-02 in slim and 2026-10-03 in minimal, before 2622a6d to
+  a1edc58 changed rzig's sources. There is no full tree on linux.
+- **osx-arm64:** omicron's ~/r-zig-pixi/dist, with slim, full and
+  minimal built 2026-10-04 08:02-08:41. The copy has no .git. Its
+  build.zig and rzig sources equal 4868515's, and its pixi.lock is
+  f743e74f… (the lock of 4868515 through 992269a).
+- **win-64:** kappa's dist\R-4.6.1-slim-zig, the one Windows variant
+  (toolchain written 2026-10-04), from the same sources and lock.
+- **osx-64 and linux-aarch64:** there is no tree; omicron's ~/rz-osx64
+  is gone. rzig comes instead from the channel's r-zig-toolchain build
+  4: universe's `_4` packages, whose sha256 matched the repodata. Their
+  timestamps are 2026-10-06 10:53-10:58 -0400, right after the merge
+  53687ab (10:52), which has HEAD's rzig sources.
+
+**R_HOME/bin/toolchain today:**
+
+| platform, flavor | contents | raw | gzip -6 | xz -6 | zstd -19 |
+|---|---|---|---|---|---|
+| linux-64 slim | rzig ×5 (407,360 each) | 2,036,800 | 740,733 | 124,700 | 133,290 |
+| linux-64 minimal | rzig ×5, make (313,656) | 2,350,456 | 883,035 | 243,772 | 260,258 |
+| osx-arm64 slim, full | rzig ×5 (306,416 each) | 1,532,080 | 591,854 | 91,348 | 104,807 |
+| osx-arm64 minimal | rzig ×5, make (267,120) | 1,799,200 | 708,972 | 184,960 | 210,523 |
+| win-64 | rzig ×5 (746,496 each), 8 binutils (13,642,752) | 17,375,232 | 7,394,695 (zip: 7,394,501) | 2,031,372 | 2,187,770 |
+
+- xz and zstd store the five identical rzig copies about once. gzip's
+  32 KB window cannot, so it stores each.
+- Build 4's rzig, from HEAD's sources, is 407,872 B on linux-64,
+  306,536 on linux-aarch64, 306,416-306,432 on osx-arm64,
+  350,880-350,896 on osx-64 and 747,008 on win-64.
+- Build 4's win-64 binutils are byte for byte the files in kappa's
+  tree.
+
+**rzig across flavors.**
+- linux-64: all ten copies in slim and minimal have sha256 b4320d5e….
+  That includes two trees installed a day apart, and the
+  r-zig-toolchain wheel of 2026-10-03, which also carries minimal's
+  make.
+- osx-arm64: all fifteen copies in slim, full and minimal have
+  fe70b0ec…. That is codesign's ad-hoc signature, identifier
+  `rzig-5555…`.
+- win-64: one flavor; its five copies are identical (718b1fe7…).
+- So rzig depends on the platform only.
+- Conda's macOS packages differ. In build 4, the five copies on
+  osx-arm64 and on osx-64 each have five different sha256, and their
+  sizes differ by up to 16 B: rattler-build re-signs every Mach-O it
+  packages, and the identifier follows the file name. Build 4's copies
+  on linux-64, linux-aarch64 and win-64 are identical.
+
+**R.dll and zstd.dll** (kappa's tree, `objdump -p`).
+- R.dll imports zstd.dll directly, beside Rblas, zlib, deflate, libbz2,
+  liblzma, Rgraphapp, pcre2-8, icuuc78, icuin78 and Riconv.
+- tiff.dll and all eight binutils import it too.
+- rzig's copies import only ntdll and KERNEL32.
+- zstd.dll (658,432 B) imports KERNEL32, VCRUNTIME140 and
+  api-ms-win-crt-*.
+- So zstd.dll stays in base, whatever the split.
+
+**Upstream zig 0.16.0.**
+- Source: fetch-zig.sh's PyPI wheels, each checked against its pinned
+  sha256. linux-64 came through `pixi run --locked fetch-zig` in this
+  worktree; the other four were downloaded on linux the same way.
+- The unpacked `ziglang/` holds 19,546 files: zig (zig.exe), lib/
+  (19,541 files), LICENSE, README.md, `__init__.py` and `__main__.py`.
+- The dist-info is 2.25 MB more, almost all of it RECORD (the wheel's
+  file list with hashes, 2,128,153 B on linux-64). Its licence notices
+  in `licenses/` are 15 files and 119,414 B.
+- lib/ is 184,249,850 B on every platform.
+- On disk (btrfs, linux-64) they take 398,976 KiB, of which lib/ is
+  230,340 KiB. So the 390 MB and 225 MB this plan gave before were MiB
+  on disk; the apparent sizes are 356.9 MB and 184.2 MB.
+
+| platform | wheel | `ziglang/` raw | zig binary | gzip -6 | xz -6 | zstd -19 |
+|---|---|---|---|---|---|---|
+| linux-64 | 97.9 MB | 356.9 MB | 172.6 MB | 86.6 MB | 57.4 MB | 61.3 MB |
+| linux-aarch64 | 95.0 MB | 343.3 MB | 159.0 MB | 83.6 MB | 52.8 MB | 59.1 MB |
+| osx-arm64 | 97.3 MB | 369.6 MB | 185.3 MB | 85.9 MB | 54.0 MB | 59.8 MB |
+| osx-64 | 101.2 MB | 379.8 MB | 195.5 MB | 89.9 MB | 59.5 MB | 63.2 MB |
+| win-64 | 98.7 MB | 361.4 MB | 177.1 MB | 87.3 MB (zip -6: 98.9 MB) | 58.2 MB | 62.1 MB |
+
+In bytes, linux-64's gzip -6 is 86,558,717 and its zstd -19 is
+61,303,632. Both reproduce the 86.6 and 61.3 MB measured on
+2026-10-05.
+
+**conda-forge's make 4.4.1** (build 3 for each subdir, as pixi.lock
+pins it; sha256 checked against the lock). The sizes are of the file
+alone, passed to each compressor (no tar):
+
+| subdir | bin/make | gzip -6 | xz -6 | zstd -19 | links |
+|---|---|---|---|---|---|
+| linux-64 (hb03c661_3) | 313,656 | 141,443 | 119,892 | 127,387 | libc.so.6, libdl.so.2; GLIBC_2.17 at most; RPATH `$ORIGIN/../lib`; not stripped |
+| linux-aarch64 (he30d5cf_3) | 436,424 | 167,157 | 128,452 | 148,181 | the same plus ld-linux-aarch64.so.1; GLIBC_2.17 |
+| osx-arm64 (h84a0fba_3) | 267,120 | 117,571 | 95,412 | 107,323 | libSystem; minos 11.0; LC_RPATH `@loader_path/../lib/`; ad-hoc signed |
+| osx-64 (ha1e9b39_3) | 251,736 | 123,195 | 108,388 | 114,060 | libSystem; minos 11.0; LC_RPATH `@loader_path/../lib/`; not signed (load commands parsed on linux, 2026-10-06) |
+| win-64 (hba3369d_3) | make.exe 17,111,844 | 4,830,494 | 779,916 | 863,354 | ADVAPI32, KERNEL32, USER32, api-ms-win-crt-*; 12 debug sections |
+
+- The win-64 package ships the same binary three times: make.exe,
+  gnumake.exe and mingw32-make.exe. Stripping a copy gives 287,744 B
+  (146,873 with gzip -6).
+- The minimal trees' make is the package's file, byte for byte: linux
+  8a9d9648…, osx-arm64 f1bbc4fa…. Its info/paths.json records no prefix
+  placeholder, so conda installs it unchanged.
+
+**Build paths in make** (`strings -a`). None names our build machine.
+- linux: `/home/conda/feedstock_root/build_artifacts/make_<ts>/_h_env_placehold…`
+  with `/include`, `/lib` and `/share/locale`.
+- macOS: `/Users/runner/miniforge3/conda-bld/make_<ts>/_h_env_placehold…`
+  with `/include` and `/lib`.
+- These are make's compiled-in INCLUDEDIR (where `include` looks),
+  LIBDIR (for `-l<name>` prerequisites) and, on linux, LOCALEDIR. The
+  placeholder is never replaced and names no directory, so make falls
+  back to its other defaults, and linux make prints English only.
+- win-64: `D:\bld\make_<ts>\work`, its `_build_env` headers, and
+  `/home/conda/feedstock_root/...` paths of the m2w64-sysroot and gcc
+  builds. All of them are in the debug sections: a stripped copy keeps
+  only `/usr/local/include`.
+
+**The toolchain directory as it would sit.** This stages one possible
+layout of Designs 3a, 4a and 9, not a decision.
+- unix: rzig ×5 (build 4's), conda-forge's make, `zig/` (fetch-zig's
+  `ziglang/` as unpacked), and `LICENSES/zig-dist-info/` (the
+  dist-info's `licenses/`).
+- win-64: rzig ×5, the 8 binutils, `zig/` and the same licences. There
+  is no make, since decision 8 is open.
+- No flang, no SOURCES, no BUILD file.
+
+| platform | files | raw | gzip -6 | xz -6 | zstd -19 |
+|---|---|---|---|---|---|
+| linux-64 | 19,567 | 359.4 MB | 87.5 MB | 57.6 MB | 61.6 MB |
+| linux-aarch64 | 19,567 | 345.4 MB | 84.5 MB | 53.1 MB | 59.3 MB |
+| osx-arm64 | 19,567 | 371.5 MB | 86.6 MB | 54.2 MB | 60.1 MB |
+| osx-64 | 19,567 | 381.9 MB | 90.7 MB | 59.8 MB | 63.5 MB |
+| win-64 | 19,574 | 378.9 MB | 94.7 MB (zip -6: 106.8 MB) | 60.3 MB | 64.3 MB |
+
+- zig is 99 % (98.9-99.7 %) of each unix archive, and 92 % (gzip) to
+  97 % (xz, zstd) of win-64's.
+- On unix, make, rzig and zig's licence texts add 0.7-0.9 MB with
+  gzip, and 0.2-0.3 MB with xz or zstd.
+- On win-64, the binutils, rzig and the licences add 7.4 MB with gzip
+  and 7.9 MB with zip. A make.exe would add 4.8 MB (gzip -6) as
+  conda-forge ships it, or 0.15 MB stripped.
+- xz -6 is 34-37 % smaller than gzip -6, and zstd -19 is 30-32 %
+  smaller.
+
+**xcrun without the Command Line Tools** (omicron, macOS 26.4.1).
+- omicron has the CLT (26.4) and no Xcode. Removing them was not
+  safe, so the real state is untested.
+- Simulation: DEVELOPER_DIR pointed at an empty directory, one command
+  at a time. A missing directory gives "missing DEVELOPER_DIR path"
+  instead.
+- `xcrun --sdk macosx --show-sdk-path` exits 1 at once. stdout is
+  empty, and stderr says
+  `xcrun: error: invalid DEVELOPER_DIR path (<dir>), missing xcrun at: <dir>/usr/bin/xcrun`.
+- `xcode-select -p` prints the directory and exits 0.
+- rzig then omits the SDK's `-F<sdk>/System/Library/Frameworks` and
+  `-L<sdk>/usr/lib`, and prints nothing about it. That was the minimal
+  tree's zig-cc (4868515's rzig) with the env's conda-forge zig as
+  ZIG_BIN, and zig's caches in a scratch directory.
+- A C hello compiles, links and runs (minos 13.0), from zig's own macOS
+  headers and libSystem stubs. `zig cc` run directly behaves the same.
+- A `-framework CoreFoundation` link fails: "unable to find framework
+  'CoreFoundation'. searched paths: none". With the CLT, the same link
+  passes.
+- Not observable over ssh with the CLT present: whether a Mac that
+  never had them opens the install dialog when rzig runs xcrun.
+
 ## Principles and constraints
 
 - **The user's aim:** "a single build path that should just work
@@ -401,10 +604,13 @@ How the pair is tied together:
 - A file `R_HOME/bin/toolchain/BUILD` records the base it belongs to
   (R version, flavor, platform, commit).
 - rzig is built from the target alone (build.zig:526,
-  `rzig_build.add(b, ..., target, ...)`), so the toolchain directory
-  should be byte-identical across the flavors of one platform. One
-  toolchain archive per platform would save space later, but is not
-  needed now.
+  `rzig_build.add(b, ..., target, ...)`). It is byte-identical across
+  the flavors of one platform: measured on linux-64 slim and minimal,
+  and on osx-arm64 slim, full and minimal (2026-10-06, Phase 0
+  measurements). Today the toolchain directories of one platform still
+  differ by minimal's make. With make in every unix tree (Design 4a)
+  they would be the same, so one toolchain archive per platform would
+  be possible later. It is not needed now.
 
 package-standalone.sh makes both archives from the one tree:
 - unix: tar once with an exclude of that directory, once with only that
@@ -503,7 +709,8 @@ Recommendation: a.
 
 What a means elsewhere:
 - **Dev trees grow.** Every non-conda tree, the dev tree included,
-  carries 390 MB of zig.
+  carries zig: 343-380 MB and 19,546 files per platform (390 MiB on
+  disk on linux-64; Phase 0 measurements).
 - **The pipeline keeps the zig that built R.** contract, check and
   verify-package's existing compiles must keep compiling with the zig
   that built R, as F4 set up. So env.sh exports `ZIG_BIN=$ZIG` always,
@@ -516,7 +723,8 @@ What a means elsewhere:
 - **conda is unchanged.** The conda build's prefix is the env, and no
   option is passed.
 - **hermetic-check.sh** copies the tree without `bin/toolchain`, instead
-  of copying it and then deleting it. That is 390 MB less to copy.
+  of copying it and then deleting it. That is about 360 MB and 19,500
+  files less to copy.
 - **verify-tree.sh** treats `bin/toolchain/zig/**` as third-party in its
   build-path scan, like the vendored libraries. It also checks that
   `zig/zig version` prints 0.16.0.
@@ -918,8 +1126,9 @@ What the Windows toolchain directory holds today: rzig (gcc.exe,
 g++.exe, zig-fc.exe, zig-cc, zig-cxx) and the binutils.
 - The binutils import zstd.dll, which lands in `R_HOME/bin/x64`
   (vendor-libs.sh walks every PE in the tree).
-- rattler-build's overlinking warnings list R.dll too. So R.dll itself
-  imports zstd.dll, and it belongs in base anyway (to confirm on kappa).
+- R.dll imports zstd.dll itself, and so does tiff.dll (confirmed on
+  kappa's tree, 2026-10-06, Phase 0 measurements). So zstd.dll stays in
+  base under any split.
 - With Design 3 and 5, zig.exe and flang join the directory.
 
 What is missing is the userland that compiling needs:
@@ -1049,22 +1258,35 @@ The toolchain directory gets `LICENSES/` and `SOURCES`. They sit inside
 - The base's vendored libraries (OpenSSL, curl, ICU, ...) are the wheel
   work's open prerequisite, not this PR's.
 
-### 10. Sizes (estimates, measured in phases 2-4)
+### 10. Sizes (the toolchain measured in phase 0, the archives in phases 2-4)
 
-| Archive (linux-64) | gzip | zstd -19 | Note |
+What is measured: the toolchain directory without flang, staged per
+platform on 2026-10-06 ("Phase 0 measurements": rzig, make on unix, the
+binutils on win-64, upstream zig and its licence texts).
+
+What is estimated: the flang column and the sums.
+- The flang column is flang-pixi's set (docs/19 §2) at gzip -9, xz -9
+  and zstd -19.
+- A sum adds two separately compressed streams. One stream would come
+  out a little smaller, and gzip/xz at -6 a little larger.
+
+| platform | toolchain, measured: gzip -6 / xz -6 / zstd -19 | flang set: gzip -9 / xz -9 / zstd -19 | sum: gzip / xz / zstd |
 |---|---|---|---|
-| base, slim | about 74 MB | not measured | today's archive minus 2 MiB of rzig |
-| toolchain: zig, make, rzig | about 88 MB | about 62 MB | zig alone: 86.6 MB with gzip -6, 61.3 MB with zstd -19 |
-| toolchain plus the flang set | about 150 MB | about 105 MB | the flang set adds 62.2 MB (gzip -9) or 43.9 MB (zstd -19), flang-pixi docs/19 §2. Our earlier 88 MB for flang (2026-10-05) included lld |
-| Windows toolchain | about 110 MB; about 170 MB with flang | not measured | zig's zip is 97 MB, the binutils 13.7 MB raw; the flang set adds 58.0 MB (gzip -9) or 40.1 MB (zstd -19) |
+| linux-64 | 87.5 / 57.6 / 61.6 MB | 62.2 / 39.3 / 43.9 MB | about 150 / 97 / 106 MB |
+| linux-aarch64 | 84.5 / 53.1 / 59.3 MB | 58.9 / 34.7 / 41.3 MB | about 143 / 88 / 101 MB |
+| osx-arm64 | 86.6 / 54.2 / 60.1 MB | 45.1 / 25.9 / 30.5 MB | about 132 / 80 / 91 MB |
+| osx-64 | 90.7 / 59.8 / 63.5 MB | 50.3 / 31.8 / 35.0 MB | about 141 / 92 / 99 MB |
+| win-64 (no make or userland) | 94.7 (zip -6: 106.8) / 60.3 / 64.3 MB | 58.0 / 35.6 / 40.1 MB | about 153 (zip about 165) / 96 / 104 MB |
 
-On every platform the flang set adds 30.5-43.9 MB with zstd, or
-45-62 MB with gzip (Design 5's table). It does not add 88 MB.
-
+- The base: linux-64 slim's archive of 2026-10-03 is 73,768,677 B.
+  Its toolchain directory is 0.74 MB with gzip -6, so the base would
+  be about 73 MB (not measured as an archive).
+- The flang set adds 30.5-43.9 MB with zstd, or 45-62 MB with gzip
+  (Design 5's table). It does not add 88 MB.
 - gzip is what the base uses, and every unix tar reads it.
-- xz would save about a third on the toolchain (zig: 55 MB against
-  87 MB), but GNU tar needs the xz program for it. zstd saves about as
-  much, and GNU tar needs the zstd program for it.
+- xz would save 34-37 % on the toolchain (linux-64: 57.6 MB against
+  87.5 MB), but GNU tar needs the xz program for it. zstd saves 30-32 %,
+  and GNU tar needs the zstd program for it.
 
 Recommendation: gzip. Decide again if phase 4's measurement shows the
 toolchain with flang above about 150 MB (decision 11). With gzip,
@@ -1119,6 +1341,76 @@ of its own.
 Proposed order: do this first, before the split, so that the comparison
 with build 4 is clean. The item lists it second, but it does not depend
 on the split.
+
+#### Phase 1 record (2026-10-06, linux-64)
+
+Done in the worktree (not committed; the build number stays 4):
+- recipe.yaml: the `if: unix` host block and its comment are deleted,
+  and so is `which` in the staging build requirements (below).
+- build.zig: mkRbase's `@WHICH@` replace is deleted, and `all_r` is
+  now `const`. The patched R sources still name `@WHICH@` only in
+  share/make/basepkg.mk and base's Makefile.in, which build.zig does not
+  read.
+- verify-tree.sh's glibc comment now says what bin/toolchain holds: rzig,
+  and minimal's make (GLIBC_2.17). The 2.28 case is kept as history.
+- PLAN.md (feat-no-host-paths): the "Vendored in the standalone tree"
+  paragraph now lists today's bin/toolchain.
+
+Test: `pixi run --locked -e pkg conda-package` (pixi.lock sha256
+e9f17d315fd52ccf58db6a9840379e787e5c51ad80406982f907faa2dc1b9513), run
+under `strace -f -e trace=execve`.
+- It passed in 12.5 min, both packages' tests included, with build 4's
+  build strings (hb0f4dca_4, hf9c1e0e_4).
+- `which`: none of the 1,251 execve calls, successful or failed, ran a
+  file named `which`, and no script, build.zig or rzig source calls it.
+  So `which` left the build requirements too. On macOS this is shown by
+  CI only.
+- No host sed or grep ran: sed came from the build env, and grep never
+  ran.
+
+Compared with universe's build 4 (r-zig-slim sha256 5956f25c...,
+r-zig-toolchain 9f8b8620...):
+- r-zig-toolchain: its 6 files are byte-identical, and its depends are
+  equal.
+- r-zig-slim, files:
+  - the same 1,860 paths, with the same paths.json types, modes and
+    prefix placeholders;
+  - lib/R/etc is identical, and 1,761 files are byte-identical.
+- r-zig-slim, the 99 files that differ:
+  - which they are: DESCRIPTION and Meta/package.rds, 15 each (the
+    `Built:` date); doc/NEWS*.rds (3); help/paths.rds (14); and 52 R
+    and help lazy-load DB files.
+  - How they were compared: loaded object by object (7,691 objects),
+    with the rattler-build directories and dates replaced by tokens.
+  - All are equal except two kinds: paths.rds's `first` attribute,
+    which is the build directory's length; and Rd2HTML's help, which
+    holds a build-time `\Sexpr` date.
+  - base's R code: all 1,179 objects are identical without any
+    normalizing (bytecode included), except `.Library` and `.popath`.
+- r-zig-slim, depends: one difference, `libharfbuzz >=14.5.1` became
+  `>=14.6.0`. That is the run export of conda-forge's harfbuzz 14.6.0,
+  published after build 4; rattler-build solves when it runs. The only
+  other changes in what it resolved are python 3.14.7 → 3.14.8 and
+  `which` gone.
+- `/bin/which`, `/bin/sed`, `/bin/grep`:
+  - none in either package's files, nor in the deparsed R code DBs;
+  - the one match, in both builds, is upstream R's Solaris comment
+    `/usr/xpg4/bin/sed` in bin/R;
+  - build 4's info/recipe/recipe.yaml still had the deleted comment's
+    paths.
+
+Noticed, not changed:
+- Build 4 has the same build-machine paths in its R and help DBs,
+  NEWS*.rds and paths.rds: rattler-build's host prefix and work
+  directory, in `.Library`, `.popath`, each namespace's `path`, and the
+  Rd file names.
+- These files are compressed, so conda's prefix replacement and a text
+  scan both miss the paths.
+- At run time base's Rprofile sets `.Library` and `.popath` again, and
+  loadNamespace sets `path` again.
+
+Still to do: omicron (osx-arm64, osx-64), kappa (win-64; the deleted
+block was unix-only) and the five CI conda-package jobs.
 
 ## The zig 0.17 wave (open, decision 18)
 
@@ -1467,6 +1759,10 @@ Prerequisites from outside this plan:
    - flang's sizes are flang-pixi's (docs/19 §2) and are not measured
      again.
    - No code changes.
+   - The measurements are done (2026-10-06, "Phase 0 measurements").
+     The full tree was measured on osx-arm64 only, and osx-64 and
+     linux-aarch64 through build 4's packages. The decisions are still
+     open.
 1. **Recipe cleanup** (Design 11). conda-package runs on all five
    platforms, and both packages compare equal to build 4.
 2. **The split, with today's contents.**
@@ -1604,7 +1900,8 @@ plus omicron and kappa, and by the comparison with build 4 (Design 11).
 
 ## Risks
 
-- **Size.** Every non-conda tree grows by 390 MB of zig, plus 144-210 MB
+- **Size.** Every non-conda tree grows by 343-380 MB of zig (19,546
+  files), plus 144-210 MB
   if flang ships (raw; the flang driver binary alone is 136-196 MB,
   flang-pixi docs/19 §2). That costs dev disk space and CI time: copies,
   archive time, and artifact storage for two archives on each of ten
@@ -1623,12 +1920,24 @@ plus omicron and kappa, and by the comparison with build 4 (Design 11).
   on the first C++ compile, and prints about 3k warnings once
   (feat-wheel-minimal/PLAN.md).
 - **macOS without the Command Line Tools.** rzig runs `xcrun` on every
-  compile, and on such a Mac that may open the install dialog. Packages
-  that link frameworks need the SDK. Browser downloads get quarantined
-  by Gatekeeper; curl downloads do not.
-- **conda-forge's binaries carry build-path strings.** make names
-  /home/conda/feedstock_root and /Users/runner. verify-tree lists them
-  and does not fail on them.
+  compile, and on such a Mac that may open the install dialog (not
+  observed: omicron has the CLT).
+  - Simulated with an empty DEVELOPER_DIR (Phase 0 measurements): xcrun
+    fails at once, and rzig drops the SDK flags without a word. Plain C
+    still compiles and links, but `-framework CoreFoundation` fails
+    with "unable to find framework".
+  - So packages that link frameworks need the SDK.
+  - Browser downloads get quarantined by Gatekeeper; curl downloads do
+    not.
+- **conda-forge's binaries carry build-path strings.**
+  - make names /home/conda/feedstock_root/... (linux) and
+    /Users/runner/miniforge3/conda-bld/... (macOS). These are its
+    compiled-in include, lib and locale directories under an
+    unreplaced `_h_env_placehold` prefix.
+  - win-64's make.exe names D:\bld\... and /home/conda/... in its debug
+    sections.
+  - None of them names our build machine (Phase 0 measurements).
+    verify-tree lists them and does not fail on them.
 - **GPL obligations grow.** They are already unmet for make and the
   Windows binutils. Shipping without SOURCES and a source mirror repeats
   that.
@@ -1673,14 +1982,26 @@ plus omicron and kappa, and by the comparison with build 4 (Design 11).
 ## Open questions
 
 - Can the macOS check run on a Mac without the Command Line Tools?
-  omicron has them. And what should rzig do there: skip `xcrun` when
-  `xcode-select -p` fails?
-- Is rzig byte-identical across flavors? It is expected to be, since it
-  is built from the target alone. If so, one toolchain archive per
-  platform later.
-- Does R.dll import zstd.dll? If not, zstd.dll moves into
-  `bin/toolchain` beside the binutils. And should conda's
-  r-zig-toolchain declare zstd, given rattler's overlinking warning?
+  omicron has them (CLT 26.4, no Xcode). An empty DEVELOPER_DIR
+  simulates part of it (Phase 0 measurements): xcrun exits 1 at once,
+  rzig drops the SDK flags, plain C links and frameworks do not. Still
+  unobserved: whether a Mac that never had the CLT opens the install
+  dialog on rzig's xcrun call. And what should rzig do there: skip
+  `xcrun` when `xcode-select -p` fails? Under the simulation
+  `xcode-select -p` prints the directory and exits 0, so that test
+  would need the real case.
+- Is rzig byte-identical across flavors? Yes (2026-10-06): linux-64
+  slim = minimal, and osx-arm64 slim = full = minimal (Phase 0
+  measurements). One toolchain archive per platform is possible later,
+  once minimal's make is in every unix tree.
+- Does R.dll import zstd.dll? Yes (kappa, 2026-10-06), so zstd.dll
+  stays in base. Still open: should conda's packages declare zstd,
+  given rattler's overlinking warning?
+  - Neither build 4 package lists it (universe win-64 repodata,
+    2026-10-06), although R.dll and the binutils import it.
+  - It arrives through other packages: in pixi.lock's win-64 entries,
+    libtiff, binutils_impl, ld_impl, zig_impl and python depend on
+    zstd.
 - Do the Windows binutils stay, or do zig's dlltool, ar and rc plus an
   rzig `nm` applet replace them? That would remove GPL-3 binaries other
   than make. A later question.
