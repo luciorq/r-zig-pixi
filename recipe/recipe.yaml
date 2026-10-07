@@ -117,7 +117,14 @@ build:
   # feat-no-host-paths; libc++ static everywhere; FLIBS names the static
   # flang runtime. linux-64's Fortran moved from conda-forge's flang to
   # flang-zig (2026-10-03) before build 4 was published, so it rides here.
-  number: 4
+  # 4 → 5 (2026-10-06): rzig, the compilers r-zig-toolchain ships in
+  # R_HOME/bin/toolchain, passes -mcpu=baseline on every OS. Build 4 (on
+  # universe for all five subdirs) compiles Windows packages for the
+  # compiling machine's own CPU (zig cc has no -target there, so a native
+  # CPU: target-cpu "skylake" on kappa), which another machine's CPU may
+  # lack; linux and macOS were already baseline through their -target.
+  # (fix-rzig-baseline-cpu PLAN.md)
+  number: 5
 
 outputs:
   # One build (scripts/zig-build.sh), two packages split by

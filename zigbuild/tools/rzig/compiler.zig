@@ -21,9 +21,11 @@ const Args = cmdline.Args;
 pub const Lang = enum { c, cxx };
 
 /// zig's arguments after its own path:
-///   cc|c++ -fno-sanitize=undefined <target> [-F<SDK frameworks>] [<soname>]
-///          <caller's, rewritten, with the environments' -L/-rpath before
-///          the first -o> <environments' headers> [-lomp] [-L<SDK>/usr/lib]
+///   cc|c++ -fno-sanitize=undefined -mcpu=baseline [<target>]
+///          [-F<SDK frameworks>] [<soname>]
+///          <caller's, rewritten, no -mtune=, with the environments'
+///          -L/-rpath before the first -o> <environments' headers> [-lomp]
+///          [-L<SDK>/usr/lib]
 pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     const a = ctx.arena;
     var before: Args = &.{};
@@ -39,11 +41,13 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
             before = t.before;
             link_last = t.link_last;
         },
-        // zig cc's native Windows target is already x86_64-windows-gnu
+        // No target: zig cc's native Windows OS and ABI are already
+        // x86_64-windows-gnu, R's own. Its native CPU is the compiling
+        // machine's, which -mcpu=baseline (below) replaces.
         .windows, .other => {},
     }
 
-    var args = try flang_rt.resolve(ctx, caller);
+    var args = try flang_rt.resolve(ctx, try dropTune(ctx, caller));
     // the caller's arguments decide it, not a directory's name
     const soname = try sonameFlag(ctx, args);
     args = try envFlags(ctx, args);
@@ -65,10 +69,47 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     // zig cc enables UBSan in trap mode by default; R's numeric code has
     // benign UB that would SIGILL at run time.
     try out.append(a, "-fno-sanitize=undefined");
+    try out.append(a, cpu_flag);
     try out.appendSlice(a, before);
     if (soname) |s| try out.append(a, s);
     try out.appendSlice(a, args);
     try out.appendSlice(a, link_last);
+    return out.items;
+}
+
+/// The CPU packages are compiled for, on every OS: the baseline of the
+/// target's architecture (x86-64 on linux and Windows x86_64, generic on
+/// linux aarch64, apple-m1 on macOS arm64, core2 on macOS x86_64), as
+/// build.zig compiles R itself (cpu_model = .baseline). A package
+/// compiled on one machine is loaded on others: CI-built binary packages,
+/// a shared library on a cluster's compute nodes, so no instruction may
+/// depend on the compiling machine's CPU (AVX2, AVX-512). zig resolves a
+/// target that names its architecture to that baseline already (linux's
+/// and macOS's above), and no target to the machine's own CPU (Windows:
+/// target-cpu "skylake" on kappa, 2026-10-06); one explicit rule, the
+/// same flag everywhere.
+/// Before the caller's arguments: zig takes the last -mcpu or -march, so
+/// a package's own -march=native still wins. zig reads -mtune as one of
+/// them too, which is why dropTune drops it.
+const cpu_flag = "-mcpu=baseline";
+
+/// The caller's -mtune=<cpu>, dropped. zig cc reads it as the CPU to
+/// compile for, as it reads -mcpu and -march, never as tuning alone:
+/// after -mcpu=baseline, -mtune=native gives target-cpu "skylake-avx512"
+/// and -mtune=haswell "haswell", with tune-cpu "generic" either way (zig
+/// 0.16.0, 2026-10-06); a gcc spelling zig has no CPU for fails the
+/// compile (-mtune=generic: "unknown target CPU 'generic'"; aarch64's
+/// -mtune=cortex-a76). gcc, clang and flang only schedule for that CPU,
+/// so a Makevars, a package's or ~/.R/Makevars, may well pass
+/// -mtune=native as a portable flag; through zig it would make a package
+/// that needs the compiling machine's CPU. Nothing is lost: zig tunes
+/// for "generic" anyway. zig-fc's flang commands keep it (flang:
+/// target-cpu "x86-64", tune-cpu the named one).
+fn dropTune(ctx: *Ctx, caller: Args) !Args {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (caller) |x| {
+        if (!mem.startsWith(u8, x, "-mtune=")) try out.append(ctx.arena, x);
+    }
     return out.items;
 }
 
@@ -163,7 +204,7 @@ fn linksLibomp(args: Args) bool {
 const testing = std.testing;
 const testutil = @import("testutil.zig");
 const expectArgs = testutil.expectArgs;
-const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-target", linux_target };
+const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-target", linux_target };
 
 test "linux: glibc floor pinned, UBSan off, the caller's arguments kept" {
     var f: testutil.Fixture = undefined;
@@ -171,9 +212,45 @@ test "linux: glibc floor pinned, UBSan off, the caller's arguments kept" {
     defer f.deinit();
     try testing.expect(mem.endsWith(u8, linux_target, "-linux-gnu.2.17"));
     try expectArgs(pre ++ &[_][]const u8{ "-std=gnu23", "-c", "a.c", "-o", "a.o" }, try argv(&f.ctx, .c, &.{ "-std=gnu23", "-c", "a.c", "-o", "a.o" }));
-    try expectArgs(&.{ "c++", "-fno-sanitize=undefined", "-target", linux_target, "-c", "a.cpp" }, try argv(&f.ctx, .cxx, &.{ "-c", "a.cpp" }));
+    try expectArgs(&.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-target", linux_target, "-c", "a.cpp" }, try argv(&f.ctx, .cxx, &.{ "-c", "a.cpp" }));
     // nothing is de-duplicated off macOS
     try expectArgs(pre ++ &[_][]const u8{ "-lm", "-lm" }, try argv(&f.ctx, .c, &.{ "-lm", "-lm" }));
+}
+
+test "every OS: the baseline CPU, once, before the target and the caller's own -march/-mcpu; -mtune dropped" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    // no SDK (the fixture's xcrun runs nothing): macOS's target alone
+    const mac: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0" };
+    const targets = [_]struct { os: Ctx.Os, target: Args }{
+        .{ .os = .linux, .target = &.{ "-target", linux_target } },
+        .{ .os = .macos, .target = mac },
+        // Windows: no target, so without the flag zig would compile for
+        // the machine's own CPU
+        .{ .os = .windows, .target = &.{} },
+    };
+    for (targets) |t| {
+        c.os = t.os;
+        for ([_]Lang{ .c, .cxx }) |lang| {
+            const head: Args = &.{ if (lang == .c) "cc" else "c++", "-fno-sanitize=undefined", "-mcpu=baseline" };
+            try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-O2", "-c", "a.c", "-o", "a.o" } }), try argv(c, lang, &.{ "-O2", "-c", "a.c", "-o", "a.o" }));
+            // a package's own CPU choice comes later, so zig takes it
+            try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-march=native", "-mcpu=haswell", "-c", "a.c" } }), try argv(c, lang, &.{ "-march=native", "-mcpu=haswell", "-c", "a.c" }));
+            // -mtune=, which zig would take as the CPU, goes; the rest stays
+            try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-O2", "-march=x86-64", "-mtune", "-c", "a.c" } }), try argv(c, lang, &.{ "-mtune=native", "-O2", "-march=x86-64", "-mtune=haswell", "-mtune", "-c", "a.c" }));
+            // links too: a shared library carries the objects' code
+            const link = try argv(c, lang, &.{ "-shared", "-mtune=native", "-o", "pkg.so", "a.o" });
+            try expectArgs(head, link[0..3]);
+            var n: usize = 0;
+            for (link) |x| {
+                n += @intFromBool(mem.startsWith(u8, x, "-mcpu="));
+                try testing.expect(!mem.startsWith(u8, x, "-mtune"));
+            }
+            try testing.expectEqual(1, n);
+        }
+    }
 }
 
 test "SONAME for lib*.so* only, first -o only, never over an explicit one" {
@@ -332,14 +409,14 @@ test "Windows: -idirafter, no rpath, -lz and -lomp through the environment's -L"
     const l = f.fmt("-L{s}", .{f.path("env/Library/lib")});
     const omp = f.path("env/Library/lib/libomp.lib");
     const z = f.path("env/Library/lib/libz.dll.a");
-    try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-c", "z.c", "-o", "z.o", "-idirafter", inc }, try argv(c, .c, &.{ "-c", "z.c", "-o", "z.o" }));
+    try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-c", "z.c", "-o", "z.o", "-idirafter", inc }, try argv(c, .c, &.{ "-c", "z.c", "-o", "z.o" }));
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-shared", "-fopenmp", l, "-o", "pkg.dll", "a.o", z, "-idirafter", inc, omp },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-shared", "-fopenmp", l, "-o", "pkg.dll", "a.o", z, "-idirafter", inc, omp },
         try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz" }),
     );
     // the caller's -lomp, resolved the same way; none added
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-shared", "-fopenmp", l, "-o", "pkg.dll", "a.o", omp, "-idirafter", inc },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-shared", "-fopenmp", l, "-o", "pkg.dll", "a.o", omp, "-idirafter", inc },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lomp" }),
     );
 }
@@ -352,7 +429,7 @@ test "Windows: no target, the Fortran runtime before the -l lookup" {
     try f.touch("d/libz.dll.a");
     const l = f.fmt("-L{s}", .{f.path("d")});
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lc++" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lc++" },
         try argv(&f.ctx, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", l, "-lz", "-lflang_rt.runtime", "-lc++" }),
     );
 }
@@ -373,22 +450,22 @@ test "macOS: target, SONAME, -l de-duplicated with the environment's, SDK -L las
     const rp = f.fmt("-Wl,-rpath,{s}", .{f.path("env/lib")});
     const t: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0", "-F/SDK/System/Library/Frameworks" };
     try expectArgs(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined" } ++ t ++ &[_][]const u8{ "-Wl,-soname,libx.so", "-shared", "-fopenmp", l, rp, "-o", "libx.so", "-L/r", "-lR", "-lomp", inc, "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-Wl,-soname,libx.so", "-shared", "-fopenmp", l, rp, "-o", "libx.so", "-L/r", "-lR", "-lomp", inc, "-L/SDK/usr/lib" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "libx.so", "-L/r", "-lR", "-lomp", "-lR", "-lflang_rt.runtime", "-lomp" }),
     );
     // data.table: -lomp added once, then no second from the caller's; compiles get no SDK -L
     try expectArgs(
-        &[_][]const u8{ "c++", "-fno-sanitize=undefined" } ++ t ++ &[_][]const u8{ "-Xclang", "-fopenmp", "-c", "a.cpp", inc },
+        &[_][]const u8{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-Xclang", "-fopenmp", "-c", "a.cpp", inc },
         try argv(c, .cxx, &.{ "-Xclang", "-fopenmp", "-c", "a.cpp" }),
     );
     try expectArgs(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined" } ++ t ++ &[_][]const u8{ "-dynamiclib", l, rp, "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", inc, "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-dynamiclib", l, rp, "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", inc, "-L/SDK/usr/lib" },
         try argv(c, .c, &.{ "-dynamiclib", "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", "-lomp" }),
     );
     // a standalone tree: its -L before the SDK's, so its libz wins
     c.self_exe = try tree(&f, "tree", false, false);
     try expectArgs(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined" } ++ t ++ &[_][]const u8{ "-dynamiclib", f.fmt("-L{s}", .{f.path("tree/lib")}), "-o", "z.so", "z.o", "-lz", "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-dynamiclib", f.fmt("-L{s}", .{f.path("tree/lib")}), "-o", "z.so", "z.o", "-lz", "-L/SDK/usr/lib" },
         try argv(c, .c, &.{ "-dynamiclib", "-o", "z.so", "z.o", "-lz", "-lz" }),
     );
 }

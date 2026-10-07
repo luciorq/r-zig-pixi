@@ -229,6 +229,8 @@ run_case "empty argument kept" linux zig-cc -c '' a.c
 run_case "nothing de-duplicated off macOS" linux zig-cc -shared -o pkg.so a.o -lm -lm -L/x -L/x
 run_case "gcc name" linux gcc -c a.c
 run_case "g++ name, SONAME" linux g++ -shared -o libg.so a.o
+run_case "a package's own -march/-mcpu after -mcpu=baseline" linux zig-cxx -march=native -mcpu=haswell -O2 -c a.cpp
+run_case "-mtune= dropped (zig would take it as the CPU)" linux zig-cc -mtune=native -O2 -mtune=haswell -march=x86-64 -c a.c
 
 # --- the Fortran runtime (Makeconf's FLIBS = -lflang_rt.runtime) ---------------
 CASE_PATH="$W/flang"
@@ -327,6 +329,8 @@ run_case "lib*.so link: SONAME (all OSes)" macos zig-cc -shared -o libfoo.so a.o
 CASE_ENV=(XDG_CACHE_HOME="$W/cache6" FAKE_SDK="$SDK"); CASE_PATH="$W/envD/bin"; CASE_RESET="rm -rf '$W/cache6'"; CASE_STATE=$mirror_state
 run_case "libc++.1.dylib beside zig: mirror" macos zig-cxx -dynamiclib -o pkg.so a.o
 run_case "gcc name" macos gcc -c a.c
+run_case "a package's own -mcpu after -mcpu=baseline" macos zig-cc -mcpu=native -c a.c
+run_case "-mtune= dropped" macos zig-cxx -mtune=native -c a.cpp
 
 # --- macOS ar: ar.zig's archive seed ----------------------------------------------
 CASE_RESET='rm -f libnew.a'; CASE_STATE='od -c libnew.a | head -2'
@@ -350,7 +354,9 @@ run_case "ar into a missing directory: warned, still pinned" macos zig-ar rcs no
 run_case "ranlib" macos zig-ranlib libnew.a
 
 # --- Windows: windows.zig (gcc/g++ as Makeconf.win names them) --------------------------
-run_case "compile: no target, no mirror" windows gcc -std=gnu2x -I"$RH/include" -DNDEBUG -O2 -Wall -c a.c -o a.o
+run_case "compile: no target, -mcpu=baseline, no mirror" windows gcc -std=gnu2x -I"$RH/include" -DNDEBUG -O2 -Wall -c a.c -o a.o
+run_case "a package's own -march after -mcpu=baseline" windows g++ -march=native -c a.cpp
+run_case "-mtune= dropped" windows gcc -mtune=generic -O2 -c a.c -o a.o
 run_case "-l lookup: .dll.a, zig's own names, lib<n>.lib" windows gcc -shared -s -static-libgcc -o pkg.dll tmp.def a.o \
   -L"$W/win/d1" -L"$W/win/d2" -ldlla -lziglib -lmsvc -lstop -lonly2 -lnowhere -L"$RH/bin/x64" -lR
 run_case "-mwindows link set" windows gcc -mwindows -o Rgui.exe a.o -L"$W/win/d1" -ldlla

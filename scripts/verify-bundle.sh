@@ -14,6 +14,9 @@
 #   - R runs from the new place (unix: env -i), with the variant's
 #     capabilities: the vendored libraries load from there;
 #   - TLS trust with the shipped CA bundle and nothing from the build env;
+#   - the bundle's C compiler compiles for the arch's baseline CPU, not
+#     this machine's, also when told -mtune=native (LLVM IR's target-cpu;
+#     every OS);
 #   - packages compiled with the relocated tree build and load under
 #     env -i: C++, Fortran, USE_FC_TO_LINK, $(FLIBS) without flang,
 #     OpenMP (C, and Fortran with `use omp_lib`), decoy CONDA_PREFIX runs,
@@ -157,6 +160,46 @@ else
     "$R_BIN" --vanilla --no-echo -e "$CHECK_R"
 fi
 echo "== standalone bundle verified relocatable ($OS/$FLAVOR)"
+
+# The CPU packages are compiled for, every OS: the baseline of this
+# machine's arch, not its own CPU. rzig passes -mcpu=baseline
+# (zigbuild/tools/rzig/compiler.zig), so a package compiled here also
+# loads on an older CPU of the same arch (a CI-built binary package, a
+# cluster's compute nodes); without it Windows compiled for the machine's
+# own (kappa: "skylake"). The bundle's C compiler compiles a C file to
+# LLVM IR, whose target-cpu must be what the same zig gives with
+# -mcpu=baseline and no target: x86-64 on linux and Windows x86_64,
+# generic on linux aarch64, apple-m1 on macOS arm64, core2 on macOS
+# x86_64 (also under Rosetta). The same zig: env.sh's $ZIG, which the
+# compiler finds as env.sh did (ZIG_BIN, exported absolute, else PATH's).
+# Once more with -mtune=native, which a Makevars may pass as a portable
+# tuning flag: zig would take it as the CPU, so rzig drops it (dropTune).
+# (verify-tree.sh checks R's own x86_64 binaries for AVX instructions.)
+if [ -n "$ZIG" ]; then
+  if [ "$OS" = windows ]; then cc="$BUNDLE_DIR/Library/lib/R/bin/toolchain/gcc.exe"; else cc="$BUNDLE_DIR/lib/R/bin/toolchain/zig-cc"; fi
+  cpu_dir="$VERIFY_DIR/cpu"
+  mkdir -p "$cpu_dir"
+  printf '%s\n' 'double dot(const double *x, const double *y, int n)' \
+    '{ double s = 0; for (int i = 0; i < n; i++) s += x[i] * y[i]; return s; }' > "$cpu_dir/cpu.c"
+  # the distinct target-cpu values of an IR file, one line
+  target_cpu() { { grep -o '"target-cpu"="[^"]*"' "$1" || true; } | sed 's/^"target-cpu"=//' | sort -u | tr '\n' ' ' | sed 's/ $//'; }
+  (cd "$cpu_dir" && "$ZIG" cc -mcpu=baseline -O2 -S -emit-llvm cpu.c -o want.ll &&
+    "$cc" -O2 -S -emit-llvm cpu.c -o got.ll &&
+    "$cc" -O2 -mtune=native -S -emit-llvm cpu.c -o tune.ll) > "$cpu_dir/log" 2>&1 ||
+    { cat "$cpu_dir/log" >&2; echo "error: compiling a C file to LLVM IR (zig cc -mcpu=baseline, or the bundle's ${cc##*/}) failed" >&2; exit 1; }
+  want="$(target_cpu "$cpu_dir/want.ll")"; got="$(target_cpu "$cpu_dir/got.ll")"; tune="$(target_cpu "$cpu_dir/tune.ll")"
+  if [ -z "$want" ] || [ "$got" != "$want" ]; then
+    echo "error: the bundle's ${cc##*/} compiles for target-cpu ${got:-(none)}, not this arch's baseline ${want:-(none)} (zig cc -mcpu=baseline): packages compiled here would need this machine's CPU" >&2
+    exit 1
+  fi
+  if [ "$tune" != "$want" ]; then
+    echo "error: with -mtune=native the bundle's ${cc##*/} compiles for target-cpu ${tune:-(none)}, not $want: zig takes -mtune as the CPU, and the compiler passed it on, so a package's portable -mtune=native would need this machine's CPU" >&2
+    exit 1
+  fi
+  echo "== packages compile for the baseline CPU: the bundle's ${cc##*/} gives target-cpu $got, as zig cc -mcpu=baseline does ($(uname -m)), and with -mtune=native too"
+else
+  echo "== baseline CPU check skipped (no zig: ZIG_BIN unset, none on PATH)"
+fi
 
 # Windows: what rzig (gcc.exe) adds for the environment it is installed in
 # (F3b): -L<prefix>/Library/lib on a link, no rpath, and nothing from a
