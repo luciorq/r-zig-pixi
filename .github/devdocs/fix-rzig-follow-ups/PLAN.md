@@ -1,16 +1,23 @@
 # fix-rzig-follow-ups — rzig's follow-ups (PR ii): RZIG_PRINT_ARGV, -lgfortran, TCL_VERSION, Tcl/Tk headers, -lsynchronization
 
-**Status (2026-10-08).** Branch fix-rzig-follow-ups, from
-origin/fix-rzig-baseline-cpu at 192ee86 (PR #14 plus main's 0c7e19a).
-#14 and #15 (feat-standalone-toolchain) are on main now (92394d5), and
-every file this branch changes merges with origin/main without a
-conflict (`git merge-file`, file by file, at review). Implemented,
-reviewed, and tested on linux-64, win-64 (kappa) and osx-arm64
-(omicron): every step passed, see "Tested". Not committed. The recipe's
-build number goes 5 → 6 (main is still at 5). After that, D5's
-follow-up was answered (T1, 2026-10-08): the standalone Windows tree
-now ships Tcl/Tk's headers in R_HOME/Tcl/include (D5 below). That
-change is implemented and checked on linux-64; kappa's run is pending.
+**Status (2026-10-08).** Branch fix-rzig-follow-ups, PR #19. It
+started from origin/fix-rzig-baseline-cpu at 192ee86 (PR #14 plus
+main's 0c7e19a). Implemented, reviewed, and tested on linux-64, win-64
+(kappa) and osx-arm64 (omicron): every step passed, see "Tested". The
+recipe's build number goes 5 → 6 (main is still at 5). After that,
+D5's follow-up was answered (T1, 2026-10-08): the standalone Windows
+tree now ships Tcl/Tk's headers in R_HOME/Tcl/include (D5 below),
+tested on linux-64 and kappa, reviewed.
+
+The user then rebased the branch onto main 9239285 (PRs #14, #15, #17
+and #18 merged) and committed it: a42a6bd (the work below, the same as
+471d0e7) and 3ea083c (T1). Since then pixi.lock is main's, sha256
+7aef60ff4b270486cf70786f20e21b50cde2638eb6b6deba62d934e780355a63. Next
+to 192ee86's it only adds binutils 2.46.1 and strace 7.2 to the linux
+envs; no win-64 or osx package changes. The runs in "Tested" used
+192ee86's lock; kappa's second T1 run used main's (D5, "Tests (T1)").
+The T1 record in feat-standalone-toolchain PLAN.md is applied on top
+of 3ea083c, with the review's edits (not committed).
 
 ## What, and the user's answers
 
@@ -256,18 +263,19 @@ package's Library/include, which rzig's environment searches with
 same and the build number stays 6. Makeconf.win does not change either:
 its TCLTK_CPPFLAGS already names `$(TCL_HOME)/include`.
 
-verify-tree.sh's standalone Windows Tcl/Tk check, which already requires
-the DLLs in Tcl/bin (so it runs wherever Tcl/bin exists), now also
+verify-tree.sh's Tcl/Tk check runs on every Windows tree that is not a
+conda env, and already requires the DLLs in Tcl/bin. It now also
 requires Tcl/include/tcl.h and tk.h, non-empty, and its summary line
 counts the headers. Its error now begins "Tcl/Tk in <R_HOME>/Tcl:".
 
 The standalone plan records T1 in its "Resolved decisions", with the
-reason, and where it lists what the base holds on Windows. That file
-(feat-standalone-toolchain PLAN.md) is on main (92394d5) but not on
-this branch, which starts at 192ee86, and adding it here would conflict
-with main's. So the record is a patch against main's file, to apply
-with `git apply` from the repo root once this branch has main:
-/data/gamma/luciorq/workspaces/temp/r-zig-pixi/tclhdr/impl/t1-standalone-plan.patch.
+reason, and where it lists what the base holds on Windows (sections
+1, 2 and 5, and Verification). The implementer wrote it as a patch
+against main's file, since the branch did not have that file yet
+(/data/gamma/luciorq/workspaces/temp/r-zig-pixi/tclhdr/impl/t1-standalone-plan.patch).
+After the rebase onto main the review applied it, adding the kappa
+result and correcting the PyPI line (the wheel is minimal, and Windows
+minimal drops Tcl/Tk, C1).
 
 Tests (T1):
 - linux-64 (gamma), implementer, in the worktree, pixi.lock unchanged
@@ -287,13 +295,58 @@ Tests (T1):
     Tcl/include"); fails naming Tcl/include/tk.h when it is missing,
     and naming both when tcl.h is empty and tk.h missing, or when
     Tcl/include is missing.
-- win-64 (kappa): pending. To show: build, verify-tree (the new line),
-  smoke, contract and verify-package pass; R_HOME/Tcl/include holds the
-  13 files, byte-identical to the env's; tkrplot 0.0-32 from CRAN
-  source, installed with the tree alone (R_ZIG_EXTRA_ENV unset, no
-  env's Library/include reachable), compiles, links `-ltcl86t
-  -ltk86t`, loads and draws; the control, with R_HOME/Tcl/include moved
-  away, stops at 'tk.h'.
+- win-64 (kappa), tester, pixi 0.81.0, two runs, all passed. Run 1:
+  471d0e7 plus the uncommitted T1 diff (sha256 ed5284ff..., the
+  implementer's tested diff), lock a7d3dcec.... Run 2: 3ea083c, clean,
+  lock 7aef60ff... (main's). 3ea083c's added and removed lines are
+  those of the tested diff, and the win-64 tk is the same in both locks.
+  Logs: tclhdr/kappa/{run1-471d0e7+T1diff,run2-3ea083c}/ in the scratch
+  area, each with a STATE.txt naming the hashes tested.
+  - `pixi install --locked`, then `pixi run --locked` build (-j6, 7m43s
+    and 7m52s from a fresh zig cache), verify-tree, smoke,
+    verify-package and contract (Rcpp, data.table, minqa, quadprog, pak,
+    ps): all exit 0. verify-tree: "== Tcl/Tk runtime verified: ...
+    Makeconf's TCL_VERSION = 86t, 1009 files in Tcl/lib, 13 headers in
+    Tcl/include". Zips: sha256 f37cf136... (run 1), fdfe4c52... (run 2).
+  - R_HOME/Tcl/include in the extracted zip: 13 files, 690,477 B, the
+    same bytes as the env's Library/include, the installed dist tree and
+    the implementer's expected list (run 1's hash.log prints "DIFFERS"
+    for that last one only because sha256sum marked binary mode with
+    `*`: its expected.norm and kappa-tree.sha256 are equal). R_HOME/Tcl
+    holds bin, include and lib.
+  - tkrplot 0.0-32 from CRAN source (sha256 a37a591e..., downloaded with
+    the tree's own Rscript), from the extracted zip alone: PATH = the
+    tree's bin\x64, System32 and the env's Library\usr\bin (sh, make);
+    R_ZIG_EXTRA_ENV, CONDA_PREFIX and PIXI_* unset; ZIG_BIN = the env's
+    zig (the tree ships none yet). R CMD INSTALL: DONE. The compile has
+    `-I "<R_HOME>/Tcl"/include`; the only include option rzig's argv
+    (RZIG_PRINT_ARGV=1) adds is `-idirafter <tree>/Library/include`,
+    and nothing on it points into the env but zig itself (argv[0]).
+    Replayed with -H: the 12 Tcl/Tk headers tcltkimg.c opens
+    (tkPlatDecls.h is not one) come from R_HOME/Tcl/include; of 689
+    header openings, 29 are the tree's and 660 zig's own libc headers,
+    none from anywhere else (both runs, recounted from h.txt at review).
+    The link: `-L<R_HOME>/Tcl/bin -ltcl86t -ltk86t`, rzig adding only
+    `-L<tree>/Library/lib`, which holds no Tcl/Tk library, so zig linked
+    the DLLs directly. tkrplot.dll imports tcl86t.dll, tk86t.dll, R.dll
+    and system DLLs.
+  - Load, PATH = the tree's bin\x64 and System32 only:
+    `library(tkrplot)` with `options(warn = 2)`; Tcl/Tk 8.6.13 with
+    tcl_library under R_HOME/Tcl/lib; the Rplot image type is
+    registered; `tkrplot(tktoplevel(), function() plot(1:10))` makes a
+    344 x 288 image.
+  - Control: with R_HOME/Tcl/include moved away, R CMD INSTALL stops at
+    "tcltkimg.c:3:10: fatal error: 'tk.h' file not found".
+  - Some of the tester's own script output is void, not the product:
+    run 1's replay.log hash section (Windows find/sort ran; hash.log
+    redoes it); run 1's list of "any header from the pixi env other
+    than zig's own lib dir", which shows zig's own headers, and run 2's
+    last "zig's own lib dir" count, 0 (both greps missed -H's doubled
+    backslashes; the counts above are the review's recount).
+- windows-latest (CI, PR #19, run 37844621816, on 3ea083c): build,
+  verify-tree (the same line, "13 headers in Tcl/include"), smoke,
+  contract, regression, hermetic and the relocated archive passed. Its
+  conda-package / win-64 leg was still running at review.
 
 ## D6: -lsynchronization links with upstream zig
 
@@ -378,11 +431,13 @@ alone); two parity cases.
 - build.zig: a comment (D5); Tcl/Tk's headers in R_HOME/Tcl/include,
   Windows trees that are not the env (T1).
 - recipe/recipe.yaml: build number 5 → 6.
+- .github/devdocs/feat-standalone-toolchain/PLAN.md: the T1 record
+  (Resolved decisions; sections 1, 2 and 5; Verification).
 
 ## Tested
 
-T1 (D5's follow-up) came after these runs: its checks are in D5,
-"Tests (T1)", and kappa's run is pending.
+T1 (D5's follow-up) came after these runs: its checks (linux-64,
+kappa, one CI leg) are in D5, "Tests (T1)", and its review below.
 
 Every host: pixi.lock sha256
 a7d3dcecb5592fbe165e8476af400c96f6800268d19a7e59dd7357a554154f79
@@ -506,11 +561,31 @@ holds). linux-64 `pixi run --locked rzig-test` passes again: parity 50
 identical, 31 identical but for rzig's own -L, 17 deliberate, 0 failed.
 Not re-run on kappa and omicron (a message text only).
 
+Review of T1 (2026-10-08), on 3ea083c: the header set, read from the
+win-64 tk's 28 headers' own `#include` lines. tcl.h, tk.h and
+tkPlatDecls.h pull in exactly the 13, and none of the 13 includes a
+Tcl, Tk or X11 header outside them. tclOO.h, tclTomMath.h, itcl.h and
+tdbc.h are separate entry points that nothing shipped includes. The
+package's sha256 matches the lock's. None of its 28 headers has a
+prefix placeholder or names a path. The new code runs only where
+prefix_is_env is false, so the conda build is unchanged. The R sources
+cited for CRAN's layout match R 4.6.1's (Makefile.win's
+`-I "$(TCL_HOME)"/include`; the installer's `$(CP) -pRf .../Tcl` at
+154 and 161 and `$(RM) $(RPREFIX)/Tcl*/lib/*.lib` at 163). kappa's
+claims match its logs, as recorded in "Tests (T1)". Fixed at review:
+comments in build.zig and verify-tree.sh, and this record. The
+standalone plan's T1 record was applied, with the PyPI line corrected
+and kappa's result added. No code change.
+
 ## Not tested
 
-- osx-64 and linux-aarch64 on a host; CI (build.yaml), whose legs run
-  verify-tree, contract and verify-package on every platform, has not
-  run on this branch (not pushed yet).
+- osx-64 and linux-aarch64 on a host. CI (build.yaml) ran on 3ea083c
+  (PR #19, run 37844621816, the core tier). At the T1 review every
+  finished leg had passed: windows-latest, ubuntu-latest (default and
+  minimal), ubuntu-24.04-arm, macos-latest, macos-15-intel, and
+  conda-package for linux-64, linux-aarch64, osx-64 and osx-arm64.
+  conda-package / win-64 was still running. The review read only the
+  Windows leg's log.
 - A whole R build, or the D4, D5 and E4 checks, with upstream zig: only
   D6 used it (kappa).
 - The full, minimal and openblas variants on any host (slim only); the
@@ -519,21 +594,27 @@ Not re-run on kappa and omicron (a message text only).
 - A real Rtools gfortran on PATH (conda-forge's gfortran 15.2 and a stub
   stood in on kappa).
 - A Rust-based CRAN package naming `-lsynchronization` (only wait.c).
-- tkrplot from a standalone Windows tree used alone: T1 ships the
-  headers; kappa's run is pending (D5, "Tests (T1)").
-- The recipe's build number through rattler-build (no conda-package
-  run). verify-tree's TCL_VERSION check runs on standalone Windows trees
-  only, not on the conda package's.
+- T1: tkrplot with upstream zig (kappa used the env's conda-forge zig
+  through ZIG_BIN), and tkrplot in a conda env with r-zig-slim. A
+  package that includes one of the 15 headers T1 leaves out (tclOO.h,
+  X11/cursorfont.h, ...) does not compile from the tree alone, by
+  design.
+- The recipe's build number through rattler-build on a host (CI's
+  conda-package legs above aside). verify-tree's TCL_VERSION and
+  Tcl/include checks run on standalone Windows trees only, not on the
+  conda package's.
 - On macOS, `-lgfortran` with no flang on PATH (the drop): unit tests
   only.
-- `pixi run check` and hermetic.
+- `pixi run check` and hermetic on a host (CI's windows-latest leg ran
+  both on 3ea083c).
 
 ## Follow-ups (not on this branch)
 
-- Answered (T1, 2026-10-08) and done on this branch: Tcl/Tk's headers
-  in R_HOME/Tcl/include (D5). Left: the T1 record for
-  feat-standalone-toolchain PLAN.md, a patch to apply once this branch
-  has main (D5).
+- T1 (2026-10-08) is answered and done on this branch: Tcl/Tk's
+  headers in R_HOME/Tcl/include, and its record in
+  feat-standalone-toolchain PLAN.md (D5). If a package needs one of the
+  15 headers left out, add it to installEnvRuntime's list, or ship all
+  28, as CRAN's installer copies its whole R_HOME/Tcl.
 - Windows' `-lc++` for a C link that pulls flang's runtime with
   `-lgfortran` and no FLIBS: only if a case shows up (D4 above).
 - zig-fc's own flang-driver commands still pass `-lgfortran` and
@@ -541,6 +622,7 @@ Not re-run on kappa and omicron (a message text only).
 - Leftovers on the hosts, safe to delete, left for the user: kappa's
   default zig cache, C:\Users\admin\AppData\Local\zig (about 105 MB
   added by a first test run that had no private ZIG_GLOBAL_CACHE_DIR;
-  shared with other zig users there), and omicron's
+  shared with other zig users there; T1's kappa tester reported it
+  absent on 2026-10-08, before and after its runs), and omicron's
   ~/.cache/r-zig/zig-lib-4120825996 (the libc++ mirror for a deleted
   env's zig lib dir: symlinks only).

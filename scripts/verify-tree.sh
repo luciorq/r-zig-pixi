@@ -25,11 +25,11 @@
 #     (Windows: Library/include/omp.h, Library/lib/libomp.lib and
 #     R_HOME/bin/x64/libomp.dll; unix: include/omp.h and lib/libomp);
 #   - Windows (a tree that is not a conda env): the Tcl/Tk runtime is in
-#     R_HOME/Tcl (with Tcl's modules) and Makeconf's TCL_VERSION names its
-#     DLLs (tcl86t, tk86t), its headers (tcl.h, tk.h) are in
-#     R_HOME/Tcl/include, and every DLL a PE file in the tree
-#     imports is in the tree (its own directory, R_HOME/bin/x64, or
-#     R_HOME/Tcl/bin for the Tcl/Tk DLLs) or the system's;
+#     R_HOME/Tcl (with Tcl's modules), Makeconf's TCL_VERSION names its
+#     DLLs (tcl86t, tk86t), Tcl/Tk's headers (tcl.h, tk.h) are in
+#     R_HOME/Tcl/include, and every DLL a PE file in the tree imports is
+#     in the tree (its own directory, R_HOME/bin/x64, or R_HOME/Tcl/bin
+#     for the Tcl/Tk DLLs) or the system's;
 #   - unix (a tree that is not a conda env): etc/ca-bundle.crt holds
 #     certificates and etc/Renviron names it in R_ZIG_CA_BUNDLE; with
 #     tcltk (full), Tcl/Tk's script libraries and Tcl's modules are in
@@ -420,7 +420,7 @@ if [ "$OS" = windows ]; then
       echo "error: Tcl/Tk in $rh/Tcl:$bad" >&2
       exit 1
     fi
-    echo "== Tcl/Tk runtime verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), Makeconf's TCL_VERSION = $tclv, $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib, $(find "$TREE/$rh/Tcl/include" -type f | wc -l | tr -d ' ') headers in Tcl/include"
+    echo "== Tcl/Tk verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), Makeconf's TCL_VERSION = $tclv, $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib, $(find "$TREE/$rh/Tcl/include" -type f | wc -l | tr -d ' ') headers in Tcl/include"
 
     # The DLL closure: every DLL a PE file in the tree imports is found in
     # the tree, where the loader looks for it (the file's own directory;

@@ -2988,8 +2988,8 @@ fn installOpenMP(ctx: *const Ctx, io: std.Io) !void {
 ///     loads it from (Tcl/bin as library.dynam's DLLpath, Tcl/lib as
 ///     TCLLIBPATH); the build fails without it, tcltk is always built
 ///     there. Also Tcl/Tk's headers in R_HOME/Tcl/include, for packages
-///     that compile against Tcl/Tk (tkrplot): compile-time files, not
-///     runtime data, kept here as an exception (below).
+///     that compile against Tcl/Tk (tkrplot): compile-time files, kept
+///     in the base by T1 (feat-standalone-toolchain PLAN.md; below).
 ///     fontconfig's configuration (installFontconfig) as
 ///     R_HOME/etc/fonts, which
 ///     etc/Renviron.site points FONTCONFIG_PATH at. etc/Renviron.site is
@@ -3089,9 +3089,9 @@ fn installEnvRuntime(ctx: *const Ctx, io: std.Io) !void {
         // "'tk.h' file not found". The set is tcl.h, tk.h and
         // tkPlatDecls.h (Tk_GetHWND and the rest) with what they include,
         // from conda-forge's win-64 tk; tk.h includes X11/Xlib.h, Tk's own
-        // stand-in for Xlib on Windows. Left out: Tcl's other APIs
-        // (tclOO, tclTomMath, itcl, tdbc) and the X11 headers nothing
-        // here includes.
+        // stand-in for Xlib on Windows. Left out: tk's other 15 headers
+        // (tclOO, tclTomMath, itcl, tdbc, and the X11 headers none of
+        // these include).
         inline for (.{
             "tcl.h",            "tclDecls.h",  "tclPlatDecls.h",
             "tk.h",             "tkDecls.h",   "tkPlatDecls.h",
