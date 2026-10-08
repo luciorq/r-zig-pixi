@@ -760,9 +760,18 @@ What it means for this plan:
     names), and Makeconf.win's AR and RANLIB go through rzig as on unix
     (`zig-ar`, `zig-ranlib`). gcc-nm, pkg-config and objdump come from
     conda-forge: pkg-config into `TC/usr/bin/` (so B39's list gains
-    it), objdump and the nm that Makeconf.win's gcc-nm line names into
-    `TC/binutils/`. All three are reassessed after the stress suite
-    shows what is really needed and what zig cc and rzig already cover.
+    it), objdump into `TC/binutils/`. gcc-nm ships, from conda-forge,
+    only if really needed (B43-2, below). All three are reassessed after
+    the stress suite shows what is really needed and what zig cc and
+    rzig already cover.
+  - **B43 follow-ups (2026-10-08):** B43-1 (a): Windows AR and RANLIB
+    are `zig-ar`/`zig-ranlib` as on unix, plus `gcc-ar`/`gcc-ranlib`
+    (four rzig copies). B43-2, the user's: "Ship from conda-forge if
+    really needed": no gcc-nm ships now and Makeconf.win's gcc-nm line
+    (268) is not pointed at binutils' nm; a real gcc-nm from
+    conda-forge's MinGW GCC comes only if the stress suite shows a
+    package needs it. B43-3 (a): Makeconf.win names a bare
+    `pkg-config`.
   - **B44:** Fortran through flang must succeed on every OS. If phase
     6's prototype fails on an OS, the fix is made together with
     flang-pixi (the flang-zig project), which we can adapt to our needs;
@@ -802,7 +811,7 @@ What it means for this plan:
 | B40 | How rzig decides OpenMP is available | (a) only when the base has the libomp runtime | phase 2 |
 | B41 | conda's exceptions to the shared boundary | (a) omp.h with the base and the win-64 binutils copies, accepted and recorded | phase 4 |
 | B42 | Windows' flavor name | (a) slim on every channel, documented; a really slim Windows slim later | phase 3 |
-| B43 | Makeconf.win's tools r-zig did not ship | the user's: AR, RANLIB, gcc-ar and gcc-ranlib through rzig; gcc-nm (nm), pkg-config and objdump from conda-forge; reassessed after the stress suite | phases 2, 3, 7 |
+| B43 | Makeconf.win's tools r-zig did not ship | the user's: AR, RANLIB, gcc-ar and gcc-ranlib through rzig (B43-1 a: `zig-ar`/`zig-ranlib` as on unix); pkg-config (bare name, B43-3 a) and objdump from conda-forge; gcc-nm from conda-forge only if really needed (B43-2); reassessed after the stress suite | phases 2, 3, 7 |
 | B44 | Fortran on an OS whose phase 6 prototype fails | the user's: Fortran through flang must succeed on every OS, fixed with flang-pixi | phase 6 |
 
 ### Related items of the 2026-10-07 menu, answered 2026-10-08
@@ -1901,9 +1910,12 @@ ships):
   `$(BINPREF)zig-ranlib`, the names unix's Makeconf uses. The LTO lines
   267 and 269 keep `$(BINPREF)gcc-ar` and `$(BINPREF)gcc-ranlib`, which
   now exist. ar and ranlib leave `binutils/` (B24).
-- gcc-nm (268): no gcc-nm is shipped; the line names the nm in
-  `TC/binutils/` (`$(R_HOME)/bin/toolchain/binutils/nm.exe`, the same nm
-  as lines 78 and 204), conda-forge's copy.
+- gcc-nm (268): B43-2, the user's (2026-10-08): "Ship from conda-forge
+  if really needed". No gcc-nm ships now; the line stays as it is
+  (`$(BINPREF)gcc-nm`, a file that does not exist), so an LTO build that
+  needs it fails the same way everywhere. A real gcc-nm from
+  conda-forge's MinGW GCC packages ships only if the stress suite shows
+  a package needs it.
 - objdump (211): conda-forge's MinGW objdump, copied into `TC/binutils/`
   with the other binutils (phase 3 checks that binutils_impl_win-64 has
   it); the line names `$(R_HOME)/bin/toolchain/binutils/objdump.exe`.
@@ -2094,8 +2106,9 @@ Steps:
 - Makeconf.win (B24, B43; the caveat lists the lines): AR (103) and
   RANLIB (213) become `$(BINPREF)zig-ar` and `$(BINPREF)zig-ranlib`; the
   LTO gcc-ar and gcc-ranlib lines (267, 269) stay and now name rzig
-  copies; NM (78, 204) and the LTO gcc-nm line (268) name
-  `$(R_HOME)/bin/toolchain/binutils/nm.exe`; DLLTOOL with its `--as`
+  copies; NM (78, 204) names `$(R_HOME)/bin/toolchain/binutils/nm.exe`;
+  the LTO gcc-nm line (268) stays unchanged (B43-2: a gcc-nm ships only
+  if the stress suite shows a need); DLLTOOL with its `--as`
   (76), RESCOMP (79), OBJDUMP (211) and STRIP_* (251-252) name their
   files under `binutils/`, or rzig's names for any tool the routing
   check moved; PKG_CONFIG (75) becomes bare `pkg-config`, found on PATH
@@ -2490,8 +2503,9 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
 - Does conda-forge's win-64 uutils-coreutils install one .exe per tool,
   and which of B39's tools have native win-64 builds on conda-forge
   (phase 7)?
-- Does `R CMD INSTALL --use-LTO` work on Windows with zig: GNU nm (the
-  LTO gcc-nm line's nm) reading zig's LLVM bitcode objects (phase 3)?
+- Does `R CMD INSTALL --use-LTO` work on Windows with zig? No gcc-nm
+  ships (B43-2), and neither GNU nm nor gcc-nm reads zig's LLVM bitcode
+  objects; the stress suite shows whether any package needs it.
 - pip upgrade and uv tests for the wheels.
 - Where is the release published, and how does the message name it?
 - Is passing `-fintrinsic-modules-path` twice harmless, and where does
@@ -2525,8 +2539,9 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   pkg-config on Windows is no longer a candidate, since it ships in
   `usr/bin/` (B43).
 - **Reassess after the stress suite** (B39, B43): which of B39's tools
-  are really needed, and whether gcc-nm (the binutils nm), pkg-config
-  and objdump are needed or already covered by zig cc and rzig.
+  are really needed, whether pkg-config and objdump are needed or
+  already covered by zig cc and rzig, and whether a gcc-nm from
+  conda-forge is really needed (B43-2).
 - **The rest of the Windows binutils through rzig** (B24): ar and
   ranlib go through rzig now; dlltool, windres, strip, nm and as follow
   as rzig can serve them (phase 3's check, then each zig release).

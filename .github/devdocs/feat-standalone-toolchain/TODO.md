@@ -103,9 +103,11 @@ PLAN.md, "The answers of 2026-10-08".
       to reaccess after the stress suite decide what is really needed
       and what zig cc/rzig already covers." rzig gains the two names;
       Windows AR/RANLIB go through rzig as on unix (`zig-ar`,
-      `zig-ranlib`); gcc-nm (the binutils nm), objdump (in `binutils/`)
-      and pkg-config (in `usr/bin/`) come from conda-forge; reassess them
-      after the stress suite
+      `zig-ranlib`; B43-1 a); objdump (in `binutils/`) and pkg-config
+      (in `usr/bin/`, named bare in Makeconf.win; B43-3 a) come from
+      conda-forge; gcc-nm: "Ship from conda-forge if really needed"
+      (B43-2, 2026-10-08), so none now; reassess them after the stress
+      suite
 - [x] B44, the user's own: "fortran through flang should succeed, we can
       work the flang-zig project to fit our needs." Fortran must pass on
       every OS; a phase 6 failure is fixed with flang-pixi; no OS ships
@@ -235,8 +237,8 @@ B38, B42, B43.
       `PATH="${R_CUSTOM_TOOLS_PATH:-${R_HOME}/bin/toolchain/usr/bin};${PATH}/"`
 - [ ] Makeconf.win: AR (103) `$(BINPREF)zig-ar`, RANLIB (213)
       `$(BINPREF)zig-ranlib`; LTO gcc-ar/gcc-ranlib (267, 269) unchanged
-      (now rzig); NM (78, 204) and LTO gcc-nm (268) →
-      `binutils/nm.exe`; DLLTOOL (76), RESCOMP (79), OBJDUMP (211),
+      (now rzig); NM (78, 204) → `binutils/nm.exe`; LTO gcc-nm (268)
+      unchanged (B43-2); DLLTOOL (76), RESCOMP (79), OBJDUMP (211),
       STRIP_* (251-252) → `binutils/` (or rzig for moved tools);
       PKG_CONFIG (75) bare `pkg-config` (found in `TC/usr/bin` on PATH,
       like sed; conda's is in `Library/bin`); BINPREF for gcc/g++ and
@@ -420,8 +422,9 @@ Needs (answered): B14 (a), with B37 (a).
       for now)
 - [ ] Optional extras group, only when the stress suite shows a need
       (the suite starts now, D15 a)
-- [ ] After the stress suite: reassess B39's list and B43's gcc-nm,
-      pkg-config and objdump (what is really needed, what zig cc/rzig
+- [ ] After the stress suite: reassess B39's list and B43's pkg-config
+      and objdump, and whether a gcc-nm from conda-forge is really
+      needed (B43-2) (what is really needed, what zig cc/rzig
       already covers)
 - [ ] The rest of the Windows binutils through rzig as zig gains them
       (B24); LLVM's tools are the other way out of GPL-3 binaries
