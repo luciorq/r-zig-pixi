@@ -67,25 +67,27 @@ _a=()
 for a in "$@"; do case "$a" in -mtune=*) ;; *) _a+=("$a") ;; esac; done
 set -- "${_a[@]}"
 
-# Fortran runtime (-lflang_rt.runtime in Makeconf's FLIBS): the static
-# archive of the flang on PATH, once; dropped without one. See zig-cc.
+# Fortran runtime (-lflang_rt.runtime in Makeconf's FLIBS, and a gcc
+# Makevars' -lgfortran and -lquadmath): the static archive of the flang
+# on PATH, once; dropped without one. See zig-cc.
 case " $* " in
-  *" -lflang_rt.runtime "*)
+  *" -lflang_rt.runtime "*|*" -lgfortran "*|*" -lquadmath "*)
     _frt=""
     if _rd="$(flang -print-resource-dir 2>/dev/null)" && [ -n "$_rd" ]; then
       _rd="${_rd%$'\r'}"; _rd="${_rd//\\//}"
       for _c in "$_rd"/lib/*/libflang_rt.runtime.a; do
         if [ -f "$_c" ]; then _frt="$_c"; break; fi
       done
-      [ -n "$_frt" ] || echo "${0##*/}: warning: no libflang_rt.runtime.a under $_rd/lib/*/; dropping -lflang_rt.runtime" >&2
+      [ -n "$_frt" ] || echo "${0##*/}: warning: no libflang_rt.runtime.a under $_rd/lib/*/; dropping -lflang_rt.runtime, -lgfortran and -lquadmath" >&2
     fi
     _a=()
     for a in "$@"; do
-      if [ "$a" = -lflang_rt.runtime ]; then
-        [ -n "$_frt" ] && _a+=("$_frt")
-        _frt=""
-        continue
-      fi
+      case "$a" in
+        -lflang_rt.runtime|-lgfortran|-lquadmath)
+          [ -n "$_frt" ] && _a+=("$_frt")
+          _frt=""
+          continue ;;
+      esac
       _a+=("$a")
     done
     set -- "${_a[@]}"
@@ -96,20 +98,13 @@ case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*)
     libdirs=()
     for a in "$@"; do case "$a" in -L?*) libdirs+=("${a#-L}");; esac; done
-    extraL=()
-    if [[ " $* " == *"-lgfortran"* || " $* " == *"-lquadmath"* ]]; then
-      gl="$(dirname "$(gfortran -print-file-name=libgfortran.dll.a 2>/dev/null)" 2>/dev/null || true)"
-      if [ -n "$gl" ] && [ -d "$gl" ]; then
-        libdirs+=("$gl")
-        extraL=("-L$gl")
-      fi
-    fi
     args=()
     for a in "$@"; do
       repl=""
       case "$a" in
         -l?*)
           n="${a#-l}"
+          case "$n" in synchronization) n=api-ms-win-core-synch-l1-2-0; a="-l$n" ;; esac
           for d in "${libdirs[@]}"; do
             # GNU ld order: shared import lib first, then zig's own names
             if [ -f "$d/lib$n.dll.a" ]; then
@@ -127,7 +122,6 @@ case "$(uname -s 2>/dev/null)" in
     if [[ " $* " == *" -mwindows "* ]]; then
       args+=(-lgdi32 -lcomdlg32 -lwinspool -ladvapi32 -lshell32)
     fi
-    args+=("${extraL[@]}")
     set -- "${args[@]}"
     ;;
 esac

@@ -109,7 +109,8 @@ The base is R plus rzig, on every channel:
   0 measurements), copied once per name.
 - The external runtime (section 2) is also in the base.
 - Third-party compile-time software is not. It is the toolchain
-  (section 3).
+  (section 3). One exception, on Windows: Tcl/Tk's headers in
+  `R_HOME/Tcl/include`, beside the Tcl/Tk runtime (T1).
 
 ### 2. Runtime and compile-time
 
@@ -120,7 +121,7 @@ the base (B21 = a). Today's places, and what B27 (a) changes (phase 8):
 |---|---|---|---|
 | vendored shared libraries | `<top>/lib/*.so.N`, `*.dylib`: only third-party libraries sit as files in `<top>/lib`; its subdirectories are R_HOME, `pkgconfig` (R's libR.pc) and Tcl's scripts (scripts/vendor-libs.sh:116-172) | `R_HOME/bin/x64/*.dll`, beside R.dll (vendor-libs.sh:76-115) | unchanged |
 | libomp runtime (slim, full) | `<top>/lib/libomp.so`, `libomp.dylib` (libR links it, build.zig:2677-2684) | `R_HOME/bin/x64/libomp.dll` (no R DLL imports it; packages do) | unchanged; on Windows its trigger changes (phase 3) |
-| Tcl/Tk (unix full; Windows always) | `<top>/lib/{tcl8.6,tk8.6,tcl8}` and `libtcl8.6`, `libtk8.6` in `<top>/lib` (build.zig:3031-3046) | `R_HOME/Tcl/bin/{tcl86t,tk86t}.dll`, `R_HOME/Tcl/lib` (CRAN's layout; tcltk's .onLoad looks there) | unchanged |
+| Tcl/Tk (unix full; Windows always) | `<top>/lib/{tcl8.6,tk8.6,tcl8}` and `libtcl8.6`, `libtk8.6` in `<top>/lib` (build.zig:3031-3046) | `R_HOME/Tcl/bin/{tcl86t,tk86t}.dll`, `R_HOME/Tcl/lib` (CRAN's layout; tcltk's .onLoad looks there); the headers in `R_HOME/Tcl/include` (T1) | unchanged |
 | CA bundle (not Windows) | `R_HOME/etc/ca-bundle.crt`, named by etc/Renviron's `R_ZIG_CA_BUNDLE` (build.zig:3006-3029, 3665-3674) | none: libcurl uses Schannel | `<top>/ssl/cacert.pem`, conda's place |
 | fontconfig (slim, full) | `<top>/etc/fonts`; the launchers set `FONTCONFIG_PATH` (zigbuild/launchers/R:17-21) | `R_HOME/etc/fonts`; `FONTCONFIG_PATH` in etc/Renviron.site, which `--vanilla` skips (build.zig:3077-3080) | `<top>/Library/etc/fonts`, where conda-forge's win-64 fontconfig keeps it; `FONTCONFIG_PATH` set where `--vanilla` still reads it |
 | licence texts and sources | none | none | `<env dir>/share/licenses/` (B33) |
@@ -135,7 +136,8 @@ libomp.lib, make, and on Windows sh, make, the other userland tools
 (B39), pkg-config (B43) and the binutils rzig does not serve (B24). It
 goes in the toolchain. On unix the libomp runtime is also the link
 input for `-lomp` (there is no import library), so OpenMP's
-compile-time part there is the four headers.
+compile-time part there is the four headers. One exception (T1):
+Windows' Tcl/Tk headers stay in the base, in `R_HOME/Tcl/include`.
 
 ### 3. The toolchain groups
 
@@ -205,7 +207,7 @@ today.
 | rzig | base archive (today in the tree, archived with it) | r-zig-slim (today r-zig-toolchain) | r-zig (today r-zig-toolchain) |
 | vendored runtime libraries | base archive | conda-forge packages, r-zig-slim's run dependencies | r-zig |
 | libomp runtime | base archive (slim, full) | llvm-openmp, a run dependency of r-zig-slim | none (minimal) |
-| Tcl/Tk | base archive (unix full; Windows) | unix: none (conda builds slim); win-64: tk 8.6 through `MY_TCLTK` | none |
+| Tcl/Tk | base archive (unix full; Windows, with its headers in `R_HOME/Tcl/include`: T1) | unix: none (conda builds slim); win-64: tk 8.6 through `MY_TCLTK` | none |
 | CA bundle | base archive (unix) | ca-certificates, libcurl's compiled-in path | r-zig |
 | fontconfig | base archive (slim, full) | fontconfig | none |
 | zig | compilers archive: `TC/zig/` | conda-forge `zig 0.16.*`, through r-zig-compilers | `ziglang`, required by r-zig-compilers |
@@ -677,8 +679,9 @@ compilers; base + compilers + build-tools.
 ## Resolved decisions
 
 No decision is open. Every B decision and every related item of the
-2026-10-07 menu is answered (2026-10-07 and 2026-10-08). What still
-comes back with results is listed at the end of this section.
+2026-10-07 menu is answered (2026-10-07 and 2026-10-08), and so is T1,
+a later question of the same day. What still comes back with results
+is listed at the end of this section.
 
 ### The answers of 2026-10-07
 
@@ -855,6 +858,59 @@ The same reply answered D1 (b: strip Linux debug info), D2 (a: keep
 lazy-load databases), D4 (a), D5 (a), D8-D11 (a), D13 (a), E3 (a) and
 E4 (a). They are not part of this plan; feat-no-host-paths PLAN.md and
 chore-lock-and-ci-refresh PLAN.md record them.
+
+### T1 (2026-10-08): Tcl/Tk headers in the Windows base
+
+The question came from D5 (fix-rzig-follow-ups PLAN.md). The
+standalone Windows tree ships Tcl/Tk's runtime in R_HOME/Tcl (Tcl/bin,
+Tcl/lib) but had no headers. A package that compiles against Tcl/Tk
+then built only where rzig's environment has them: from the tree alone,
+tkrplot stopped at "tcltkimg.c:3:10: fatal error: 'tk.h' file not
+found" (kappa). The question: ship the env's tk headers as
+R_HOME/Tcl/include, where Makeconf's TCLTK_CPPFLAGS looks, although
+this plan puts compile-time files in the toolchain?
+
+The user's answer, verbatim:
+
+> Ship the headers in the base at R_HOME/Tcl/include, where package Makevars expect them.
+
+**T1 = (a).** On Windows, Tcl/Tk's headers ship in the base at
+`R_HOME/Tcl/include`. They are the one exception to "compile-time
+files go in the toolchain" (point 2; section 2 above). The reasons:
+- Packages look for them there. Makeconf.win has
+  `TCL_HOME = $(R_HOME)/Tcl` and
+  `TCLTK_CPPFLAGS = -I "$(TCL_HOME)/include"`, and tkrplot's
+  Makevars.win names `-I "$(TCL_HOME)"/include`. It is CRAN's layout:
+  R's Windows build compiles tcltk with `-I "$(TCL_HOME)"/include`
+  (src/library/tcltk/src/Makefile.win), and its installer copies the
+  whole R_HOME/Tcl, deleting only `Tcl/lib/*.lib`
+  (src/gnuwin32/installer/Makefile:154-163).
+- The headers belong to the DLLs beside them (Tcl/Tk 8.6.13, the
+  threaded build) and change only with the base's Tcl/Tk.
+- They are small: 13 files, 690,477 B.
+
+What ships (fix-rzig-follow-ups: build.zig installEnvRuntime, in a
+tree that is not the env): tcl.h, tk.h and tkPlatDecls.h with what they
+include, from conda-forge's win-64 tk (tk-8.6.13-h967ab96_4). That is
+tcl.h, tclDecls.h, tclPlatDecls.h, tk.h, tkDecls.h, tkPlatDecls.h,
+tkIntXlibDecls.h, and X11/X.h, Xfuncproto.h, Xlib.h, Xutil.h, keysym.h
+and keysymdef.h (Tk's stand-in for Xlib on Windows; tk.h includes
+X11/Xlib.h). The package's other 15 headers stay out (tclOO,
+tclTomMath, itcl, tdbc, and X11 headers that none of these include).
+verify-tree.sh requires tcl.h and tk.h in Tcl/include. B33's record
+for tk (phase 8) covers these files too.
+
+Tested on kappa (2026-10-08, fix-rzig-follow-ups PLAN.md, D5): with
+the extracted standalone zip, and only the env's zig, sh and make
+besides (no env headers or libraries), tkrplot 0.0-32 compiles against
+R_HOME/Tcl/include, links R_HOME/Tcl/bin's DLLs, loads and draws. With
+R_HOME/Tcl/include moved away it stops at 'tk.h'.
+
+The other channels do not change. conda: the tk package, a run
+dependency, has the headers in `Library/include`, which rzig's
+environment already searches (`-idirafter`); there is no R_HOME/Tcl
+there. PyPI: none, as for Tcl/Tk itself (section 5's table): the
+wheel is minimal, and Windows minimal drops Tcl/Tk (C1).
 
 ### What comes back with results (not open decisions)
 
@@ -2402,9 +2458,9 @@ PATH set to `R_HOME\bin\x64;C:\Windows\System32`.
      above, sh, make, pkg-config and the rest coming from `TC/usr/bin/`.
 
 Also in verify-bundle: the file lists (base ∪ groups = R tree ∪
-toolchain tree, no overlap, nothing compile-time in the base), and the
-existing compiles with `ZIG_BIN=$ZIG` and the env's make and flang as a
-fourth pass.
+toolchain tree, no overlap, nothing compile-time in the base but
+Windows' Tcl/Tk headers, T1), and the existing compiles with
+`ZIG_BIN=$ZIG` and the env's make and flang as a fourth pass.
 
 The same three scenarios on the other channels: conda (r-zig-slim
 alone, with r-zig-compilers, with r-zig-toolchain) and pip (r-zig

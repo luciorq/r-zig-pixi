@@ -337,6 +337,7 @@ copy of this worktree, the same pixi.lock, `--locked`:
   `Io.File.stdout().writer(io, &buf)`, a positional writer, which writes
   at offset 0. The repo captures it through `$(...)` (a pipe), so nothing
   here is affected; `writerStreaming` is the likely fix. Already in
-  6cc4ba6.
+  6cc4ba6. (E4) In PR (ii), branch fix-rzig-follow-ups: it writes
+  through `writerStreaming` now (fix-rzig-follow-ups/PLAN.md).
 - Legacy-encoded extensions (SSE3 to SSE4.2, POPCNT, LZCNT, BMI1/2,
   MOVBE) alone pass verify-tree; catching them needs a mnemonic list.
