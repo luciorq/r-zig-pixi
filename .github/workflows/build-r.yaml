@@ -61,6 +61,12 @@ jobs:
         run: |
           zig="$(pixi run -e ${{ inputs.env }} fetch-zig)"
           echo "ZIG_BIN=$zig" >> "$GITHUB_ENV"
+      # minimal's packages in pixi.lock, on all four of its platforms,
+      # against scripts/minimal-deny.txt: a partial re-lock can bring the
+      # graphics stack or glib into it (pixi.toml, [environments]).
+      - name: Check minimal's locked packages
+        if: inputs.env == 'minimal'
+        run: pixi run -e minimal minimal-check
       # rzig, the compilers zig build installs into R_HOME/bin/toolchain
       # (feat-no-host-paths F3): unit tests on this OS; on linux also the
       # parity test against the bash shims for every OS's command lines.

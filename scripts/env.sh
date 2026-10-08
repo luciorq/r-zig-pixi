@@ -118,10 +118,19 @@ fi
 # cache knows zig's version, not which build of it, so conda-forge's
 # 0.16.0 and upstream's 0.16.0 handed each other their objects (2026-10-04:
 # one checkout gave a tree of upstream's LLD over conda clang's cached C
-# objects). The key is the zig binary's cksum (CRC and size), cheap and
-# portable: another build of zig at the same path, as a pixi update
-# installs, gets caches of its own too.
-zig_key="$({ cksum < "$ZIG"; } 2>/dev/null | tr ' ' -)" || zig_key=""
+# objects). The key is the cksum (CRC and size) of the zig binary and of
+# the LLVM libraries beside it, cheap and portable: another build of zig
+# at the same path, as a pixi update installs, gets caches of its own
+# too, and so does an update of only the libLLVM and libclang-cpp that
+# conda-forge's zig loads from <env>/lib (libllvm21 and libclang-cpp21.1
+# were rebuilt 2026-10-06). Upstream's zig and conda-forge's win-64 zig
+# have LLVM linked in: no LLVM library is beside them, and their keys
+# stay as before.
+zig_key_files=("$ZIG")
+for f in "$(dirname "$ZIG")"/../lib/libLLVM[.-]* "$(dirname "$ZIG")"/../lib/libclang-cpp[.-]*; do
+  [ -f "$f" ] && [ ! -L "$f" ] && zig_key_files+=("$f")
+done
+zig_key="$({ cat "${zig_key_files[@]}" | cksum; } 2>/dev/null | tr ' ' -)" || zig_key=""
 export ZIG_GLOBAL_CACHE_DIR="$BUILD_DIR/zig-cache/zig-${zig_key:-none}/global"
 export ZIG_LOCAL_CACHE_DIR="$BUILD_DIR/zig-cache/zig-${zig_key:-none}/local"
 

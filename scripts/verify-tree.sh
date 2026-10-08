@@ -461,7 +461,10 @@ n_bins="$(wc -l < "$bin_list" | tr -d ' ')"
 # already requires a development machine with zig on PATH, so they are
 # bounded at conda-forge's own baseline instead — anything above *that*
 # still trips (a host tool leaking in, conda-forge moving to 2.34).
-if [ "$OS" = linux ]; then
+# objdump: conda-forge's binutils (pixi.toml).
+if [ "$OS" = linux ] && ! command -v objdump > /dev/null 2>&1; then
+  cannot_check "objdump unavailable; glibc ceiling not checked"
+elif [ "$OS" = linux ]; then
   GLIBC_FLOOR="2.17"          # runtime artifacts: R + vendored libs
   GLIBC_TOOLS_CEILING="2.28"  # lib/R/bin/toolchain helpers (conda-forge baseline)
   worst=""; worst_file=""; tools_over=0; failed=0
@@ -487,7 +490,11 @@ if [ "$OS" = linux ]; then
     fi
   done < "$bin_list"
   [ "$failed" = 0 ] || exit 1
-  echo "== glibc ceiling verified: runtime worst $worst ($worst_file) <= floor $GLIBC_FLOOR; $tools_over toolchain helper(s) above the floor, all <= $GLIBC_TOOLS_CEILING"
+  if [ -z "$worst" ]; then
+    cannot_check "objdump -T read no glibc version from any runtime file; glibc ceiling not checked"
+  else
+    echo "== glibc ceiling verified: runtime worst $worst ($worst_file) <= floor $GLIBC_FLOOR; $tools_over toolchain helper(s) above the floor, all <= $GLIBC_TOOLS_CEILING"
+  fi
 fi
 
 # No build-machine rpaths. Every RUNPATH/LC_RPATH entry in the tree must be

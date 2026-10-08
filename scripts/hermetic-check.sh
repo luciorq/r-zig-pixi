@@ -17,7 +17,8 @@
 # On linux, where strace can trace, every program started must be
 # /bin/sh or one of R's own launchers: an undeclared tool fails the job
 # even when R swallows the error (Sys.which() returning "", a temp
-# directory left behind).
+# directory left behind). strace comes from the env (pixi.toml); in CI a
+# missing or blocked strace fails the check (cannot_check).
 #
 # Windows: R starts programs without a shell (CreateProcess), so there is
 # no /bin/sh to allow. The environment keeps only what Windows itself
@@ -206,7 +207,7 @@ if [ -n "$strace_bin" ]; then
   echo "   programs started: $(echo "$started" | sed "s|$T|<tree>|g" | tr '\n' ' ')"
 else
   run
-  [ "$OS" = linux ] && echo "   note: strace unavailable; checked with an empty PATH only"
+  [ "$OS" != linux ] || cannot_check "strace unavailable or cannot trace; checked with an empty PATH only"
 fi
 
 left="$(ls -A "$WORK/tmp")"

@@ -264,14 +264,16 @@ if [ "$OS" != windows ]; then
   }
   build_env="${CONDA_PREFIX:-}"
   strace_bin=""
-  if [ "$OS" = linux ] && [ -n "$build_env" ] && command -v strace > /dev/null 2>&1; then
+  if [ "$OS" = linux ] && [ -n "$build_env" ]; then
     # `?`: skip syscalls this architecture lacks (aarch64 has no open(2)).
     # Preflight: where ptrace is blocked (containers, Yama) the trace is
-    # skipped rather than failing a good bundle.
-    if strace -f -qq -e 'trace=?openat,?open' -o /dev/null /bin/true 2> /dev/null; then
+    # skipped locally rather than failing a good bundle (cannot_check).
+    if ! command -v strace > /dev/null 2>&1; then
+      cannot_check "strace unavailable; build-env CA check skipped"
+    elif strace -f -qq -e 'trace=?openat,?open' -o /dev/null /bin/true 2> /dev/null; then
       strace_bin="$(command -v strace)"
     else
-      echo "   note: strace cannot trace here; build-env CA check skipped"
+      cannot_check "strace cannot trace here; build-env CA check skipped"
     fi
   fi
   if [ -n "$strace_bin" ]; then
