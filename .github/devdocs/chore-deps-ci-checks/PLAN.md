@@ -360,3 +360,17 @@ branch, so they are not edited here. Once the user re-decides D10:
   `Library/bin/zstd.dll` for R.dll and the toolchain's binutils:
   rattler-build resolves zstd.dll from the pkg env on PATH, not the host
   prefix. From before this branch; worth a look.
+
+## Merge of main (2026-10-08)
+
+main gained #14 (-mcpu=baseline, with verify-tree's AVX check) and #15
+after this branch was cut. One conflict, in scripts/verify-tree.sh's
+glibc comment: main's updated text (#15's phase 1) is kept, with this
+branch's objdump line and its cannot_check branch. #14's AVX check said
+linux's objdump was the host's, "which no pixi env provides"; with E3 it
+is the env's, so its comment and message now say so (it still fails
+without one, everywhere). Tested on linux-64 after the merge, CI=true,
+lock 7aef60ff: rzig-test, build, verify-tree (AVX check on the env's
+objdump: 21 binaries, 0 VEX/EVEX), smoke, verify-package (target-cpu
+x86-64, also with -mtune=native).
+

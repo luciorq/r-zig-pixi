@@ -117,7 +117,14 @@ build:
   # feat-no-host-paths; libc++ static everywhere; FLIBS names the static
   # flang runtime. linux-64's Fortran moved from conda-forge's flang to
   # flang-zig (2026-10-03) before build 4 was published, so it rides here.
-  number: 4
+  # 4 → 5 (2026-10-06): rzig, the compilers r-zig-toolchain ships in
+  # R_HOME/bin/toolchain, passes -mcpu=baseline on every OS. Build 4 (on
+  # universe for all five subdirs) compiles Windows packages for the
+  # compiling machine's own CPU (zig cc has no -target there, so a native
+  # CPU: target-cpu "skylake" on kappa), which another machine's CPU may
+  # lack; linux and macOS were already baseline through their -target.
+  # (fix-rzig-baseline-cpu PLAN.md)
+  number: 5
 
 outputs:
   # One build (scripts/zig-build.sh), two packages split by
@@ -160,7 +167,6 @@ outputs:
             - sed
             - grep
             - gawk
-            - which
             # unzip: build.zig shells out to it directly for share/zoneinfo
             # (zoneinfo.zip); gzip: grDevices' afm compression; tar/zip: not
             # invoked by the R build itself but kept for parity with pixi.
@@ -200,39 +206,6 @@ outputs:
             - m2-zip
             - m2-patch  # zigbuild/patches/; conda-forge has no win-64 `patch`
       host:
-        # `which`: also needed here, not just build: — build.zig bakes an
-        # absolute "$CONDA_PREFIX/bin/which" path into R's own Sys.which()
-        # fallback (the @WHICH@ subst-table entry, substituted from whatever
-        # $CONDA_PREFIX/ctx.conda resolves to at build time), and recipe/
-        # build.sh points $CONDA_PREFIX at $PREFIX (host), not $BUILD_PREFIX —
-        # unlike the old autoconf path, which found `which` via a plain $PATH
-        # search (which already includes both build_env and host_env bins in
-        # a rattler-build script), this vendored-config-replay design needs
-        # the tool to exist at the SAME prefix its own path substitution
-        # points at. Found via a real `pixi run -e pkg conda-package` run:
-        # bootstrap's very first `library(utils)` load failed with ".onLoad
-        # failed ... error in running command" — traced to Sys.which() calling
-        # a `which` binary that didn't exist under $PREFIX/bin at all (only
-        # under $BUILD_PREFIX/bin, a plain build: dependency). stage.sh's own
-        # `bin/toolchain/which` rewrite (see TODO.md's gotcha catalog) fixes
-        # this up for the FINAL installed package; this fixes the bootstrap
-        # phase itself, before stage.sh has run. Unix-only: this @WHICH@
-        # subst-table mechanism is part of installStaticTree/mkRbase, which
-        # buildWindows() doesn't use at all (no bin/R front script on Windows,
-        # per F6.0 — Rscript.exe is the only front-end there).
-        # `sed`: same exact bug, confirmed by a real failure one step later
-        # ("$PREFIX/bin/sed: No such file or directory" from bin/R's own
-        # @SED@-substituted SED= line, R.sh.in's front-end argument parser).
-        # `grep`: not yet hit by a real failure, but SED's sibling GREP/EGREP/
-        # FGREP subst entries use the identical "@ZR_CONDA@/bin/grep[-flags]"
-        # pattern — added proactively rather than waiting for the next
-        # whack-a-mole round trip; AWK is a bare "gawk" (PATH-resolved, no
-        # baked absolute path) so it isn't part of this class of bug.
-        - if: unix
-          then:
-            - which
-            - sed
-            - grep
         # Fortran runtime: linked into libR (statically for flang's
         # libflang_rt.runtime.a on every platform, see build.zig's
         # linkFortranRt), must be in host too; pinned as in build

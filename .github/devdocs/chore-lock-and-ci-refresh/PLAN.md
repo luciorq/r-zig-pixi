@@ -164,7 +164,9 @@ sqlite3). The win-64 config is hand-written. CC_VER was not refreshed:
 it reaches only R_compiled_by(), the vendored configs were already mixed
 (osx-* have no commit, linux minimal had 334cf9a5 already), and
 refreshing it changes libR, which would mean build 5 for a cosmetic
-string.
+string. Answered 2026-10-08 (D7 a): CC_VER and FC_VER are refreshed
+with the first conda build-number bump, feat-standalone-toolchain's
+phase 4.
 
 **Universe.** The lock has 15 package URLs under
 https://prefix.dev/universe (flang-zig, flang-rt-zig and lld-zig for
@@ -182,7 +184,7 @@ Every test run cleared build/zig-cache first, and after the builds the
 cache held only the `_20` key. The key does not cover libLLVM or
 libclang-cpp: an update that moved only those would keep the key and
 reuse objects the old LLVM built. Not the case here (the binary changed
-too); a proposal is in the open questions.
+too); a proposal is in the open questions (D8, answered 2026-10-08: a).
 
 ## CI actions and pixi
 
@@ -298,12 +300,16 @@ none.
   files with the host's objdump (binutils 2.46 on the 26.04 image). If
   objdump were missing, every ceiling would come back empty and be
   skipped, and the check would pass with an empty "runtime worst".
+  Answered 2026-10-08: objdump comes from conda-forge's binutils in
+  pixi.toml (E3 a), and CI fails when it is missing (D11 a).
 - **strace.** hermetic-check.sh and verify-bundle.sh use the host's
   strace (not in pixi.toml) and fall back quietly when it is missing or
   cannot trace ("note: strace unavailable; checked with an empty PATH
   only"; "build-env CA check skipped"). It works on 24.04 (run
   37482616655). On 26.04 it is expected through ubuntu-standard's
-  Depends (archive.ubuntu.com, resolute), not observed.
+  Depends (archive.ubuntu.com, resolute), not observed. Answered
+  2026-10-08 (D11 a): CI fails when strace is missing; local runs keep
+  the fallback.
 - **Host coreutils.** 26.04's default coreutils are the uutils (Rust)
   ones (coreutils-from-uutils); /bin/sh is still dash. hermetic runs with
   the tree's bin/ plus /bin/sh, but verify-package deliberately runs R
@@ -325,7 +331,8 @@ none.
   host, so this record does not recommend it. Better, if GitHub already
   offers the `ubuntu-26.04` label: before 2026-10-19, one dispatch of
   build.yaml from a throwaway branch with its linux-64 legs on that
-  label.
+  label. Answered 2026-10-08 (D13 a): that early dispatch, if the label
+  exists.
 
 ## Tested
 
@@ -432,23 +439,43 @@ its builds. All on 2026-10-06, times EDT.
 
 ## Open questions
 
-- CC_VER in zigbuild/config/linux-*-{slim,full} still names
+**Answers of 2026-10-08.** The menu of 2026-10-07 asked the questions
+below as D7 to D12, the Ubuntu 26.04 pin as D13, and binutils for linux
+as E3. The user answered "all ★" (the recommended option, a) with no
+exception among them. Where the work goes (a proposal, the grouping is
+in feat-no-host-paths/PLAN.md, "Answers of 2026-10-08"): D7 rides with
+feat-standalone-toolchain's phase 4 build-number bump; D8 to D13 and E3
+are one follow-up PR, "chore deps and CI checks". The two not in the
+list below:
+- **D13 a:** before 2026-10-19, one dispatch of build.yaml with its
+  linux-64 legs on the `ubuntu-26.04` label, if GitHub offers it (see
+  "Ubuntu 26.04", the proposed pin).
+- **E3 a:** binutils for linux-64 and linux-aarch64 in pixi.toml, so
+  verify-tree's objdump comes from conda-forge, not the host; in the
+  same small dependency change as D10.
+The pango/harfbuzz pin below was not asked and stays open.
+
+- **D7.** CC_VER in zigbuild/config/linux-*-{slim,full} still names
   clangdev-feedstock 0b2bbeec; leave it (recommended: cosmetic, and
   refreshing it means build 5) or refresh with feat-zig-build/PLAN.md's
-  regenerate rule and bump?
-- env.sh's zig cache key: also hash the libLLVM/libclang-cpp next to
-  conda-forge's zig (a no-op for upstream's static zig; every cache
-  invalidated once)?
-- A check of minimal's package set whenever pixi.lock changes (a
-  deny-list task, or in CI)?
-- `libglib` instead of `glib` in pixi.toml would drop python, packaging
-  and libpython from R's build envs (pango links only libglib); not done
-  here (no dependency changes in this branch).
-- Fail, not fall back, in CI on linux when strace or objdump is missing
-  (hermetic-check.sh, verify-bundle.sh, verify-tree.sh)?
-- Raise the rattler-build floor to `>=0.76` and pass
+  regenerate rule and bump? Answered: a (the menu's option a, not the
+  "leave it" recommended here), refresh CC_VER and FC_VER with the
+  first conda build-number bump (feat-standalone-toolchain's phase 4).
+- **D8.** env.sh's zig cache key: also hash the libLLVM/libclang-cpp
+  next to conda-forge's zig (a no-op for upstream's static zig; every
+  cache invalidated once)? Answered: a, yes.
+- **D9.** A check of minimal's package set whenever pixi.lock changes (a
+  deny-list task, or in CI)? Answered: a, yes.
+- **D10.** `libglib` instead of `glib` in pixi.toml would drop python,
+  packaging and libpython from R's build envs (pango links only
+  libglib); not done here (no dependency changes in this branch).
+  Answered: a, `libglib`, in one small dependency change with E3.
+- **D11.** Fail, not fall back, in CI on linux when strace or objdump is
+  missing (hermetic-check.sh, verify-bundle.sh, verify-tree.sh)?
+  Answered: a, fail in CI, stay lenient locally.
+- **D12.** Raise the rattler-build floor to `>=0.76` and pass
   `--error-overlapping-files --error-unused-staging-files` once a 0.76.1
-  CI build shows no warnings?
+  CI build shows no warnings? Answered: a, yes, once CI is clean.
 - Seen, not changed (predates this branch): build 4's linux-64
   r-zig-slim depends on pango >=1.58.2 and libharfbuzz >=14.5.1, while
   pixi.toml pins pango 1.56.* and harfbuzz 14.2.* because 1.58 "breaks R

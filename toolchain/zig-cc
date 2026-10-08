@@ -4,6 +4,14 @@
 # -fno-sanitize=undefined: zig cc enables UBSan trap mode by default;
 # R's numeric code contains benign UB that would otherwise SIGILL at runtime.
 #
+# -mcpu=baseline, on every OS: the baseline CPU of the target's arch, as
+# build.zig compiles R itself. A target naming the arch (linux's and
+# macOS's below) resolves to it already; no target (Windows) would be the
+# compiling machine's own CPU (AVX2, AVX-512), and packages compiled on
+# one machine load on others. Before the caller's arguments, so a
+# package's own -march/-mcpu wins; its -mtune= goes (below), since zig
+# would take that as the CPU too. rzig: zigbuild/tools/rzig/compiler.zig.
+#
 # SONAME injection: GNU ld records a bare "libR.so" as DT_NEEDED when a
 # library has no SONAME; zig's lld records the literal path it resolved
 # (e.g. "../../lib/libR.so"), which breaks at runtime. When linking a
@@ -100,6 +108,17 @@ if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
     sdkL=("-L$_sdk/usr/lib")
   fi
 fi
+
+# -mtune=<cpu>: zig cc takes it as the CPU to compile for, as it takes
+# -mcpu and -march (gcc, clang and flang only tune for it): after
+# -mcpu=baseline, -mtune=native compiles for this machine's CPU, and a
+# gcc spelling zig has no CPU for (-mtune=generic) fails. So a Makevars'
+# portable -mtune=native would make a package that needs the compiling
+# machine's CPU. Dropped: zig tunes for "generic" anyway. rzig:
+# compiler.zig's dropTune.
+_a=()
+for a in "$@"; do case "$a" in -mtune=*) ;; *) _a+=("$a") ;; esac; done
+set -- "${_a[@]}"
 
 # Fortran runtime: Makeconf's FLIBS says -lflang_rt.runtime (feat-no-
 # host-paths F1.5). Link the static archive of the flang on PATH, the
@@ -277,4 +296,4 @@ case "$(uname -s 2>/dev/null)" in
     ;;
 esac
 
-exec "${ZIG[@]}" cc -fno-sanitize=undefined "${target[@]}" "${extra[@]}" "$@" "${omp[@]}" "${sdkL[@]}"
+exec "${ZIG[@]}" cc -fno-sanitize=undefined -mcpu=baseline "${target[@]}" "${extra[@]}" "$@" "${omp[@]}" "${sdkL[@]}"

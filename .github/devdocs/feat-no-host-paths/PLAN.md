@@ -146,17 +146,21 @@ What remains, in order (proposed; ask the user before starting each):
    and win-64 with both zigs, and upstream-zig.yaml passed on GitHub on
    a1edc58 (run 37354940568, triggered by the PR's `upstream-zig` label:
    ubuntu 10 min, macos 11, windows 25). Left: decide whether to file the
-   drafted upstream zig report on the auto-exported atexit.
+   drafted upstream zig report on the auto-exported atexit. Answered
+   2026-10-08 (A2'): not filed; build.zig's workaround stays.
 2. Major (decided 2026-10-04): a Windows minimal variant, then a Windows
    wheel (first without compile support; compiling needs a sh/make/
    coreutils userland the wheel would have to bring). Analysis and order:
-   the section "Windows minimal and the Windows wheel".
+   the section "Windows minimal and the Windows wheel". Answered
+   2026-10-08 (C1 a, C2 a, C3 a): as analysed, after
+   feat-standalone-toolchain's phase 7.
 3. T's standalone split (a standalone toolchain archive), then the
    recipe's host which/sed/grep cleanup.
 4. Later, test carefully first: the toolchain in an environment of its
-   own (F3 section).
+   own (F3 section). Answered 2026-10-08 (D14 a): still later.
 5. Small, open: Windows Makeconf's TCL_VERSION (86 vs conda's 86t) for
-   packages that link Tcl/Tk (F1.7's record).
+   packages that link Tcl/Tk (F1.7's record). Answered 2026-10-08 (D5
+   a): set 86t and test tkrplot on kappa; follow-up PR (ii).
 6. Done 2026-10-05 (record "gfortran removed" after F4's): build.zig,
    env.sh, configure-only.sh, gen-subst.sh and the Windows Makeconf know
    only flang; a missing flang stops the build with one error. Tested on
@@ -172,7 +176,9 @@ What remains, in order (proposed; ask the user before starting each):
 8. Small, open (found in F4): on Windows, packages that link
    `-lsynchronization` (Rust-based ones) build with conda-forge's zig,
    which ships prebuilt MinGW import libraries, but not with upstream
-   zig 0.16.0, which has none for it.
+   zig 0.16.0, which has none for it. Answered 2026-10-08 (D6 b): rzig
+   provides the import library itself; no upstream report. Follow-up
+   PR (ii).
 9. Open (found in 7): R's compressed lazy-load databases still name the
    build machine, which no byte search sees. In a linux slim tree, 1,471
    Rd objects in the base packages' help databases (every Rd file's
@@ -183,13 +189,65 @@ What remains, in order (proposed; ask the user before starting each):
    when it starts and loads a package; the first is only read by help
    tools. Upstream's make records the same. Fixing them means changing
    how the bootstrap installs Rd objects and where it runs R (a neutral
-   prefix), with a check that reads the databases.
+   prefix), with a check that reads the databases. Answered 2026-10-08
+   (D3 b): fix it; follow-up PR (iii).
 10. Small, open (found in 6): rzig on Windows still resolves a
    package's `-lgfortran`/`-lquadmath` against a gfortran on PATH
    (windows.zig `gfortranLibDir`, kept in parity with the bash shims). No
    toolchain of ours has gfortran; whether such a package should get
    flang's runtime instead, or a clear error, is a package-compatibility
-   decision.
+   decision. Answered 2026-10-08 (D4 a): map both to flang's runtime;
+   follow-up PR (ii).
+
+**Answers of 2026-10-08.** The user's reply to the menu of 2026-10-07
+(the B items are recorded in feat-standalone-toolchain/PLAN.md) was
+"all ★" (the recommended option, a) except, for the items of this
+record, verbatim: "A2: Do not file any report", "D1: Strip Linux debug
+info", "D2: Keep `flang`", "D3: b - Fix it." and "D6: b - rzig deals
+with the import library, do not report anything yet." "A2" there answers
+A2', the follow-up of 2026-10-07 (file the atexit report upstream?).
+- What remains 1, A2': no report is filed. build.zig's `.drectve`
+  workaround stays; the draft in the F4 record stays as the reference.
+- What remains 2, C1 a, C2 a, C3 a: Windows minimal drops ICU, cairo,
+  Tcl/Tk and OpenMP for packages and keeps png/jpeg/tiff and NLS; a
+  Windows wheel without compile support comes first; both start after
+  feat-standalone-toolchain's phase 7 (Windows' usr/bin userland, which
+  compiling from the wheel would use). Their own PR.
+- What remains 4, D14 a: the toolchain in an environment of its own
+  stays later.
+- What remains 5, D5 a: Windows Makeconf's TCL_VERSION becomes 86t,
+  and tkrplot is tested on kappa. PR (ii).
+- What remains 8, D6 b: rzig provides the `synchronization` import
+  library itself for upstream zig; nothing is reported upstream. PR
+  (ii).
+- What remains 9, D3 b: fix it. Per the item: change how the bootstrap
+  installs the base packages' Rd objects and run its R from a neutral
+  prefix, with a check that reads the lazy-load databases.
+  PR (iii).
+- What remains 10, D4 a: rzig on Windows maps `-lgfortran` and
+  `-lquadmath` to flang's runtime (FLIBS's `-lflang_rt.runtime`)
+  instead of looking for a gfortran on PATH. PR (ii).
+- D1 b, Linux debug info (record "Build-machine paths in R's files"):
+  R's own linux binaries are stripped in every variant, as macOS's are;
+  linkRoot, which keeps R's DWARF on linux slim and full while dropping
+  that of zig's runtime libraries, goes. PR (iii).
+- D2 a, Windows R_SYSTEM_ABI (record "gfortran removed"): it stays
+  `windows,gcc,gxx,flang,flang`. Nothing to change.
+- E1 (answered 2026-10-07): a testing rule, under "How to verify".
+
+Follow-up PRs, proposed (the user can regroup them):
+- (i) chore deps and CI checks: D10 + E3 (libglib instead of glib;
+  binutils for linux in pixi.toml), D9, D8, D11, D12, D13. The answers
+  are in chore-lock-and-ci-refresh/PLAN.md, "Open questions".
+- (ii) rzig fixes: E4 (RZIG_PRINT_ARGV: printArgv in
+  zigbuild/tools/rzig/main.zig writes through a positional writer, which
+  overwrites the start of a regular file stdout is redirected to; it
+  moves to a streaming writer), D4, D5, D6.
+- (iii) no build-machine leftovers: D1 (strip linux) and D3 (the
+  lazy-load databases' build paths).
+- E2 (declare zstd in the recipe) and D7 (refresh CC_VER/FC_VER) ride
+  with feat-standalone-toolchain's phase 4 build-number bump.
+- D15: the stress suite starts now, on its own branch feat-stress-suite.
 
 How to verify (Linux here; omicron = osx-arm64 and osx-64 via Rosetta
 in ~/rz-osx64; kappa = win-64 in C:\Users\admin\r-zig-pixi; see the
@@ -210,6 +268,9 @@ test-servers notes for SSH):
   upstream, 21.1.8 for conda-forge) show which zig built what. Each zig
   has its own build/zig-cache/zig-<cksum>/ (the old build/zig-cache/
   global and local can be deleted).
+- Testing rule (the user, 2026-10-07, E1): a failure on omicron that
+  CrowdStrike Falcon could have caused stops testing that platform
+  there; leave it to CI (build.yaml's macos-15-intel legs for osx-64).
 
 R source references are to R 4.6.1 (`build/R-4.6.1/`).
 
@@ -318,10 +379,16 @@ resolved under the environment
 (`${R_HOME}/../../bin/`; on Windows `Library/bin`, with the m2 tools in
 `Library/usr/bin`). Tier 3 stays bare everywhere.
 
-Vendored in the standalone tree today: `bzip2`, `gzip`, `make`, `nm`,
-`sed`, `tar`, `unzip`, `which`, `zip`, plus the zig shims. After A and
-T, the base vendors nothing; the wheel's toolchain package ships make
-(pip has no other way to provide it) and the shims.
+Vendored in the standalone tree (A and T done; corrected 2026-10-06):
+no tool outside `R_HOME/bin/toolchain`. That directory holds rzig under
+the compiler names (unix: zig-cc, zig-cxx, zig-fc, zig-ar, zig-ranlib;
+Windows: gcc.exe, g++.exe, zig-fc.exe, zig-cc, zig-cxx, plus the MinGW
+binutils ar, ranlib, nm, dlltool, strip, as, ld and windres) and, in
+minimal, `make`. Before A and T it was `bzip2`, `gzip`, `make`
+(minimal only), `nm`, `realpath` (not in minimal), `sed`, `tar`,
+`unzip`, `which`, `zip`, plus the zig shims. The wheel's
+toolchain package ships make (pip has no other way to provide it) and
+rzig.
 
 ## Packaging (phase T)
 
@@ -689,7 +756,7 @@ workarounds into code.** In order:
     (an extra environment of headers and libraries) applies even when
     rzig does not sit in an R tree, so it composes with this. Touches
     phase T's package split and the compile preflight's "is the
-    toolchain here" test.
+    toolchain here" test. Still later (D14 a, 2026-10-08).
 - **F4. Both zigs** (redefined 2026-10-04; the original "one zig, the
   mirror goes" is dropped): R and packages build with conda-forge's zig
   and with upstream zig (PyPI's ziglang), and CI keeps that tested. The
@@ -832,7 +899,8 @@ workarounds into code.** In order:
       only for that label; such an event for another label gets a
       concurrency group of its own so it cannot cancel a run). Its legs
       read "<os> / default (upstream zig)".
-  - **Upstream zig report, draft (not filed).** Title: "windows-gnu:
+  - **Upstream zig report, draft (not filed; the user, 2026-10-08, A2':
+    "Do not file any report").** Title: "windows-gnu:
     `zig cc -shared` without a .def exports mingw CRT symbols (atexit),
     so an exe linking the import library fails with duplicate symbol:
     atexit". Body:
@@ -1035,7 +1103,10 @@ workarounds into code.** In order:
       (std.Build names a module to zig only when it has sources, and zig
       takes the first module it is given as the root); a root with an
       empty C file keeps the C module's DWARF and drops compiler_rt's.
-      libR.so: 12.7 to 11.8 MiB.
+      libR.so: 12.7 to 11.8 MiB. D1 b (the user, 2026-10-08: "Strip
+      Linux debug info"): linux slim and full get stripped too, as
+      minimal and macOS are, so linkRoot's stripped root goes; follow-up
+      PR (iii).
     - macOS: the DWARF of R's code stays in the object files in zig's
       cache, and the binary names those files (N_OSO stabs: absolute
       paths that zig's Mach-O linker, `link/MachO/Object.zig`
@@ -1118,7 +1189,8 @@ workarounds into code.** In order:
     bin/x64 without a namesake in the env is marked "R's own, or an
     earlier run's". It prints the counts and, on failure, each offender
     with its first match. Compressed files (the lazy-load databases,
-    .rds) are not looked into: What remains 9. On the old slim tree (a
+    .rds) are not looked into: What remains 9 (D3 b, 2026-10-08: to be
+    fixed, with a check that reads them). On the old slim tree (a
     copy of the main checkout's) it failed with the 19 files of R's own;
     on a copy of the new one with five planted defects (the checkout in
     etc/Renviron, the env's include dir appended to splines.so, the
@@ -1242,7 +1314,8 @@ workarounds into code.** In order:
     rows name Classic Flang's f90io_* runtime, so there no Fortran row
     ever matches LLVM flang's objects; on Windows the flang rows are now
     live. Not tested: R CMD check of a Fortran package on Windows with
-    the new value.
+    the new value. D2 a (the user, 2026-10-08: "Keep `flang`"): the
+    value stays.
   - scripts/env.sh `fortran_compiler`: flang or flang-new, else
     `error: no flang in the pixi environment: R's Fortran needs
     flang-pixi's flang-zig (pixi.toml)`. zigbuild/tools/configure-only.sh
@@ -1253,7 +1326,8 @@ workarounds into code.** In order:
   - Comments in pixi.toml, recipe.yaml and contract-test.sh. Kept:
     history (records, the recipe's build-number comments), the bash
     shims in toolchain/ (parity-test.sh's reference), rzig's Windows
-    `-lgfortran` lookup for packages that ask for it (What remains 10),
+    `-lgfortran` lookup for packages that ask for it (What remains 10;
+    D4 a, 2026-10-08: to map to flang's runtime),
     and upstream's own text in the vendored Windows config.h and
     Makeconf.win.
   - Tested (linux-64): build.zig's probe with a CONDA_PREFIX that has no
@@ -1627,7 +1701,8 @@ zig 0.16's std.Build):
   - **Open:** Windows' etc/x64/Makeconf keeps `TCL_VERSION = 86`, so a
     package that links Tcl/Tk through it (tkrplot) asks for -ltcl86, while
     conda ships tcl86t (and the standalone tree has no Tcl import
-    libraries); untested. The Windows check prints two NOTEs: tools-Ex
+    libraries); untested. D5 a (2026-10-08): set 86t and test tkrplot
+    on kappa. The Windows check prints two NOTEs: tools-Ex
     (the Windows tree has no COPYING, linux's has) and stats-Ex (two
     htest titles wrap differently). The tree ships no R_HOME/tests (as on
     unix).
@@ -2378,7 +2453,11 @@ Separate from all of this: P3M binaries need the `HTTPUserAgent` option
 
 Decided 2026-10-04: the next major item once the current work (the OpenMP
 gaps, then the queued phases) is done. Today Windows has one profile
-(win-x86_64-full) and no wheel.
+(win-x86_64-full) and no wheel. Answered 2026-10-08: C1 a (minimal drops
+ICU, cairo, Tcl/Tk and OpenMP; png/jpeg/tiff and NLS stay, as below),
+C2 a (a wheel without compile support first), C3 a (after
+feat-standalone-toolchain's phase 7, whose Windows userland compiling
+from the wheel would use).
 
 **A minimal tree on Windows: work, not blockers.** Windows R has no
 configure, so build.zig's buildWindows mirrors gnuwin32's one profile and
@@ -2425,7 +2504,8 @@ windows-latest/minimal CI leg.
    rzig finding zig from PyPI's ziglang (which has Windows wheels) is
    untried on Windows. (F4: R builds on win-64 with PyPI's ziglang
    through ZIG_BIN, with build.zig's atexit fix, kappa 2026-10-04;
-   packages linking `-lsynchronization` do not, What remains 8.)
+   packages linking `-lsynchronization` do not, What remains 8; D6 b,
+   2026-10-08: rzig will provide that import library.)
 3. Not a blocker: Fortran (the unix wheels ship no flang either).
 
 Order: the Windows minimal tree first (it is what a Windows wheel would
@@ -2601,7 +2681,9 @@ the same for its C++ test package.
   MinGW atexit export (drafted in the F4 record, not filed) and
   `-lsynchronization` with upstream zig on Windows (Status section,
   What remains 8); the build-path strings in the shipped tree, What
-  remains 7, are done (2026-10-05).
+  remains 7, are done (2026-10-05). Answered 2026-10-08: the atexit
+  report is not filed (A2'), and rzig provides the synchronization
+  import library, with no report either (D6 b).
 - **Names** of the base and toolchain packages, on conda and PyPI.
   Decide together with the v3 naming question (consolidation/PLAN.md,
   Phase 3); `r-base` depends on the gate above.
