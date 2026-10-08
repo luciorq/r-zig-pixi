@@ -149,6 +149,16 @@ former gamma/omicron/kappa runners were decommissioned in September 2026
 and fully removed on 2026-09-24. Docs-only changes (`*.md`,
 `.github/devdocs/`) skip the workflow.
 
+The full matrix above runs only on request: on a pull request labelled
+`full-ci` and on a manual dispatch (`pixi run ci-trigger` for main, `gh
+workflow run build.yaml --ref <branch>` for a branch). Every other pull
+request push and every push to `main` runs the core tier: `default` on
+all five platforms and `minimal` on linux-64 (6 legs). `conda-package`
+also runs on every push to `main`, which publishes, and on a pull
+request that changes `recipe/`, `pixi.toml`, `pixi.lock`, `build.zig`,
+`zigbuild/`, `scripts/` or the workflows. See
+`.github/devdocs/chore-ci-tiers/PLAN.md`.
+
 `upstream-zig` runs the same `build` steps (`.github/workflows/build-r.yaml`,
 shared by both workflows) on `default` for ubuntu-latest, macos-latest
 and windows-latest with upstream zig (`pixi run fetch-zig`). It is a

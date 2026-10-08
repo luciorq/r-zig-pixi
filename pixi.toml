@@ -125,8 +125,11 @@ configure = { cmd = "bash zigbuild/tools/configure-only.sh", depends-on = ["fetc
 
 [tasks]
 # --- CI (build-r.yml on GitHub Actions; needs `gh auth login`) ---
-# Full run on-demand (all jobs, same as a push to main — see
-# workflow_dispatch in .github/workflows/build.yaml).
+# The full tier on demand, on main: all 15 legs and conda-package on all
+# 5, which publishes, as a push to main does (a push runs only the core
+# tier's 6 legs; .github/devdocs/chore-ci-tiers/PLAN.md). For a branch:
+# `gh workflow run build.yaml --ref <branch>`; for a pull request, the
+# `full-ci` label.
 ci-trigger = "gh workflow run build.yaml --ref main"
 # Re-run only the jobs that failed in the most recent build-r run (e.g.
 # just conda-package/windows) without re-running everything that already
