@@ -96,7 +96,10 @@ SORT = sort
 
 ## For use in packages
 GRAPHAPP_LIB = -lRgraphapp
-TCL_VERSION = 86
+## r-zig: conda-forge's Tcl/Tk 8.6 is the threaded build, tcl86t/tk86t
+## (R_HOME/Tcl/bin's DLLs, a conda env's Library/lib/tcl86t.lib): what
+## TCLTK_LIBS' -ltcl$(TCL_VERSION) -ltk$(TCL_VERSION) must name.
+TCL_VERSION = 86t
 # was a reference to Rzlib.dll in R < 3.2.0
 ZLIB_LIBS = -lz
 

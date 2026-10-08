@@ -4,18 +4,19 @@
 //!
 //! - A shared link of objects (`-shared` or `-dynamiclib` as a word, and
 //!   no source file among the inputs) goes through zig cc, exactly as
-//!   zig-cc links (compiler.zig: the glibc floor, or the macOS target and
-//!   SDK; the SONAME; the environment's -L and a conda env's rpath;
-//!   OpenMP; Windows' import libraries), with the Fortran runtime
-//!   appended, which flang_rt.zig resolves to the static archive of that
-//!   flang. This is R's USE_FC_TO_LINK: SHLIB_LD = $(SHLIB_FCLD) = $(FC),
-//!   and install.R takes $(FLIBS) and $(LIBR) off that link, leaving the
-//!   runtime to the Fortran driver. flang's own driver links with the
-//!   system linker and the runtime it finds there: "cannot find
-//!   -lflang_rt.runtime" (conda-forge's linux-64 flang, measured
-//!   2026-10-02), or a runtime found through its config file, which also
-//!   records an absolute rpath into the env (flang-zig's flang.cfg,
-//!   `-Wl,-rpath,<CFGDIR>/../lib`; measured on linux-64 2026-10-03).
+//!   zig-cc links (compiler.zig: the baseline CPU, no -mtune=; the glibc
+//!   floor, or the macOS target and SDK; the SONAME; the environment's -L
+//!   and a conda env's rpath; OpenMP; Windows' import libraries), with
+//!   the Fortran runtime appended, which flang_rt.zig resolves to the
+//!   static archive of that flang. This is R's USE_FC_TO_LINK: SHLIB_LD =
+//!   $(SHLIB_FCLD) = $(FC), and install.R takes $(FLIBS) and $(LIBR) off
+//!   that link, leaving the runtime to the Fortran driver. flang's own
+//!   driver links with the system linker and the runtime it finds there:
+//!   "cannot find -lflang_rt.runtime" (conda-forge's linux-64 flang,
+//!   measured 2026-10-02), or a runtime found through its config file,
+//!   which also records an absolute rpath into the env (flang-zig's
+//!   flang.cfg, `-Wl,-rpath,<CFGDIR>/../lib`; measured on linux-64
+//!   2026-10-03).
 //!   The runtime goes last, where FLIBS sits on an R CMD SHLIB link; lld
 //!   and zig's Mach-O linker resolve archives in any order anyway. R's own
 //!   library is left off too: Fortran that calls into R from such a
@@ -24,10 +25,15 @@
 //! - Everything else, compiles (.f .f90 .F ...), -E, the --version and -v
 //!   probes, and configure's mixed source+link calls, runs flang with the
 //!   caller's arguments, on macOS after the floor (floors.zig), so the
-//!   caller's own -mmacosx-version-min still wins. A mixed call stays
-//!   flang's: splitting it into compiles and a zig link is the kind of
-//!   trickery the toolchain avoids, and a configure probe's executable is
-//!   no package's library.
+//!   caller's own -mmacosx-version-min still wins. flang compiles for its
+//!   target's baseline CPU unless told otherwise (target-cpu x86-64 on
+//!   linux-64 and win-64, measured 2026-10-06), which zig-cc gets from
+//!   -mcpu=baseline; flang refuses that flag ("unsupported option
+//!   '-mcpu='" on x86_64), and needs none. A -mtune= stays: flang only
+//!   tunes for that CPU (target-cpu still x86-64), which zig cc does not
+//!   (compiler.zig dropTune). A mixed call stays flang's: splitting it
+//!   into compiles and a zig link is the kind of trickery the toolchain
+//!   avoids, and a configure probe's executable is no package's library.
 //!
 //! No flang on PATH: nothing runs; zig-fc says so (no_flang) and exits
 //! 127, as a shell does for a command it cannot find (main.zig). FC names
@@ -154,6 +160,8 @@ test "compiles, -E and probes: flang with the caller's arguments, after the floo
         &.{ "-fpic", "-O2", "-c", "a.f", "-o", "a.o" },
         &.{ "-O2", "-c", "m.f90", "-o", "m.o" },
         &.{ "-I/r/include", "-DX=1", "-c", "p.F", "-o", "p.o" },
+        // flang tunes for -mtune's CPU only, unlike zig cc: kept
+        &.{ "-mtune=native", "-O2", "-c", "t.f90", "-o", "t.o" },
         &.{ "-E", "p.F90" },
         &.{"--version"},
         &.{"-v"},
@@ -229,7 +237,7 @@ test "linux: a shared link of objects goes through zig cc, as zig-cc's, with the
     c.self_exe = f.path("env/lib/R/bin/toolchain/zig-fc");
     const l = f.fmt("-L{s}", .{f.path("env/lib")});
     const rp = f.fmt("-Wl,-rpath,{s}", .{f.path("env/lib")});
-    const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-target", linux_target };
+    const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-target", linux_target };
     // R CMD SHLIB under USE_FC_TO_LINK: $(SHLIB_FCLD) $(SHLIB_FCLDFLAGS)
     // $(LIBR0) $(LDFLAGS) -o pkg.so <objects> $(PKG_LIBS) $(SHLIB_LIBADD)
     try expectZig(
@@ -240,6 +248,11 @@ test "linux: a shared link of objects goes through zig cc, as zig-cc's, with the
     try expectZig(
         pre ++ &[_][]const u8{ "-Wl,-soname,libfx.so", "-shared", l, rp, "-o", "libfx.so", "a.o", a, "-lm", "-lm" },
         try command(c, &.{ "-shared", "-o", "libfx.so", "a.o", "-lflang_rt.runtime", "-lm" }),
+    );
+    // a -mtune= on the link (zig cc's: dropped, compiler.zig dropTune)
+    try expectZig(
+        pre ++ &[_][]const u8{ "-shared", "-O2", l, rp, "-o", "pkg.so", "a.o", a, "-lm" },
+        try command(c, &.{ "-shared", "-O2", "-mtune=native", "-o", "pkg.so", "a.o" }),
     );
     // OpenMP, as zig-cc: -lomp when an environment has omp.h
     try f.touch("env/include/omp.h");
@@ -263,11 +276,11 @@ test "macOS: the shared link has the target, the SDK and the runtime; -dynamicli
     // macOS SHLIB_FCLDFLAGS; the caller's -lm is kept and the runtime's
     // second one dropped (darwin.dedupLibs), the SDK's -L last
     try expectZig(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-L/r/lib", "-o", "p.so", "a.o", "-lflangish", "-lm", a, "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-L/r/lib", "-o", "p.so", "a.o", "-lflangish", "-lm", a, "-L/SDK/usr/lib" },
         try command(c, &.{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-L/r/lib", "-o", "p.so", "a.o", "-lflangish", "-lm" }),
     );
     try expectZig(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "p.so", "a.o", a, "-lm", "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "p.so", "a.o", a, "-lm", "-L/SDK/usr/lib" },
         try command(c, &.{ "-dynamiclib", "-o", "p.so", "a.o" }),
     );
 }
@@ -283,7 +296,7 @@ test "Windows: the shared link resolves -l to import libraries, adds -lc++, no .
     const l = f.fmt("-L{s}", .{f.path("d")});
     // winshlib.mk: $(SHLIB_LD) $(SHLIB_LDFLAGS) $(LDFLAGS) $(DLLFLAGS) -o pkg.dll tmp.def <objects> $(ALL_LIBS)
     try expectZig(
-        &.{ "cc", "-fno-sanitize=undefined", "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, f.path("d/libz.dll.a"), a, "-lc++" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, f.path("d/libz.dll.a"), a, "-lc++" },
         try command(c, &.{ "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, "-lz" }),
     );
     try expectProgram(&.{ f.path("bin/flang"), "-o", "px", "a.o" }, try command(c, &.{ "-o", "px", "a.o" }));

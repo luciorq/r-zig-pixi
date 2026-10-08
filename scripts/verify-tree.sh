@@ -25,13 +25,18 @@
 #     (Windows: Library/include/omp.h, Library/lib/libomp.lib and
 #     R_HOME/bin/x64/libomp.dll; unix: include/omp.h and lib/libomp);
 #   - Windows (a tree that is not a conda env): the Tcl/Tk runtime is in
-#     R_HOME/Tcl (with Tcl's modules), and every DLL a PE file in the tree
-#     imports is in the tree (its own directory, R_HOME/bin/x64, or
-#     R_HOME/Tcl/bin for the Tcl/Tk DLLs) or the system's;
+#     R_HOME/Tcl (with Tcl's modules), Makeconf's TCL_VERSION names its
+#     DLLs (tcl86t, tk86t), Tcl/Tk's headers (tcl.h, tk.h) are in
+#     R_HOME/Tcl/include, and every DLL a PE file in the tree imports is
+#     in the tree (its own directory, R_HOME/bin/x64, or R_HOME/Tcl/bin
+#     for the Tcl/Tk DLLs) or the system's;
 #   - unix (a tree that is not a conda env): etc/ca-bundle.crt holds
 #     certificates and etc/Renviron names it in R_ZIG_CA_BUNDLE; with
 #     tcltk (full), Tcl/Tk's script libraries and Tcl's modules are in
 #     <prefix>/lib and etc/Renviron points TCL_LIBRARY there;
+#   - x86_64 (every OS): no binary of R's own has a VEX or EVEX
+#     instruction (AVX, AVX2, FMA, AVX-512, on any register width): R is
+#     compiled for the baseline CPU, not the build machine's;
 #   - minimal: no binary of R's own links a library the profile excludes;
 #   - linux: no ELF needs a glibc above the floor (2.17; toolchain helpers
 #     conda-forge's 2.28);
@@ -43,7 +48,8 @@
 # verify-bundle.sh (pixi task verify-package, after package) keeps what
 # only a moved, environment-free copy can show: the archive extracts, R
 # runs from the new place under env -i, TLS trust with the shipped CA
-# bundle, and packages compiled with the relocated tree build and load
+# bundle, the CPU its C compiler compiles for (the arch's baseline, every
+# OS), and packages compiled with the relocated tree build and load
 # under env -i (C++, Fortran, USE_FC_TO_LINK, FLIBS without flang,
 # OpenMP, decoy CONDA_PREFIX runs, zig-fc with no flang; Windows: rzig's
 # dry runs, and OpenMP C and Fortran packages built with the tree alone
@@ -299,6 +305,86 @@ if [ -z "$conda_tree" ] && grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
   echo "== OpenMP for packages verified: ${omp_files// /, }"
 fi
 
+# The baseline CPU (x86_64): R's own binaries are compiled for their
+# arch's baseline (build.zig's cpu_model = .baseline), so they run on any
+# CPU of the arch, not only on ones like the build machine's. The x86-64
+# baseline (SSE2) has no VEX- or EVEX-encoded instruction, the encodings
+# of AVX, AVX2, FMA, F16C and AVX-512 at every register width (FMA on
+# %xmm included), whose mnemonics all start with v; the base ISA's only
+# such mnemonics, verr and verw, are not counted. One in R's own code is
+# the build machine's CPU leaking in (an object compiled with
+# -mcpu=native, a -march in some flags). Not caught: the extensions that
+# keep the legacy encoding (SSE3 to SSE4.2, POPCNT, LZCNT, BMI1/2,
+# MOVBE): one of those alone, with no AVX next to it, passes. What CPU
+# the toolchain compiles for is verify-bundle.sh's check (the LLVM IR's
+# target-cpu, every arch); this one is the backstop on what shipped.
+# R's own: every binary under R_HOME but the conda libraries
+# vendor-libs.sh copied there (vendored_files: Windows' bin/x64) and the
+# env files build.zig copies as they are (Windows' Tcl/Tk in R_HOME/Tcl;
+# in the toolchain directory only rzig is R's own, not Windows' binutils
+# nor minimal's make). conda-forge's binaries are built for its own
+# baseline, and some carry AVX2 code behind a run-time CPU check
+# (libdeflate, libcrypto), so they are not counted. objdump: on Windows
+# the env's x86_64-w64-mingw32-objdump; on macOS /usr/bin/objdump, which
+# is llvm-objdump, from the Command Line Tools the SDK needs anyway; on
+# linux the env's, conda-forge's binutils (pixi.toml). Without one the
+# check fails, everywhere, saying so. aarch64: the check does not apply.
+case "$(uname -m)" in
+  x86_64|amd64)
+    if [ "$OS" = windows ]; then objdump_cmd=x86_64-w64-mingw32-objdump; else objdump_cmd=objdump; fi
+    if ! command -v "$objdump_cmd" > /dev/null 2>&1; then
+      echo "error: no $objdump_cmd on PATH for the baseline CPU check" >&2
+      exit 1
+    fi
+    rzig_file="$TREE/$tc_dir/${tc_names%% *}"
+    : > "$WORK/vendored-r.txt"
+    if [ -z "$conda_tree" ]; then cp "$WORK/vendored.txt" "$WORK/vendored-r.txt"; fi
+    case "$OS" in
+      windows) find "$TREE/$rh" -path "$TREE/$rh/Tcl" -prune -o -type f \( -iname '*.dll' -o -iname '*.exe' \) -print ;;
+      linux) find "$TREE/$rh" -type f \( -name '*.so*' -o -perm -u+x \) \
+        -exec sh -c 'head -c4 "$1" | od -An -tx1 | grep -q "7f 45 4c 46"' _ {} \; -print ;;
+      macos) find "$TREE/$rh" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) \
+        -exec sh -c 'head -c4 "$1" | od -An -tx1 | grep -q "cf fa ed fe"' _ {} \; -print ;;
+    esac > "$WORK/r-bins-all.txt"
+    : > "$WORK/r-bins.txt"
+    while IFS= read -r f; do
+      if [ "${f%/*}" = "$TREE/$tc_dir" ] && ! cmp -s "$f" "$rzig_file"; then continue; fi
+      if grep -qxF -- "$f" "$WORK/vendored-r.txt"; then continue; fi
+      printf '%s\n' "$f" >> "$WORK/r-bins.txt"
+    done < "$WORK/r-bins-all.txt"
+    n_rb="$(wc -l < "$WORK/r-bins.txt" | tr -d ' ')"
+    [ "$n_rb" -gt 0 ] || { echo "error: no binaries of R's own found under $TREE/$rh" >&2; exit 1; }
+    # objdump -d --no-show-raw-insn's instruction lines, GNU's and llvm's:
+    # "<hex address>:", blanks, the instruction (binutils may put a {vex}
+    # or {evex} pseudo-prefix first). Counts: VEX/EVEX instructions, and
+    # instructions naming a %ymm, a %zmm register.
+    vex_counts() {
+      "$objdump_cmd" -d --no-show-raw-insn "$1" | awk '
+        !sub(/^[[:space:]]*[0-9a-f]+:[[:space:]]+/, "") { next }
+        { sub(/^[{][a-z0-9]+[}][[:space:]]+/, "") }
+        /^v[a-z]/ && !/^ver[rw][[:space:]]/ { v++ }
+        /%ymm/ { y++ }
+        /%zmm/ { z++ }
+        END { print v + 0, y + 0, z + 0 }'
+    }
+    bad=""; n_vex=0; n_ymm=0; n_zmm=0
+    while IFS= read -r f; do
+      vyz="$(vex_counts "$f")" || { echo "error: $objdump_cmd cannot disassemble ${f#$TREE/}" >&2; exit 1; }
+      read -r v y z <<< "$vyz"
+      n_vex=$((n_vex + v)); n_ymm=$((n_ymm + y)); n_zmm=$((n_zmm + z))
+      if [ "$v" -gt 0 ] || [ "$y" -gt 0 ] || [ "$z" -gt 0 ]; then bad="$bad
+  ${f#$TREE/}: $v VEX/EVEX instructions, $y on %ymm, $z on %zmm"; fi
+    done < "$WORK/r-bins.txt"
+    if [ -n "$bad" ]; then
+      echo "error: R's own binaries use AVX-class instructions, beyond the x86-64 baseline (an object compiled for the build machine's CPU):$bad" >&2
+      exit 1
+    fi
+    n_conda=$(($(wc -l < "$WORK/r-bins-all.txt") - n_rb))
+    echo "== baseline CPU verified: $n_rb binaries of R's own under R_HOME, $n_vex VEX/EVEX instructions (AVX, FMA, AVX-512), $n_ymm on %ymm, $n_zmm on %zmm ($objdump_cmd -d; $n_conda conda binaries there not counted)"
+    ;;
+  *) echo "== baseline CPU: the VEX/EVEX check is x86_64's; on $(uname -m) it does not apply" ;;
+esac
+
 # Windows has no rpaths, glibc or Mach-O: the binary checks further down
 # are unix. Its own: the Tcl/Tk runtime and the DLL closure.
 if [ "$OS" = windows ]; then
@@ -316,11 +402,25 @@ if [ "$OS" = windows ]; then
     for f in tcl86t.dll tk86t.dll; do
       [ ! -e "$TREE/$rh/bin/x64/$f" ] || bad="$bad bin/x64/$f(misplaced)"
     done
+    # Makeconf's TCL_VERSION names those DLLs: packages that link Tcl/Tk
+    # (tkrplot) take TCLTK_LIBS, -L$(TCL_HOME)/bin -ltcl$(TCL_VERSION)
+    # -ltk$(TCL_VERSION).
+    tclv="$(sed -n 's/^TCL_VERSION = *\([^[:space:]]*\).*/\1/p' "$mk")"
+    for f in "tcl$tclv.dll" "tk$tclv.dll"; do
+      [ -f "$TREE/$rh/Tcl/bin/$f" ] || bad="$bad TCL_VERSION=$tclv:Tcl/bin/$f(missing)"
+    done
+    # With Tcl/bin come the headers, in Tcl/include, where TCLTK_CPPFLAGS
+    # (-I "$(TCL_HOME)/include") and packages' Makevars.win look: without
+    # them a package that compiles against Tcl/Tk (tkrplot) stops at
+    # tk.h (feat-standalone-toolchain PLAN.md, T1).
+    for f in Tcl/include/tcl.h Tcl/include/tk.h; do
+      [ -s "$TREE/$rh/$f" ] || bad="$bad $f(missing)"
+    done
     if [ -n "$bad" ]; then
-      echo "error: the Tcl/Tk runtime in $rh/Tcl:$bad" >&2
+      echo "error: Tcl/Tk in $rh/Tcl:$bad" >&2
       exit 1
     fi
-    echo "== Tcl/Tk runtime verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib"
+    echo "== Tcl/Tk verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), Makeconf's TCL_VERSION = $tclv, $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib, $(find "$TREE/$rh/Tcl/include" -type f | wc -l | tr -d ' ') headers in Tcl/include"
 
     # The DLL closure: every DLL a PE file in the tree imports is found in
     # the tree, where the loader looks for it (the file's own directory;
@@ -453,15 +553,20 @@ n_bins="$(wc -l < "$bin_list" | tr -d ' ')"
 # Two tiers, learned from the first hosted-CI run of this check
 # (2026-09-19): everything R needs to *run* (R itself, its modules and
 # package .so files, every vendored library under lib/) must stay at the
-# 2.17 floor — and does. The compile-time helper tools build.zig installs
-# into lib/R/bin/toolchain (nm/realpath/sed/... for bin/libtool and
-# javareconf) come from conda-forge, whose linux baseline is glibc 2.28
-# now: coreutils' `realpath` needs GLIBC_2.28, nothing else did. Those
-# tools only run when compiling packages or reconfiguring Java, which
-# already requires a development machine with zig on PATH, so they are
-# bounded at conda-forge's own baseline instead — anything above *that*
-# still trips (a host tool leaking in, conda-forge moving to 2.34).
-if [ "$OS" = linux ]; then
+# 2.17 floor — and does. lib/R/bin/toolchain holds what build.zig
+# installs for compiling packages: rzig under the compiler names (built
+# for R's own target, so at the floor) and, in minimal, conda-forge's
+# GNU make (4.4.1 needs GLIBC_2.17 on linux-64). conda-forge's linux
+# baseline is glibc 2.28, and these only run when compiling, which
+# needs zig anyway, so the toolchain is bounded at that baseline instead
+# — anything above *that* still trips (a host tool leaking in,
+# conda-forge moving to 2.34). (The 2.28 case was coreutils' `realpath`,
+# one of the nm/realpath/sed/... helpers stage.sh copied there until
+# phase A5, 5f23127.)
+# objdump: conda-forge's binutils (pixi.toml).
+if [ "$OS" = linux ] && ! command -v objdump > /dev/null 2>&1; then
+  cannot_check "objdump unavailable; glibc ceiling not checked"
+elif [ "$OS" = linux ]; then
   GLIBC_FLOOR="2.17"          # runtime artifacts: R + vendored libs
   GLIBC_TOOLS_CEILING="2.28"  # lib/R/bin/toolchain helpers (conda-forge baseline)
   worst=""; worst_file=""; tools_over=0; failed=0
@@ -487,7 +592,11 @@ if [ "$OS" = linux ]; then
     fi
   done < "$bin_list"
   [ "$failed" = 0 ] || exit 1
-  echo "== glibc ceiling verified: runtime worst $worst ($worst_file) <= floor $GLIBC_FLOOR; $tools_over toolchain helper(s) above the floor, all <= $GLIBC_TOOLS_CEILING"
+  if [ -z "$worst" ]; then
+    cannot_check "objdump -T read no glibc version from any runtime file; glibc ceiling not checked"
+  else
+    echo "== glibc ceiling verified: runtime worst $worst ($worst_file) <= floor $GLIBC_FLOOR; $tools_over toolchain helper(s) above the floor, all <= $GLIBC_TOOLS_CEILING"
+  fi
 fi
 
 # No build-machine rpaths. Every RUNPATH/LC_RPATH entry in the tree must be

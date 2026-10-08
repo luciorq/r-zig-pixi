@@ -1521,9 +1521,9 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // OpenMP for packages (R itself has none on Windows, see R.dll's link
     // above): llvm-openmp's headers and libomp.lib.
     try installOpenMP(ctx, io);
-    // The env's runtime data, for a tree that is not the env (Tcl/Tk and
-    // fontconfig's configuration), and etc/Renviron.site (in the conda
-    // build: MY_TCLTK, the env's Tcl/Tk).
+    // The env's runtime data, for a tree that is not the env (Tcl/Tk with
+    // its headers, and fontconfig's configuration), and etc/Renviron.site
+    // (in the conda build: MY_TCLTK, the env's Tcl/Tk).
     try installEnvRuntime(ctx, io);
 
     // ------------------------------------------------------------------
@@ -1840,8 +1840,11 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
     var mkc = try gnuwin32O3ToO2(b, try substituteWith(ctx, raw, &mk));
     // Tcl/Tk headers and libraries where the standalone tree has them
-    // (installEnvRuntime installs R_HOME/Tcl); inside a conda env this is
-    // unused.
+    // (installEnvRuntime installs R_HOME/Tcl: include, bin, lib); inside a
+    // conda env this is unused. TCL_VERSION is the vendored file's 86t,
+    // the names of conda-forge's threaded Tcl/Tk (tcl86t.dll, a conda
+    // env's tcl86t.lib), which TCLTK_LIBS links (verify-tree.sh checks
+    // them against R_HOME/Tcl/bin).
     mkc = try replaceLine(b, mkc, "TCL_HOME", "TCL_HOME = $(R_HOME)/Tcl");
     try assertNoBuildPath(ctx, "etc/x64/Makeconf", raw, mkc);
     const mkc_wf = b.addWriteFiles();
@@ -2984,7 +2987,10 @@ fn installOpenMP(ctx: *const Ctx, io: std.Io) !void {
 ///   - Windows: the Tcl/Tk runtime in R_HOME/Tcl, where tcltk's .onLoad
 ///     loads it from (Tcl/bin as library.dynam's DLLpath, Tcl/lib as
 ///     TCLLIBPATH); the build fails without it, tcltk is always built
-///     there. fontconfig's configuration (installFontconfig) as
+///     there. Also Tcl/Tk's headers in R_HOME/Tcl/include, for packages
+///     that compile against Tcl/Tk (tkrplot): compile-time files, kept
+///     in the base by T1 (feat-standalone-toolchain PLAN.md; below).
+///     fontconfig's configuration (installFontconfig) as
 ///     R_HOME/etc/fonts, which
 ///     etc/Renviron.site points FONTCONFIG_PATH at. etc/Renviron.site is
 ///     written here, for the conda build too: it carries the compile
@@ -3073,6 +3079,31 @@ fn installEnvRuntime(ctx: *const Ctx, io: std.Io) !void {
         // script library, Tcl/lib.
         inline for (.{ "tcl8.6", "tk8.6", "tcl8" }) |d| {
             try installEnvDir(ctx, io, ctx.condaDir("lib/" ++ d), ctx.rhomeInstallDir("Tcl/lib/" ++ d), &.{});
+        }
+        // Tcl/Tk's headers in Tcl/include, where Makeconf's TCLTK_CPPFLAGS
+        // (-I "$(TCL_HOME)/include") and packages' Makevars.win look, as
+        // in CRAN's R_HOME/Tcl. They are compile-time files, the one
+        // exception to "compile-time files go in the toolchain"
+        // (feat-standalone-toolchain PLAN.md, T1). Without them a tree
+        // used alone compiled no Tcl/Tk C code: tkrplot stopped at
+        // "'tk.h' file not found". The set is tcl.h, tk.h and
+        // tkPlatDecls.h (Tk_GetHWND and the rest) with what they include,
+        // from conda-forge's win-64 tk; tk.h includes X11/Xlib.h, Tk's own
+        // stand-in for Xlib on Windows. Left out: tk's other 15 headers
+        // (tclOO, tclTomMath, itcl, tdbc, and the X11 headers none of
+        // these include).
+        inline for (.{
+            "tcl.h",            "tclDecls.h",  "tclPlatDecls.h",
+            "tk.h",             "tkDecls.h",   "tkPlatDecls.h",
+            "tkIntXlibDecls.h", "X11/X.h",     "X11/Xfuncproto.h",
+            "X11/Xlib.h",       "X11/Xutil.h", "X11/keysym.h",
+            "X11/keysymdef.h",
+        }) |h| {
+            if (!pathExists(io, ctx.condaDir("include/" ++ h))) {
+                std.debug.print("error: {s} is missing (tk not in the env?); the tree ships Tcl/Tk's headers in R_HOME/Tcl/include\n", .{ctx.condaDir("include/" ++ h)});
+                return error.MissingTclTk;
+            }
+            b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("include/" ++ h) }, ctx.rhomeInstallDir("Tcl/include"), h).step);
         }
         if (fonts) {
             try installFontconfig(ctx, io, ctx.rhomeInstallDir("etc/fonts"));
@@ -3411,16 +3442,9 @@ fn stageLibraryPayload(ctx: *const Ctx, io: std.Io, libstage: *std.Build.Step.Wr
             const s4 = std.mem.eql(u8, pkg, "methods") or std.mem.eql(u8, pkg, "stats4");
             const with_os = std.mem.eql(u8, pkg, "base") or std.mem.eql(u8, pkg, "utils") or
                 std.mem.eql(u8, pkg, "grDevices") or std.mem.eql(u8, pkg, "parallel");
-            var all_r = try concatRSources(ctx, io, b.fmt("{s}/R", .{pkg_src}), if (with_os) os_subdir else null, if (s4) pkg else null);
-            if (std.mem.eql(u8, pkg, "base")) {
-                // mkRbase: substitute configure's @WHICH@ — only appears in
-                // R/unix/system.unix.R (real value comes from vendored
-                // config.status, which only exists on unix/macOS); Windows's
-                // R/windows/-only concatenation never even includes that
-                // file, so the token is never actually present there — the
-                // "which" fallback is a no-op in that case, not a real value.
-                all_r = try std.mem.replaceOwned(u8, b.allocator, all_r, "@WHICH@", ctx.subst.get("WHICH") orelse "which");
-            }
+            // (base: mkRbase's one substitution, configure's @WHICH@ in
+            // R/unix/system.unix.R, is gone with patch 0002's Sys.which.)
+            const all_r = try concatRSources(ctx, io, b.fmt("{s}/R", .{pkg_src}), if (with_os) os_subdir else null, if (s4) pkg else null);
             _ = libstage.add(b.fmt("{s}/R/{s}", .{ pkg, pkg }), all_r);
         }
 

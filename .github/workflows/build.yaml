@@ -1,10 +1,21 @@
 name: build-r
 
-# Docs-only changes never touch the build: skip the whole matrix for
-# them (a full run is 20 jobs: 15 build legs, 5 conda packages). Note the
+# Two tiers, so that a commit runs what it can break and the expensive
+# legs run only when asked for (.github/devdocs/chore-ci-tiers/PLAN.md):
+# - core, on every pull request push and every push to main: the default
+#   leg on all 5 platforms and minimal on linux-64, the wheel's (6 legs);
+# - full, on a pull request labelled `full-ci` and on a manual dispatch,
+#   nothing else: all 15 legs (full, openblas and minimal too).
+# conda-package (5 jobs) runs on every push to main, which publishes, in
+# the full tier, and on a pull request that changes what it builds from.
+# Docs-only changes never touch the build: they start nothing. On a pull
+# request the paths are matched against its whole diff, so once it
+# changes code, a docs-only push to it runs the core tier too. Note the
 # consequence for branch protection: a docs-only PR reports no build-r
-# checks at all, so don't mark them "required" or such PRs can't merge.
-# `[skip ci]` in a commit message also works for a one-off.
+# checks at all, so don't mark them "required" or such PRs can't merge
+# (main requires none). No `[skip ci]` needed, and it skips more than its
+# own commit: in the newest commit of a push it skips the whole push,
+# which is how #15's merge of main went untested.
 on:
   push:
     branches: [main]
@@ -13,19 +24,32 @@ on:
       - ".github/devdocs/**"
       - "LICENSE"
   pull_request:
+    # labeled: adding `full-ci` starts the full tier at once. Any other
+    # label starts nothing (the jobs' conditions).
+    types: [opened, synchronize, reopened, labeled]
     paths-ignore:
       - "**/*.md"
       - ".github/devdocs/**"
       - "LICENSE"
   workflow_dispatch:
+    inputs:
+      # A runner image before ubuntu-latest moves to it, e.g. ubuntu-26.04
+      # (ubuntu-latest from 2026-10-19): `gh workflow run build.yaml
+      # --ref <branch> -f linux_runner=ubuntu-26.04`. Only main publishes.
+      linux_runner:
+        description: Runner for the linux-64 legs
+        type: string
+        default: ubuntu-latest
 
-# Cancel a still-running run for the same branch/PR the moment a newer
-# commit lands (or a second manual dispatch fires) — keeps stale runs
-# from burning runner time behind the current commit. (Historically this
-# mattered most for the self-hosted gamma/omicron/kappa fleet, since
-# decommissioned — everything runs on GitHub-hosted runners now.)
+# A newer push to a pull request cancels its older run (the group is the
+# pull request's number): the old commit's result no longer matters.
+# Runs on main are never cancelled, since each commit on main is tested
+# and publishes, and neither are manual dispatches: each such run has a
+# group of its own, its run id. So does a pull request event that runs
+# nothing here (another label added), so that it cannot cancel a run of
+# the legs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')) && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: true
 
 # Every job starts from a bare runner: the only bootstrap is pixi itself.
@@ -41,7 +65,8 @@ jobs:
   # The steps themselves are in build-r.yaml, which upstream-zig.yaml
   # calls too (the same legs with upstream zig, F4): one step list. A leg
   # reads "<os> / <env>": this job is named after the runner, the called
-  # one after the env.
+  # one after the env. This job runs the core tier's 6 legs, build-full
+  # the full tier's other 9.
   build:
     name: ${{ matrix.os }}
     # Gated behind ENABLE_HOSTED_JOBS (repo Settings > Actions > Variables)
@@ -49,7 +74,11 @@ jobs:
     # is public, so hosted standard runners are free with no minute caps
     # (the gate's original reason, a private-repo minute budget, is gone).
     # Toggle with `gh variable set ENABLE_HOSTED_JOBS --body false`.
-    if: vars.ENABLE_HOSTED_JOBS == 'true'
+    # Every job has it. A `labeled` event runs these legs only for
+    # `full-ci` (its full tier includes them).
+    if: >-
+      vars.ENABLE_HOSTED_JOBS == 'true' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     # The arch axis arrived with the repo going public (2026-09-03):
     # GitHub-hosted arm64-linux (ubuntu-24.04-arm) and Intel-macOS
     # (macos-15-intel) runners are free for public repos, dissolving the
@@ -62,26 +91,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
-        env: [default, full]
+        os: ["${{ inputs.linux_runner || 'ubuntu-latest' }}", ubuntu-24.04-arm, macos-latest, macos-15-intel]
+        env: [default]
         include:
-          # external optimized BLAS/LAPACK variant (linux only for now,
-          # both linux archs)
-          - os: ubuntu-latest
-            env: openblas
-          - os: ubuntu-24.04-arm
-            env: openblas
           # minimal: the r-zig Python wheel's variant (pixi.toml
-          # [feature.minimal]); unix only. linux-x86_64's vendored config
-          # was captured locally, the other three by gen-config's minimal
-          # legs (run 36151245208, 2026-09-25).
-          - os: ubuntu-latest
-            env: minimal
-          - os: ubuntu-24.04-arm
-            env: minimal
-          - os: macos-latest
-            env: minimal
-          - os: macos-15-intel
+          # [feature.minimal]); unix only. In the core tier on linux-64,
+          # whose wheel it builds and tests; the other three are in
+          # build-full. linux-x86_64's vendored config was captured
+          # locally, the other three by gen-config's minimal legs (run
+          # 36151245208, 2026-09-25).
+          - os: ${{ inputs.linux_runner || 'ubuntu-latest' }}
             env: minimal
           # Windows: one variant only (R's Windows build has no slim/
           # minimal switches; no wheel, no openblas), so only `default`.
@@ -104,6 +123,77 @@ jobs:
       build_args: ${{ matrix.build_args }}
       timeout: ${{ matrix.timeout || 180 }}
 
+  # The full tier's other 9 legs, on the same runners: full on the four
+  # unix ones, openblas (external optimized BLAS/LAPACK, linux only for
+  # now, both archs), and minimal on the three build doesn't run. Only on
+  # a pull request labelled `full-ci` (its `labeled` event, then every
+  # push while the label stays) and on a manual dispatch.
+  build-full:
+    name: ${{ matrix.os }}
+    if: >-
+      vars.ENABLE_HOSTED_JOBS == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'full-ci')))
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["${{ inputs.linux_runner || 'ubuntu-latest' }}", ubuntu-24.04-arm, macos-latest, macos-15-intel]
+        env: [full]
+        include:
+          - os: ${{ inputs.linux_runner || 'ubuntu-latest' }}
+            env: openblas
+          - os: ubuntu-24.04-arm
+            env: openblas
+          - os: ubuntu-24.04-arm
+            env: minimal
+          - os: macos-latest
+            env: minimal
+          - os: macos-15-intel
+            env: minimal
+    uses: ./.github/workflows/build-r.yaml
+    with:
+      os: ${{ matrix.os }}
+      env: ${{ matrix.env }}
+
+  # Does the pull request change what conda-package builds from? The
+  # recipe, the envs (pixi.toml, pixi.lock), the build (build.zig,
+  # zigbuild/, scripts/) or the workflows. Read from GitHub's list of the
+  # pull request's files, its whole diff (base...head) as paths-ignore
+  # reads it, so a later push that touches no such file still packages a
+  # pull request that changed the recipe. The log lists the files that
+  # matched. Not needed with `full-ci`, on push or on dispatch: those
+  # package anyway. If the list can't be read, it says yes: a spare job
+  # beats an untested recipe. No checkout and no pixi: it builds nothing,
+  # the runner's gh only reads the API.
+  packaging:
+    if: >-
+      vars.ENABLE_HOSTED_JOBS == 'true' &&
+      github.event_name == 'pull_request' && github.event.action != 'labeled' &&
+      !contains(github.event.pull_request.labels.*.name, 'full-ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      changed: ${{ steps.files.outputs.changed }}
+    steps:
+      - name: Files of the pull request
+        id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILES: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100
+        run: |
+          if ! files="$(gh api --paginate "$FILES" --jq '.[] | .filename, .previous_filename // empty')"; then
+            echo "::warning::could not list the pull request's files: packaging anyway"
+            changed=true
+          elif grep -E '^(recipe/|pixi\.toml$|pixi\.lock$|build\.zig$|zigbuild/|scripts/|\.github/workflows/)' <<< "$files"; then
+            changed=true
+          else
+            changed=false
+          fi
+          echo "changed=$changed" | tee -a "$GITHUB_OUTPUT"
+
   # conda-forge-style package (rattler-build) — always the slim variant
   # regardless of matrix.env above, since recipe/build.sh never sets
   # R_BUILD_VARIANT. A from-scratch build in its own isolated sandbox, so
@@ -117,9 +207,20 @@ jobs:
   # stored credentials on any runner. Requires this repo+workflow to be
   # registered as a Trusted Publisher in the `universe` channel's
   # settings on prefix.dev.
+  # It runs on every push to main (publishing needs it) and every manual
+  # dispatch; on a pull request, with `full-ci` or when packaging says
+  # the pull request changes what it builds from. !cancelled(), because
+  # packaging is skipped in all the other cases, and a job whose need was
+  # skipped is skipped too unless its condition has a status function.
   conda-package:
     name: conda-package / ${{ matrix.name }}
-    if: vars.ENABLE_HOSTED_JOBS == 'true'
+    needs: packaging
+    if: >-
+      vars.ENABLE_HOSTED_JOBS == 'true' && !cancelled() &&
+      (github.event_name != 'pull_request' ||
+       needs.packaging.outputs.changed == 'true' ||
+       (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'full-ci')))
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -129,7 +230,7 @@ jobs:
       matrix:
         include:
           - name: linux-64
-            runner: ubuntu-latest
+            runner: ${{ inputs.linux_runner || 'ubuntu-latest' }}
           - name: linux-aarch64
             runner: ubuntu-24.04-arm
           - name: osx-arm64

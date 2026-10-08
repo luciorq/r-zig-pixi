@@ -11,6 +11,26 @@
 //! usual `PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)` puts it on C and
 //! C++ links too). A flang without the archive: dropped with a warning, so
 //! only a Fortran package fails, at its load test.
+//!
+//! -lgfortran and -lquadmath, as a Makevars written for gcc names them
+//! (`PKG_LIBS = -lgfortran -lquadmath`, Rtools' habit on Windows), are this
+//! runtime too, on every OS: FC is flang, so the Fortran runtime a link
+//! needs is flang's, and gfortran's defines no symbol flang's code calls.
+//! The three flags count as one: the first becomes the archive, every
+//! other goes. Before (linux-64, 2026-10-08): -lgfortran failed the link
+//! ("unable to find dynamic system library 'gfortran'") wherever the
+//! environment had no conda-forge libgfortran (all but the openblas
+//! variants'), and where it had one zig dropped it as unneeded and the
+//! package failed to load ("undefined symbol:
+//! _FortranAioBeginExternalListOutput"); -lquadmath linked nothing (libgcc's
+//! libquadmath, dropped as unneeded) or, with no environment, failed the
+//! link. macOS (osx-arm64, the same day): both failed the link, as neither
+//! the environment nor the SDK has either library. Windows looked for a
+//! gfortran on PATH and linked Rtools' libgfortran, which has no flang
+//! symbol either, and failed the link without one. C that calls
+//! libquadmath itself needs GCC's quadmath.h, which zig does not ship and
+//! GCC keeps in its own lib/gcc/<triple>/<version>/include, on no
+//! environment's include path.
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
@@ -22,15 +42,22 @@ const Args = cmdline.Args;
 pub const flag = "-lflang_rt.runtime";
 const archive = "libflang_rt.runtime.a";
 
-/// `args` with the first -lflang_rt.runtime replaced by the archive (or
-/// dropped) and every later one dropped. Unchanged, and flang not asked,
-/// when no argument has the flag as a word (the shims' `" $* "` test).
+/// The flags that name the runtime: FLIBS's, then gfortran's runtime and
+/// its quad-precision library.
+const flags = [_][]const u8{ flag, "-lgfortran", "-lquadmath" };
+
+/// `args` with the first of the runtime's flags replaced by the archive
+/// (or dropped) and every later one dropped. Unchanged, and flang not
+/// asked, when no argument has one of them as a word (the shims' `" $* "`
+/// test).
 pub fn resolve(ctx: *Ctx, args: Args) !Args {
-    if (!cmdline.anyWord(args, flag)) return args;
+    for (flags) |f| {
+        if (cmdline.anyWord(args, f)) break;
+    } else return args;
     var found = try find(ctx);
     var out: std.ArrayList([]const u8) = .empty;
     for (args) |x| {
-        if (!mem.eql(u8, x, flag)) {
+        if (!isFlag(x)) {
             try out.append(ctx.arena, x);
             continue;
         }
@@ -38,6 +65,11 @@ pub fn resolve(ctx: *Ctx, args: Args) !Args {
         found = null;
     }
     return out.items;
+}
+
+fn isFlag(x: []const u8) bool {
+    for (flags) |f| if (mem.eql(u8, x, f)) return true;
+    return false;
 }
 
 /// The flang on PATH (`command -v flang`): what zig-fc runs, and whose
@@ -61,7 +93,7 @@ fn find(ctx: *Ctx) !?[]const u8 {
         const a = try ctx.fmt("{s}/lib/{s}/" ++ archive, .{ dir, sub });
         if (ctx.isFile(a)) return a;
     }
-    ctx.warn("warning: no " ++ archive ++ " under {s}/lib/*/; dropping " ++ flag, .{dir});
+    ctx.warn("warning: no " ++ archive ++ " under {s}/lib/*/; dropping " ++ flag ++ ", -lgfortran and -lquadmath", .{dir});
     return null;
 }
 
@@ -101,6 +133,8 @@ test "no flang on PATH: every -lflang_rt.runtime dropped; flang never asked with
     // the flag inside another argument triggers the lookup but is no flag
     try expectArgs(&.{"-DX=a -lflang_rt.runtime b"}, try resolve(&f.ctx, &.{"-DX=a -lflang_rt.runtime b"}));
     try expectArgs(&.{ "-lflang_rt", "x.o" }, try resolve(&f.ctx, &.{ "-lflang_rt", "x.o" }));
+    // gfortran's runtime and libquadmath are this runtime: dropped too
+    try expectArgs(&.{ "a.o", "-lm" }, try resolve(&f.ctx, &.{ "a.o", "-lgfortran", "-lm", "-lquadmath" }));
 }
 
 test "flang's resource dir: the archive once, in place of the first flag" {
@@ -114,7 +148,7 @@ test "flang's resource dir: the archive once, in place of the first flag" {
     // no archive: dropped, with a warning
     try f.touch("llvm/lib/clang/23/lib/x86_64-unknown-linux-gnu/libother.a");
     try expectArgs(&.{ "a.o", "-lm" }, try resolve(&f.ctx, &.{ "a.o", "-lflang_rt.runtime", "-lm", "-lflang_rt.runtime" }));
-    try testing.expectEqualStrings(f.fmt("rzig-test: warning: no libflang_rt.runtime.a under {s}/lib/*/; dropping -lflang_rt.runtime\n", .{rd}), f.takeWarnings());
+    try testing.expectEqualStrings(f.fmt("rzig-test: warning: no libflang_rt.runtime.a under {s}/lib/*/; dropping -lflang_rt.runtime, -lgfortran and -lquadmath\n", .{rd}), f.takeWarnings());
     // the first triple directory in byte order that has it; a directory of that name is no archive
     try f.tmp.dir.createDirPath(testing.io, "llvm/lib/clang/23/lib/.hidden/libflang_rt.runtime.a");
     try f.tmp.dir.createDirPath(testing.io, "llvm/lib/clang/23/lib/a-dir/libflang_rt.runtime.a");
@@ -122,6 +156,35 @@ test "flang's resource dir: the archive once, in place of the first flag" {
     try f.touch("llvm/lib/clang/23/lib/zz/libflang_rt.runtime.a");
     const a = f.path("llvm/lib/clang/23/lib/x86_64-unknown-linux-gnu/libflang_rt.runtime.a");
     try expectArgs(&.{ "a.o", a, "-lm" }, try resolve(&f.ctx, &.{ "a.o", "-lflang_rt.runtime", "-lm", "-lflang_rt.runtime" }));
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "-lgfortran and -lquadmath: the same runtime, once, in place of the first of the three, on every OS" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for flang
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const rd = f.path("llvm/lib/clang/23");
+    try f.write("bin/flang", f.fmt("#!/bin/sh\n[ \"$1\" = -print-resource-dir ] && printf '%s\\n' '{s}'\n", .{rd}), .fromMode(0o755));
+    try f.env.put("PATH", f.path("bin"));
+    try f.touch("llvm/lib/clang/23/lib/x86_64-unknown-linux-gnu/libflang_rt.runtime.a");
+    const a = f.path("llvm/lib/clang/23/lib/x86_64-unknown-linux-gnu/libflang_rt.runtime.a");
+    for ([_]Ctx.Os{ .linux, .macos, .windows }) |os| {
+        f.ctx.os = os;
+        // a Makevars written for gcc: PKG_LIBS = -lgfortran -lquadmath
+        try expectArgs(&.{ "a.o", a, "-lm" }, try resolve(&f.ctx, &.{ "a.o", "-lgfortran", "-lquadmath", "-lm" }));
+        try expectArgs(&.{a}, try resolve(&f.ctx, &.{"-lquadmath"}));
+        // and $(FLIBS) after it: the archive where the first flag was
+        try expectArgs(
+            &.{ "a.o", a, "-lm", "-lm" },
+            try resolve(&f.ctx, &.{ "a.o", "-lquadmath", "-lm", "-lflang_rt.runtime", "-lgfortran", "-lm" }),
+        );
+        try expectArgs(&.{ "a.o", a, "-lc++" }, try resolve(&f.ctx, &.{ "a.o", "-lflang_rt.runtime", "-lc++", "-lgfortran" }));
+    }
+    // other names, the two-argument form and a flag inside another
+    // argument are no flags (the last asks flang, as before)
+    const others: Args = &.{ "-lgfortran5", "-lquadmathx", "-l", "gfortran", "-DX=a -lgfortran b", "-Wl,-lquadmath" };
+    try expectArgs(others, try resolve(&f.ctx, others));
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 

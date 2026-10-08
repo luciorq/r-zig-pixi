@@ -125,8 +125,11 @@ configure = { cmd = "bash zigbuild/tools/configure-only.sh", depends-on = ["fetc
 
 [tasks]
 # --- CI (build-r.yml on GitHub Actions; needs `gh auth login`) ---
-# Full run on-demand (all jobs, same as a push to main — see
-# workflow_dispatch in .github/workflows/build.yaml).
+# The full tier on demand, on main: all 15 legs and conda-package on all
+# 5, which publishes, as a push to main does (a push runs only the core
+# tier's 6 legs; .github/devdocs/chore-ci-tiers/PLAN.md). For a branch:
+# `gh workflow run build.yaml --ref <branch>`; for a pull request, the
+# `full-ci` label.
 ci-trigger = "gh workflow run build.yaml --ref main"
 # Re-run only the jobs that failed in the most recent build-r run (e.g.
 # just conda-package/windows) without re-running everything that already
@@ -203,6 +206,13 @@ harfbuzz = "14.2.*"
 fontconfig = "*"
 freetype = "*"
 libpng = "*"
+# glib, not libglib alone (2026-10-08, glib 2.90.0): R's cairo device
+# compiles against pango's headers, which include glibconfig.h, and only
+# glib ships it (lib/glib-2.0/include). R links -lgobject-2.0 -lglib-2.0,
+# and the unversioned libraries those name are in glib-tools, which glib
+# brings; libglib has only the versioned ones. glib needs python, so
+# python is in R's build envs on unix. On win-64 harfbuzz's
+# libharfbuzz-devel needs glib anyway.
 glib = "*"
 
 # conda-forge's linux cairo is built with X11 backends; its pkg-config
@@ -227,6 +237,14 @@ patch = "*"  # zig-build.sh applies zigbuild/patches/ (m2-patch on win-64)
 [target.linux-64.dependencies]
 uutils-coreutils = "*"
 patchelf = "*"  # rpath rewriting for relocatable installs
+# objdump (verify-tree.sh's glibc ceiling) and strip (vendor-libs.sh,
+# minimal) from conda-forge, not the host. Puts bare ld/as/ar/nm on PATH
+# too; nothing calls them: zig links in-process, flang with ld.lld
+# (flang-zig's flang.cfg: -fuse-ld=lld), rzig's ar is `zig ar`.
+binutils = "*"
+# strace (hermetic-check.sh's and verify-bundle.sh's traces) from
+# conda-forge, not the host: in CI those checks fail without it.
+strace = "*"
 
 # win-64: flang-zig is the MinGW-ABI flang (see [dependencies]); it
 # replaced conda-forge's MinGW gfortran (gcc_impl_win-64), Phase 2,
@@ -275,6 +293,8 @@ uutils-coreutils = "*"
 [target.linux-aarch64.dependencies]
 coreutils = "*"
 patchelf = "*"
+binutils = "*"  # binutils and strace: see linux-64
+strace = "*"
 
 # --- optional capabilities (compile-time: only via the 'full' environment) ---
 
@@ -378,16 +398,27 @@ flang-rt-zig = { version = "==23.1.1", build-number = "==10" }
 [feature.minimal.target.linux-64.dependencies]
 uutils-coreutils = "*"
 patchelf = "*"
+binutils = "*"
+strace = "*"
 
 [feature.minimal.target.linux-aarch64.dependencies]
 coreutils = "*"
 patchelf = "*"
+binutils = "*"
+strace = "*"
 
 [feature.minimal.target.osx-64.dependencies]
 uutils-coreutils = "*"
 
 [feature.minimal.target.osx-arm64.dependencies]
 uutils-coreutils = "*"
+
+# minimal's packages in pixi.lock, all four platforms, against
+# scripts/minimal-deny.txt (the graphics stack, glib, python, ...). Reads
+# the lock only. Run it after every re-lock; CI runs it on the minimal
+# legs (build-r.yaml).
+[feature.minimal.tasks]
+minimal-check = "bash scripts/check-minimal.sh"
 
 # Wheel assembly + test: only Python (stdlib zipfile/hashlib, venv, pip).
 # Not the build env: python's own closure (readline, tk, sqlite, ...)
@@ -405,6 +436,11 @@ R_BUILD_VARIANT = "minimal"
 [feature.wheel.dependencies]
 python = ">=3.9"
 
+# readelf (wheel-test.sh's C++ runtime and rpath checks) from conda-forge,
+# not the host; macOS uses otool there.
+[feature.wheel.target.linux.dependencies]
+binutils = "*"
+
 [feature.wheel.tasks]
 wheel = "python scripts/make-wheel.py"
 # Installs the wheel plus ziglang (from PyPI: needs network) into a
@@ -417,7 +453,7 @@ wheel-test = "bash scripts/wheel-test.sh"
 # (scripts/prefix-*.sh) — declared here so the pkg env is self-contained
 # rather than borrowing whatever the host machine happens to have.
 [feature.pkg.dependencies]
-rattler-build = ">=0.70"
+rattler-build = ">=0.76"  # --error-overlapping-files, --error-unused-staging-files (0.76.0)
 curl = "*"
 python = ">=3.9"
 
@@ -436,7 +472,10 @@ python = ">=3.9"
 # dist/conda/build_cache under a key that does not hash the recipe's
 # `path:` sources (scripts/, zigbuild/, build.zig), so a local rebuild
 # after editing them silently reused the old build (2026-09-30).
-conda-package = "rm -rf dist/conda/build_cache && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id -c conda-forge -c https://prefix.dev/universe"
+# --error-*: two outputs packaging the same file, or a staging file no
+# output takes, fail the build instead of warning (no 0.76.1 build of
+# ours has warned).
+conda-package = "rm -rf dist/conda/build_cache && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id --error-overlapping-files --error-unused-staging-files -c conda-forge -c https://prefix.dev/universe"
 
 # Channel administration: list/delete published package files. Neither
 # rattler-build nor pixi has CLI support for either operation (upload-
@@ -551,13 +590,13 @@ stress = "dist/R-$R_VERSION-slim-zig/Library/lib/R/bin/x64/Rscript.exe stress/st
 # R envs already had. A re-lock that keeps an older build can add more:
 # `pixi lock` with the old lock's preferences kept default's pkg-config
 # _1009, which brought libglib and libffi (linux-aarch64, osx-arm64) and
-# libgcc-ng and libstdcxx-ng (linux) into minimal. After a re-lock, check
-# minimal's packages with `pixi list -e minimal --platform <p> --frozen`;
-# verify-tree checks only what R links. minimal has no win-64, so the
-# group's win-64 solve leaves minimal's features out. wheel stays out: it
-# is Python-only and nothing in it builds or links R, and in the group its
-# python (libpython needs libcxx >= 20) would share versions with R's
-# build envs, where zig holds libcxx at 21.* on macOS.
+# libgcc-ng and libstdcxx-ng (linux) into minimal. After a re-lock, run
+# `pixi run -e minimal minimal-check` (scripts/minimal-deny.txt; CI runs
+# it too); verify-tree checks only what R links. minimal has no win-64,
+# so the group's win-64 solve leaves minimal's features out. wheel stays
+# out: it is Python-only and nothing in it builds or links R, and in the
+# group its python (libpython needs libcxx >= 20) would share versions
+# with R's build envs, where zig holds libcxx at 21.* on macOS.
 [environments]
 pkg = { features = ["pkg", "pipeline"], solve-group = "r" }
 default = { features = ["pipeline"], solve-group = "r" }

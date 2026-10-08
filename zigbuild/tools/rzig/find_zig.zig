@@ -43,7 +43,7 @@ fn canRun(ctx: *Ctx, path: []const u8) bool {
 /// `command -v name`: the first PATH entry holding an executable file of
 /// that name (name.exe on Windows; a .bat is no use to CreateProcess with
 /// arguments like ours). An empty entry is the current directory. Also how
-/// the applets find flang and gfortran, in `ctx.env`'s PATH.
+/// the applets find flang, in `ctx.env`'s PATH.
 pub fn onPath(ctx: *Ctx, name: []const u8) !?[]const u8 {
     const path = ctx.getenv("PATH") orelse return null;
     var it = mem.splitScalar(u8, path, if (windows) ';' else ':');

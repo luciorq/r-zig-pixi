@@ -1,0 +1,39 @@
+# Packages the minimal environment (the r-zig wheel's build) must never
+# have. One extended regular expression per line, matched against the
+# whole package name. scripts/check-minimal.sh reads it.
+#
+# What minimal leaves out (pixi.toml, [feature.minimal]): the graphics
+# stack, with what it brings into the R envs, and libdeflate.
+cairo
+pango
+harfbuzz
+libharfbuzz.*
+glib
+glib-tools
+libglib
+libffi
+fontconfig
+fonts-.*
+font-ttf-.*
+expat
+libexpat
+freetype
+libfreetype.*
+pixman
+fribidi
+graphite2
+libpng
+libdeflate
+libjpeg-turbo
+libtiff
+libwebp.*
+lerc
+tk
+libxcb
+xorg-.*
+# glib's Python, and what a partial re-lock once added through an old
+# pkg-config build (pixi.toml, the note above [environments]):
+python
+libpython
+libgcc-ng
+libstdcxx-ng

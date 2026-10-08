@@ -4,42 +4,60 @@ const std = @import("std");
 const mem = std.mem;
 const Ctx = @import("Ctx.zig");
 const cmdline = @import("cmdline.zig");
-const find_zig = @import("find_zig.zig");
 const Args = cmdline.Args;
 
 /// zig's MinGW `-l` search tries only <n>.dll, <n>.lib and lib<n>.a. It
 /// misses lib<n>.dll.a (MinGW import libraries, what GNU ld tries first)
 /// and lib<n>.lib (conda-forge's MSVC naming: libbz2.lib, libcurl.lib), so
-/// name the file when only a missed name exists. Also the -mwindows
-/// libraries, and gfortran's runtime directory.
+/// name the file when only a missed name exists. MinGW's library names
+/// zig has no import library for under that name are renamed first
+/// (mingw_names). Also the -mwindows libraries. (-lgfortran and
+/// -lquadmath are flang's runtime by now: flang_rt.zig.)
 pub fn libs(ctx: *Ctx, args: Args) !Args {
     const a = ctx.arena;
-    var dirs = try cmdline.libDirs(a, args);
-    // gfortran's runtime lives in GCC's private libdir, which the real gcc
-    // driver searches implicitly and zig cannot know about.
-    var gfortran_l: ?[]const u8 = null;
-    if (cmdline.anyContains(args, "-lgfortran") or cmdline.anyContains(args, "-lquadmath")) {
-        if (try gfortranLibDir(ctx)) |d| {
-            try dirs.append(a, d);
-            gfortran_l = try ctx.fmt("-L{s}", .{d});
-        }
-    }
+    const dirs = try cmdline.libDirs(a, args);
     var out: std.ArrayList([]const u8) = .empty;
     for (args) |x| {
-        const name = cmdline.flagValue(x, "-l") orelse {
+        var name = cmdline.flagValue(x, "-l") orelse {
             try out.append(a, x);
             continue;
         };
-        try out.append(a, (try importLib(ctx, dirs.items, name)) orelse x);
+        var l = x;
+        if (mingw_names.get(name)) |n| {
+            name = n;
+            l = try ctx.fmt("-l{s}", .{n});
+        }
+        try out.append(a, (try importLib(ctx, dirs.items, name)) orelse l);
     }
     // GNU gcc's -mwindows also links the GDI/shell set; zig only sets the
     // subsystem. gnuwin32's makefiles rely on the implicit libraries.
     if (cmdline.anyWord(args, "-mwindows")) {
         try out.appendSlice(a, &.{ "-lgdi32", "-lcomdlg32", "-lwinspool", "-ladvapi32", "-lshell32" });
     }
-    if (gfortran_l) |l| try out.append(a, l);
     return out.items;
 }
+
+/// MinGW library names upstream zig has no import library for, and the
+/// name it has one under. zig makes the import library for -l<n> from
+/// <n>.def in its lib/libc/mingw, and upstream zig ships no .def under
+/// these names; conda-forge's zig ships prebuilt MinGW import libraries
+/// as well, so it links either name. One rule for both zigs: the name
+/// both have a .def for, which imports the same functions from the same
+/// DLL.
+///   synchronization: WaitOnAddress, WakeByAddressSingle and
+///     WakeByAddressAll, which Rust's standard library calls on
+///     windows-gnu (rustc's native-static-libs list -lsynchronization, so
+///     Rust-based packages' Makevars.win name it, and rustc passes it on
+///     its own links). They live in the API set api-ms-win-core-synch-l1-2-0;
+///     conda-forge's synchronization.def is that API set's .def (LIBRARY
+///     api-ms-win-core-synch-l1-2-0.dll, the same 17 exports). Upstream
+///     zig 0.16.0: "unable to find dynamic system library
+///     'synchronization'"; with the API set's name both zigs link it
+///     (cross-compiled from linux-64, and natively on kappa with this
+///     rule, 2026-10-08: the same import table).
+const mingw_names = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "synchronization", "api-ms-win-core-synch-l1-2-0" },
+});
 
 /// MinGW gcc names an executable link's output `<name>.exe` when `-o`
 /// gives a name without an extension (`gcc px.c -o px` writes px.exe);
@@ -74,21 +92,8 @@ fn importLib(ctx: *Ctx, dirs: Args, name: []const u8) !?[]const u8 {
     return null;
 }
 
-/// The directory of `gfortran -print-file-name=libgfortran.dll.a`, when
-/// gfortran answers with one that exists. (The shim's `dirname` turned a
-/// missing gfortran, or an answer without a directory, into `.`, which
-/// added `-L.`; that is dropped here. No platform uses gfortran since
-/// Phase 2, so this only matters to a package naming -lgfortran.)
-fn gfortranLibDir(ctx: *Ctx) !?[]const u8 {
-    const gfortran = (try find_zig.onPath(ctx, "gfortran")) orelse return null;
-    const res = ctx.capture(&.{ gfortran, "-print-file-name=libgfortran.dll.a" });
-    const dir = std.fs.path.dirname(mem.trimEnd(u8, res.stdout, "\r")) orelse return null;
-    return if (ctx.isDir(dir)) dir else null;
-}
-
 // ---------------------------------------------------------------------------
 
-const builtin = @import("builtin");
 const testing = std.testing;
 const testutil = @import("testutil.zig");
 const expectArgs = testutil.expectArgs;
@@ -109,23 +114,22 @@ test "import libraries GNU ld would find; zig's own names left to zig; -mwindows
     try expectArgs(&.{"-mwindowsx"}, try libs(&f.ctx, &.{"-mwindowsx"}));
 }
 
-test "gfortran's libdir for -lgfortran/-lquadmath, nothing without gfortran" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for gfortran
+test "-lsynchronization: the API set's name, which both zigs have an import library for" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
     defer f.deinit();
-    try f.env.put("PATH", f.path("bin"));
-    try expectArgs(&.{ "a.o", "-lgfortran" }, try libs(&f.ctx, &.{ "a.o", "-lgfortran" }));
-    for ([_][]const u8{ "gcc/libgfortran.dll.a", "gcc/libquadmath.dll.a" }) |p| try f.touch(p);
-    try f.write("bin/gfortran", f.fmt("#!/bin/sh\nprintf '%s\\r\\n' '{s}'\n", .{f.path("gcc/libgfortran.dll.a")}), .fromMode(0o755));
-    const l = f.fmt("-L{s}", .{f.path("gcc")});
+    const l1 = f.fmt("-L{s}", .{f.path("d1")});
+    // Rust's libraries on a package's link line
     try expectArgs(
-        &.{ "a.o", f.path("gcc/libgfortran.dll.a"), f.path("gcc/libquadmath.dll.a"), "-lm", l },
-        try libs(&f.ctx, &.{ "a.o", "-lgfortran", "-lquadmath", "-lm" }),
+        &.{ "a.o", l1, "-lrustpkg", "-lws2_32", "-lapi-ms-win-core-synch-l1-2-0", "-lntdll" },
+        try libs(&f.ctx, &.{ "a.o", l1, "-lrustpkg", "-lws2_32", "-lsynchronization", "-lntdll" }),
     );
-    // an answer without a directory (gcc's when it does not know the file)
-    try f.write("bin/gfortran", "#!/bin/sh\necho libgfortran.dll.a\n", .fromMode(0o755));
-    try expectArgs(&.{"-lquadmath"}, try libs(&f.ctx, &.{"-lquadmath"}));
+    // looked up under the new name, as any other -l
+    try f.touch("d1/libapi-ms-win-core-synch-l1-2-0.dll.a");
+    try expectArgs(&.{ l1, f.path("d1/libapi-ms-win-core-synch-l1-2-0.dll.a") }, try libs(&f.ctx, &.{ l1, "-lsynchronization" }));
+    // only that name, as a one-argument -l
+    const others: Args = &.{ "-lsynchronizationx", "-lsynch", "-l", "synchronization", "-Wl,-lsynchronization" };
+    try expectArgs(others, try libs(&f.ctx, others));
 }
 
 test "exeSuffix: gcc's .exe for an executable named without an extension" {

@@ -32,7 +32,8 @@
 #     business) and reported as "ok+";
 #   - what a case's CASE_DELIBERATE sed script does to the bash side, with
 #     CASE_WHY: F3b's other differences (rzig never reads CONDA_PREFIX; the
-#     tree's headers on every call, -idirafter on Windows), and two more.
+#     tree's headers on every call, -idirafter on Windows), and the message
+#     for an archive ar cannot seed.
 # zig-fc (F3c) has no bash shim to compare with: fortran.zig's unit tests
 # cover it.
 set -euo pipefail
@@ -229,6 +230,8 @@ run_case "empty argument kept" linux zig-cc -c '' a.c
 run_case "nothing de-duplicated off macOS" linux zig-cc -shared -o pkg.so a.o -lm -lm -L/x -L/x
 run_case "gcc name" linux gcc -c a.c
 run_case "g++ name, SONAME" linux g++ -shared -o libg.so a.o
+run_case "a package's own -march/-mcpu after -mcpu=baseline" linux zig-cxx -march=native -mcpu=haswell -O2 -c a.cpp
+run_case "-mtune= dropped (zig would take it as the CPU)" linux zig-cc -mtune=native -O2 -mtune=haswell -march=x86-64 -c a.c
 
 # --- the Fortran runtime (Makeconf's FLIBS = -lflang_rt.runtime) ---------------
 CASE_PATH="$W/flang"
@@ -244,6 +247,14 @@ CASE_PATH="$W/flang-noarchive"
 run_case "the flag inside an argument: flang asked, nothing replaced" linux zig-cc '-DX=a -lflang_rt.runtime b' -c a.c
 CASE_PATH="$W/flang"
 run_case "-lflang_rt alone is another library" linux zig-cc -shared -o p.so a.o -lflang_rt -lflang_rt.runtimex
+# a Makevars written for gcc: -lgfortran and -lquadmath are flang's runtime
+CASE_PATH="$W/flang"
+run_case "-lgfortran -lquadmath, then FLIBS: the archive once" linux zig-cc -shared -o p.so a.o -lgfortran -lquadmath -lm -lflang_rt.runtime -lm
+CASE_PATH="$W/flang"
+run_case "-lquadmath alone: the archive" linux zig-cxx -shared -o p.so a.o -lquadmath
+run_case "-lgfortran -lquadmath without flang: dropped" linux zig-cc -shared -o p.so a.o -lgfortran -lquadmath -lm
+CASE_PATH="$W/flang"
+run_case "-lgfortran5, -lquadmathx and a word inside an argument are other things" linux zig-cc -shared -o p.so a.o -lgfortran5 -lquadmathx '-DX=a -lgfortran b'
 
 # --- OpenMP ------------------------------------------------------------------------
 # The shims took OpenMP from CONDA_PREFIX when their tree had no omp.h, and
@@ -312,6 +323,8 @@ CASE_PATH="$W/flang"
 run_case "SHLIB link, Fortran: dedup, archive once, SDK -L last" macos zig-cc -std=gnu23 -dynamiclib -Wl,-headerpad_max_install_names -undefined dynamic_lookup \
   -L"$RH/lib" -L/opt/lib -o quadprog.so solve.o -L"$RH/lib" -lRlapack -L"$RH/lib" -lRblas -lflang_rt.runtime -lm -lflang_rt.runtime -lm
 run_case "-framework link" macos zig-cc -dynamiclib -o ps.so apps.o -framework AppKit -framework CoreFoundation -lobjc
+CASE_PATH="$W/flang"
+run_case "-lgfortran -lquadmath, then FLIBS: the archive once, SDK -L last" macos zig-cc -dynamiclib -undefined dynamic_lookup -o p.so a.o -lgfortran -lquadmath -lflang_rt.runtime -lm
 run_case "-L kept, explicit -rpath kept" macos zig-cxx -shared -L"$W/mac/a" -lX -L"$W/mac/b" -lY -lW -lX -L /sep -Wl,-rpath,/keep -o pkg.so
 CASE_ENV=(ZIG_BIN="$STUB")
 run_case "no SDK: target only" macos zig-cc -dynamiclib -o pkg.so a.o -lz
@@ -327,6 +340,8 @@ run_case "lib*.so link: SONAME (all OSes)" macos zig-cc -shared -o libfoo.so a.o
 CASE_ENV=(XDG_CACHE_HOME="$W/cache6" FAKE_SDK="$SDK"); CASE_PATH="$W/envD/bin"; CASE_RESET="rm -rf '$W/cache6'"; CASE_STATE=$mirror_state
 run_case "libc++.1.dylib beside zig: mirror" macos zig-cxx -dynamiclib -o pkg.so a.o
 run_case "gcc name" macos gcc -c a.c
+run_case "a package's own -mcpu after -mcpu=baseline" macos zig-cc -mcpu=native -c a.c
+run_case "-mtune= dropped" macos zig-cxx -mtune=native -c a.cpp
 
 # --- macOS ar: ar.zig's archive seed ----------------------------------------------
 CASE_RESET='rm -f libnew.a'; CASE_STATE='od -c libnew.a | head -2'
@@ -350,7 +365,9 @@ run_case "ar into a missing directory: warned, still pinned" macos zig-ar rcs no
 run_case "ranlib" macos zig-ranlib libnew.a
 
 # --- Windows: windows.zig (gcc/g++ as Makeconf.win names them) --------------------------
-run_case "compile: no target, no mirror" windows gcc -std=gnu2x -I"$RH/include" -DNDEBUG -O2 -Wall -c a.c -o a.o
+run_case "compile: no target, -mcpu=baseline, no mirror" windows gcc -std=gnu2x -I"$RH/include" -DNDEBUG -O2 -Wall -c a.c -o a.o
+run_case "a package's own -march after -mcpu=baseline" windows g++ -march=native -c a.cpp
+run_case "-mtune= dropped" windows gcc -mtune=generic -O2 -c a.c -o a.o
 run_case "-l lookup: .dll.a, zig's own names, lib<n>.lib" windows gcc -shared -s -static-libgcc -o pkg.dll tmp.def a.o \
   -L"$W/win/d1" -L"$W/win/d2" -ldlla -lziglib -lmsvc -lstop -lonly2 -lnowhere -L"$RH/bin/x64" -lR
 run_case "-mwindows link set" windows gcc -mwindows -o Rgui.exe a.o -L"$W/win/d1" -ldlla
@@ -371,11 +388,14 @@ CASE_DELIBERATE="s|^-I\\($W/$W_LIB2/include\\)\$|-idirafter\\n\\1|
 run_case "OpenMP from the tree, no libomp.lib: -lomp" windows gcc -fopenmp -shared -o pkg.dll a.o
 CASE_PATH="$W/flang-win"
 run_case "FLIBS: Windows flang's answer, then -lc++" windows gcc -shared -o pkg.dll a.o -L"$W/win/d1" -lflang_rt.runtime -lc++ -lflang_rt.runtime -lc++
+# a gfortran on PATH (Rtools'), which neither asks any more
+CASE_PATH="$W/flang-win:$W/gf"
+run_case "-lgfortran -lquadmath: flang's runtime, not gfortran's" windows gcc -shared -o pkg.dll a.o -lgfortran -lquadmath -lm -lflang_rt.runtime -lc++
 CASE_PATH="$W/gf"
-run_case "-lgfortran: gfortran's libdir searched and added" windows gcc -shared -o pkg.dll a.o -lgfortran -lquadmath -lm
-CASE_DELIBERATE='/^-L\.$/d'
-CASE_WHY="no gfortran: the shim's dirname turned that into -L. (search the current directory); rzig adds nothing"
-run_case "-lgfortran without gfortran" windows gcc -shared -o pkg.dll a.o -lgfortran
+run_case "-lgfortran without flang: dropped" windows gcc -shared -o pkg.dll a.o -lgfortran
+run_case "-lsynchronization: the API set's import library" windows gcc -shared -o pkg.dll a.o -L"$W/win/d1" -lws2_32 -lsynchronization -lntdll
+touchf "$W/win/d3/libapi-ms-win-core-synch-l1-2-0.dll.a"
+run_case "-lsynchronization: looked up under the API set's name" windows g++ -shared -o pkg.dll a.o -L"$W/win/d3" -lsynchronization
 CASE_ENV=(XDG_CACHE_HOME="$W/cache7"); CASE_PATH="$W/envB/bin"; CASE_STATE='ls "$XDG_CACHE_HOME" 2>&1 || :'
 run_case "libc++ beside zig: no mirror on Windows" windows zig-cxx -shared -o pkg.dll a.o
 run_case "ar and ranlib passthrough" windows zig-ar rcs libw.a a.o
