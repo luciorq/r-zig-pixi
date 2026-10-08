@@ -1,0 +1,64 @@
+# r-zig stress suite: one row per target, run in file order (cheap groups first).
+# stress.R reads this file; stress/README.md explains the suite.
+# Columns (tab-separated; '-' means none):
+#   package     CRAN/Bioconductor name, or name:variant (a second install of the
+#               same package with other env vars, into a library of its own)
+#   group       g3 C libraries from the env, g4 own build systems / bundled code,
+#               g2 C++ across a library boundary, g1 heavy C++ (the brief's 1-4)
+#   tags        extra labels a target or --skip can name: heavy (long builds,
+#               e.g. `--skip=heavy` on small CI runners)
+#   oses        all, or a comma list of linux, macos, windows
+#   sysdeps     conda-forge names the row needs in the libraries env;
+#               name@os limits one to an OS. For documentation, the drift
+#               check against the env's conda-meta, and the --conda env.
+#   env         NAME=VALUE;NAME=VALUE set for this row only; {env} is the
+#               libraries env dir (its Library on Windows)
+#   timeout_min install timeout, minutes (dependencies get 30)
+#   expect      one value, or os=value pairs: ok, fail-abi, fail-sysdep,
+#               fail-network, fail-toolchain, fail-resource, fail-package,
+#               ? (no guess). A guess until a run confirms it.
+#   smoke       one R expression run after library(); FALSE or an error fails
+#               it; must not need the network. The file stays ASCII: write
+#               other characters as \u escapes.
+#   note        why the row is here, what it exercises
+package	group	tags	oses	sysdeps	env	timeout_min	expect	smoke	note
+curl	g3	-	all	libcurl	-	15	linux=ok macos=ok windows=?	curl::curl_version()$version	tree vendors libcurl.so.4 (same soname as the env's); windows: tools/winlibs.R downloads an r-windows bundle and ignores the env
+openssl	g3	-	all	openssl	-	15	linux=ok macos=ok windows=?	openssl::sha256("abc")	windows: downloads an r-windows bundle
+xml2	g3	-	all	libxml2-devel	-	15	linux=ok macos=ok windows=?	xml2::xml_text(xml2::read_xml("<a>x</a>"))	libxml2-devel holds xml2-config and libxml-2.0.pc (conda-forge split); windows: downloads a bundle
+gert	g3	-	all	libgit2	-	15	linux=ok macos=ok windows=?	gert::libgit2_config()$version	conda libgit2 links libssh2/openssl; windows: downloads rwinlib libgit2
+units	g3	-	all	udunits2	-	15	ok	{x <- units::as_units(1, "km"); units(x) <- "m"; as.numeric(x) == 1000}	udunits2.h found through rzig's -I/-idirafter of the env (no UDUNITS2_INCLUDE)
+systemfonts	g3	-	all	fontconfig freetype	-	15	ok	nrow(systemfonts::system_fonts()) >= 0	C++ package over C libraries
+textshaping	g3	-	all	harfbuzz fribidi freetype	-	15	ok	nrow(textshaping::shape_text("abc")$shape)	harfbuzz is held at 14.2.* by the default feature (pango pin), same as the tree's vendored libharfbuzz
+ragg	g3	-	all	freetype libpng libtiff libjpeg-turbo libwebp-base	-	20	ok	{f <- tempfile(fileext = ".png"); ragg::agg_png(f); plot(1); invisible(dev.off()); file.exists(f)}	graphics device over five C libraries
+magick	g3	-	all	imagemagick	-	20	linux=fail-abi macos=? windows=fail-abi	magick::magick_config()$version	Magick++ is a C++ API (std::string): really a group-2 boundary case; conda has ImageMagick 7.1.2; windows: downloads a gcc-built static bundle
+hdf5r	g3	-	all	hdf5	-	20	linux=ok macos=ok windows=?	{f <- tempfile(); h <- hdf5r::H5File$new(f, "w"); h$close_all(); file.exists(f)}	configure parses `h5cc -show`, which names conda's gcc (x86_64-conda-linux-gnu-cc) but runs nothing; HDF5 2.2 (hdf5r has a 2.0 patch); windows: downloads rwinlib hdf5
+ncdf4	g3	-	all	libnetcdf	-	15	linux=ok macos=ok windows=?	ncdf4::nc_version()	nc-config from the env
+gsl	g3	-	all	gsl	-	15	ok	gsl::bessel_J0(1)	gsl-config from the env
+Rmpfr	g3	-	all	mpfr gmp	-	15	ok	format(Rmpfr::mpfr(1, 100) / 3)	also builds the gmp R package (C++ over libgmp's C API)
+RPostgres	g3	-	all	libpq	-	20	linux=ok macos=ok windows=?	class(RPostgres::Postgres())[1]	C++ (cpp11/plogr) over libpq's C API; no server needed; windows: downloads an r-windows libpq bundle
+nloptr	g4	-	all	cmake nlopt@windows	-	20	ok	round(nloptr::nloptr(1, function(x) (x - 2)^2, function(x) 2 * (x - 2), opts = list(algorithm = "NLOPT_LD_LBFGS", xtol_rel = 1e-8))$solution, 3)	no nlopt in the unix env on purpose: bundled NLopt through cmake with R CMD config CC/CXX (rzig); windows has no configure.win and links -lnlopt (conda's nlopt.lib, C API)
+s2	g4	-	all	cmake openssl	-	30	linux=ok macos=? windows=?	s2::s2_area(s2::as_s2_geography("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")) > 0	linux forces the bundled abseil (cmake); macos takes abseil from pkg-config when absl_s2 resolves, and libprotobuf brings conda's libabseil into the env: a boundary; set S2_FORCE_BUNDLED_ABSEIL=true for the bundled path
+igraph	g4	-	all	glpk gmp libxml2-devel	-	30	ok	igraph::vcount(igraph::make_ring(10))	vendored igraph C core, ARPACK in Fortran (flang), R's LAPACK/BLAS
+stringi	g4	-	all	icu	-	20	ok	{i <- stringi::stri_info(); print(i$ICU.version); isTRUE(i$ICU.system)}	system ICU through pkg-config (icu-i18n): ICU 78 is also what the tree vendors; the smoke fails if stringi fell back to its bundled ICU
+stringi:bundled	g4	-	all	-	STRINGI_DISABLE_PKG_CONFIG=1	45	ok	{i <- stringi::stri_info(); print(i$ICU.version); !isTRUE(i$ICU.system) && stringi::stri_trans_toupper("stra\u00dfe") == "STRASSE"}	ICU's own C++ sources compiled by zig c++ (big compile); the smoke checks the bundled ICU is the one in use
+qs2	g4	-	all	zstd	-	20	ok	identical(qs2::qs_deserialize(qs2::qs_serialize(mtcars)), mtcars)	system zstd when pkg-config finds it; pulls RcppParallel and stringfish
+fst	g4	-	all	-	-	20	ok	{f <- tempfile(); fst::write_fst(mtcars, f); nrow(fst::read_fst(f))}	fstcore bundles zstd and lz4 and uses OpenMP
+geos	g4	-	all	-	-	45	ok	geos::geos_version()	moved from g3 with evidence: the R package uses the libgeos R package (bundled GEOS C++, ~14 min single-threaded on CRAN), not the env's geos
+Rhdf5lib	g4	-	all	cmake	-	45	ok	Rhdf5lib::getHdf5Version()	Bioconductor 3.23 (setRepositories(ind = 1:2), no BiocManager); 2.0.0 builds HDF5 with cmake via biocmake (finds the env's cmake >= 3.24, else downloads one)
+lwgeom	g2	-	all	geos proj	-	20	linux=ok macos=ok windows=?	lwgeom::lwgeom_extSoftVersion()	the control case: C APIs only (GEOS C, PROJ C); needs sf for its headers (LinkingTo)
+sf	g2	-	all	libgdal-core geos proj	-	30	?	sf::st_crs(sf::st_transform(sf::st_sfc(sf::st_point(c(0, 0)), crs = 4326), 3857))$epsg	GDAL C++ classes (OGR*); windows: pkg-config gdal geos proj if pkg-config is on PATH, and copies $(R_TOOLS_SOFT)/share/{gdal,proj}
+terra	g2	-	all	libgdal-core geos proj	-	40	linux=fail-abi macos=? windows=fail-abi	terra::nrow(terra::rast(nrows = 2, ncols = 2))	GDAL C++ API with std::string/std::vector; windows: Makevars.ucrt as sf, plus -ltbb12
+gdalraster	g2	-	all	libgdal-core geos proj	-	30	linux=fail-abi macos=? windows=fail-abi	gdalraster::gdal_version()[1]	GDAL C++ API, std::string-heavy
+RcppParallel	g2	-	all	cmake	-	30	linux=ok macos=ok windows=?	RcppParallel::defaultNumThreads() > 0	6.x builds its bundled oneTBB with cmake on every OS unless TBB_ROOT/TBB_LIB is set: no boundary by default
+RcppParallel:system-tbb	g2	-	linux,macos	tbb-devel	TBB_ROOT={env}	20	linux=? macos=?	RcppParallel::defaultNumThreads() > 0	the boundary variant: conda's oneTBB 2023 (libstdc++ on linux, shared libc++ on macOS)
+protolite	g2	-	all	libprotobuf	-	20	linux=fail-abi macos=? windows=fail-abi	length(protolite::unserialize_pb(protolite::serialize_pb(list(1, "a"))))	protobuf 7.36 (6.x C++ API) is std::string everywhere and needs libabseil
+arrow	g2	-	all	-	ARROW_USE_PKG_CONFIG=false	40	linux=fail-abi macos=? windows=fail-abi	nrow(as.data.frame(arrow::arrow_table(x = 1:3)))	default path: downloads a prebuilt libarrow (linux: gcc/libstdc++; macOS: Apple clang/libc++; windows: Rtools gcc); network
+arrow:source	g2	heavy	linux,macos	cmake	LIBARROW_BINARY=false;ARROW_USE_PKG_CONFIG=false;ARROW_DEPENDENCY_SOURCE=BUNDLED	120	ok	nrow(as.data.frame(arrow::arrow_table(x = 1:3)))	libarrow C++ built with R CMD config CC/CXX (rzig, libc++): no boundary; BUNDLED so cmake does not pick conda's libstdc++ snappy/re2/thrift; downloads third-party sources (network); ~61 min single-threaded on CRAN
+V8	g2	-	all	-	-	20	linux=fail-abi macos=? windows=?	V8::v8()$eval("1 + 1")	optional; default downloads a static libv8 (jeroen/build-v8-static on linux/macOS, an r-windows bundle on windows); conda's libv8 is 8.9 and has no win-64 build, so it is not used
+Rcpp	g1	-	all	-	-	15	ok	{f <- Rcpp::cppFunction('int f(int x) { if (x < 0) throw std::range_error("neg"); return x; }'); f(2L) == 2L && inherits(try(f(-1L), silent = TRUE), "try-error")}	added: compiles at run time and throws a C++ exception through the static libc++abi inside an R process that has the tree's libstdc++ loaded (ICU)
+RcppArmadillo	g1	-	all	-	-	20	ok	RcppArmadillo::fastLm(cbind(1, 1:10), (1:10) * 2)$coefficients[2]	OpenMP plus LAPACK_LIBS BLAS_LIBS FLIBS: the flang runtime on a zig-cxx link
+lme4	g1	-	all	-	-	30	ok	lme4::fixef(lme4::lmer(Reaction ~ Days + (Days | Subject), lme4::sleepstudy))[2]	RcppEigen; pulls Matrix (SuiteSparse), minqa and nlme (Fortran), nloptr (cmake), MASS, lattice, boot (slim has no recommended packages)
+StanHeaders	g1	-	all	-	-	30	ok	nzchar(StanHeaders:::CxxFlags(as_character = TRUE))	builds a static libStanHeaders.a (sundials C, some Fortran) that rstan links; only Windows loads a DLL, so the smoke reads its flags
+rstan	g1	-	all	-	-	90	ok	rstan::stan_version()	memory-heavy translation units (keep jobs low on 7 GB runners); pulls RcppParallel, QuickJSR, BH and the ggplot2 tree; no model compile in the smoke
+duckdb	g1	heavy	all	-	-	120	linux=ok macos=ok windows=?	{con <- DBI::dbConnect(duckdb::duckdb()); x <- DBI::dbGetQuery(con, "select 42 as x")$x; DBI::dbDisconnect(con, shutdown = TRUE); x == 42}	~65 min single-threaded on CRAN debian; windows: -Wa,-mbig-obj
+mlpack	g1	heavy	all	-	-	120	ok	exists("linear_regression", asNamespace("mlpack"))	the Armadillo-heavy package (with ensmallen, cereal, OpenMP); ~40 min single-threaded on CRAN; alternative if too long: sommer (~3.5 min)

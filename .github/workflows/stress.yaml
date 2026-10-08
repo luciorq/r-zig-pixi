@@ -1,0 +1,111 @@
+name: stress
+
+# The stress suite (stress/README.md): hard-to-build CRAN/Bioconductor
+# packages compiled from source with r-zig's toolchain, one report per
+# OS x distribution. A diagnostic, never a gate: manual dispatch only, no
+# push or pull_request trigger, and a failing package does not fail the
+# job (stress.R exits 0 unless --strict). The job fails when the harness
+# itself breaks: the R build, the conda packages, an env that cannot be
+# made (stress.R exits 2 and still writes its report).
+on:
+  workflow_dispatch:
+    inputs:
+      oses:
+        description: 'JSON list of runners: ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest'
+        type: string
+        default: '["ubuntu-latest"]'
+      packages:
+        description: 'stress/packages.tsv targets: package names, package:variant, groups g1 to g4, tags (heavy), or all'
+        type: string
+        default: 'g3 g4'
+      skip:
+        description: 'rows, groups or tags to leave out, comma-separated (heavy: the longest builds)'
+        type: string
+        default: ''
+      distribution:
+        description: 'tree: the dev tree + the stress env; conda: r-zig-slim + r-zig-toolchain + the rows'' sysdeps; both'
+        type: choice
+        options: [tree, conda, both]
+        default: tree
+      channel:
+        description: 'conda only. local: this run''s conda-package; universe: the packages published on prefix.dev'
+        type: choice
+        options: [local, universe]
+        default: local
+      jobs:
+        description: 'make -j and cmake parallel level (empty: the runner''s cores, max 8)'
+        type: string
+        default: ''
+      zig:
+        description: 'conda: the env''s zig; upstream: PyPI''s ziglang (pixi run fetch-zig), as upstream-zig.yaml'
+        type: choice
+        options: [conda, upstream]
+        default: conda
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    name: ${{ matrix.os }} / ${{ matrix.dist }}
+    # build.yaml's kill switch
+    if: vars.ENABLE_HOSTED_JOBS == 'true'
+    runs-on: ${{ matrix.os }}
+    # Hosted jobs stop at 360 minutes. Each package has its own timeout
+    # (packages.tsv), so a hang costs one row, not the job.
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.oses) }}
+        dist: ${{ fromJSON(inputs.distribution == 'both' && '["tree","conda"]' || format('["{0}"]', inputs.distribution)) }}
+    env:
+      STRESS_OUT: build/stress/run
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.11.0
+        with:
+          pixi-version: v0.81.0  # as build-r.yaml, which says why
+          environments: ${{ matrix.dist == 'conda' && inputs.channel == 'local' && 'default stress pkg' || 'default stress' }}
+          cache: true
+      - name: Upstream zig (ZIG_BIN)
+        if: inputs.zig == 'upstream'
+        shell: bash
+        run: echo "ZIG_BIN=$(pixi run -e stress fetch-zig)" >> "$GITHUB_ENV"
+      # The dev tree: what the tree leg tests, and the R that starts the
+      # runner in the conda leg (stress.R --conda makes the conda env and
+      # runs itself again with that env's R).
+      - name: Build R (the dev tree)
+        run: pixi run build ${{ runner.os == 'Windows' && '-- --verbose' || '' }}
+      - name: Build the conda packages
+        if: matrix.dist == 'conda' && inputs.channel == 'local'
+        run: pixi run -e pkg conda-package
+      - name: Stress
+        shell: bash
+        env:
+          TARGETS: ${{ inputs.packages }}
+          SKIP: ${{ inputs.skip }}
+          STRESS_JOBS: ${{ inputs.jobs }}
+          CHANNEL: ${{ matrix.dist == 'conda' && inputs.channel || '' }}
+        run: |
+          set -euo pipefail
+          args=("--out=$STRESS_OUT")
+          if [ -n "$CHANNEL" ]; then args+=("--conda=$CHANNEL"); fi
+          if [ -n "$SKIP" ]; then args+=("--skip=$SKIP"); fi
+          # one target per word
+          # shellcheck disable=SC2086
+          pixi run -e stress stress "${args[@]}" $TARGETS
+      # The report is in the job summary already (stress.R appends it to
+      # $GITHUB_STEP_SUMMARY); the logs, the smoke files and the conda
+      # env's manifest and lock are here.
+      - name: Upload the report and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stress-${{ matrix.os }}-${{ matrix.dist }}
+          path: |
+            ${{ env.STRESS_OUT }}/report.*
+            ${{ env.STRESS_OUT }}/logs/
+            ${{ env.STRESS_OUT }}/smoke/
+            ${{ env.STRESS_OUT }}/conda/pixi.*
+          if-no-files-found: warn
