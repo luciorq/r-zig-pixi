@@ -86,3 +86,14 @@ minos_over_floor() {
   fi
   return 1
 }
+
+# A check this machine cannot run (its tool is missing or does not work):
+# an error in CI, where every tool is there (GitHub Actions sets
+# CI=true), a note locally, where the script goes on with what it can.
+cannot_check() {
+  if [ "${CI:-}" = true ]; then
+    echo "error: $1 (CI: every check must run)" >&2
+    exit 1
+  fi
+  echo "   note: $1 (an error in CI)"
+}

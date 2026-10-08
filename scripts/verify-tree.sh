@@ -325,19 +325,13 @@ fi
 # (libdeflate, libcrypto), so they are not counted. objdump: on Windows
 # the env's x86_64-w64-mingw32-objdump; on macOS /usr/bin/objdump, which
 # is llvm-objdump, from the Command Line Tools the SDK needs anyway; on
-# linux the host's, binutils: no pixi env has one (pixi.toml has no
-# binutils for linux), GitHub's ubuntu images do, a bare container may
-# not, and then this check fails, saying so. aarch64: the check does not
-# apply.
+# linux the env's, conda-forge's binutils (pixi.toml). Without one the
+# check fails, everywhere, saying so. aarch64: the check does not apply.
 case "$(uname -m)" in
   x86_64|amd64)
     if [ "$OS" = windows ]; then objdump_cmd=x86_64-w64-mingw32-objdump; else objdump_cmd=objdump; fi
     if ! command -v "$objdump_cmd" > /dev/null 2>&1; then
-      if [ "$OS" = linux ]; then
-        echo "error: no objdump on PATH for the baseline CPU check: it is the host's (binutils), which no pixi env provides" >&2
-      else
-        echo "error: no $objdump_cmd on PATH for the baseline CPU check" >&2
-      fi
+      echo "error: no $objdump_cmd on PATH for the baseline CPU check" >&2
       exit 1
     fi
     rzig_file="$TREE/$tc_dir/${tc_names%% *}"
@@ -553,7 +547,10 @@ n_bins="$(wc -l < "$bin_list" | tr -d ' ')"
 # conda-forge moving to 2.34). (The 2.28 case was coreutils' `realpath`,
 # one of the nm/realpath/sed/... helpers stage.sh copied there until
 # phase A5, 5f23127.)
-if [ "$OS" = linux ]; then
+# objdump: conda-forge's binutils (pixi.toml).
+if [ "$OS" = linux ] && ! command -v objdump > /dev/null 2>&1; then
+  cannot_check "objdump unavailable; glibc ceiling not checked"
+elif [ "$OS" = linux ]; then
   GLIBC_FLOOR="2.17"          # runtime artifacts: R + vendored libs
   GLIBC_TOOLS_CEILING="2.28"  # lib/R/bin/toolchain helpers (conda-forge baseline)
   worst=""; worst_file=""; tools_over=0; failed=0
@@ -579,7 +576,11 @@ if [ "$OS" = linux ]; then
     fi
   done < "$bin_list"
   [ "$failed" = 0 ] || exit 1
-  echo "== glibc ceiling verified: runtime worst $worst ($worst_file) <= floor $GLIBC_FLOOR; $tools_over toolchain helper(s) above the floor, all <= $GLIBC_TOOLS_CEILING"
+  if [ -z "$worst" ]; then
+    cannot_check "objdump -T read no glibc version from any runtime file; glibc ceiling not checked"
+  else
+    echo "== glibc ceiling verified: runtime worst $worst ($worst_file) <= floor $GLIBC_FLOOR; $tools_over toolchain helper(s) above the floor, all <= $GLIBC_TOOLS_CEILING"
+  fi
 fi
 
 # No build-machine rpaths. Every RUNPATH/LC_RPATH entry in the tree must be
