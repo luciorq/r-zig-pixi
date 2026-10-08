@@ -1,93 +1,391 @@
 # TODO — feat-standalone-toolchain
 
-PLAN.md (same directory) has the design, the options and the reasons;
-the numbers below refer to its "Decisions for the user". Every phase:
-implement in a worktree, review, test on linux-64 here, omicron
-(osx-arm64, osx-64 under Rosetta) and kappa (win-64), then CI. The user
-makes the commits (hand over the commands); docs-only commits get
-`[skip ci]`.
+PLAN.md (same directory) has the layered model, the facts, the options
+and the reasons; the IDs below are its decision IDs (B1-B44).
+
+**Implementation is on hold until the user has answered the open
+decisions below.** The re-lock PR, #14 and #15 continue as planned.
+
+Every phase: implement in a worktree, review, test on linux-64 here,
+omicron (osx-arm64, osx-64 under Rosetta) and kappa (win-64), then CI.
+From phase 3 on, every phase runs verify-bundle's three scenarios (base
+alone; base + compilers; base + compilers + build-tools) on every OS.
+The user makes the commits (hand over the commands); docs-only commits
+get `[skip ci]`.
 
 ## Decisions the user makes first
 
-- [ ] 1 Layout: overlay archive in the same top directory (rec.), or a
-      separate toolchain directory (item 4)
-- [ ] 2 zig's artifact: fetch-zig.sh's pinned PyPI wheel (rec.), or
-      ziglang.org via a mirror with minisign
-- [ ] 3 Where zig enters: build.zig `-Dbundle-zig` for every non-conda
-      tree plus env.sh always exporting ZIG_BIN (rec.), opt-in for
-      packaging, added at packaging, or downloaded by rzig
-- [ ] 4 rzig lookup: ZIG_BIN, bundled, PATH, python3 -m ziglang; flang
-      bundled before PATH (rec.)
-- [ ] 5 make on unix: conda-forge's make in every non-conda unix tree
-      (rec.), host make for slim/full, or make built with zig
-- [ ] 6 Fortran: flang-pixi's compile set (flang-23 + link, the .mod
-      files, libflang_rt.runtime.a; 30.5-43.9 MB zstd; no lld, sysroot
-      or flang.cfg; proved by flang-pixi on all four OSes) in the
-      toolchain archive, once zig-fc's executable links through zig
-      pass (rec.); none; the full closure; or a separate archive
-- [ ] 7 OpenMP headers and libomp.lib: stay in base (rec.), move to the
-      toolchain archive, or under bin/toolchain with an rzig change
-- [ ] 8 Windows: split now, toolchain zip still expects sh/make on PATH,
-      userland prototype then bundle (rec.); or m2 now; or Rtools; or
-      unsplit until item 2
-- [ ] 9 Zig for released standalone R: upstream once a release job exists
-      (rec.), or the env's conda-forge zig
-- [ ] 10 Publishing: CI artifacts in this PR, release job later (rec.),
-      or a release job now
-- [ ] 11 Compression: gzip (rec., revisit after phase 4; with flang,
-      linux-64 is about 150 MB gzip, 105 MB zstd), xz or zstd
-- [ ] 12 Conda build number 4 → 5 in the last phase (rec.), or none
-- [ ] 13 Remove patch 0009's Makeconf-CC fallback (rec.), or keep it
-- [ ] 14 Recipe cleanup scope and order: host block, comment, dead
-      @WHICH@, stale comments, first (rec.); or last
-- [ ] 15 Working names now (rec.), or wait for the v3 naming decision
-- [ ] 16 Every packaged flavor gets the pair; CI packages default and
-      minimal (rec.)
-- [ ] 17 flang files: copy the documented set from the build env's
-      installed flang-zig/flang-rt-zig, provenance from conda-meta into
-      SOURCES (rec.); or run flang-pixi's carve script on the .conda
-      pinned to a flang-pixi commit (needs Python >= 3.14, a second
-      download; the script is not committed in flang-pixi yet)
-- [ ] 18 zig 0.17 wave: do not tie our move to flang-pixi's; port
-      build.zig/rzig/zig-build.sh to upstream 0.17 on the gated legs
-      with a small 0.16/0.17 switch; conda build and r-zig-toolchain
-      stay on conda-forge's zig until its main label has 0.17 (rec.); or
-      the conda build on a sha256-pinned upstream tarball (`source:`
-      entry or universe repackage), as flang-pixi does
+Answered (2026-10-07):
+- [x] B1 = (a): one top directory for all archives
+- [x] B2 = (a): `ZIG_BIN` → rzig's own `zig/` → PATH → `python3 -m ziglang`;
+      flang from rzig's `flang/` then PATH; output a no-zig message that
+      explicitly names the toolchain
+- [x] B19 = (a): rzig in the base (standalone base archive, r-zig-slim,
+      r_zig wheel)
+- [x] B20 ≈ (a): the group design (compilers: `zig/`, `flang/`,
+      `openmp/`; minimal build tools: unix make, Windows `usr/bin/` and
+      `binutils/`; optional extras later); point 3 also settles a
+      `LICENSES/` and `SOURCES` per group directory
+- [x] B21 = (a): external runtime libraries stay with the base
+- [x] B22 = (a): OpenMP compile files in the compilers group
 
-## Prerequisites from outside this plan
+Done, moot or merged: B16 (done: phase 1, 9bbce0b; omicron, kappa and
+CI's macOS and Windows jobs still to pass), B3 (one toolchain per
+platform; leftover in B31), B5 (→ B30), B8 (→ B20; B9, B29 and B44
+remain), B10 (→ B22; B40 and B41 remain), B15 (→ B26).
 
-- [ ] rzig passes `-mcpu=baseline` (pending the user's go): Windows
-      package compiles are native today (no `-target`, compiler.zig:42-43;
-      kappa target-cpu "skylake"); linux and macOS are baseline already.
-      Already affects r-zig-toolchain on win-64; needed at the latest
-      before phase 4 ships compilers to Windows users
-- [ ] Before flang-pixi uploads flang-rt-zig 10 (the conda build and
-      installs of r-zig-toolchain `_4` take flang-zig/flang-rt-zig
-      unpinned; a re-lock takes it too): nm build 10's archive on every
-      subdir for undefined symbols our zig 0.16 lacks (win-64: 0.17's
-      `-D__CRT__NO_INLINE`; all: libc++ 22 headers), link each with our
-      zig 0.16, build R and a Fortran package on kappa. Proposed as part
-      of flang-pixi's wave; else decide on a temporary `<10` bound
+Open. Reply e.g. "all recommended" or "all recommended except B27c
+B36b". B6 and B18 block none of phases 2-9. B11 comes back after phase
+7's prototype; B44 only if phase 6's prototype fails on an OS.
+- [ ] B4 zig's artifact for the standalone compilers group: (a) PyPI
+      ziglang wheel as fetch-zig.sh pins it; (b) ziglang.org via a
+      mirror with minisign. Rec. (a)
+- [ ] B6 zig that builds the released standalone R: (a) upstream, once a
+      release job exists; (b) conda-forge's. Rec. (a)
+- [ ] B7 unix make's source: (a) conda-forge's 4.4.1 from the build env;
+      (b) GNU make built with zig. Rec. (a)
+- [ ] B9 flang's compile set: (a) copied from the build env, SOURCES
+      from conda-meta; (b) flang-pixi's carve script on the .conda files.
+      Rec. (a)
+- [ ] B11 source of Windows' usr/bin tools: (a) prototype busybox-w32 +
+      make vs MSYS2 on kappa, ship the winner in `usr/bin/`; (b) MSYS2
+      now; (c) require Rtools45. Rec. (a)
+- [ ] B12 publishing: (a) CI artifacts now, release job later; (b)
+      release job now. Rec. (a)
+- [ ] B13 compression: (a) gzip/zip now, measure after phase 6 and
+      choose for any compilers archive above 150 MB; (b) xz for
+      compilers now; (c) zstd for compilers now. Rec. (a)
+- [ ] B14 conda build number: (a) bump in phase 4's PR (required) and in
+      each later PR that changes a package, none in phases 2-3; (b) one
+      bump 5 → 6 at the end. Rec. as B37: (a)
+- [ ] B17 names: (a) base `R-<ver>-<flavor>-<plat>`, groups
+      `R-<ver>-<plat>-<group>`; (b) wait for v3 naming; (c) groups named
+      by their contents. Rec. (a)
+- [ ] B18 zig 0.17 wave: (a) upstream leads on the gated legs (fetch-zig
+      0.17 pin once PyPI has all five wheels), conda waits for
+      conda-forge's main label; (b) conda build on a pinned upstream zig.
+      Rec. (a)
+- [ ] B23 unix make: (a) `TC/usr/bin/make`; (b) `TC/make/make`. Rec. (a)
+- [ ] B24 Windows binutils: (a) conda-forge's in `binutils/`, Makeconf
+      names each, ld.exe dropped; (b) zig's tools + an nm; (c) LLVM's
+      tools in `binutils/`. Rec. (a)
+- [ ] B25 build tools on PATH: (a) R puts `TC/usr/bin` first (unix
+      etc/Renviron, Windows Rcmd_environ), MAKE stays `make`; (b) absolute
+      MAKE on unix; (c) an rzig make applet. Rec. (a)
+- [ ] B26 a missing group: (a) rzig's check mode for every group (zig,
+      flang, make/sh), called by patches 0009 and 0010; (b) check mode
+      for compilers, R checks make itself; (c) file tests in R; (d) no
+      preflight. Rec. (a)
+- [ ] B27 runtime places: (a) conda's prefix paths (CA bundle to
+      `<top>/ssl/cacert.pem`, Windows fonts to `<top>/Library/etc/fonts`
+      with FONTCONFIG_PATH read under `--vanilla`); (b) today's places,
+      recorded only; (c) a dedicated runtime root. Rec. (a)
+- [ ] B28 conda: (a) r-zig-slim + r-zig-compilers + r-zig-build-tools +
+      r-zig-toolchain metapackage, one recipe; (b) one r-zig-toolchain;
+      (c) group packages in their own recipe. Rec. (a)
+- [ ] B29 PyPI: (a) r-zig + r-zig-compilers + r-zig-build-tools +
+      r-zig-toolchain, no Fortran; (b) plus r-zig-flang; (c) extras on
+      r-zig. Rec. (a)
+- [ ] B30 assembly: (a) a toolchain tree per platform, R trees hold the
+      base only; (b) every R tree installs every group; (c) added at
+      packaging. Rec. (a)
+- [ ] B31 CI: (a) a `toolchain` job per subdir, the `build` job needs it,
+      packaging legs run the three scenarios, upstream-zig.yaml gets its
+      own; (b) also package full and openblas; (c) no toolchain job.
+      Rec. (a)
+- [ ] B32 zig version check: (a) the check mode fails on a major.minor
+      different from R's; (b) it warns; (c) no check. Rec. (a)
+- [ ] B33 base runtime licences: (a) in this plan (phase 8); (b) later.
+      Rec. (a)
+- [ ] B34 B2 refinement: (a) also R's own environment's `bin/`, after
+      `zig/` (`flang/`) and before PATH; (b) keep B2 as answered. Rec. (a)
+- [ ] B35 missing-group text: (a) one text built into rzig, the same on
+      every channel; (b) a per-channel hint variable. Rec. (a)
+- [ ] B36 top directory: (a) `R-<ver>-zig/`, dev trees under
+      `dist/<flavor>/` and `dist/toolchain/`; (b) the same, renamed at
+      packaging; (c) `r-zig/`. Rec. (a)
+- [ ] B37 landing: (a) #15 merges with phases 0-1 and these docs, then
+      one PR per phase; (b) phases 2-9 on #15; (c) one new PR for phases
+      2-9. Rec. (a)
+- [ ] B38 group names: (a) compilers, build-tools; (b) compilers, tools;
+      (c) compilers, minimal. Rec. (a)
+- [ ] B39 Windows usr/bin list: (a) sh, make, coreutils, sed, grep, gawk,
+      which, findutils (what conda proved); (b) sh, make, coreutils only;
+      (c) (a) plus pkg-config. Rec. (a)
+- [ ] B40 OpenMP availability: (a) only when the base has the libomp
+      runtime; (b) a per-flavor Renviron variable; (c) no rule. Rec. (a)
+- [ ] B41 conda exceptions: (a) accept omp.h with the base and the win-64
+      binutils copies, recorded; (b) rzig gates conda OpenMP on
+      r-zig-compilers; (c) win-64 binutils from a conda dependency.
+      Rec. (a)
+- [ ] B42 Windows flavor name: (a) slim on every channel, documented;
+      (b) full for the standalone archive only; (c) full everywhere.
+      Rec. (a)
+- [ ] B43 Makeconf.win's unshipped tools (pkg-config, objdump, gcc-ar/nm/
+      ranlib): (a) bare names; (b) unchanged, files under TC that do not
+      exist. Rec. (b)
+- [ ] B44 Fortran on an OS whose phase 6 prototype fails: (a) that OS
+      ships without `flang/`; (b) no OS ships `flang/` until all pass.
+      Rec. (a)
 
-## The zig 0.17 wave (decision 18; not a phase of this PR)
+Still pending from the 2026-10-07 menu and touching this plan (PLAN.md,
+"Related items"): D6, D7, D12, D14, D15, C1-C3, E2, R1.
+
+## Outside this plan (continue as planned)
+
+- [ ] The re-lock (chore-relock-flang-rt-10) merged, before #14's bump
+      publishes, so that build 5 carries the exact flang pins
+- [ ] #14 (fix-rzig-baseline-cpu) merged: `-mcpu=baseline`, build 5;
+      needed at the latest before phase 5 ships compilers to Windows
+- [ ] #15: phase 1's remaining checks pass after the re-lock (History)
+
+## The zig 0.17 wave (B18; not a phase of this plan)
 
 - [x] 2026-10-06: conda-forge has 0.17.0 only on the `zig_dev` label
       (snapshots 0.17.0-dev.2320+1e770dbef, builds 23200-23202); main is
       0.16.0 build 20; PyPI ziglang is 0.16.0; ziglang.org has 0.17.0
       (2026-10-01) for all five platforms
-- [ ] After flang-pixi's wave: pixi.toml flang-rt-zig
-      `build-number = ">=10"` in [dependencies] (154-160) and
-      [feature.minimal.dependencies] (373); delete the win-64 `>=4`
-      override (229-234); `llvm-openmp = "23.*"` (183) already matches
-      flang-rt 10's new unix `llvm-openmp >=23`
-- [ ] With decision 18 settled: the port of build.zig and rzig to 0.17
-      (flang-pixi docs/17 §4: `b.install_prefix`, `b.pathFromRoot`,
-      configure caching) and zig-build.sh's argument order (docs/17 §8),
-      behind a 0.16/0.17 switch; fetch-zig.sh gets a 0.17 pin for the
-      upstream legs (PyPI's wheel once it exists, else a ziglang.org
-      archive from a mirror, sha256-pinned) while the toolchain archive
-      keeps bundling 0.16.0
+- [x] 2026-10-07/08: flang-pixi's flang-zig 6, lld-zig 5 and
+      flang-rt-zig 10 are zig 0.16.0 builds; its 0.17 builds will be 7, 6
+      and 11. PyPI ziglang 0.17.0 uploaded 2026-10-08 01:00 UTC (six
+      wheels at 01:09 UTC, no win_amd64); conda-forge's main label still
+      0.16.0
+- [x] Superseded: the old flang-rt-zig `build-number = ">=10"` item;
+      the re-lock pins exact builds and drops the win-64 override
+- [ ] Before our pins move to flang-rt-zig 11 (a 0.17 build): nm its
+      runtime archive on every subdir for symbols our zig 0.16 lacks, link
+      each with zig 0.16, build R and a Fortran package on kappa
+- [ ] With B18 settled: the port of build.zig and rzig to 0.17
+      (`b.install_prefix`, `b.pathFromRoot`, configure caching) and
+      zig-build.sh's argument order, behind a 0.16/0.17 switch, on the
+      linux and macOS upstream-zig legs; fetch-zig.sh gets a 0.17 pin
+      once PyPI has all five ziglang 0.17.0 wheels (win-64 stays on 0.16
+      until then)
+
+## Phase 2 — rzig knows the groups
+
+Needs: B26, B32, B34, B35, B38, B40; B37 (the branch).
+
+- [ ] find_zig.zig: `ZIG_BIN`, `<rzig dir>/zig/zig` (`zig.exe`), PATH,
+      `python3 -m ziglang`; only with B34 = a, `<env dir>/bin/zig`
+      (Windows `x86_64-w64-mingw32-zig.exe`) between `zig/` and PATH;
+      B35's text and exit 127 when the python3 fallback cannot start or
+      has no ziglang
+- [ ] flang_rt.flang(): `<rzig dir>/flang/bin/flang`, PATH; only with
+      B34 = a, `<env dir>/bin/flang` between them; fortran.zig's no-flang
+      text becomes B35's; its unit test and wheel-test.sh:149-168 follow
+- [ ] OpenMP (B40): `<rzig dir>/openmp/include` on every compile
+      (`-idirafter` on Windows), `-L <rzig dir>/openmp/lib` on Windows,
+      only when B40's rule holds; `-lomp` rule counts `openmp/`
+- [ ] Check mode (B26 a): the compile lookup (`fortran` also flang), the
+      build-tools check (make; Windows also sh), the zig and its
+      version, B32's major.minor check
+- [ ] build.zig passes R's version and the platform name to rzig
+- [ ] Unit tests: each lookup step, "zig/ wins over PATH", the env-bin
+      step (with B34 = a), missing zig and flang, the openmp rule with
+      and without libomp, the check mode's exit codes and texts
+- [ ] `pixi run rzig-test` on linux-64, osx-arm64, osx-64, win-64
+- [ ] conda test-toolchain.R and wheel-test.sh unchanged in behaviour;
+      verify-bundle as today
+
+## Phase 3 — the standalone layout, today's contents
+
+Needs: B7, B12, B13, B17, B23, B24, B25, B26, B30, B31, B36, B38, B42,
+B43.
+
+- [ ] env.sh: platform name once; prefixes `dist/<flavor>/R-<ver>-zig`
+      and `dist/toolchain/R-<ver>-zig` (replacing env.sh:29's PREFIX);
+      the seven scripts (zig-build, zig-package, zig-verify-package,
+      zig-smoke, zig-contract, verify-tree, hermetic-check) read them;
+      make-wheel.py:350 derives the same prefix
+- [ ] build.zig toolchain step (pixi task `toolchain`), each directory
+      with `LICENSES/` and `SOURCES`: `openmp/` (moved out of the base),
+      unix `usr/bin/make` (moved out of minimal's tree), Windows
+      `binutils/` (moved out of installWindowsCompilerContract; ld.exe
+      dropped)
+- [ ] The base's TC holds only rzig; Windows drops `zig-cc` and `zig-cxx`
+- [ ] unix etc/Renviron: `PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}`,
+      `MAKE=${MAKE-'make'}` for every flavor (minimal's `R_ZIG_MAKE` goes)
+- [ ] Windows etc/Rcmd_environ:
+      `PATH="${R_CUSTOM_TOOLS_PATH:-${R_HOME}/bin/toolchain/usr/bin};${PATH}/"`
+- [ ] Makeconf.win: each binutils tool named under `binutils/`; BINPREF
+      for gcc/g++ only; unshipped tools per B43
+- [ ] vendor-libs.sh: Windows libomp.dll trigger on R's OpenMP setting
+- [ ] Patches 0009 and 0010 call the check mode (compilers and build
+      tools); 0009's fallback removed; 0010's `command -v` replaced
+- [ ] package-standalone.sh: base archive + compilers + build-tools
+      archives, `.sha256` each
+- [ ] hermetic-check.sh: the R tree is the base, nothing deleted
+- [ ] verify-tree.sh: base TC = rzig only; toolchain tree records,
+      closures (OS, own directory, base runtime), glibc 2.28 ceiling
+- [ ] verify-bundle.sh: the three scenarios (scenario 2 takes zig from
+      `ZIG_BIN=$ZIG` and flang from the env until phases 5 and 6; Windows
+      scenario 3 takes sh/make from the env until phase 7); file-list
+      check
+- [ ] conda: build.sh runs the toolchain step into `$PREFIX` (Windows
+      binutils); packages unchanged until phase 4, no bump
+- [ ] make-wheel.py: make from the toolchain tree; wheel-test checks
+      `Sys.which("make")`
+- [ ] CI: `toolchain` job per subdir in build.yaml; the `build` job (all
+      legs) `needs:` it; packaging legs download their groups, run the
+      scenarios, upload base and group archives (short retention);
+      upstream-zig.yaml gets its own toolchain job
+- [ ] Tested: linux-64 (slim, minimal, wheel, conda-package), omicron
+      (osx-arm64 slim and minimal, osx-64 slim), kappa, CI
+
+## Phase 4 — conda and PyPI on the same boundary
+
+Needs: B14, B28, B29, B35, B38, B39, B41.
+
+- [ ] Check: rattler-build 0.76.1 makes outputs with no files that do not
+      inherit the staging build
+- [ ] recipe.yaml: r-zig-slim excludes only
+      `lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**` (and
+      `Library/...`); r-zig-compilers, r-zig-build-tools (win-64: B39's
+      list, B41's binutils), r-zig-toolchain metapackage; build number
+      per B14 (a: 5 → 6 here)
+- [ ] Hint writers removed: `-Dtoolchain-hint`, zig-build.sh:57-66,
+      make-wheel.py's renviron_hint
+- [ ] make-wheel.py: r-zig with rzig; r-zig-build-tools with
+      `usr/bin/make`; r-zig-compilers and r-zig-toolchain without files;
+      one tag set; the zig-cc check moves to the base wheel
+- [ ] test-preflight.R: rzig present, no zig, preflight names
+      r-zig-compilers
+- [ ] wheel-test.sh: the three scenarios with pip; uninstalling the
+      groups leaves R whole
+- [ ] Upgrade test from `_5` (pixi, conda, mamba): no clobber error
+- [ ] Tested: conda-package on linux-64, omicron (both), kappa, CI;
+      wheel-test on linux-64 and CI
+
+## Phase 5 — zig in the compilers group
+
+Needs: B4 (B6: both cases are tested either way; B13: sizes only
+recorded).
+
+- [ ] Toolchain step: fetch-zig's zig into `TC/zig/` with `LICENSES/`
+      (LICENSE, dist-info licences) and `SOURCES` (wheel URL, sha256)
+- [ ] verify-tree: `zig/` third-party in the build-path scan;
+      `zig/zig version` is 0.16.0
+- [ ] verify-bundle scenario 2 with `ZIG_BIN` unset: RZIG_PRINT_ARGV shows
+      `TC/zig/zig`; C, C++ (no shared libc++/libstdc++), OpenMP C (3
+      forms), flagless omp.h probe; the env-tools pass kept
+- [ ] The mixed case (default legs) and the one-zig case (upstream legs)
+      pass on every OS
+- [ ] Archive sizes recorded in PLAN.md; the first C++ compile's time
+      with upstream zig measured ("Later": cache pre-seeding)
+- [ ] Tested: linux-64, omicron (both), kappa, CI, upstream-zig label run
+
+## Phase 6 — Fortran in the compilers group
+
+Needs: B9, B13 (revisit), B29, B44 (only if a prototype fails).
+
+Prototype first (linux-64, osx-arm64, osx-64, win-64):
+- [ ] zig-fc sends every link through zig (`flang -c` per source + the
+      zig link); unit tests; a real configure probing `$FC` passes in the
+      standalone tree and in a conda env
+- [ ] zig-fc passes `-fintrinsic-modules-path` from flang's location;
+      harmless beside a conda env's flang.cfg; where the triple comes from
+- [ ] rzig's runtime lookup under `TC/flang/` (Windows without
+      `Library/`); the driver as the single file `flang`
+- [ ] kappa: a Fortran package without `-lc++` (flang-rt-zig 10's archive
+      checked first); omicron: R without linkFortranRt's `link_libcpp`
+- [ ] An OS whose prototype fails: B44 applies; ask the user with the
+      result
+
+Then:
+- [ ] Toolchain step: the set from the env into `TC/flang/` (no
+      `Library/`, no flang.cfg, no lld, the driver once, no linux
+      module-directory symlink); `flang/SOURCES` from conda-meta;
+      verify-tree checks against `paths_data`
+- [ ] The carve script's cross-check, once
+- [ ] `-lc++` and `link_libcpp` dropped where those runs passed
+- [ ] verify-bundle scenario 2, no flang on PATH, no flang.cfg: a
+      derived-type module, USE_FC_TO_LINK, `use omp_lib` on two threads,
+      a configure linking with `$FC`
+- [ ] Compression revisited with the measured compilers archives (B13)
+- [ ] Tested: linux-64, omicron (both), kappa, CI
+
+## Phase 7 — Windows build tools: usr/bin
+
+Needs: B11, B25, B39.
+
+- [ ] Prototype on kappa: busybox64u.exe (sh + one .exe per applet in
+      B39's list) with make.exe, then the MSYS2 set; each on the contract
+      set, pak, data.table and glue (a pkg-config package only with
+      B39 c)
+- [ ] Scan CRAN's configure.win/configure.ucrt for bash-only syntax;
+      record the count
+- [ ] B11 back to the user with the result (and the Windows make
+      question if busybox-w32 wins)
+- [ ] Toolchain step: the chosen set into `TC/usr/bin/` with
+      `usr/LICENSES/` and `usr/SOURCES` (sha256 pins for downloads)
+- [ ] Rprofile.windows PATH line, if the prototype needs it
+- [ ] `R CMD config` without the build tools fails with one clear message
+- [ ] conda's r-zig-build-tools (win-64) follows the winner where
+      conda-forge packages it
+- [ ] verify-bundle scenario 3 on Windows with PATH = bin\x64 + System32:
+      the contract set builds and loads
+- [ ] Tested: kappa, CI windows-latest
+
+## Phase 8 — the base's runtime files
+
+Needs: B27, B33.
+
+- [ ] unix: CA bundle at `<top>/ssl/cacert.pem`; Renviron's
+      `R_ZIG_CA_BUNDLE`, make-wheel.py's check (368-371) follow
+- [ ] Windows: fontconfig at `<top>/Library/etc/fonts`; `FONTCONFIG_PATH`
+      moves to a place R reads under `--vanilla`
+- [ ] `<env dir>/share/licenses/<package>/` and `SOURCES` for every
+      vendored package; the wheel's dist-info/licenses the same;
+      verify-tree requires an entry for every vendored file
+- [ ] verify-bundle scenario 1 on every OS: TLS, an svg device with
+      fonts (Windows also under `--vanilla`), tcltk (full, Windows);
+      wheel-test's TLS check
+- [ ] Tested: linux-64, omicron (both), kappa, CI
+
+## Phase 9 — finish
+
+Needs: B14 (with B37).
+
+- [ ] Build number per B14 (a: only if a package changed since the last
+      bump; b: 5 → 6 here); conda-package on all five platforms
+- [ ] feat-no-host-paths PLAN.md: What remains 3 points here; the T
+      record and the OpenMP note (406-409) updated
+- [ ] installOpenMP's comment updated to B22
+- [ ] This PLAN.md: status and records with dates and test results
+- [ ] upstream-zig label run green
+- [ ] Last round: linux-64, omicron (osx-arm64, osx-64), kappa, CI all
+      green; hand the commit and PR commands to the user
+
+## Later / future checks
+
+- [ ] Which full-only features can become add-on R components (tcltk
+      first); drop the separate full build only if readline/NLS can be
+      settled
+- [ ] Depend less on make for package installs (Windows needs sh/make
+      for now)
+- [ ] Optional extras group, only when the stress suite shows a need
+      (pkg-config on Windows first; D15 sets when the suite starts)
+- [ ] Windows binutils without GPL-3 (zig's tools + an nm, or LLVM's), if
+      B24 stays (a)
+- [ ] GNU make built with zig (B7 b)
+- [ ] The release job (B12): `v*` tags, GitHub Release, GPL sources
+      mirrored
+- [ ] The toolchain in an environment of its own (feat-no-host-paths
+      item 4; D14)
+- [ ] zig's global cache: after phase 5's measurement, put pre-seeding
+      to the user as a menu
+- [ ] macOS without the Command Line Tools: observe a Mac that never had
+      them, then put rzig's `xcrun` handling to the user as a menu
+
+## History: phases 0 and 1 (done, recorded in 9bbce0b, #15; verbatim from 9bbce0b)
+
+The two sections below are copied unchanged. Their decision numbers
+are the old ones (PLAN.md, "Old decisions and their status"). Phase 1's
+open boxes are still open: omicron and kappa have not run
+conda-package, and on #15 CI's osx-64 and win-64 conda-package jobs and
+the seven macOS and Windows build legs failed at `pixi install` (a 404
+on deleted flang builds, confirmed in the job logs).
 
 ## Phase 0 — measurements (no code changes)
 
@@ -179,198 +477,3 @@ PLAN.md's "Phase 1 record" (under Design 11) has the details.
       linux-64 run shows nothing running `which`; the macOS runs above
       still have to pass)
 - [ ] CI: the five conda-package jobs green
-
-## Phase 2 — the split, with today's contents
-
-- [ ] env.sh: the platform name (linux-64, linux-aarch64, osx-arm64,
-      osx-64, win-64) computed once; package-standalone.sh and
-      verify-bundle.sh use it
-- [ ] package-standalone.sh: base archive = tree minus R_HOME/bin/
-      toolchain; toolchain archive `...-toolchain.tar.gz` (Windows `.zip`)
-      = only that directory, same top directory; a `.sha256` each
-- [ ] build.zig: `R_HOME/bin/toolchain/BUILD` naming R version, flavor,
-      platform and commit (only in non-conda trees, or in all; decide in
-      review)
-- [ ] zig-build.sh: `-Dtoolchain-hint` for every non-conda build, naming
-      this flavor's and platform's toolchain archive
-- [ ] make-wheel.py: replace an existing R_ZIG_TOOLCHAIN_HINT line with
-      the wheel's (renviron_hint), and check it in wheel-test.sh
-- [ ] Patch 0009 without the Makeconf-CC fallback (if decision 13); the
-      dev contract step still passes
-- [ ] verify-bundle.sh: file lists of the two archives against the
-      installed tree (base + toolchain = tree, no overlap)
-- [ ] verify-bundle.sh: base archive alone, freshly extracted: R starts;
-      a `src/` package stops with the standalone hint text; unix `R CMD
-      config CC` says "needs make"
-- [ ] verify-bundle.sh: the existing checks run on base + toolchain
-      extracted over it
-- [ ] build-r.yaml: upload both archives (default and minimal legs) with
-      a short retention
-- [ ] Tested: linux-64 (slim, minimal, wheel, conda-package), omicron
-      (osx-arm64 slim and minimal, osx-64 slim), kappa (win-64), CI
-
-## Phase 3 — rzig's toolchain root
-
-- [ ] find_zig.zig: ZIG_BIN, then `<rzig dir>/zig/zig` (`zig.exe` on
-      Windows), then PATH, then `python3 -m ziglang`; unit tests for each
-      step and for "bundled wins over PATH"
-- [ ] flang_rt.zig/fortran.zig: `<rzig dir>/flang/bin/flang` before PATH;
-      unit tests
-- [ ] main.zig: with no zig at all, a message naming zig and
-      R_ZIG_TOOLCHAIN_HINT (exit 127), not a python3 error; unit test
-- [ ] env.sh: export `ZIG_BIN=$ZIG` whenever a zig was found; wheel-test
-      and conda-package unaffected (checked)
-- [ ] `pixi run rzig-test` on linux-64, osx-arm64, osx-64, win-64
-- [ ] conda: test-toolchain.R still compiles with the env's zig (a root
-      with no zig/); wheel-test still uses ziglang
-
-## Phase 4 — upstream zig in the toolchain
-
-- [ ] build.zig: `-Dbundle-zig=<dir>` installs fetch-zig's `ziglang/`
-      into R_HOME/bin/toolchain/zig/ (one install-directory step), with
-      the dist-info licences
-- [ ] zig-build.sh: runs fetch-zig and passes `-Dbundle-zig` for every
-      non-conda build; the conda build gets nothing
-- [ ] make-wheel.py: excludes `lib/R/bin/toolchain/zig/`; the toolchain
-      wheel stays under 1 MB
-- [ ] verify-tree.sh: bin/toolchain/zig/** counted as third-party in the
-      build-path scan; `zig/zig version` is 0.16.0
-- [ ] hermetic-check.sh: copies the tree without bin/toolchain
-- [ ] verify-bundle.sh: base + toolchain, ZIG_BIN unset, `env -i` with
-      PATH=/usr/bin:/bin: RZIG_PRINT_ARGV shows the bundled zig; a C, a
-      C++ (no shared libc++/libstdc++) and an OpenMP C package, and the
-      flagless omp.h probe, build and load
-- [ ] The mixed case: R built with conda-forge zig (default legs), slim
-      with OpenMP, through the bundled zig — passes on every OS
-- [ ] The same with ZIG_BIN from fetch-zig (R built with upstream zig)
-- [ ] Record archive sizes per OS in PLAN.md
-- [ ] Tested: linux-64, omicron (both), kappa, CI, upstream-zig label run
-
-## Phase 5 — make in every unix toolchain
-
-- [ ] build.zig: conda-forge's make into bin/toolchain for every
-      non-conda unix tree (was minimal only)
-- [ ] build.zig finalRenviron: `R_ZIG_MAKE` and `MAKE=${MAKE-${R_ZIG_MAKE}}`
-      for every non-conda unix tree
-- [ ] verify-tree.sh: make present in slim/full/minimal non-conda trees;
-      within the 2.28 glibc ceiling
-- [ ] verify-bundle.sh: with the toolchain, `Sys.getenv("MAKE")` is the
-      bundled make; `R CMD config CC` works; install.packages(Ncpus = 2)
-      of two compiled packages runs make
-- [ ] Base alone: hermetic still passes (install one at a time; R CMD
-      config "needs make")
-- [ ] omicron: slim compiles with no Command Line Tools make involved
-      (MAKE is the bundled one)
-- [ ] Tested: linux-64, omicron (both), CI
-
-## Phase 6 — licences and sources
-
-- [ ] Licence texts kept in the repository (GPL-3.0, GPL-2.0 if
-      busybox, Apache-2.0 WITH LLVM-exception)
-- [ ] build.zig installs bin/toolchain/LICENSES/ (zig's LICENSE and
-      dist-info licences, make, Windows binutils, and what phases 7/8 add)
-      and bin/toolchain/SOURCES (upstream source URL, version, sha256,
-      conda-forge feedstock version for each third-party binary)
-- [ ] verify-tree.sh: every third-party binary in bin/toolchain has an
-      entry in SOURCES and a licence in LICENSES/
-- [ ] The r-zig-toolchain wheel carries them (same directory)
-- [ ] Tested: linux-64, omicron, kappa, CI
-
-## Phase 7 — Fortran (only with decision 6 = b)
-
-Proved by flang-pixi (docs/19, handoff §8; 2026-10-06), not repeated:
-- [x] The set (bin/flang-23 + flang link, Windows flang.exe; the .mod
-      files under lib/clang/23/finclude/flang/<conda triple>/, both
-      Windows dirs; libflang_rt.runtime.a) compiles hello, derived
-      types, `use omp_lib` and OpenMP directives with nothing else on
-      PATH on linux-64, osx-arm64, osx-64 and win-64
-- [x] zig links the runtime archive (unix `-lm`, plus `-lomp` for
-      OpenMP; Windows plus our libomp import lib) with no lld, sysroot,
-      SDK path or CRT snapshot; programs run, OpenMP on two threads
-- [x] The flang executables load only system libraries; sizes 30.5-43.9
-      MB zstd per subdir
-- [x] No flang.cfg on linux and Windows; on macOS `-fintrinsic-modules-path`
-      replaces it; `-mmacos-version-min` already passed by zig-fc
-      (fortran.zig:58)
-- [x] Windows `-lc++` checked (PLAN Design 5): flang-rt-zig build 4's
-      win-64 archive has no undefined C++ runtime symbol; a cross link
-      of a Fortran exe and DLL succeeds without `-lc++`, and with it the
-      DLL is the same size with the same imports and exports. FLIBS not
-      changed
-
-Ours:
-- [ ] Decision 17 settled
-- [ ] Prototype: zig-fc sends every link through zig: a call with
-      sources and a link becomes `flang -c` per source plus the zig link
-      with the runtime archive (reverses F3c's "a mixed call stays
-      flang's"); unit tests; a real configure that probes `$FC` passes
-      on linux-64, osx-arm64, osx-64 and win-64, from the standalone
-      tree and from a conda env
-- [ ] Prototype: zig-fc passes `-fintrinsic-modules-path` from flang's
-      own location on every compile; harmless beside a conda env's
-      flang.cfg; where the conda triple comes from (constant or scan)
-- [ ] Prototype: rzig's runtime lookup (`flang -print-resource-dir`)
-      finds the archive under bin/toolchain/flang/; on Windows flang
-      still finds its resource dir without the `Library/` prefix; the
-      driver works as the single file `flang` (no flang-23 beside it)
-- [ ] Prototype (kappa): a Fortran package builds and loads without
-      `-lc++`; (omicron) R builds, and its Fortran-using libraries load,
-      without linkFortranRt's `link_libcpp`
-- [ ] Decide with the user from the prototype; an OS whose executable
-      links fail ships without Fortran
-- [ ] build.zig: install the set from the env into bin/toolchain/flang/
-      for non-conda trees (flang-zig's layout, no `Library/`, no
-      flang.cfg, no lld; the driver once, as `flang`, since zig's
-      install step would copy the `flang` link's 196 MB target again);
-      flang-zig/flang-rt-zig name, version, build, URL and sha256 from
-      conda-meta into SOURCES; verify-tree checks each copy against
-      conda-meta's `paths_data` sha256
-- [ ] Cross-check once: flang-pixi's carve-fortran-standalone.py on the
-      same two packages gives the same driver, modules and runtime
-      archive (sha256; its flang.cfg, lib/ symlink and origin file
-      aside)
-- [ ] Where the kappa/omicron runs passed: drop `-lc++` from Windows
-      FLIBS (build.zig:1824) and rzig's flibs (fortran.zig:75), and the
-      runtime's `link_libcpp` (build.zig:2702) on that OS; comments
-      updated
-- [ ] make-wheel.py: excludes bin/toolchain/flang/ (unless decided)
-- [ ] fortran.zig: the no-flang message updated
-- [ ] verify-bundle.sh: base + toolchain, ZIG_BIN unset, no flang on
-      PATH, no flang.cfg: a Fortran package with a derived-type module,
-      USE_FC_TO_LINK, `use omp_lib` running on two threads, and a
-      configure that compiles and links with `$FC`
-- [ ] Tested: linux-64, omicron (both), kappa, CI
-
-## Phase 8 — Windows userland (only with decision 8)
-
-- [ ] Prototype on kappa: busybox64u.exe as sh.exe plus per-applet .exe
-      files, with conda-forge's make.exe; then the m2 set; each against
-      the contract set (C, C++, Fortran, OpenMP), pak, data.table, glue
-      and a pkg-config package
-- [ ] Scan CRAN's configure.win/configure.ucrt for bash-only syntax;
-      record the count
-- [ ] Decide with the user from the prototype
-- [ ] build.zig: install the chosen userland into bin/toolchain/usr/bin
-      (Windows, non-conda); SHA256 pins for anything downloaded
-- [ ] build.zig: etc/Rcmd_environ with
-      `PATH="${R_CUSTOM_TOOLS_PATH:-${R_HOME}/bin/toolchain/usr/bin};${PATH}/"`
-      for non-conda Windows trees; Rprofile.windows too if the
-      prototype needs it
-- [ ] `R CMD config` without the toolchain fails with one clear message
-      on Windows
-- [ ] verify-bundle.sh (Windows): base + toolchain with PATH = bin\x64 +
-      System32 only: the contract-set packages build and load
-- [ ] Licences and SOURCES for the userland (phase 6's format)
-- [ ] Tested: kappa, CI windows-latest
-
-## Phase 9 — finish
-
-- [ ] recipe build number 4 → 5 (if decision 12; build 4 is on the
-      channel since 2026-10-06); conda-package on all five platforms
-- [ ] feat-no-host-paths PLAN.md: What remains 3 points here; the T
-      record and the OpenMP note (400-403) updated
-- [ ] installOpenMP's comment updated to decision 7
-- [ ] This PLAN.md: status and records with dates and test results
-- [ ] upstream-zig label run green
-- [ ] Last round: linux-64, omicron (osx-arm64, osx-64), kappa, CI all
-      green; hand the commit and PR commands to the user

@@ -400,3 +400,97 @@ scheduled.
   after the 0.17 wave pin `flang-rt-zig` build 10 on every platform (and
   `llvm-openmp >=23`, which flang-rt 10 will itself require on unix as it
   already does on win-64).
+
+## 9. The zig 0.16 release you asked for: lld-zig 5 / flang-zig 6 / flang-rt-zig 10 on all six subdirs (built 2026-10-07; flang-pixi docs/10, docs/14)
+
+**What it is.** The first release under flang-pixi's one-number-per-release
+rule (§7): every consumer package rebuilt on linux-64, linux-aarch64,
+osx-arm64, osx-64, win-64 and win-arm64 at ONE build number each —
+**lld-zig `_5`, flang-zig `_6`, flang-rt-zig `_10`** — still zig 0.16.0
+(conda-forge zig_impl build 20 on every host) and LLVM 23.1.1. This is the
+last 0.16 release; nothing 0.17-related is in it. **Status: ON UNIVERSE as of 2026-10-07** — uploaded, the pre-rule spread
+pruned (the channel holds exactly these 18 files), `check-build-alignment.py`
+→ OK, and flang-pixi's `test.yml` run 37610086141 green on all six native
+runners (incl. the arm64 Linux and Windows runners). Re-lock whenever you
+like.
+
+**Pin `flang-rt-zig` build number `>=10` on every platform** (replacing
+`>=9` unix / `>=4` win-64), `flang-zig ==23.1.1`, `lld-zig` comes through
+flang-zig's run dependency. What the release carries for you:
+- flang-rt-zig 10: static-only, hidden-visibility runtime on all six
+  subdirs (Windows included — measured again on the new archive: a
+  zig-linked Fortran DLL exports 24 symbols, all its own, none of the
+  runtime; the archive now carries explicit `-exclude-symbols:` directives
+  for its hidden symbols), **`llvm-openmp >=23` in `run:` everywhere**
+  (your `23.*` pin already satisfies it; the module declares 6.0-era entry
+  points, docs/19 §7), one runtime archive on Windows instead of five.
+- flang-zig 6: `bin/flang-compile.cfg` (the one-line compile-only driver
+  config, §8) beside the full `flang.cfg`.
+- All three: explicit `__glibc >=2.17,<3.0.a0` (linux) / `__osx >=11.0`
+  (osx) in `depends` — the linux-aarch64 packages previously declared no
+  floor at all; and every executable is libc-only at load time by a
+  build-time allowlist (docs/18 §6.6).
+- Every package records the zig it was built with
+  (`share/<pkg>/zig-toolchain.txt` on unix: `zig_impl_<sub> 0.16.0 build
+  20`, target `<arch>-linux-gnu.2.17` / wrapper default on macOS).
+
+**No zig run constraint, by decision.** A `run_constraints` on `zig` in
+flang-pixi's packages could only act on *future* solves and would not
+protect against already-published builds, and the packages' run metadata
+stays minimal (R, libc floors, lld-zig, llvm-openmp). The guard is on your
+side: pin by **build number**, and when 0.17-built packages appear they
+arrive at the **next numbers — lld-zig 6, flang-zig 7, flang-rt-zig 11**
+(flang-pixi `scripts/build-alignment.json` `next_release`). *Corrected
+2026-10-07 after your re-lock:* a build-number **range** is not accepted by
+pixi 0.81 / rattler-build 0.76 ("expected EOF"), and a `[build_number="==6"]`
+bracket copied into published `depends` is unparseable for libmamba and
+micromamba — so the working pins are the ones you use: `pixi.toml`
+`{ version = "==23.1.1", build-number = "==6" }` (lld `"==5"`, flang-rt
+`"==10"`) and, in recipes, the **build-string form** `flang-zig ==23.1.1 *_6`,
+`lld-zig ==23.1.1 *_5`, `flang-rt-zig ==23.1.1 *_10`, which every solver
+parses. Two flang-pixi guarantees make that safe: build strings always end
+in `_<build number>` (`zig_<hash>_<N>`, recipe `string:` line, kept as a
+contract), and **release builds a published r-zig-toolchain pins are never
+pruned** — they are listed under `retain` in flang-pixi's
+`scripts/build-alignment.json` (`lld-zig [5]`, `flang-zig [6]`,
+`flang-rt-zig [10]` today) and `prune-universe.py` skips them even after
+the next release lands; tell flang-pixi when a pinned set can go. Nothing
+with a lower number will ever be re-published. From the next release on,
+flang-zig also pins its own lld-zig by build string (`lld-zig ==23.1.1
+*_<lld build>` in its run deps), so a 0.17-built lld-zig cannot pair with a
+0.16-built flang-zig and your explicit lld-zig pin becomes optional.
+
+**Offer standing:** flang-pixi can add your win-64 Fortran package test to
+its `test.yml` so every future release is checked against it before
+publishing.
+
+## 10. Your `atexit` auto-export report: reproduced on upstream zig 0.16.0 AND 0.17.0; not filed by flang-pixi (2026-10-07)
+
+Re-run on gamma (cross from linux-64, your exact lib.c/main.c): the
+ziglang.org **0.16.0** tarball, the ziglang.org **0.17.0** release tarball
+and conda-forge's linux `zig_impl` 0.16.0 build 20 all export `atexit` from
+`lib.dll` and fail the `main.exe` link with `duplicate symbol: atexit`; with
+your `-exclude-symbols:atexit` drectve object the DLL exports only
+`_CRT_INIT __mingw_module_is_dll answer` and the link passes, on both zig
+versions. So **0.17.0 does not fix it; keep the workaround object through
+the 0.17 wave and any upstream-zig switch.** The mechanism is as you wrote:
+zig's CRT objects are `crt2.obj`/`dllcrt2.obj`, so LLD's MinGW auto-export
+does not recognise them as CRT; conda-forge's win-64 zig hides it only via
+its `mingw-crtexe-no-atexit` / `ucrtbase-export-atexit-alias` patches.
+
+**Filing:** flang-pixi has a standing user rule of *no upstream filing*
+(drafts are parked in its `docs/12-upstream-reports.md`; yours is #7 there,
+with the re-run table). Whether and who files on Codeberg is the user's
+call, not this session's; nothing has been filed. If it is filed later, the
+issue number goes here. flang-pixi's own published packages are not
+affected (executables and archives only).
+
+Noted (corrected): your re-lock onto lld-zig 5 / flang-zig 6 / flang-rt-zig
+10 is done and passes on all OSes (lock sha a7d3dcec…: linux-64 19-step
+chain incl. check/wheel/conda-package; osx-arm64 + osx-64 build/verify/
+contract/verify-package; win-64 build/verify-tree/smoke/contract/check/
+verify-package/conda-package). Pins are exact builds — `build-number =
+"==N"` in pixi.toml and `*_N` build strings in the recipe (r-zig-toolchain
+run deps included), not ranges (see §9 correction). On win-64 flang-rt-zig
+10's archive carries 5,436 `-exclude-symbols` for its 5,442 globals and no
+DLL exports a runtime symbol, .def or not.
