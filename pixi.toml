@@ -150,14 +150,22 @@ pkg-config = "*"
 # its flang-rt ships a shared runtime with default visibility.
 # build.zig requires it: without $CONDA/bin/flang the build stops.
 # ~1.5 GiB closure (flang-zig + lld-zig + flang-rt-zig).
-flang-zig = "*"
-# flang-rt-zig build >= 9 (flang-pixi, 2026-10-01): static-only (no
-# .so/.dylib) and built with hidden visibility, so a Fortran package
-# exports 2-4 symbols instead of re-exporting the whole runtime (~830 on
-# macOS, ~1,240 on linux) and -lflang_rt.runtime can only mean the
-# archive. Also ships omp_lib.mod (`use omp_lib`). win-64 overrides it
-# below (no build 9 there).
-flang-rt-zig = { version = "*", build-number = ">=9" }
+# Pinned to flang-pixi's 2026-10-07 release, one build number per package
+# on every platform, built with zig 0.16.0: flang-zig 6, lld-zig 5,
+# flang-rt-zig 10. Its zig 0.17 builds will come at the next numbers
+# (7, 6, 11), so the pins keep us on the 0.16 builds until we move on
+# purpose. ==N, not >=N,<N+1: pixi 0.81 takes one comparison per
+# build-number (a range is a parse error), and for an integer it is the
+# same. lld-zig is listed for its pin only: flang-zig accepts any lld-zig
+# 23.1.1 build.
+flang-zig = { version = "==23.1.1", build-number = "==6" }
+lld-zig = { version = "==23.1.1", build-number = "==5" }
+# flang-rt-zig 10: static-only (no .so/.dylib) and built with hidden
+# visibility on every platform, so a Fortran package exports only its own
+# symbols instead of re-exporting the whole runtime (~830 on macOS, ~1,240
+# on linux) and -lflang_rt.runtime can only mean the archive. Also ships
+# omp_lib.mod (`use omp_lib`); it requires llvm-openmp >= 23 (below).
+flang-rt-zig = { version = "==23.1.1", build-number = "==10" }
 # --- portable userland (fetch/extract tools; coreutils are per-target below) ---
 curl = "*"
 # --- core libraries R links against (slim profile) ---
@@ -226,12 +234,6 @@ patchelf = "*"  # rpath rewriting for relocatable installs
 # is what provides the x86_64-w64-mingw32-nm/-dlltool that build.zig's
 # import-stub steps call; keep it explicitly.
 [target.win-64.dependencies]
-# flang-rt-zig: win-64 has no build 9 (its runtime was always
-# static-only). build >= 4: ships omp_lib.mod + the libatomic/libomp
-# link shims flang's MinGW driver needs for -fopenmp (flang-pixi
-# handoff). It requires llvm-openmp >= 23.1.1, which the 23.* pin in
-# [dependencies] meets.
-flang-rt-zig = { version = "*", build-number = ">=4" }
 binutils_impl_win-64 = "*"
 uutils-coreutils = "*"
 # gnuwin32 has no slim switches: Windows R unconditionally builds the
@@ -369,8 +371,9 @@ gzip = "*"
 unzip = "*"
 zip = "*"
 patch = "*"
-flang-zig = "*"
-flang-rt-zig = { version = "*", build-number = ">=9" }  # static-only, hidden: see [dependencies]
+flang-zig = { version = "==23.1.1", build-number = "==6" }  # pins: see [dependencies]
+lld-zig = { version = "==23.1.1", build-number = "==5" }
+flang-rt-zig = { version = "==23.1.1", build-number = "==10" }
 
 [feature.minimal.target.linux-64.dependencies]
 uutils-coreutils = "*"

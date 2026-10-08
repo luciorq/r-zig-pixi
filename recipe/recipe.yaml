@@ -136,8 +136,15 @@ outputs:
         # gfortran anywhere (consolidation/PLAN.md Phase 2; linux-64 left
         # conda-forge's flang 2026-10-03). build.zig stops without
         # $BUILD_PREFIX/bin/flang (or $CONDA/bin/flang).
-        - flang-zig
-        - flang-rt-zig
+        # Pinned as in pixi.toml to flang-pixi's zig 0.16.0 release
+        # (flang-zig 6, lld-zig 5, flang-rt-zig 10); its zig 0.17 builds
+        # come at the next build numbers. The build string's `_N` suffix
+        # pins it: a `[build_number="==N"]` bracket would be copied into
+        # r-zig-toolchain's depends, which conda's default (libmamba)
+        # solver and micromamba cannot parse. lld-zig only for its pin.
+        - flang-zig ==23.1.1 *_6
+        - lld-zig ==23.1.1 *_5
+        - flang-rt-zig ==23.1.1 *_10
         - if: win
           then:
             - binutils_impl_win-64  # x86_64-w64-mingw32-nm/-dlltool for build.zig's import-stub steps
@@ -194,8 +201,8 @@ outputs:
       host:
         # Fortran runtime: linked into libR (statically for flang's
         # libflang_rt.runtime.a on every platform, see build.zig's
-        # linkFortranRt), must be in host too
-        - flang-rt-zig
+        # linkFortranRt), must be in host too; pinned as in build
+        - flang-rt-zig ==23.1.1 *_10
         # build.zig copies the binutils tools (windres/ld/nm/dlltool/...) from
         # $PREFIX/Library/bin into lib/R/bin/toolchain for the package-
         # compilation contract, so they must be in *host* too (gfortran used
@@ -448,10 +455,13 @@ outputs:
         # this mirrors the build exactly. flang-zig's closure is ~1.5 GiB
         # (flang-zig + lld-zig + flang-rt-zig), the accepted cost of one
         # Fortran toolchain everywhere (on osx-arm64, of correct complex
-        # LAPACK at -O2; flang-pixi docs/11).
+        # LAPACK at -O2; flang-pixi docs/11). Pinned as in build, so a
+        # user gets the zig 0.16 flang this was built and tested with, not
+        # a later 0.17 build.
         - zig 0.16.*
-        - flang-zig
-        - flang-rt-zig
+        - flang-zig ==23.1.1 *_6
+        - lld-zig ==23.1.1 *_5
+        - flang-rt-zig ==23.1.1 *_10
         - make >=4.4
     tests:
       - script:
