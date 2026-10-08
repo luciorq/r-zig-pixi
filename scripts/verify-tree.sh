@@ -26,7 +26,8 @@
 #     R_HOME/bin/x64/libomp.dll; unix: include/omp.h and lib/libomp);
 #   - Windows (a tree that is not a conda env): the Tcl/Tk runtime is in
 #     R_HOME/Tcl (with Tcl's modules) and Makeconf's TCL_VERSION names its
-#     DLLs (tcl86t, tk86t), and every DLL a PE file in the tree
+#     DLLs (tcl86t, tk86t), its headers (tcl.h, tk.h) are in
+#     R_HOME/Tcl/include, and every DLL a PE file in the tree
 #     imports is in the tree (its own directory, R_HOME/bin/x64, or
 #     R_HOME/Tcl/bin for the Tcl/Tk DLLs) or the system's;
 #   - unix (a tree that is not a conda env): etc/ca-bundle.crt holds
@@ -408,11 +409,18 @@ if [ "$OS" = windows ]; then
     for f in "tcl$tclv.dll" "tk$tclv.dll"; do
       [ -f "$TREE/$rh/Tcl/bin/$f" ] || bad="$bad TCL_VERSION=$tclv:Tcl/bin/$f(missing)"
     done
+    # With Tcl/bin come the headers, in Tcl/include, where TCLTK_CPPFLAGS
+    # (-I "$(TCL_HOME)/include") and packages' Makevars.win look: without
+    # them a package that compiles against Tcl/Tk (tkrplot) stops at
+    # tk.h (feat-standalone-toolchain PLAN.md, T1).
+    for f in Tcl/include/tcl.h Tcl/include/tk.h; do
+      [ -s "$TREE/$rh/$f" ] || bad="$bad $f(missing)"
+    done
     if [ -n "$bad" ]; then
-      echo "error: the Tcl/Tk runtime in $rh/Tcl:$bad" >&2
+      echo "error: Tcl/Tk in $rh/Tcl:$bad" >&2
       exit 1
     fi
-    echo "== Tcl/Tk runtime verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), Makeconf's TCL_VERSION = $tclv, $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib"
+    echo "== Tcl/Tk runtime verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), Makeconf's TCL_VERSION = $tclv, $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib, $(find "$TREE/$rh/Tcl/include" -type f | wc -l | tr -d ' ') headers in Tcl/include"
 
     # The DLL closure: every DLL a PE file in the tree imports is found in
     # the tree, where the loader looks for it (the file's own directory;

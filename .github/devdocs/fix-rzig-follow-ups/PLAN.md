@@ -1,4 +1,4 @@
-# fix-rzig-follow-ups — rzig's follow-ups (PR ii): RZIG_PRINT_ARGV, -lgfortran, TCL_VERSION, -lsynchronization
+# fix-rzig-follow-ups — rzig's follow-ups (PR ii): RZIG_PRINT_ARGV, -lgfortran, TCL_VERSION, Tcl/Tk headers, -lsynchronization
 
 **Status (2026-10-08).** Branch fix-rzig-follow-ups, from
 origin/fix-rzig-baseline-cpu at 192ee86 (PR #14 plus main's 0c7e19a).
@@ -7,7 +7,10 @@ every file this branch changes merges with origin/main without a
 conflict (`git merge-file`, file by file, at review). Implemented,
 reviewed, and tested on linux-64, win-64 (kappa) and osx-arm64
 (omicron): every step passed, see "Tested". Not committed. The recipe's
-build number goes 5 → 6 (main is still at 5).
+build number goes 5 → 6 (main is still at 5). After that, D5's
+follow-up was answered (T1, 2026-10-08): the standalone Windows tree
+now ships Tcl/Tk's headers in R_HOME/Tcl/include (D5 below). That
+change is implemented and checked on linux-64; kappa's run is pending.
 
 ## What, and the user's answers
 
@@ -28,6 +31,10 @@ deals with the import library, do not report anything yet."):
   and tkrplot is tested on kappa.
 - D6 b (What remains 8): rzig provides the `synchronization` import
   library for upstream zig itself; nothing is reported upstream.
+- T1 (D5's follow-up, 2026-10-08), verbatim: "Ship the headers in the
+  base at R_HOME/Tcl/include, where package Makevars expect them." An
+  explicit exception to "compile-time files go in the toolchain"
+  (feat-standalone-toolchain PLAN.md), matching CRAN's Windows layout.
 
 ## E4: RZIG_PRINT_ARGV appends
 
@@ -193,17 +200,100 @@ environments' -L before the package's (before the first -o), so
 `-ltcl86t` most likely resolved to the pixi env's
 Library/lib/tcl86t.lib, not to R_HOME/Tcl/bin/tcl86t.dll; the DLL
 imported is tcl86t.dll either way. A link from the tree alone could not
-be tried there: the compile stops first, at tk.h. The tree's headers
-are not enough: the standalone tree has no R_HOME/Tcl/include
-(installEnvRuntime ships Tcl/bin and Tcl/lib only), so tkrplot's
-`-I$(TCL_HOME)/include` names nothing and `#include <tk.h>` resolves
-only through the environment rzig compiles against (R_ZIG_EXTRA_ENV's
-Library/include under pixi; a conda env's own). A standalone tree used
-alone cannot compile Tcl/Tk C code: a follow-up decision (ship the
-env's tk headers as R_HOME/Tcl/include, where Makeconf's
-TCLTK_CPPFLAGS, `-I "$(TCL_HOME)/include"`, looks), not done here.
-kappa confirmed it: with R_ZIG_EXTRA_ENV unset, tkrplot stops at
-"tcltkimg.c:3:10: fatal error: 'tk.h' file not found".
+be tried there: the compile stopped first, at tk.h. The standalone tree
+had no R_HOME/Tcl/include (installEnvRuntime shipped Tcl/bin and
+Tcl/lib only), so tkrplot's `-I$(TCL_HOME)/include` named nothing and
+`#include <tk.h>` resolved only through the environment rzig compiles
+against (R_ZIG_EXTRA_ENV's Library/include under pixi; a conda env's
+own). A standalone tree used alone could not compile Tcl/Tk C code.
+kappa confirmed it: with R_ZIG_EXTRA_ENV unset, tkrplot stopped at
+"tcltkimg.c:3:10: fatal error: 'tk.h' file not found". The follow-up
+decision (ship the env's tk headers as R_HOME/Tcl/include, where
+Makeconf's TCLTK_CPPFLAGS, `-I "$(TCL_HOME)/include"`, looks) is
+answered: T1, below.
+
+### The follow-up: Tcl/Tk's headers in R_HOME/Tcl/include (T1)
+
+The user's answer (2026-10-08), verbatim: "Ship the headers in the base
+at R_HOME/Tcl/include, where package Makevars expect them." T1 = (a):
+the one exception to "compile-time files go in the toolchain"
+(feat-standalone-toolchain PLAN.md). It matches CRAN's Windows layout:
+Makeconf.win has `TCL_HOME = $(R_HOME)/Tcl`, R's own Windows build
+compiles tcltk with `-I "$(TCL_HOME)"/include`
+(src/library/tcltk/src/Makefile.win), and its installer copies the
+whole R_HOME/Tcl (src/gnuwin32/installer/Makefile:154-163).
+
+What ships. build.zig's installEnvRuntime, in a Windows tree that is
+not the env, installs 13 headers from the env's Library/include into
+R_HOME/Tcl/include, keeping X11/: tcl.h, tclDecls.h, tclPlatDecls.h,
+tk.h, tkDecls.h, tkPlatDecls.h, tkIntXlibDecls.h, X11/X.h,
+X11/Xfuncproto.h, X11/Xlib.h, X11/Xutil.h, X11/keysym.h and
+X11/keysymdef.h (690,477 B). A missing one fails the build, naming it,
+as a missing Tcl/bin DLL does. The set is tcl.h, tk.h and tkPlatDecls.h
+(Tk_GetHWND and the rest) with what they include:
+- conda-forge's win-64 tk-8.6.13-h967ab96_4 is the lock's only win-64
+  tk, in every env that has tk (the downloaded .conda's sha256 matches
+  the lock's). Its paths.json lists 28 files in Library/include: these
+  13, and tclOO.h, tclOODecls.h, tclTomMath.h, tclTomMathDecls.h,
+  itcl.h, itclDecls.h, tdbc.h, tdbcDecls.h, and X11's ap_keysym.h,
+  cursorfont.h, DECkeysym.h, HPkeysym.h, Sunkeysym.h, XF86keysym.h and
+  Xatom.h. None has a prefix placeholder or names a path.
+- tk.h includes X11/Xlib.h, Tk's stand-in for Xlib on Windows. That
+  brings X11/X.h, Xfuncproto.h and tkIntXlibDecls.h, which brings
+  X11/Xutil.h, keysym.h and keysymdef.h. tcl.h brings tclDecls.h and
+  tclPlatDecls.h. tk.h does not include tkPlatDecls.h; a Windows
+  package includes it for Tk_GetHWND and the rest.
+- `zig cc -target x86_64-windows-gnu -DWin32 -M`, with all 28 on -I: a
+  file that includes `<windows.h>`, `<tk.h>` and `<tkPlatDecls.h>`
+  depends on exactly these 13. tkrplot 0.0-32's one source,
+  tcltkimg.c, depends on the same 13 but tkPlatDecls.h (on Windows it
+  includes `<tk.h>` and `<windows.h>`; `<X11/Xutil.h>` only off
+  Windows).
+
+The conda build does not change: it has no R_HOME/Tcl, and the tk
+package's Library/include, which rzig's environment searches with
+`-idirafter`, has the headers. So the conda package's content is the
+same and the build number stays 6. Makeconf.win does not change either:
+its TCLTK_CPPFLAGS already names `$(TCL_HOME)/include`.
+
+verify-tree.sh's standalone Windows Tcl/Tk check, which already requires
+the DLLs in Tcl/bin (so it runs wherever Tcl/bin exists), now also
+requires Tcl/include/tcl.h and tk.h, non-empty, and its summary line
+counts the headers. Its error now begins "Tcl/Tk in <R_HOME>/Tcl:".
+
+The standalone plan records T1 in its "Resolved decisions", with the
+reason, and where it lists what the base holds on Windows. That file
+(feat-standalone-toolchain PLAN.md) is on main (92394d5) but not on
+this branch, which starts at 192ee86, and adding it here would conflict
+with main's. So the record is a patch against main's file, to apply
+with `git apply` from the repo root once this branch has main:
+/data/gamma/luciorq/workspaces/temp/r-zig-pixi/tclhdr/impl/t1-standalone-plan.patch.
+
+Tests (T1):
+- linux-64 (gamma), implementer, in the worktree, pixi.lock unchanged
+  (a7d3dcec..., as above):
+  - `pixi run --locked zig build --help` compiles build.zig, exit 0.
+    The new Windows code is analysed on linux too: a type error planted
+    in it failed the same command (then removed).
+  - `zig fmt --check build.zig` clean; `bash -n scripts/verify-tree.sh`.
+  - The 13 headers alone on -I: the test file above and tkrplot's
+    tcltkimg.c (with -DWin32, the linux tree's R headers standing in
+    for Windows') compile to x86_64 COFF objects with
+    `zig cc -target x86_64-windows-gnu`. With X11/keysymdef.h,
+    tkIntXlibDecls.h or tclPlatDecls.h left out, the tkrplot compile
+    fails, naming the missing file.
+  - verify-tree.sh's Windows Tcl/Tk block on a fake tree (CRLF
+    Makeconf): passes with the 13 headers ("13 headers in
+    Tcl/include"); fails naming Tcl/include/tk.h when it is missing,
+    and naming both when tcl.h is empty and tk.h missing, or when
+    Tcl/include is missing.
+- win-64 (kappa): pending. To show: build, verify-tree (the new line),
+  smoke, contract and verify-package pass; R_HOME/Tcl/include holds the
+  13 files, byte-identical to the env's; tkrplot 0.0-32 from CRAN
+  source, installed with the tree alone (R_ZIG_EXTRA_ENV unset, no
+  env's Library/include reachable), compiles, links `-ltcl86t
+  -ltk86t`, loads and draws; the control, with R_HOME/Tcl/include moved
+  away, stops at 'tk.h'.
 
 ## D6: -lsynchronization links with upstream zig
 
@@ -283,11 +373,16 @@ alone); two parity cases.
 - toolchain/zig-cc, zig-cxx: the same as rzig (D4, D6).
 - zigbuild/tools/rzig/parity-test.sh: nine new cases, two old ones out.
 - zigbuild/config/win-x86_64-full/Makeconf.win: TCL_VERSION (D5).
-- scripts/verify-tree.sh: TCL_VERSION against R_HOME/Tcl/bin (D5).
-- build.zig: a comment (D5).
+- scripts/verify-tree.sh: TCL_VERSION against R_HOME/Tcl/bin (D5);
+  Tcl/include's tcl.h and tk.h (T1).
+- build.zig: a comment (D5); Tcl/Tk's headers in R_HOME/Tcl/include,
+  Windows trees that are not the env (T1).
 - recipe/recipe.yaml: build number 5 → 6.
 
 ## Tested
+
+T1 (D5's follow-up) came after these runs: its checks are in D5,
+"Tests (T1)", and kappa's run is pending.
 
 Every host: pixi.lock sha256
 a7d3dcecb5592fbe165e8476af400c96f6800268d19a7e59dd7357a554154f79
@@ -424,7 +519,8 @@ Not re-run on kappa and omicron (a message text only).
 - A real Rtools gfortran on PATH (conda-forge's gfortran 15.2 and a stub
   stood in on kappa).
 - A Rust-based CRAN package naming `-lsynchronization` (only wait.c).
-- tkrplot from a standalone Windows tree used alone (blocked by tk.h).
+- tkrplot from a standalone Windows tree used alone: T1 ships the
+  headers; kappa's run is pending (D5, "Tests (T1)").
 - The recipe's build number through rattler-build (no conda-package
   run). verify-tree's TCL_VERSION check runs on standalone Windows trees
   only, not on the conda package's.
@@ -434,10 +530,10 @@ Not re-run on kappa and omicron (a message text only).
 
 ## Follow-ups (not on this branch)
 
-- The standalone Windows tree ships no Tcl/Tk headers, so it cannot
-  compile tkrplot alone: ship the env's tcl.h and tk.h (and what they
-  include) as R_HOME/Tcl/include, where TCLTK_CPPFLAGS looks? The
-  user's decision.
+- Answered (T1, 2026-10-08) and done on this branch: Tcl/Tk's headers
+  in R_HOME/Tcl/include (D5). Left: the T1 record for
+  feat-standalone-toolchain PLAN.md, a patch to apply once this branch
+  has main (D5).
 - Windows' `-lc++` for a C link that pulls flang's runtime with
   `-lgfortran` and no FLIBS: only if a case shows up (D4 above).
 - zig-fc's own flang-driver commands still pass `-lgfortran` and
