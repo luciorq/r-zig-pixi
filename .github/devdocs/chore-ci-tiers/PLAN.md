@@ -7,9 +7,9 @@ build.yaml and D9's minimal check in build-r.yaml. main has since merged
 #14 and #15 (92394d5); they touch none of this branch's files. Of the
 workflows this branch changes build.yaml only; build-r.yaml,
 upstream-zig.yaml and gen-config.yaml are untouched. It also edits the
-ci-trigger comment in pixi.toml, adds a paragraph to README.md's CI
-section, and adds CLAUDE.md. recipe/, build.zig, zigbuild/, scripts/
-and pixi.lock are untouched, so the recipe's build number does not
+ci-trigger comment in pixi.toml and adds a paragraph to README.md's
+CI section. recipe/, build.zig, zigbuild/, scripts/ and pixi.lock are
+untouched, so the recipe's build number does not
 move.
 
 Why on PR (i)'s state rather than after its merge: both change
@@ -183,7 +183,7 @@ pull requests is in the build legs (15 to 6).
   "build.yaml: run the full matrix" --color 5319e7`.
 
 Add the `full-ci` label to a PR that needs the full matrix (e.g.
-toolchain, flavor or packaging changes). CLAUDE.md says the same.
+toolchain, flavor or packaging changes).
 
 ## Validation
 
