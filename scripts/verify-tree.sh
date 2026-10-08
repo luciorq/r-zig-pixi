@@ -543,14 +543,16 @@ n_bins="$(wc -l < "$bin_list" | tr -d ' ')"
 # Two tiers, learned from the first hosted-CI run of this check
 # (2026-09-19): everything R needs to *run* (R itself, its modules and
 # package .so files, every vendored library under lib/) must stay at the
-# 2.17 floor — and does. The compile-time helper tools build.zig installs
-# into lib/R/bin/toolchain (nm/realpath/sed/... for bin/libtool and
-# javareconf) come from conda-forge, whose linux baseline is glibc 2.28
-# now: coreutils' `realpath` needs GLIBC_2.28, nothing else did. Those
-# tools only run when compiling packages or reconfiguring Java, which
-# already requires a development machine with zig on PATH, so they are
-# bounded at conda-forge's own baseline instead — anything above *that*
-# still trips (a host tool leaking in, conda-forge moving to 2.34).
+# 2.17 floor — and does. lib/R/bin/toolchain holds what build.zig
+# installs for compiling packages: rzig under the compiler names (built
+# for R's own target, so at the floor) and, in minimal, conda-forge's
+# GNU make (4.4.1 needs GLIBC_2.17 on linux-64). conda-forge's linux
+# baseline is glibc 2.28, and these only run when compiling, which
+# needs zig anyway, so the toolchain is bounded at that baseline instead
+# — anything above *that* still trips (a host tool leaking in,
+# conda-forge moving to 2.34). (The 2.28 case was coreutils' `realpath`,
+# one of the nm/realpath/sed/... helpers stage.sh copied there until
+# phase A5, 5f23127.)
 if [ "$OS" = linux ]; then
   GLIBC_FLOOR="2.17"          # runtime artifacts: R + vendored libs
   GLIBC_TOOLS_CEILING="2.28"  # lib/R/bin/toolchain helpers (conda-forge baseline)
