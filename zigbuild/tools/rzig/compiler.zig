@@ -434,6 +434,47 @@ test "Windows: no target, the Fortran runtime before the -l lookup" {
     );
 }
 
+test "every OS: -lgfortran and -lquadmath link flang's runtime, once; no gfortran is asked" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-ins for flang and gfortran
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const rd = f.path("llvm/lib/clang/23");
+    try f.touch("llvm/lib/clang/23/lib/x86_64-unknown-linux-gnu/libflang_rt.runtime.a");
+    const rt = f.path("llvm/lib/clang/23/lib/x86_64-unknown-linux-gnu/libflang_rt.runtime.a");
+    try f.write("bin/flang", f.fmt("#!/bin/sh\n[ \"$1\" = -print-resource-dir ] && printf '%s\\n' '{s}'\n", .{rd}), .fromMode(0o755));
+    // an Rtools gfortran, which Windows asked for its libdir before
+    try f.touch("gcc/libgfortran.dll.a");
+    try f.write("bin/gfortran", f.fmt("#!/bin/sh\n: > '{s}'\necho '{s}'\n", .{ f.path("gfortran-ran"), f.path("gcc/libgfortran.dll.a") }), .fromMode(0o755));
+    try f.env.put("PATH", f.path("bin"));
+    const mac: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0" };
+    const targets = [_]struct { os: Ctx.Os, target: Args }{
+        .{ .os = .linux, .target = &.{ "-target", linux_target } },
+        .{ .os = .macos, .target = mac },
+        .{ .os = .windows, .target = &.{} },
+    };
+    for (targets) |t| {
+        c.os = t.os;
+        const head: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" };
+        // R CMD SHLIB's link of a package whose Makevars was written for
+        // gcc (PKG_LIBS = -lgfortran -lquadmath), then $(FLIBS)
+        try expectArgs(
+            try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", rt, "-lm" } }),
+            try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", "-lgfortran", "-lquadmath", "-lflang_rt.runtime", "-lm" }),
+        );
+        // either alone
+        for ([_][]const u8{ "-lgfortran", "-lquadmath" }) |l| {
+            try expectArgs(
+                try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-shared", "-o", "p.so", "a.o", rt } }),
+                try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", l }),
+            );
+        }
+    }
+    try testing.expect(!f.ctx.exists(f.path("gfortran-ran")));
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
 test "macOS: target, SONAME, -l de-duplicated with the environment's, SDK -L last on links only" {
     if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for xcrun
     var f: testutil.Fixture = undefined;

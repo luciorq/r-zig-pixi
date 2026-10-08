@@ -157,7 +157,7 @@ pub fn main(init: std.process.Init) !u8 {
         },
     };
 
-    if (dry_run) return printArgv(io, env, argv);
+    if (dry_run) return printArgv(io, .stdout(), env, argv);
     if (isSet(env, "RZIG_TRACE")) {
         // what the environment rule saw: this binary's path, and the
         // environments it chose (environment.zig)
@@ -237,9 +237,17 @@ fn longPathName(arena: mem.Allocator, p: []const u8) ?[]const u8 {
     return std.unicode.utf16LeToUtf8Alloc(arena, buf[0..n]) catch null;
 }
 
-fn printArgv(io: Io, env: *const std.process.Environ.Map, argv: []const []const u8) !u8 {
+/// RZIG_PRINT_ARGV's output, to `out_file` (main's: stdout). Through a
+/// streaming writer, which writes at the file's own offset, as `echo`
+/// does: the positional one (File.writer) writes from offset 0 of a
+/// regular file, over whatever the shell had written to it before, as in
+/// `{ echo x; zig-cc ...; } > file` (E4, fix-rzig-baseline-cpu's
+/// follow-ups). On Windows that write also left the shared handle's file
+/// pointer after the argv, so later output to the same redirect
+/// overwrote what followed (kappa, 2026-10-08).
+fn printArgv(io: Io, out_file: Io.File, env: *const std.process.Environ.Map, argv: []const []const u8) !u8 {
     var buf: [4096]u8 = undefined;
-    var w = Io.File.stdout().writer(io, &buf);
+    var w = out_file.writerStreaming(io, &buf);
     const out = &w.interface;
     if (env.get("ZIG_LIB_DIR")) |v| try out.print("ZIG_LIB_DIR={s}\n", .{v});
     for (argv) |x| try out.print("{s}\n", .{x});
@@ -292,6 +300,29 @@ test toolName {
     try std.testing.expect(Tool.fromName(toolName("zig-ranlib")) == .ranlib);
     // no other Fortran name: FC is zig-fc, flang and gfortran stay themselves
     for ([_][]const u8{ "flang", "gfortran.exe", "zig-f77" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == null);
+}
+
+test printArgv {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var env: std.process.Environ.Map = .init(arena.allocator());
+    try env.put("ZIG_LIB_DIR", "/cache/r-zig/zig-lib-1/lib/zig");
+    // `{ echo first; RZIG_PRINT_ARGV=1 zig-cc -c a.c; } > out`: one open
+    // file, its offset past what the shell wrote
+    const file = try tmp.dir.createFile(io, "out", .{});
+    defer file.close(io);
+    var w = file.writerStreaming(io, &.{});
+    try w.interface.writeAll("first\n");
+    try std.testing.expectEqual(0, try printArgv(io, file, &env, &.{ "/z/zig", "cc", "-c", "a.c" }));
+    try std.testing.expectEqual(0, try printArgv(io, file, &env, &.{"ranlib"}));
+    const got = try tmp.dir.readFileAlloc(io, "out", arena.allocator(), .limited(4096));
+    try std.testing.expectEqualStrings(
+        "first\nZIG_LIB_DIR=/cache/r-zig/zig-lib-1/lib/zig\n/z/zig\ncc\n-c\na.c\nZIG_LIB_DIR=/cache/r-zig/zig-lib-1/lib/zig\nranlib\n",
+        got,
+    );
 }
 
 test shellCommand {

@@ -141,6 +141,11 @@ The decisions that shape the code now (each has its record below):
   A difference that breaks upstream zig is fixed for upstream zig (the
   atexit export, addSharedLib).
 
+In PR (ii), branch fix-rzig-follow-ups (record
+.github/devdocs/fix-rzig-follow-ups/PLAN.md): What remains 5, 8 and 10
+below, and E4 (RZIG_PRINT_ARGV, fix-rzig-baseline-cpu/PLAN.md's
+follow-ups). Item 10's rule holds on every OS there, not only Windows.
+
 What remains, in order (proposed; ask the user before starting each):
 1. F4 is done (record under F4), tested on linux-64, osx-arm64, osx-64
    and win-64 with both zigs, and upstream-zig.yaml passed on GitHub on

@@ -124,7 +124,14 @@ build:
   # CPU: target-cpu "skylake" on kappa), which another machine's CPU may
   # lack; linux and macOS were already baseline through their -target.
   # (fix-rzig-baseline-cpu PLAN.md)
-  number: 5
+  # 5 → 6 (2026-10-08): rzig links flang's runtime for a package's
+  # -lgfortran/-lquadmath on every OS (Windows asked a gfortran on PATH;
+  # elsewhere the link failed or the package did not load), and on
+  # Windows makes -lsynchronization (Rust-based packages) link with
+  # upstream zig; win-64's Makeconf says TCL_VERSION = 86t, the names of
+  # conda-forge's Tcl/Tk (tcl86t, tk86t), so packages that link Tcl/Tk
+  # through TCLTK_LIBS (tkrplot) link (fix-rzig-follow-ups PLAN.md).
+  number: 6
 
 outputs:
   # One build (scripts/zig-build.sh), two packages split by

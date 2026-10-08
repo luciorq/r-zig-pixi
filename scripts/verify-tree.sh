@@ -25,7 +25,8 @@
 #     (Windows: Library/include/omp.h, Library/lib/libomp.lib and
 #     R_HOME/bin/x64/libomp.dll; unix: include/omp.h and lib/libomp);
 #   - Windows (a tree that is not a conda env): the Tcl/Tk runtime is in
-#     R_HOME/Tcl (with Tcl's modules), and every DLL a PE file in the tree
+#     R_HOME/Tcl (with Tcl's modules) and Makeconf's TCL_VERSION names its
+#     DLLs (tcl86t, tk86t), and every DLL a PE file in the tree
 #     imports is in the tree (its own directory, R_HOME/bin/x64, or
 #     R_HOME/Tcl/bin for the Tcl/Tk DLLs) or the system's;
 #   - unix (a tree that is not a conda env): etc/ca-bundle.crt holds
@@ -400,11 +401,18 @@ if [ "$OS" = windows ]; then
     for f in tcl86t.dll tk86t.dll; do
       [ ! -e "$TREE/$rh/bin/x64/$f" ] || bad="$bad bin/x64/$f(misplaced)"
     done
+    # Makeconf's TCL_VERSION names those DLLs: packages that link Tcl/Tk
+    # (tkrplot) take TCLTK_LIBS, -L$(TCL_HOME)/bin -ltcl$(TCL_VERSION)
+    # -ltk$(TCL_VERSION).
+    tclv="$(sed -n 's/^TCL_VERSION = *\([^[:space:]]*\).*/\1/p' "$mk")"
+    for f in "tcl$tclv.dll" "tk$tclv.dll"; do
+      [ -f "$TREE/$rh/Tcl/bin/$f" ] || bad="$bad TCL_VERSION=$tclv:Tcl/bin/$f(missing)"
+    done
     if [ -n "$bad" ]; then
       echo "error: the Tcl/Tk runtime in $rh/Tcl:$bad" >&2
       exit 1
     fi
-    echo "== Tcl/Tk runtime verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib"
+    echo "== Tcl/Tk runtime verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), Makeconf's TCL_VERSION = $tclv, $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib"
 
     # The DLL closure: every DLL a PE file in the tree imports is found in
     # the tree, where the loader looks for it (the file's own directory;

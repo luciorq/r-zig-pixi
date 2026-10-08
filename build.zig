@@ -1841,7 +1841,10 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     var mkc = try gnuwin32O3ToO2(b, try substituteWith(ctx, raw, &mk));
     // Tcl/Tk headers and libraries where the standalone tree has them
     // (installEnvRuntime installs R_HOME/Tcl); inside a conda env this is
-    // unused.
+    // unused. TCL_VERSION is the vendored file's 86t, the names of
+    // conda-forge's threaded Tcl/Tk (tcl86t.dll, a conda env's
+    // tcl86t.lib), which TCLTK_LIBS links (verify-tree.sh checks them
+    // against R_HOME/Tcl/bin).
     mkc = try replaceLine(b, mkc, "TCL_HOME", "TCL_HOME = $(R_HOME)/Tcl");
     try assertNoBuildPath(ctx, "etc/x64/Makeconf", raw, mkc);
     const mkc_wf = b.addWriteFiles();
