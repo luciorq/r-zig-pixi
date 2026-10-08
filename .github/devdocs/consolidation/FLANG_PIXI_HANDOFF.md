@@ -223,3 +223,274 @@ no staging outputs or `path:` sources):** the staging-output `build_cache`
 key does not hash `path:` sources, so local rebuilds after editing them
 reuse the old output (delete `<output-dir>/build_cache`); a staging output
 gets no `PKG_NAME`/`PKG_VERSION`, pass them via `script: {file, env}`.
+
+## 7. Long-term vision — a static R channel — and the one-build-number-per-release rule (2026-10-06; flang-pixi docs/18, docs/13)
+
+**The vision (user, 2026-10-06).** A conda channel that distributes a
+portable R and R packages whose compiled code is statically linked: packages
+stay `.so`/`.dylib`/`.dll` (R dlopens them) but carry their third-party
+libraries inside, with hidden visibility, and depend at run time only on R,
+libc, and a small set of single-instance runtimes shipped with R itself.
+Packages may be *built* with conda-forge tools but must be distributable
+without conda-forge run-time dependencies — CRAN's macOS/Windows binary
+model extended to Linux, zig as the toolchain, flang-pixi as the compiler
+layer. Nothing is being built for it yet; this section says what it would
+ask of r-zig-pixi so it can be kept in view.
+
+**What it would ask of r-zig-pixi.**
+- *Portable R ships the single-instance runtimes*: `libomp`, BLAS/LAPACK,
+  `libR`, Tcl/Tk (and JVM/Python/MPI where used) are **shared libraries
+  owned by the channel**, installed beside R, with their own export surface
+  — the only libraries a package may link dynamically besides libc and R.
+  `libomp` would become a flang-pixi output (`llvm-openmp-zig`, a drop-in for
+  conda-forge's: same names/soname/exports/symbol versions, mutual exclusion
+  with `llvm-openmp`, switched in the same zig 0.17 wave on both sides).
+  **Not decided** — flang-pixi docs/18 §5 lists the checks first; today's
+  rule (conda-forge `llvm-openmp` on every subdir) stands. Two facts from
+  that assessment that touch your lock: conda-forge's libomp is already
+  libc-only on Linux/macOS (MSVC-built on Windows: `VCRUNTIME140`,
+  `vc14_runtime`), and on macOS your `openblas`/`full-openblas` environments
+  bind `llvm-openmp` *by name* through the `openmp_*` openblas builds and
+  `_openmp_mutex *_kmp_llvm` — a differently named drop-in would need
+  channel-owned BLAS or `pthreads` openblas builds there.
+- *Package builds embed everything else statically with hidden visibility
+  and an export check*: flang-rt build 9 is the template
+  (`-fvisibility=hidden -fvisibility-inlines-hidden`, static-only, a
+  tripwire that fails when the probe symbol is exported; recall the ~1,100
+  runtime symbols every Fortran `.so` re-exported before it). The check has
+  to run on all three object formats; on macOS it must be compile-time
+  hiding, because zig's Mach-O linker ignores `-exported_symbols_list`.
+- *Recipes declare only R and the channel's runtimes in `run:`*, with
+  `ignore_run_exports` for every conda-forge build input (headers, `.a`
+  files, tools) — the pattern flang-pixi already uses for `llvm-zig` and the
+  `vc`/`ucrt` chain.
+- *Floors*: glibc 2.17 (zig target + ceiling tripwire) and macOS 11.0
+  (`minos` tripwire) stay; libc is the floor that cannot be removed; on
+  Windows the UCRT api-sets are the floor.
+- *A static library tree* (zig-built `.a` files, one libc++, one floor,
+  hidden visibility) precedes the packages; sequencing is portable R with
+  the runtimes → the static library tree → packages, starting with the
+  contract-suite packages (Rcpp, data.table, minqa …).
+- *Known costs*: rebuild every package embedding a library on a security
+  fix (an inventory of what embeds what is needed); LGPL libraries stay
+  shared inside R's tree, never embedded; X11/fontconfig/Cairo stay
+  system-dynamic.
+
+**One build number per package per release (flang-pixi rule from the next
+release on).** The 23.1.1 generation carries different build numbers per
+subdir (lld `_1/_0/_4/_4/_0/_3`, flang `_2/_1/_5/_5/_1/_4`, flang-rt
+`_9/_9/_9/_9/_4/_7` for linux-64/linux-aarch64/osx-arm64/osx-64/win-64/
+win-arm64) because only affected subdirs were rebuilt and every rebuild
+needs a bump (rattler-build hashes the spec strings, not the resolved build
+deps, so a rebuild against a changed llvm-zig/zig collides with the old
+filename). From the zig 0.17 wave on, every package is rebuilt on all six
+subdirs at **one number — lld-zig 5, flang-zig 6, flang-rt-zig 10** (llvm-zig
+4, never published) — so your lock can pin a single `build-number` for
+flang-rt-zig on every platform (today: `>=9` on unix, `>=4` on win-64).
+Per-subdir rebuilds between releases become declared hotfixes (flang-pixi
+docs/14 + `scripts/build-alignment.json`, checked by
+`scripts/check-build-alignment.py`). Pin by version and build *number*,
+never by build string.
+
+**Also measured 2026-10-06 (flang-pixi docs/18 §6.1), for your
+`verify-tree.sh`-style checks:** every published flang-pixi file is libc-only
+at load time — Linux NEEDED = `libc libm libdl libpthread librt libresolv
+libutil` + `ld-linux-*` (the 2.17 target's split libraries), macOS =
+`/usr/lib/libSystem.B.dylib` with `minos 11.0`, Windows = `KERNEL32 ntdll
+ADVAPI32 SHELL32 ole32 VERSION` + `api-ms-win-crt-*` (all 12 win-64
+executables resolve per symbol). The three linux-aarch64 packages declare no
+`__glibc` floor (run export lost in the cross build; binaries are GLIBC
+2.17) — fixed in the next release by hand-declared floors; nothing for you
+to do. flang-pixi's build scripts now enforce that allowlist at build time
+(effective with the 0.17 wave); `scripts/check-load-deps.sh` applies the same
+predicates to any extracted package or tree.
+
+## 8. Your standalone Fortran archive — measured, and what flang-pixi will and will not publish (2026-10-06; flang-pixi docs/19)
+
+**Verdict.** The trimmed set you proposed works exactly as you described it,
+on all three platforms, with nothing else on `PATH`: `flang-23` (+ `flang`
+link; `flang.exe` on Windows), the intrinsic + OpenMP `.mod` files under
+`lib/clang/23/finclude/flang/<conda triple>/`, and `libflang_rt.runtime.a`.
+`hello`, derived-type modules, `use omp_lib` and OpenMP directives all
+compile with `env -i`; zig links the static archive and the result runs on
+linux-64, osx-arm64 (and osx-64 under Rosetta) and win-64 **without
+lld-zig, without a sysroot, without an SDK path, without the Windows CRT
+snapshot**. Sizes of that set (one tar, `zstd -19`): linux-64 43.9 MB,
+linux-aarch64 41.3, osx-arm64 30.5, osx-64 35.0, win-64 40.1, win-arm64
+35.7 (raw 144–210 MB; the driver binary alone is 136–196 MB; `xz -9` is
+10–20 % smaller). Your 279 MB / 63 MB linux-64 figure included `lld`; the
+set without it is 210 MB / 44 MB.
+
+**flang-pixi publishes a documented file set and a carving script, not a
+second artifact.** `scripts/carve-fortran-standalone.py` (in flang-pixi)
+takes the published `flang-zig` + `flang-rt-zig` `.conda` of one subdir and
+writes `<out>/<subdir>/flang-standalone/` (+ a `.tar.zst`/`.tar.xz`/`.tar.gz`)
+with the layout above, a one-line `flang.cfg`, the `lib/libflang_rt.runtime.a`
+symlink the conda package also ships, and a `STANDALONE-ORIGIN.txt` naming
+the source files and build numbers. Run it with `pixi exec --spec
+"python>=3.14" python carve-fortran-standalone.py --out DIR a.conda b.conda`
+(or any Python with the `zstandard` package); ~5 s per subdir; tested on
+gamma, omicron and kappa today, the linux-64 tree also from the relocated
+tarball. Why not an artifact: it would double flang-pixi's publishing
+surface and storage and drift from the build numbers the new
+one-number-per-release rule (§7) makes meaningful. If a URL-downloadable
+archive is wanted later, flang-pixi will generate it from the published
+`.conda` files as GitHub release assets named with the build numbers — ask
+when you need it.
+
+**The driver config.** Linux and Windows need **no `flang.cfg` at all** for
+compiling: flang-rt ships the intrinsic-module directory under the
+driver's own default triple name (`x86_64-conda-linux-gnu` with an
+`x86_64-unknown-linux-gnu` symlink; `x86_64-w64-windows-gnu` beside
+`x86_64-w64-mingw32` — keep both Windows directories if you carve by hand).
+macOS needs one line, because the driver's triple carries the host OS
+version (`arm64-apple-macosx26.0.0`) and can never match a shipped
+directory. **Passing `-fintrinsic-modules-path <root>/lib/clang/23/finclude/flang/<conda triple>`
+from zig-fc removes the cfg on every platform** (verified, `use omp_lib`
+included); the script writes that single line as `flang.cfg` anyway, and
+flang-zig build 6 will ship it as `bin/flang-compile.cfg` next to the full
+`flang.cfg`. Nothing else from the published cfg (`--sysroot`,
+`-fuse-ld=lld`, `--rtlib=compiler-rt`, `-Wl,-L/-rpath/-rpath-link`) is a
+compile-time need; they all belong to the driver's own link, which you are
+not using.
+
+**What the flang driver link would need, for the record** (measured, so
+nobody re-tries it): Linux `ld.lld` + a conda `sysroot_linux-64` (265 MB;
+without it the result binds the build host's glibc — GLIBC_2.34 on a 2.39
+host — and the 2.17 floor is gone) + flang-rt's compiler-rt crt objects
++ `--rtlib=compiler-rt` + the `lib/libflang_rt.runtime.a` symlink; macOS
+`SDKROOT` (then Apple `ld` or lld-zig's `ld64.lld`, both work); Windows
+`ld.lld` + the 14 MB `Library\x86_64-w64-mingw32\lib` CRT snapshot. Your
+plan to send configure probes through zig too is the right one.
+
+**Windows specifics.** lld-zig is not needed when zig links (measured). The
+flang-rt build 4 shims exist only for the *driver's* `-fopenmp` link line
+(`-latomic -lomp`): `libomp.dll.a` is an import library for conda-forge's
+`libomp.dll`, `libatomic.a` is an empty archive; a zig link takes your
+libomp import library directly (both `libomp.dll.a` and MSVC's `libomp.lib`
+work) and needs no libatomic. A Fortran DLL linked by zig with the static
+runtime exports **24 symbols, all its own** — lld's MinGW auto-export skips
+archive members — so win-64 has no runtime re-export problem today;
+flang-rt 10 adds the hidden-visibility flags there for parity only. Your
+`>=4` win-64 pin becomes `>=10` everywhere after the 0.17 wave.
+
+**Upstream zig.** Measured on linux-64: the official 0.16.0 tarball and
+conda-forge's zig produce **identical machine code** for the same explicit
+flags (`-target x86_64-linux-gnu.2.17 -mcpu=baseline`); the object bytes
+differ only in the embedded clang version string; linked programs differ
+in `NEEDED` (upstream `libc.so.6` only, conda-forge all eight glibc split
+libraries via its `--no-as-needed` patch). Plain `zig cc` **without
+`-mcpu=baseline` emits native-CPU code** — your shims must pass it, as the
+conda wrapper does. Building flang-pixi with upstream zig is a recipe
+refactor (own shims, no `ZIG_LIB_DIR` mirror, sha-pinned tarball) with no
+change in the compiled code and the side effect of not waiting for
+conda-forge's 0.17 package; it is the user's principle decision and is not
+scheduled.
+
+**What you must change to consume the set.**
+- Compile: `-fintrinsic-modules-path <root>/lib/clang/23/finclude/flang/<conda triple>`
+  (or keep the carved `flang.cfg`); `-mmacos-version-min=<floor>` on macOS
+  (flang stamps the host SDK version otherwise).
+- Link (zig): `<root>/lib/libflang_rt.runtime.a` or `-L<root>/lib
+  -lflang_rt.runtime`, plus `-lm`; `-fopenmp` code additionally needs
+  `-lomp` against the libomp you ship beside R. Windows:
+  `<root>\Library\lib\clang\23\lib\x86_64-w64-windows-gnu\libflang_rt.runtime.a`
+  and your libomp import library; nothing from the CRT snapshot.
+- Carve from the published `.conda` with the script at your build time;
+  after the 0.17 wave pin `flang-rt-zig` build 10 on every platform (and
+  `llvm-openmp >=23`, which flang-rt 10 will itself require on unix as it
+  already does on win-64).
+
+## 9. The zig 0.16 release you asked for: lld-zig 5 / flang-zig 6 / flang-rt-zig 10 on all six subdirs (built 2026-10-07; flang-pixi docs/10, docs/14)
+
+**What it is.** The first release under flang-pixi's one-number-per-release
+rule (§7): every consumer package rebuilt on linux-64, linux-aarch64,
+osx-arm64, osx-64, win-64 and win-arm64 at ONE build number each —
+**lld-zig `_5`, flang-zig `_6`, flang-rt-zig `_10`** — still zig 0.16.0
+(conda-forge zig_impl build 20 on every host) and LLVM 23.1.1. This is the
+last 0.16 release; nothing 0.17-related is in it. **Status: ON UNIVERSE as of 2026-10-07** — uploaded, the pre-rule spread
+pruned (the channel holds exactly these 18 files), `check-build-alignment.py`
+→ OK, and flang-pixi's `test.yml` run 37610086141 green on all six native
+runners (incl. the arm64 Linux and Windows runners). Re-lock whenever you
+like.
+
+**Pin `flang-rt-zig` build number `>=10` on every platform** (replacing
+`>=9` unix / `>=4` win-64), `flang-zig ==23.1.1`, `lld-zig` comes through
+flang-zig's run dependency. What the release carries for you:
+- flang-rt-zig 10: static-only, hidden-visibility runtime on all six
+  subdirs (Windows included — measured again on the new archive: a
+  zig-linked Fortran DLL exports 24 symbols, all its own, none of the
+  runtime; the archive now carries explicit `-exclude-symbols:` directives
+  for its hidden symbols), **`llvm-openmp >=23` in `run:` everywhere**
+  (your `23.*` pin already satisfies it; the module declares 6.0-era entry
+  points, docs/19 §7), one runtime archive on Windows instead of five.
+- flang-zig 6: `bin/flang-compile.cfg` (the one-line compile-only driver
+  config, §8) beside the full `flang.cfg`.
+- All three: explicit `__glibc >=2.17,<3.0.a0` (linux) / `__osx >=11.0`
+  (osx) in `depends` — the linux-aarch64 packages previously declared no
+  floor at all; and every executable is libc-only at load time by a
+  build-time allowlist (docs/18 §6.6).
+- Every package records the zig it was built with
+  (`share/<pkg>/zig-toolchain.txt` on unix: `zig_impl_<sub> 0.16.0 build
+  20`, target `<arch>-linux-gnu.2.17` / wrapper default on macOS).
+
+**No zig run constraint, by decision.** A `run_constraints` on `zig` in
+flang-pixi's packages could only act on *future* solves and would not
+protect against already-published builds, and the packages' run metadata
+stays minimal (R, libc floors, lld-zig, llvm-openmp). The guard is on your
+side: pin by **build number**, and when 0.17-built packages appear they
+arrive at the **next numbers — lld-zig 6, flang-zig 7, flang-rt-zig 11**
+(flang-pixi `scripts/build-alignment.json` `next_release`). *Corrected
+2026-10-07 after your re-lock:* a build-number **range** is not accepted by
+pixi 0.81 / rattler-build 0.76 ("expected EOF"), and a `[build_number="==6"]`
+bracket copied into published `depends` is unparseable for libmamba and
+micromamba — so the working pins are the ones you use: `pixi.toml`
+`{ version = "==23.1.1", build-number = "==6" }` (lld `"==5"`, flang-rt
+`"==10"`) and, in recipes, the **build-string form** `flang-zig ==23.1.1 *_6`,
+`lld-zig ==23.1.1 *_5`, `flang-rt-zig ==23.1.1 *_10`, which every solver
+parses. Two flang-pixi guarantees make that safe: build strings always end
+in `_<build number>` (`zig_<hash>_<N>`, recipe `string:` line, kept as a
+contract), and **release builds a published r-zig-toolchain pins are never
+pruned** — they are listed under `retain` in flang-pixi's
+`scripts/build-alignment.json` (`lld-zig [5]`, `flang-zig [6]`,
+`flang-rt-zig [10]` today) and `prune-universe.py` skips them even after
+the next release lands; tell flang-pixi when a pinned set can go. Nothing
+with a lower number will ever be re-published. From the next release on,
+flang-zig also pins its own lld-zig by build string (`lld-zig ==23.1.1
+*_<lld build>` in its run deps), so a 0.17-built lld-zig cannot pair with a
+0.16-built flang-zig and your explicit lld-zig pin becomes optional.
+
+**Offer standing:** flang-pixi can add your win-64 Fortran package test to
+its `test.yml` so every future release is checked against it before
+publishing.
+
+## 10. Your `atexit` auto-export report: reproduced on upstream zig 0.16.0 AND 0.17.0; not filed by flang-pixi (2026-10-07)
+
+Re-run on gamma (cross from linux-64, your exact lib.c/main.c): the
+ziglang.org **0.16.0** tarball, the ziglang.org **0.17.0** release tarball
+and conda-forge's linux `zig_impl` 0.16.0 build 20 all export `atexit` from
+`lib.dll` and fail the `main.exe` link with `duplicate symbol: atexit`; with
+your `-exclude-symbols:atexit` drectve object the DLL exports only
+`_CRT_INIT __mingw_module_is_dll answer` and the link passes, on both zig
+versions. So **0.17.0 does not fix it; keep the workaround object through
+the 0.17 wave and any upstream-zig switch.** The mechanism is as you wrote:
+zig's CRT objects are `crt2.obj`/`dllcrt2.obj`, so LLD's MinGW auto-export
+does not recognise them as CRT; conda-forge's win-64 zig hides it only via
+its `mingw-crtexe-no-atexit` / `ucrtbase-export-atexit-alias` patches.
+
+**Filing:** flang-pixi has a standing user rule of *no upstream filing*
+(drafts are parked in its `docs/12-upstream-reports.md`; yours is #7 there,
+with the re-run table). Whether and who files on Codeberg is the user's
+call, not this session's; nothing has been filed. If it is filed later, the
+issue number goes here. flang-pixi's own published packages are not
+affected (executables and archives only).
+
+Noted (corrected): your re-lock onto lld-zig 5 / flang-zig 6 / flang-rt-zig
+10 is done and passes on all OSes (lock sha a7d3dcec…: linux-64 19-step
+chain incl. check/wheel/conda-package; osx-arm64 + osx-64 build/verify/
+contract/verify-package; win-64 build/verify-tree/smoke/contract/check/
+verify-package/conda-package). Pins are exact builds — `build-number =
+"==N"` in pixi.toml and `*_N` build strings in the recipe (r-zig-toolchain
+run deps included), not ranges (see §9 correction). On win-64 flang-rt-zig
+10's archive carries 5,436 `-exclude-symbols` for its 5,442 globals and no
+DLL exports a runtime symbol, .def or not.
