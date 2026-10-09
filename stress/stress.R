@@ -12,8 +12,8 @@
 #          (pixi run -e stress stress [args]).
 #   conda  R installed in the env that also holds the libraries. --conda
 #          makes that env with pixi (r-zig-slim, r-zig-toolchain and the
-#          selected rows' sysdeps) in the run directory, then runs this
-#          script again with that env's R.
+#          sysdeps of the rows the run installs) in the run directory, then
+#          runs this script again with that env's R.
 #
 # Usage: stress.R [options] [target ...]
 #   target        a row of packages.tsv (package or package:variant), a group
@@ -30,10 +30,11 @@
 #   --keep-path   keep the caller's PATH (default: only the libraries env's
 #                 programs and the OS's base directories) and, on macOS,
 #                 skip the runner's CMake toolchain file that leaves
-#                 Homebrew out (a tree's own etc/r-zig.cmake still applies)
+#                 Homebrew out (a tree with its own etc/r-zig.cmake gets none)
 #   --trace       RZIG_TRACE=1: rzig prints its commands into the logs
 #   --list        print the install plan and stop
-#   --sysdeps     print the selected rows' sysdeps for this OS and stop
+#   --sysdeps     print the sysdeps of the rows the run installs on this OS
+#                 (the selected ones and their dependencies' rows) and stop
 #   --strict      exit 1 when a target's result differs from its expect
 #   --help        print this
 # Environment: STRESS_JOBS (as --jobs), STRESS_TSV (another data file).
@@ -101,8 +102,6 @@ rows <- tab[vapply(tab$oses, function(x) any(words(x) %in% c("all", os)), NA), ]
 if (length(targets_arg) && !"all" %in% targets_arg) rows <- rows[named(rows, targets_arg), ]
 rows <- rows[!named(rows, skip), ]
 if (!nrow(rows)) stop("no rows of ", tsv, " left for ", os, ": ", paste(argv, collapse = " "), call. = FALSE)
-needed <- sort(unique(unlist(lapply(rows$sysdeps, on_os))))
-if (flag("sysdeps")) { writeLines(needed); quit(status = 0) }
 
 # --- what to install, in order ------------------------------------------------
 retry <- function(f, tries = 3, wait = c(5, 30)) {
@@ -137,6 +136,13 @@ if (!inherits(db, "error")) {
 items <- rbind(data.frame(package = plan, name = plan, variant = rep("", length(plan)), stringsAsFactors = FALSE),
                rows[nzchar(rows$variant), c("package", "name", "variant")])   # variants last
 items$target <- items$package %in% rows$package
+# the sysdeps of every row the run installs: the selected rows, and the
+# rows among their dependencies (sf installs units and s2, whose rows need
+# udunits2, cmake and openssl), as the stress env holds them all
+inst <- tab[tab$package %in% c(rows$package, items$package), ]
+inst <- inst[vapply(inst$oses, function(x) any(words(x) %in% c("all", os)), NA), ]
+needed <- sort(unique(unlist(lapply(inst$sysdeps, on_os))))
+if (flag("sysdeps")) { writeLines(needed); quit(status = 0) }
 if (flag("list")) {
   if (inherits(db, "error")) stop("cannot read the repositories: ", conditionMessage(db), call. = FALSE)
   items$group <- rows$group[match(items$package, rows$package)]
@@ -161,7 +167,7 @@ patterns <- c(
   network   = "cannot open URL|cannot open the connection to '?https?:|Could not resolve host|Failed to connect|Connection (timed out|refused|reset)|Temporary failure in name resolution|status was '[45][0-9][0-9]|HTTP (error|status) [45][0-9][0-9]|HTTP/[0-9.]+ [45][0-9][0-9]|Timeout of [0-9]+ seconds was reached|curl: \\([0-9]+\\)|download (failed|error)|SSL connect error",
   resource  = "No space left on device|[Cc]annot allocate memory|[Oo]ut of memory|std::bad_alloc|Killed signal terminated|virtual memory exhausted|OutOfMemory",
   abi       = "(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__cxx11|B5cxx11|St3__1|std::__1|__cxa_|__gxx_personality|_Unwind_|\\?[A-Za-z_][A-Za-z0-9_@?$]*@@)|undefined symbol: _Z|could not open 'lib(MSVCRT|OLDNAMES|LIBCMT|msvcprt)\\.a'|-LIBPATH:|Windows Kits/10/Lib|/(W[0-4]|bigobj|wd[0-9]+): unrecognized file extension",
-  toolchain = "unknown CPU: '|unrecognized file extension|Could NOT find Threads|thread [0-9]+ panic: |/bin/R(term\\.exe|script\\.exe)?: No such file or directory|is not a full path to an existing compiler tool|windres: command not found|Building for: NMake Makefiles|make: invalid option -- \\?|ar(\\.exe)?: [^ ]+\\.o: No such file or directory|unsupported linker arg: |-Werror,-Wdate-time|version script assignment of '[^']+' to symbol '[^']+' failed: symbol not defined|rzig: |(zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib): (cannot |waiting for |could not |no flang|warning: no |warning: R_ZIG_EXTRA_ENV)|zig: error|error: unable to (spawn|create|open|load|parse|emit)|LLVM ERROR|PLEASE submit a bug report|unknown target CPU|unsupported option|unknown argument|compiler cannot create executables|relocation R_[A-Z0-9_]+ .*against|(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__(u)?(div|mod|mul)ti3|___chkstk_ms|__extend|__trunc|__emutls|__guard_(dispatch|check)_icall)",
+  toolchain = "unknown CPU: '|unrecognized file extension|Could NOT find Threads|thread [0-9]+ panic: |/bin/R(term\\.exe|script\\.exe)?: No such file or directory|is not a full path to an existing compiler tool|windres: command not found|Building for: NMake Makefiles|make: invalid option -- \\?|ar(\\.exe)?: [^ ]+\\.o: No such file or directory|unsupported linker arg: |-Werror,-Wdate-time|version script assignment of '[^']+' to symbol '[^']+' failed: symbol not defined|rzig: |(zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib): (cannot |waiting for |could not |no flang|warning: no |warning: R_ZIG_EXTRA_ENV)|zig: error|error: unable to (spawn|create|open|load|parse|emit)|LLVM ERROR|PLEASE submit a bug report|unknown target CPU|unsupported option|unsupported argument '[^']*' to option '|unknown argument|compiler cannot create executables|relocation R_[A-Z0-9_]+ .*against|(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__(u)?(div|mod|mul)ti3|___chkstk_ms|__extend|__trunc|__emutls|__guard_(dispatch|check)_icall)",
   crash     = "\\*\\*\\* caught (segfault|bus error|illegal operation) \\*\\*\\*|R is aborting now|An irrecoverable exception occurred",
   upstream  = "Library not loaded: (/opt/homebrew|/usr/local/(opt|Cellar))/|(system library '|cannot find -l|library not found for -l|unable to find library -l)(debug|optimized)\\b|[Tt]he specified procedure could not be found|failed to solve the environment|Cannot solve the request|[Cc]ould not solve for environment specs",
   sysdep    = "(?m)configure: error|was not found in the pkg-config search path|No package '[^']+' found|fatal error: '?[^ ']+\\.h(pp|xx)?'?( file)? not found|\\.h: No such file|cannot find -l|unable to find (dynamic |static )?system library|library not found for -l|command not found|: not found$|[Cc][Mm]ake.*not found|Could NOT find")
@@ -206,7 +212,7 @@ if (!is.null(conda) && !in_ws) {
   subdir <- switch(paste(os, arch), "linux x86_64" = "linux-64", "linux aarch64" = "linux-aarch64",
                    "macos x86_64" = "osx-64", "macos aarch64" = "osx-arm64", "windows x86_64" = "win-64",
                    stop("no conda subdir for ", os, " ", arch, call. = FALSE))
-  # the selected rows' sysdeps only, as a user installs what they need: a
+  # the installed rows' sysdeps only, as a user installs what they need: a
   # conflict in one row's libraries then does not block the other rows
   deps <- unique(c("r-zig-slim", "r-zig-toolchain", "pkg-config", needed))
   q <- function(x) paste0("\"", x, "\"", collapse = ", ")
@@ -219,6 +225,11 @@ if (!is.null(conda) && !in_ws) {
   # the caller's own pixi workspace (pixi run -e stress) must not leak in
   Sys.unsetenv(c("PIXI_PROJECT_MANIFEST", "PIXI_PROJECT_ROOT", "PIXI_PROJECT_NAME", "PIXI_PROJECT_VERSION",
                  "PIXI_ENVIRONMENT_NAME", "PIXI_ENVIRONMENT_PLATFORMS", "PIXI_IN_SHELL", "PIXI_PROMPT", "R_ZIG_EXTRA_ENV"))
+  # nor what this R's etc/Renviron set for itself (its CA bundle, and on
+  # macOS its CMake toolchain file): the conda R keeps a value that is
+  # set, and its children would use this R's files, not its own
+  mine <- c("CMAKE_TOOLCHAIN_FILE", "R_ZIG_CMAKE_TOOLCHAIN_FILE", "R_ZIG_CA_BUNDLE")
+  Sys.unsetenv(mine[startsWith(chartr("\\", "/", Sys.getenv(mine)), paste0(rhome, "/"))])
   Sys.setenv(STRESS_CHANNEL = channel)
   mf <- shQuote(file.path(ws, "pixi.toml"))
   elog <- file.path(out, "logs", "conda-env.log")
@@ -297,9 +308,9 @@ if (flag("trace")) Sys.setenv(RZIG_TRACE = "1")
 # the env's prefix (round 2: arrow's libarrow linked /opt/homebrew/lib/libsnappy.a).
 # A toolchain file from the environment (CMake >= 3.21) leaves Homebrew's
 # prefixes out of every find_*; a package's own -DCMAKE_TOOLCHAIN_FILE wins.
-# It also replaces a build-7 tree's own etc/r-zig.cmake (etc/Renviron keeps
-# a value that is already set); --keep-path leaves the tree's in place.
-if (os == "macos" && !flag("keep-path") && nzchar(sysroot)) {
+# Only for a tree without its own: build 7 on ships etc/r-zig.cmake, which
+# its etc/Renviron sets, and the run then tests that one.
+if (os == "macos" && !flag("keep-path") && nzchar(sysroot) && !file.exists(file.path(rhome, "etc", "r-zig.cmake"))) {
   tc <- file.path(out, "no-homebrew.cmake")
   writeLines("set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local)", tc)
   Sys.setenv(CMAKE_TOOLCHAIN_FILE = tc)

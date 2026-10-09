@@ -77,8 +77,8 @@ Useful options (`--help` lists them all):
 - `--keep-path`: keep your PATH and, on macOS, skip the runner's CMake
   toolchain file. By default the runner narrows PATH and, on macOS,
   leaves Homebrew out of CMake's searches. A tree that ships its own
-  toolchain file (build 7's `etc/r-zig.cmake`) leaves Homebrew out either
-  way.
+  toolchain file (build 7's `etc/r-zig.cmake`) gets none from the runner
+  and leaves Homebrew out either way.
 - `--strict`: exit 1 when a result differs from its `expect`.
 
 ## Run it in CI
@@ -155,17 +155,17 @@ nothing else on the machine:
   pkg-config comes first. A tool the env lacks can still come from
   `/usr/bin` or `/bin`. R's `bin/toolchain` is not on PATH: packages reach
   rzig through Makeconf.
-- macOS only: a CMake toolchain file (`CMAKE_TOOLCHAIN_FILE`, in the run
-  directory) that leaves `/opt/homebrew` and `/usr/local` out of CMake's
-  searches. PATH alone does not: CMake's `Platform/Darwin.cmake` adds
-  Homebrew's prefix before the env's whether `brew` is on PATH or not
-  (round 2: arrow linked `/opt/homebrew/lib/libsnappy.a`). A package that
-  passes its own `-DCMAKE_TOOLCHAIN_FILE` keeps it. `--keep-path` turns
+- macOS only, for a tree without its own: a CMake toolchain file
+  (`CMAKE_TOOLCHAIN_FILE`, in the run directory) that leaves
+  `/opt/homebrew` and `/usr/local` out of CMake's searches. PATH alone
+  does not: CMake's `Platform/Darwin.cmake` adds Homebrew's prefix before
+  the env's whether `brew` is on PATH or not (round 2: arrow linked
+  `/opt/homebrew/lib/libsnappy.a`). A package that passes its own
+  `-DCMAKE_TOOLCHAIN_FILE` keeps it. `--keep-path` turns
   this file off. A tree from build 7 on ships its own, `etc/r-zig.cmake`,
-  which also leaves out Fink's `/sw` and MacPorts' `/opt/local`; its
-  `etc/Renviron` makes it `CMAKE_TOOLCHAIN_FILE`'s default, and a value
-  already set wins there. So the runner's file replaces the tree's by
-  default, and with `--keep-path` the tree's applies, as for a user.
+  which also leaves out Fink's `/sw` and MacPorts' `/opt/local`, and its
+  `etc/Renviron` makes it `CMAKE_TOOLCHAIN_FILE`'s default. The runner
+  then writes none, so a run tests the tree's file, as a user gets it.
 - Windows only: `R_TOOLS_SOFT` is the env's `Library`, where packages built
   for Rtools look for libraries (sf and terra copy GDAL's and PROJ's data
   from there).
@@ -254,6 +254,8 @@ the log.
   says so (class `upstream`). The tree is not affected: the lock holds
   libdeflate 1.25. Branch fix-stress-round1 pins `libdeflate <1.26` in the
   recipe's host (build 7).
-- The conda env holds only the selected rows' libraries. A run's env can
-  therefore change a package's build path: on macOS, s2 takes abseil from
-  the env when libprotobuf is there. The tree's stress env holds them all.
+- The conda env holds only the libraries of the rows the run installs: the
+  selected rows and the rows among their dependencies (units and s2 for
+  sf). A run's env can therefore change a package's build path: on macOS,
+  s2 takes abseil from the env when libprotobuf is there. The tree's
+  stress env holds them all.
