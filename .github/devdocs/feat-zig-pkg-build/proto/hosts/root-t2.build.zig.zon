@@ -1,0 +1,9 @@
+.{
+    .name = .rpkg_root,
+    .version = "0.0.0",
+    .fingerprint = 0x85bf37cdc6a317b2,
+    .dependencies = .{
+        .pkg = .{ .path = "../proto/zighello/src" },
+    },
+    .paths = .{""},
+}

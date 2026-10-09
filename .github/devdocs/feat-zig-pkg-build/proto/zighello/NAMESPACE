@@ -1,0 +1,2 @@
+useDynLib(zighello, .registration = TRUE, .fixes = "C_")
+export(hello)

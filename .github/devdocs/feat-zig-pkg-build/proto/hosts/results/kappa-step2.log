@@ -1,0 +1,42 @@
+48
+== zig cli cold  8:25:16.46
+zig cli rc=0  8:25:41.33
+zig cli warm rc=0  8:25:42.10
+zig quadprog rc=0  8:26:18.50
+cli.dll
+quadprog.dll
+== smoke
+install quadprog R-only rc=0
+-- lib-make
+cli        TRUE
+cli-md5    900150983cd24fb0d6963f7d28e17f72
+cli-reg    49
+cli-sym    FALSE
+dll-cli    cli.dll
+unloaded all; exiting
+rc=0
+-- lib-zig
+cli        TRUE
+cli-md5    900150983cd24fb0d6963f7d28e17f72
+cli-reg    49
+cli-sym    FALSE
+quadprog   1 1
+qp-sym     TRUE
+dll-cli    cli.dll
+dll-quadprog quadprog.dll
+unloaded all; exiting
+rc=0
+== tier 2 zighello  8:26:20.27
+zig zighello rc=0  8:27:26.94
+zig zighello again rc=0  8:27:27.18
+zighello.dll
+install zighello R-only rc=0
+[1] 42
+      numParameters
+hello             1
+[1] "zighello.dll"
+ok
+zighello rc=0
+== done  8:27:28.35
+
+[exited with code 0]

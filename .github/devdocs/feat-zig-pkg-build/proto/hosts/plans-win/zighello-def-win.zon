@@ -1,0 +1,45 @@
+.{
+    .name = "zighello",
+    .srcdir = "C:/Users/admin/rz-pkgbuild/proto/zighello/src",
+    .output = "zighello.dll",
+    .toolchain = "C:/Users/admin/r-zig-pixi/dist/R-4.6.1-slim-zig/Library/lib/R/bin/toolchain",
+    .link_driver = "gcc.exe",
+    .cc_tool = "gcc.exe",
+    .cxx_tool = "g++.exe",
+    .fc_tool = "zig-fc.exe",
+    .sources = .{
+    },
+    .cc = .{
+        "-IC:/Users/admin/r-zig-pixi/dist/R-4.6.1-slim-zig/Library/lib/R/include",
+        "-DNDEBUG",
+        "-O2",
+        "-Wall",
+        "-std=gnu2x",
+    },
+    .cxx = .{
+        "-IC:/Users/admin/r-zig-pixi/dist/R-4.6.1-slim-zig/Library/lib/R/include",
+        "-DNDEBUG",
+        "-O2",
+        "-Wall",
+        "-std=gnu++20",
+    },
+    .fc = .{
+        "-O2",
+    },
+    .f9x = .{
+        "-O2",
+    },
+    .link = .{
+        "-shared",
+        "-s",
+        "-static-libgcc",
+        "C:/Users/admin/rz-pkgbuild/defs/zighello.def",
+    },
+    .libs = .{
+        "-LC:/Users/admin/r-zig-pixi/dist/R-4.6.1-slim-zig/Library/lib/R/bin/x64",
+        "-lR",
+    },
+    .env = .{ "R_PACKAGE_NAME=zighello", "CLINK_CPPFLAGS=" },
+    .target = "native",
+    .r_include = "C:/Users/admin/r-zig-pixi/dist/R-4.6.1-slim-zig/Library/lib/R/include",
+}
