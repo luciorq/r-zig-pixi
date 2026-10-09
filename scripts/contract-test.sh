@@ -152,9 +152,10 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
 '
 # The environments rzig compiled those against (feat-no-host-paths F3b):
 # the tree's own (R_HOME/../..), then the pixi env, which pixi.toml names
-# in R_ZIG_EXTRA_ENV. A link line as rzig would run it: both -L before the
-# -o, an rpath only into the pixi env (a conda env; the tree is not), the
-# headers after the caller's arguments in the same order. Windows: the
+# in R_ZIG_EXTRA_ENV. A link line as rzig would run it: both -L after the
+# caller's arguments, the -o included (fix-stress-round1 S10), an rpath
+# only into the pixi env (a conda env; the tree is not), the headers after
+# the caller's arguments in the same order. Windows: the
 # environments are <root>/Library, headers by -idirafter, no rpath.
 if [ -n "${R_ZIG_EXTRA_ENV:-}" ]; then
   rhome="$("$R_BIN" --vanilla -e 'cat(normalizePath(R.home(), winslash = "/"))')"
@@ -172,7 +173,7 @@ if [ -n "${R_ZIG_EXTRA_ENV:-}" ]; then
   at() { printf '%s\n' "$argv" | grep -nixF -- "$1" | head -1 | cut -d: -f1 || true; }
   o="$(at -o)" lo="$(at "-L$own/lib")" le="$(at "-L$extra/lib")"
   bad=""
-  { [ -n "$o" ] && [ -n "$lo" ] && [ -n "$le" ] && [ "$lo" -lt "$le" ] && [ "$le" -lt "$o" ]; } || bad="$bad order-of-L"
+  { [ -n "$o" ] && [ -n "$lo" ] && [ -n "$le" ] && [ "$o" -lt "$lo" ] && [ "$lo" -lt "$le" ]; } || bad="$bad order-of-L"
   if [ "$OS" = windows ]; then
     printf '%s\n' "$argv" | grep -q -- '-rpath' && bad="$bad rpath"
     ie="$(at "$extra/include")"
@@ -192,7 +193,7 @@ if [ -n "${R_ZIG_EXTRA_ENV:-}" ]; then
     echo "error: rzig's environment flags (own $own, extra $extra):$bad" >&2
     exit 1
   fi
-  echo "rzig environments: $own, then $extra (R_ZIG_EXTRA_ENV): -L before -o, headers after, rpath into conda envs only: OK"
+  echo "rzig environments: $own, then $extra (R_ZIG_EXTRA_ENV): -L and headers after the caller's arguments, rpath into conda envs only: OK"
 fi
 # Static libc++ everywhere (decided 2026-09-30): no compiled package may
 # depend on a shared C++ runtime. zig links its own libc++ statically, but

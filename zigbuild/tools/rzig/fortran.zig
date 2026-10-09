@@ -90,29 +90,10 @@ fn sharedLink(args: Args) bool {
     if (!cmdline.anyWord(args, "-shared") and !cmdline.anyWord(args, "-dynamiclib")) return false;
     if (cmdline.compileOnly(args)) return false;
     for (args) |x| {
-        if (mem.startsWith(u8, x, "-x") or isSource(x)) return false;
+        if (mem.startsWith(u8, x, "-x") or cmdline.isSource(x)) return false;
     }
     return true;
 }
-
-/// A file a compiler driver would compile, by its extension: Fortran's
-/// (fixed and free form, preprocessed or not) and the C family's.
-fn isSource(x: []const u8) bool {
-    if (x.len == 0 or x[0] == '-') return false;
-    const base = if (mem.findLastAny(u8, x, "/\\")) |i| x[i + 1 ..] else x;
-    const dot = mem.findScalarLast(u8, base, '.') orelse return false;
-    return source_ext.has(base[dot + 1 ..]);
-}
-
-const source_ext = std.StaticStringMap(void).initComptime(.{
-    // Fortran (flang's driver)
-    .{"f"},   .{"for"}, .{"ftn"}, .{"fpp"}, .{"f77"}, .{"f90"}, .{"f95"}, .{"f03"}, .{"f08"}, .{"cuf"},
-    .{"F"},   .{"FOR"}, .{"FTN"}, .{"FPP"}, .{"F77"}, .{"F90"}, .{"F95"}, .{"F03"}, .{"F08"}, .{"CUF"},
-    // the C family, assembler, LLVM IR (clang's)
-    .{"c"},   .{"i"},   .{"cc"},  .{"cp"},  .{"cpp"}, .{"cxx"}, .{"c++"}, .{"C"},   .{"CC"},  .{"CPP"},
-    .{"CXX"}, .{"ii"},  .{"m"},   .{"mi"},  .{"mm"},  .{"mii"}, .{"M"},   .{"s"},   .{"S"},   .{"sx"},
-    .{"cu"},  .{"ll"},  .{"bc"},
-});
 
 // ---------------------------------------------------------------------------
 
@@ -206,9 +187,6 @@ test "mixed source+link calls, -x, compile-only and executable links stay flang'
     }
     c.os = .macos;
     for (calls) |call| try expectProgram(try mem.concat(c.arena, []const u8, &.{ &.{ fc, floors.macos_min_flag }, call }), try command(c, call));
-    // the source test, by itself
-    for ([_][]const u8{ "a.f", "a.FOR", "dir/a.f03", "a.b.F95", "x.cpp", "y.c", "z.S" }) |x| try testing.expect(isSource(x));
-    for ([_][]const u8{ "a.o", "a.so", "p.dll", "tmp.def", "-fa.f", "f", "dir.f/a", "liba.a", "x.mod", "" }) |x| try testing.expect(!isSource(x));
 }
 
 /// A flang on PATH that answers -print-resource-dir with an LLVM tree
@@ -237,27 +215,27 @@ test "linux: a shared link of objects goes through zig cc, as zig-cc's, with the
     c.self_exe = f.path("env/lib/R/bin/toolchain/zig-fc");
     const l = f.fmt("-L{s}", .{f.path("env/lib")});
     const rp = f.fmt("-Wl,-rpath,{s}", .{f.path("env/lib")});
-    const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-target", linux_target };
+    const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", linux_target };
     // R CMD SHLIB under USE_FC_TO_LINK: $(SHLIB_FCLD) $(SHLIB_FCLDFLAGS)
     // $(LIBR0) $(LDFLAGS) -o pkg.so <objects> $(PKG_LIBS) $(SHLIB_LIBADD)
     try expectZig(
-        pre ++ &[_][]const u8{ "-shared", "-L/r/lib", l, rp, "-o", "pkg.so", "a.o", "b.o", "-L/opt/lib", "-lfoo", a, "-lm" },
+        pre ++ &[_][]const u8{ "-Wl,--strip-debug", "-shared", "-L/r/lib", "-o", "pkg.so", "a.o", "b.o", "-L/opt/lib", "-lfoo", a, "-lm", l, rp },
         try command(c, &.{ "-shared", "-L/r/lib", "-o", "pkg.so", "a.o", "b.o", "-L/opt/lib", "-lfoo" }),
     );
     // a package that also asks for $(FLIBS): the runtime once; a SONAME for lib*.so
     try expectZig(
-        pre ++ &[_][]const u8{ "-Wl,-soname,libfx.so", "-shared", l, rp, "-o", "libfx.so", "a.o", a, "-lm", "-lm" },
+        pre ++ &[_][]const u8{ "-Wl,-soname,libfx.so", "-Wl,--strip-debug", "-shared", "-o", "libfx.so", "a.o", a, "-lm", "-lm", l, rp },
         try command(c, &.{ "-shared", "-o", "libfx.so", "a.o", "-lflang_rt.runtime", "-lm" }),
     );
     // a -mtune= on the link (zig cc's: dropped, compiler.zig dropTune)
     try expectZig(
-        pre ++ &[_][]const u8{ "-shared", "-O2", l, rp, "-o", "pkg.so", "a.o", a, "-lm" },
+        pre ++ &[_][]const u8{ "-Wl,--strip-debug", "-shared", "-O2", "-o", "pkg.so", "a.o", a, "-lm", l, rp },
         try command(c, &.{ "-shared", "-O2", "-mtune=native", "-o", "pkg.so", "a.o" }),
     );
     // OpenMP, as zig-cc: -lomp when an environment has omp.h
     try f.touch("env/include/omp.h");
     try expectZig(
-        pre ++ &[_][]const u8{ "-shared", "-fopenmp", l, rp, "-o", "p.so", "a.o", a, "-lm", f.fmt("-I{s}", .{f.path("env/include")}), "-lomp" },
+        pre ++ &[_][]const u8{ "-Wl,--strip-debug", "-shared", "-fopenmp", "-o", "p.so", "a.o", a, "-lm", l, rp, f.fmt("-I{s}", .{f.path("env/include")}), "-lomp" },
         try command(c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }),
     );
     try testing.expectEqualStrings("", f.takeWarnings());
@@ -276,11 +254,11 @@ test "macOS: the shared link has the target, the SDK and the runtime; -dynamicli
     // macOS SHLIB_FCLDFLAGS; the caller's -lm is kept and the runtime's
     // second one dropped (darwin.dedupLibs), the SDK's -L last
     try expectZig(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-L/r/lib", "-o", "p.so", "a.o", "-lflangish", "-lm", a, "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-L/r/lib", "-o", "p.so", "a.o", "-lflangish", "-lm", a, "-L/SDK/usr/lib" },
         try command(c, &.{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-L/r/lib", "-o", "p.so", "a.o", "-lflangish", "-lm" }),
     );
     try expectZig(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "p.so", "a.o", a, "-lm", "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "p.so", "a.o", a, "-lm", "-L/SDK/usr/lib" },
         try command(c, &.{ "-dynamiclib", "-o", "p.so", "a.o" }),
     );
 }
@@ -296,7 +274,7 @@ test "Windows: the shared link resolves -l to import libraries, adds -lc++, no .
     const l = f.fmt("-L{s}", .{f.path("d")});
     // winshlib.mk: $(SHLIB_LD) $(SHLIB_LDFLAGS) $(LDFLAGS) $(DLLFLAGS) -o pkg.dll tmp.def <objects> $(ALL_LIBS)
     try expectZig(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, f.path("d/libz.dll.a"), a, "-lc++" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, f.path("d/libz.dll.a"), a, "-lc++" },
         try command(c, &.{ "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, "-lz" }),
     );
     try expectProgram(&.{ f.path("bin/flang"), "-o", "px", "a.o" }, try command(c, &.{ "-o", "px", "a.o" }));

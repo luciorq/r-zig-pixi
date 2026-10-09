@@ -37,6 +37,10 @@ name: []const u8,
 self_exe: ?[]const u8 = null,
 /// What asks macOS for the SDK. A test hook may point it elsewhere.
 xcrun: []const u8 = "/usr/bin/xcrun",
+/// The command that runs zig (find_zig.zig), for what rzig compiles itself
+/// (dso_fini.zig, cfguard.zig). main.zig sets it; unit tests leave it null
+/// (nothing is compiled) or point it at a stand-in.
+zig: ?[]const []const u8 = null,
 /// Unit tests collect `warn`'s messages here instead of stderr.
 warnings: ?*std.ArrayList(u8) = null,
 
@@ -96,6 +100,24 @@ pub const Output = struct {
     /// does; "" when it could not run.
     stdout: []const u8,
 };
+
+/// `argv > /dev/null`: run a program, its stdin and stdout discarded, its
+/// stderr passed on (what it says when it fails is the user's to see).
+/// Whether it ran and exited 0. argv[0] as for `capture`.
+pub fn succeeds(ctx: *const Ctx, argv: []const []const u8) bool {
+    var child = std.process.spawn(ctx.io, .{
+        .argv = argv,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .inherit,
+        .create_no_window = true,
+    }) catch return false;
+    const term = child.wait(ctx.io) catch return false;
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
 
 /// `$(argv 2>/dev/null)`: run a program, its stdin and stderr discarded,
 /// and keep its standard output. argv[0] should be a path (see
