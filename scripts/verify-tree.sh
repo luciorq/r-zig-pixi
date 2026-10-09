@@ -15,6 +15,8 @@
 #   - the compilers Makeconf names are rzig (one binary, no scripts);
 #   - Makeconf names no build path and has no rpath; CPPFLAGS and LDFLAGS
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
+#   - Windows (every tree): CRAN's layout, Makeconf's R_ARCH is /x64 and
+#     R_HOME/bin has R.exe and Rscript.exe;
 #   - every OS (a tree that is not a conda env): no file of R's own names
 #     the build machine's checkout, zig's caches, the env or $HOME; the
 #     vendored conda libraries that name one are listed, and so are
@@ -30,6 +32,9 @@
 #     R_HOME/Tcl/include, and every DLL a PE file in the tree imports is
 #     in the tree (its own directory, R_HOME/bin/x64, or R_HOME/Tcl/bin
 #     for the Tcl/Tk DLLs) or the system's;
+#   - macOS (every tree): etc/r-zig.cmake, a CMake toolchain file that
+#     leaves out Homebrew's, Fink's and MacPorts' prefixes, and
+#     etc/Renviron makes it CMAKE_TOOLCHAIN_FILE's default;
 #   - unix (a tree that is not a conda env): etc/ca-bundle.crt holds
 #     certificates and etc/Renviron names it in R_ZIG_CA_BUNDLE; with
 #     tcltk (full), Tcl/Tk's script libraries and Tcl's modules are in
@@ -124,6 +129,24 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 echo "== Makeconf verified: no build path, no rpath, CPPFLAGS and LDFLAGS empty, FLIBS = -lflang_rt.runtime, FC = zig-fc"
+
+# Windows: CRAN's layout, which packages build against (stress round 1).
+# Makeconf's R_ARCH is /x64, so $(R_HOME)/bin$(R_ARCH)/Rterm.exe and
+# lib$(R_ARCH) name the arch directories. R_HOME/bin has R.exe and
+# Rscript.exe (build.zig's winRfe: they start bin/x64's), which packages
+# run as ${R_HOME}/bin/R and ${R_HOME}/bin/Rscript.
+if [ "$OS" = windows ]; then
+  bad=""
+  grep -Eq '^R_ARCH = /x64 *'$'\r''?$' "$mk" || bad="$bad R_ARCH-not-/x64"
+  for f in R.exe Rscript.exe; do
+    [ "$(head -c2 "$TREE/$rh/bin/$f" 2>/dev/null)" = MZ ] || bad="$bad bin/$f(missing, or no PE file)"
+  done
+  if [ -n "$bad" ]; then
+    echo "error: $rh lacks CRAN's layout:$bad" >&2
+    exit 1
+  fi
+  echo "== CRAN's layout verified: Makeconf's R_ARCH = /x64, $rh/bin/{R,Rscript}.exe"
+fi
 
 # What a tree that is not a conda env carries from the env: the runtime
 # data build.zig installs (installEnvRuntime) and the shared libraries
@@ -460,6 +483,25 @@ if [ "$OS" = windows ]; then
   fi
   echo "== installed tree verified ($OS/$FLAVOR)"
   exit 0
+fi
+
+# macOS, every tree (the conda build's too): CMake's toolchain file
+# (build.zig's macos_cmake_toolchain). Without it CMake searches Homebrew's
+# prefix before the environment's whatever PATH says, and packages link
+# the host's libraries (stress round 2, H2). etc/Renviron makes it
+# CMAKE_TOOLCHAIN_FILE's default.
+if [ "$OS" = macos ]; then
+  bad=""
+  grep -q '^set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH .*/opt/homebrew' "$TREE/$rh/etc/r-zig.cmake" 2>/dev/null ||
+    bad="$bad etc/r-zig.cmake(missing, or no CMAKE_SYSTEM_IGNORE_PREFIX_PATH)"
+  grep -qxF 'R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake' "$TREE/$rh/etc/Renviron" &&
+    grep -qxF 'CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}' "$TREE/$rh/etc/Renviron" ||
+    bad="$bad etc/Renviron(no CMAKE_TOOLCHAIN_FILE)"
+  if [ -n "$bad" ]; then
+    echo "error: CMake's toolchain file:$bad" >&2
+    exit 1
+  fi
+  echo "== CMake's toolchain file verified: etc/r-zig.cmake, CMAKE_TOOLCHAIN_FILE's default in etc/Renviron"
 fi
 
 # TLS trust (build.zig's installEnvRuntime): a tree that is not a conda env

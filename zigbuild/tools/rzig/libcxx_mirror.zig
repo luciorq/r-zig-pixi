@@ -23,12 +23,13 @@ const mem = std.mem;
 const Io = std.Io;
 const Allocator = mem.Allocator;
 const Ctx = @import("Ctx.zig");
+const cache = @import("cache.zig");
 
 /// Sets ZIG_LIB_DIR in `ctx.env` when the zig found at `zig0` (the first
 /// word of its command) would link a shared libc++. Returns whether it did.
 pub fn apply(ctx: *Ctx, zig0: []const u8) !bool {
     const lib_dir = (try zigLibDir(ctx, zig0)) orelse return false;
-    switch (try prepare(ctx.io, ctx.arena, lib_dir, try ctx.fmt("{s}/r-zig", .{try cacheHome(ctx)}))) {
+    switch (try prepare(ctx.io, ctx.arena, lib_dir, try cache.root(ctx))) {
         .none => return false,
         .failed => |m| {
             ctx.warn("could not prepare {s}; this link may use a shared libc++", .{m});
@@ -151,12 +152,6 @@ fn cksum(data: []const u8) u32 {
     return crc.final();
 }
 
-/// `${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}`
-fn cacheHome(ctx: *Ctx) ![]const u8 {
-    if (ctx.getenv("XDG_CACHE_HOME")) |d| return d;
-    return ctx.fmt("{s}/.cache", .{ctx.getenv("HOME") orelse "/tmp"});
-}
-
 /// Whether this process gets to make the mirror.
 fn lock(io: Io, m: []const u8) bool {
     const cwd = Io.Dir.cwd();
@@ -247,36 +242,36 @@ test "prepare: build.zig's use, any cache root; upstream's layout and Windows' n
     const arena = f.ctx.arena;
     const io = testing.io;
     for ([_][]const u8{ "env/lib/zig/std/std.zig", "env/lib/zig/libcxx/include/vector", "up/zig", "up/lib/std/std.zig" }) |p| try f.touch(p);
-    const cache = f.path("build/zig-cache/local/r-zig");
+    const cache_root = f.path("build/zig-cache/local/r-zig");
 
     // upstream zig: <dir>/zig with <dir>/lib, nothing two levels above it
-    try testing.expect(try prepare(io, arena, f.path("up/lib"), cache) == .none);
+    try testing.expect(try prepare(io, arena, f.path("up/lib"), cache_root) == .none);
     // no lib dir there at all
-    try testing.expect(try prepare(io, arena, f.path("nowhere/lib/zig"), cache) == .none);
+    try testing.expect(try prepare(io, arena, f.path("nowhere/lib/zig"), cache_root) == .none);
     // conda-forge's zig, no libcxx package in the env
-    try testing.expect(try prepare(io, arena, f.path("env/lib/zig"), cache) == .none);
+    try testing.expect(try prepare(io, arena, f.path("env/lib/zig"), cache_root) == .none);
 
     // with one: the mirror, under the given root, holding the lib dir's
     // entries and nothing beside it
     try f.touch("env/lib/libc++.so");
     try testing.expectEqualStrings(f.path("env/lib/zig/../../lib/libc++.so"), (try sharedLibcxx(io, arena, f.path("env/lib/zig"), .unix)).?);
-    const ready = try prepare(io, arena, f.path("env/lib/zig"), cache);
+    const ready = try prepare(io, arena, f.path("env/lib/zig"), cache_root);
     const mirror = ready.ready;
-    try testing.expect(mem.startsWith(u8, mirror, f.fmt("{s}/zig-lib-", .{cache})));
+    try testing.expect(mem.startsWith(u8, mirror, f.fmt("{s}/zig-lib-", .{cache_root})));
     try testing.expect(mem.endsWith(u8, mirror, "/lib/zig"));
     try testing.expect(f.ctx.isFile(f.fmt("{s}/libcxx/include/vector", .{mirror})));
     try testing.expect(try sharedLibcxx(io, arena, mirror, .unix) == null);
     // made once: the same path again, also from a relative lib dir's
     // spelling of it (zig reports a relative one when it can)
-    try testing.expectEqualStrings(mirror, (try prepare(io, arena, f.fmt("{s}/env/lib/../lib/zig", .{f.root}), cache)).ready);
+    try testing.expectEqualStrings(mirror, (try prepare(io, arena, f.fmt("{s}/env/lib/../lib/zig", .{f.root}), cache_root)).ready);
     // a mirror left half made (no marker, the lock taken) fails, after
     // the wait, rather than handing out an incomplete lib dir
     try f.touch("env2/lib/zig/std/std.zig");
     try f.touch("env2/lib/libc++.1.dylib");
     const real2 = try Io.Dir.cwd().realPathFileAlloc(io, f.path("env2/lib/zig"), arena);
-    const m2 = f.fmt("{s}/zig-lib-{d}", .{ cache, try key(arena, real2, try listing(io, arena, real2)) });
+    const m2 = f.fmt("{s}/zig-lib-{d}", .{ cache_root, try key(arena, real2, try listing(io, arena, real2)) });
     try Io.Dir.cwd().createDirPath(io, m2);
-    try testing.expectEqualStrings(m2, (try prepare(io, arena, f.path("env2/lib/zig"), cache)).failed);
+    try testing.expectEqualStrings(m2, (try prepare(io, arena, f.path("env2/lib/zig"), cache_root)).failed);
 
     // Windows: conda-forge's patch looks for the import library only
     try testing.expect(try sharedLibcxx(io, arena, f.path("env/lib/zig"), .windows) == null);

@@ -6,6 +6,12 @@ stopifnot(file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")))
 ## (R_ZIG_EXTRA_ENV, pixi.toml) must not leak into this test.
 Sys.unsetenv(c("R_MAKEVARS_USER", "R_ZIG_EXTRA_ENV"))
 d <- tempfile("rzig-")
+## zig's cache and rzig's in the test's temporary dir, as scripts/env.sh
+## puts zig's in build/: the test leaves nothing in the user's caches
+## (%LOCALAPPDATA%\zig and \r-zig, ~/.cache/zig and ~/.cache/r-zig).
+Sys.setenv(ZIG_GLOBAL_CACHE_DIR = file.path(d, "zig-cache"),
+           ZIG_LOCAL_CACHE_DIR = file.path(d, "zig-cache"),
+           XDG_CACHE_HOME = file.path(d, "cache"))
 lib <- file.path(d, "lib")
 p <- file.path(d, "rzigc")
 dir.create(lib, recursive = TRUE)

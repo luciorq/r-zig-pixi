@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # C++ compiler shim: zig c++ as a single-word $CXX for autoconf/make.
-# Same UBSan, baseline-CPU (no -mtune=), SONAME, dll.a-search, and
-# zig-name handling as zig-cc.
+# Same UBSan, baseline-CPU (no -mtune=), -Wno-error=date-time, -g0,
+# --strip-debug, -march=armv*, linker-option, SONAME, version-script,
+# dll.a-search, .o-naming and zig-name handling as zig-cc.
 # zig: $ZIG_BIN if executable, else PATH, else the ziglang package — see zig-cc.
 if [ -n "${ZIG_BIN:-}" ] && [ -x "$ZIG_BIN" ]; then
   ZIG=("$ZIG_BIN")
@@ -63,8 +64,86 @@ fi
 
 # -mtune=<cpu>: zig would take it as the CPU, not as tuning; dropped.
 # See zig-cc.
+_a=(); _p=
+for a in "$@"; do case "$_p:$a" in -Xarch_*:*) _a+=("$a") ;; *:-mtune=*) ;; *) _a+=("$a") ;; esac; _p=$a; done
+set -- "${_a[@]}"
+
+# -march=armv<N>[.<M>]-a[+ext...] in zig's words: see zig-cc.
+_a=(); _p=
+for a in "$@"; do
+  case "$_p" in -Xarch_*) _a+=("$a"); _p=$a; continue ;; esac
+  _p=$a
+  case "$a" in
+    -march=armv*)
+      _v=${a#-march=}; _arch=${_v%%+*}; _ver=${_arch#armv}; _ver=${_ver%-a}
+      case "$_arch:$_ver" in
+        *-a:*[!0-9.]*|*-a:) _a+=("$a") ;;
+        *-a:*)
+          _m="-mcpu=generic+v${_ver//./_}a"; _e=${_v#"$_arch"}
+          while [ -n "$_e" ]; do
+            _e=${_e#+}; _x=${_e%%+*}; _e=${_e#"$_x"}
+            [ -n "$_x" ] || continue
+            _s=+; case "$_x" in no?*) _s=-; _x=${_x#no} ;; esac
+            case "$_x" in
+              simd) _x=neon ;; fp) _x=fp_armv8 ;; fp16) _x=fullfp16 ;; rdma) _x=rdm ;;
+              rng) _x=rand ;; memtag) _x=mte ;; profile) _x=spe ;; fcma) _x=complxnum ;;
+              jscvt) _x=jsconv ;; pmuv3) _x=perfmon ;; predres2) _x=specres2 ;;
+            esac
+            _m="$_m$_s${_x//-/_}"
+          done
+          _a+=("$_m") ;;
+        *) _a+=("$a") ;;
+      esac ;;
+    *) _a+=("$a") ;;
+  esac
+done
+set -- "${_a[@]}"
+
+# Linker options zig cannot take: -L out of -Wl,/-Xlinker, --dependency-
+# file and --allow-multiple-definition/-z muldefs dropped. See zig-cc.
+_li() { # _li ITEM [NEXT]: what becomes of linker option ITEM: _act, _val, _n
+  _act=keep _val= _n=1
+  case "$1" in
+    -L|--library-path) [ $# -ge 2 ] && [ -n "$2" ] && { _act=lib _val=$2 _n=2; } ;;
+    --dependency-file) _act=drop; [ $# -ge 2 ] && _n=2 ;;
+    -z) [ $# -ge 2 ] && [ "$2" = muldefs ] && { _act=drop _n=2; } ;;
+    -L?*) _act=lib _val=${1#-L} ;;
+    --library-path=?*) _act=lib _val=${1#--library-path=} ;;
+    --dependency-file=*|--allow-multiple-definition|-allow-multiple-definition|-zmuldefs) _act=drop ;;
+  esac
+}
 _a=()
-for a in "$@"; do case "$a" in -mtune=*) ;; *) _a+=("$a") ;; esac; done
+while [ $# -gt 0 ]; do
+  a=$1; shift
+  case "$a" in
+    -Wl,*)
+      _w=() _k=() _ch=0 _r="${a#-Wl,},"
+      while [ -n "$_r" ]; do _w+=("${_r%%,*}"); _r=${_r#*,}; done
+      i=0
+      while [ $i -lt ${#_w[@]} ]; do
+        if [ $((i + 1)) -lt ${#_w[@]} ]; then _li "${_w[i]}" "${_w[i + 1]}"; else _li "${_w[i]}"; fi
+        case $_act in
+          keep) _k+=("${_w[i]}") ;;
+          drop) _ch=1 ;;
+          lib) _a+=("-L$_val"); _ch=1 ;;
+        esac
+        i=$((i + _n))
+      done
+      if [ $_ch = 0 ]; then _a+=("$a")
+      elif [ ${#_k[@]} -gt 0 ]; then _a+=("-Wl,$(IFS=,; printf '%s' "${_k[*]}")"); fi ;;
+    -Xlinker)
+      if [ $# -eq 0 ]; then _a+=("$a"); continue; fi
+      if [ $# -ge 3 ] && [ "$2" = -Xlinker ]; then _li "$1" "$3"; else _li "$1"; fi
+      case $_act in
+        keep) _a+=("$a" "$1"); shift; continue ;;
+        lib) _a+=("-L$_val") ;;
+      esac
+      if [ $_n = 2 ]; then shift 3; else shift; fi ;;
+    -z)
+      if [ "${1:-}" = muldefs ]; then shift; else _a+=("$a"); fi ;;
+    *) _a+=("$a") ;;
+  esac
+done
 set -- "${_a[@]}"
 
 # Fortran runtime (-lflang_rt.runtime in Makeconf's FLIBS, and a gcc
@@ -96,6 +175,20 @@ esac
 
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*)
+    # -c with one source and no -o: <stem>.o, as MinGW gcc (see zig-cc).
+    _c=0 _no=0 _src=()
+    for a in "$@"; do
+      case "$a" in
+        -c) _c=1 ;;
+        -S|-E|-M|-MM|-o|-o?*) _no=1 ;;
+        -*) ;;
+        *.[cCfFimMsS]|*.cc|*.cp|*.cpp|*.cxx|*.c++|*.CC|*.CPP|*.CXX|*.ii|*.mi|*.mm|*.mii|*.sx|*.cu|*.ll|*.bc|\
+        *.for|*.ftn|*.fpp|*.f77|*.f90|*.f95|*.f03|*.f08|*.cuf|*.FOR|*.FTN|*.FPP|*.F77|*.F90|*.F95|*.F03|*.F08|*.CUF) _src+=("$a") ;;
+      esac
+    done
+    if [ $_c = 1 ] && [ $_no = 0 ] && [ ${#_src[@]} = 1 ]; then
+      _b=${_src[0]##*/}; _b=${_b##*\\}; set -- "$@" -o "${_b%.*}.o"
+    fi
     libdirs=()
     for a in "$@"; do case "$a" in -L?*) libdirs+=("${a#-L}");; esac; done
     args=()
@@ -139,6 +232,22 @@ if [[ " $* " == *" -shared "* && " $* " != *"-soname"* ]]; then
     fi
     prev="$a"
   done
+fi
+# Linux links with a version script: GNU ld's --undefined-version (see
+# zig-cc). No debug info unless the caller asks: -g0 (see zig-cc).
+if [[ "$(uname -s 2>/dev/null)" == "Linux" && " $* " == *-version-script* ]]; then
+  _link=true
+  for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) _link=false; break;; esac; done
+  $_link && extra+=(-Wl,--undefined-version)
+fi
+g0=(-g0)
+for a in "$@"; do case "$a" in -g*) g0=(); break;; esac; done
+# Linux links without a -g option: --strip-debug, for zig's own libc++
+# DWARF (see zig-cc).
+if [[ "$(uname -s 2>/dev/null)" == "Linux" && ${#g0[@]} -gt 0 ]]; then
+  _link=true
+  for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) _link=false; break;; esac; done
+  $_link && extra+=(-Wl,--strip-debug)
 fi
 # OpenMP: see zig-cc for rationale.
 omp=()
@@ -207,4 +316,4 @@ case "$(uname -s 2>/dev/null)" in
     ;;
 esac
 
-exec "${ZIG[@]}" c++ -fno-sanitize=undefined -mcpu=baseline "${target[@]}" "${extra[@]}" "$@" "${omp[@]}" "${sdkL[@]}"
+exec "${ZIG[@]}" c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time "${g0[@]}" "${target[@]}" "${extra[@]}" "$@" "${omp[@]}" "${sdkL[@]}"

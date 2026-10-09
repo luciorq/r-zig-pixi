@@ -24,7 +24,7 @@ LINKFLAGS += -static-libgcc
 WIN = 64
 MINGW_PREFIX = /mingw$(WIN)
 BINPREF = @BINPREF@
-COMPILED_BY =
+COMPILED_BY = @COMPILED_BY@
 # SYMPAT = 's/^.* [BCDRT] / /p' for 64-bit
 SYMPAT = @SYMPAT@
 IMPDIR = @IMPDIR@
@@ -106,19 +106,21 @@ ZLIB_LIBS = -lz
 AR = $(BINPREF)$(LLVMPREF)ar
 BLAS_LIBS = -L"$(R_HOME)/$(IMPDIR)" -lRblas
 C_VISIBILITY = 
-CC = $(BINPREF)$(CCBASE) $(M_ARCH)
+## r-zig: the compilers by their file names, .exe included: CMake takes
+## R CMD config CC and CXX only when they name an existing file.
+CC = $(BINPREF)$(CCBASE).exe $(M_ARCH)
 CFLAGS = -O3 -Wall @CSTD@ $(DEBUGFLAG) @EOPTS@ @SANOPTS@ $(LTO)
 CPICFLAGS = 
 CPPFLAGS =
-CC17 = $(BINPREF)$(CCBASE) $(M_ARCH)
+CC17 = $(BINPREF)$(CCBASE).exe $(M_ARCH)
 C17FLAGS = -O3 -Wall $(DEBUGFLAG) -std=gnu17 @EOPTS@ @SANOPTS@ $(LTO)
-CC23 = $(BINPREF)$(CCBASE) $(M_ARCH)
+CC23 = $(BINPREF)$(CCBASE).exe $(M_ARCH)
 C23FLAGS = -O3 -Wall $(DEBUGFLAG) -std=gnu23 @EOPTS@ @SANOPTS@ $(LTO)
-CC90 = $(BINPREF)$(CCBASE) $(M_ARCH)
+CC90 = $(BINPREF)$(CCBASE).exe $(M_ARCH)
 C90FLAGS = -O3 -Wall $(DEBUGFLAG) -std=gnu90 @EOPTS@ @SANOPTS@ $(LTO)
-CC99 = $(BINPREF)$(CCBASE) $(M_ARCH)
+CC99 = $(BINPREF)$(CCBASE).exe $(M_ARCH)
 C99FLAGS = -O3 -Wall $(DEBUGFLAG) -std=gnu99 @EOPTS@ @SANOPTS@ $(LTO)
-CXX = $(BINPREF)$(if $(USE_LLVM),clang++,g++) -std=gnu++20 $(M_ARCH)
+CXX = $(BINPREF)$(if $(USE_LLVM),clang++,g++).exe -std=gnu++20 $(M_ARCH)
 CXXCPP = $(CXX) -E
 CXXFLAGS = -O2 -Wall $(DEBUGFLAG) @EOPTS@ @SANOPTS@ $(LTO)
 CXXPICFLAGS =
@@ -131,7 +133,7 @@ CXXPICFLAGS =
 # CXX14FLAGS = $(CXX11FLAGS)
 # CXX14PICFLAGS =
 # CXX14STD = -std=gnu++14
-CXX17 = $(BINPREF)$(if $(USE_LLVM),clang++,g++) $(M_ARCH)
+CXX17 = $(BINPREF)$(if $(USE_LLVM),clang++,g++).exe $(M_ARCH)
 CXX17FLAGS = -O2 -Wall $(DEBUGFLAG) @EOPTS@ @SANOPTS@ $(LTO)
 CXX17PICFLAGS =
 CXX17STD = -std=gnu++17
@@ -212,7 +214,7 @@ OBJCFLAGS = -O2
 OBJC_LIBS = -lobjc
 OBJCXX =
 OBJDUMP = $(BINPREF)objdump
-R_ARCH =
+R_ARCH = @R_ARCH@
 RANLIB = $(BINPREF)ranlib
 SAFE_FFLAGS = -O2
 SED = sed

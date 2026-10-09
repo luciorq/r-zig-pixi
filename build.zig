@@ -1453,6 +1453,18 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const win_rcmd_cmd = winCmdFrontend(ctx, libR, rgraphapp, "rcmd.c", "Rcmd");
 
     // ------------------------------------------------------------------
+    // R_HOME/bin/R.exe and R_HOME/bin/Rscript.exe: CRAN's layout. Packages
+    // run R by these paths: Rmpfr's configure `${R_HOME}/bin/R CMD config
+    // CC`, rstan's Makevars.win `${R_HOME}/bin/Rscript`, s2's bundled
+    // abseil (stress round 1: Rmpfr stopped at "no acceptable C
+    // compiler" without them). gnuwin32 builds them as one program,
+    // Rfe.exe (front-ends/Makefile: `Rfe.exe: Rfe.o ../rhome.o ../shext.o
+    // rcico.o rcmdfn.o Renviron.o`, copied to bin/R.exe and
+    // bin/Rscript.exe), which runs bin/x64's R.exe or Rscript.exe, by the
+    // name it was started as, with the same arguments. See winRfe.
+    const win_rfe = winRfe(ctx);
+
+    // ------------------------------------------------------------------
     // Install: bin/x64/ is gnuwin32's own arch-specific binary dir
     // convention (matches smoke-test.sh's existing lookup path).
     // "Library/lib/R", not "lib/R" — must match ctx.rhome (NTFS is
@@ -1482,6 +1494,10 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rterm.getEmittedBin(), bin_dir, "Rterm.exe").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_rcmd.getEmittedBin(), bin_dir, "R.exe").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_rcmd_cmd.getEmittedBin(), bin_dir, "Rcmd.exe").step);
+    // R_HOME/bin, not bin/x64: Rfe under both names (above).
+    for ([_][]const u8{ "R.exe", "Rscript.exe" }) |n| {
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_rfe.getEmittedBin(), ctx.rhomeInstallDir("bin"), n).step);
+    }
     // bin/config.sh (RHome/bin directly — NOT bin/x64/, unlike Rterm.exe/
     // R.exe/Rcmd.exe themselves; rcmdfn.c's own fallback case builds this
     // path as plain "%s/bin/config.sh" with only RHome, no BINDIR
@@ -1514,8 +1530,11 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // gnuwin32's own ready-made file" pattern as config.h/Rconsole.
     // RHome/etc/ directly, no bin/x64 arch subdir (matches config.sh's
     // own path convention, confirmed via rcmdfn.c's literal
-    // string-concat: RHome + "/etc/Rcmd_environ").
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.path("src/gnuwin32/fixed/etc/Rcmd_environ"), ctx.rhomeInstallDir("etc"), "Rcmd_environ").step);
+    // string-concat: RHome + "/etc/Rcmd_environ"). r-zig's lines follow
+    // R's (rcmdEnviron).
+    const rcmd_env_wf = b.addWriteFiles();
+    const rcmd_env = rcmd_env_wf.add("Rcmd_environ", try rcmdEnviron(ctx, io));
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(rcmd_env, ctx.rhomeInstallDir("etc"), "Rcmd_environ").step);
 
     try installWindowsCompilerContract(ctx, io);
     // OpenMP for packages (R itself has none on Windows, see R.dll's link
@@ -1792,6 +1811,17 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     // not directly under bin/ (found via a real "unable to find dynamic
     // system library 'R'" link error).
     try ctx.subst.put("IMPDIR", "bin/x64");
+    // R_ARCH = /x64, as gnuwin32's fixed/Makefile writes it (CRAN R's
+    // etc/x64/Makeconf). Packages and R's own make files name the arch
+    // directories with it: winshlib.mk's symbols.rds step runs
+    // $(R_HOME)/bin$(R_ARCH)/Rterm.exe (igraph, duckdb: "bin/Rterm.exe: No
+    // such file or directory" while it was empty), and arrow links its
+    // prebuilt -L.../lib$(R_ARCH)$(CRT), lib/x64-ucrt (stress round 1,
+    // kappa, 2026-10-08). IMPDIR above is its literal form, bin/x64.
+    try mk.put("R_ARCH", "/x64");
+    // COMPILED_BY, gnuwin32's `$(CCBASE)-<version>` (MkRules.rules; on CRAN
+    // gcc-<version>): clang-<version> of the zig that builds R (compiledBy).
+    try mk.put("COMPILED_BY", try compiledBy(b));
     // LDFLAGS: empty, as in the vendored template and a real generated
     // Makeconf (gnuwin32 provides external-library search paths via
     // MkRules.local's LOCAL_SOFT, sourced only at R's OWN build time).
@@ -1866,6 +1896,29 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     // (etc/Renviron.site, with the compile preflight's hint: installEnvRuntime)
 }
 
+/// Makeconf's COMPILED_BY on Windows: clang-<version> of the zig that
+/// builds R, in gnuwin32's `$(CCBASE)-<version>` form. zig cc is clang, and
+/// this is the version R reports at run time in R_COMPILED_BY ("clang
+/// 21.1.8": system.c, from the same compiler's __clang_*__ macros).
+/// Packages' winlibs.R read R_COMPILED_BY to download the r-windows
+/// bundles built with clang against libc++, zig's C++ runtime (curl,
+/// magick and V8 load and pass: stress round 1). Their Makevars name
+/// `lib$(subst gcc,,$(COMPILED_BY))$(R_ARCH)` first, a directory no bundle
+/// has, then the bundle's lib, as with CRAN's gcc-<version>. Not zig-0.16.0:
+/// no package looks for zig, and the code is clang's. `zig cc --version`
+/// starts "clang version 21.1.8 (...)" with conda-forge's zig and
+/// upstream's.
+fn compiledBy(b: *std.Build) ![]const u8 {
+    const out = b.run(&.{ b.graph.zig_exe, "cc", "--version" });
+    const tag = "clang version ";
+    const i = std.mem.indexOf(u8, out, tag) orelse {
+        std.debug.print("error: no '{s}' in `zig cc --version`:\n{s}\n", .{ tag, out });
+        return error.NoClangVersion;
+    };
+    const v = out[i + tag.len ..];
+    return b.fmt("clang-{s}", .{v[0 .. std.mem.indexOfAny(u8, v, " \r\n") orelse v.len]});
+}
+
 /// `text` with the line starting `key` (then spaces or `=`) replaced by
 /// `line`; unchanged when there is none.
 fn replaceLine(b: *std.Build, text: []const u8, key: []const u8, line: []const u8) ![]u8 {
@@ -1914,9 +1967,10 @@ fn gnuwin32O3ToO2(b: *std.Build, text: []const u8) ![]u8 {
 
 /// Windows equivalent of installStaticTree: stages library/ (via the shared
 /// stageLibraryPayload), share/, doc/, and include/ under ctx.rhome
-/// (Library/lib/R/...). No bin/R wrapper, no etc/{Renviron,ldpaths,
-/// javaconf} — Rscript.exe is the only front end (F6.0); Makeconf is
-/// installed separately by installWindowsCompilerContract, above.
+/// (Library/lib/R/...). No bin/R script, no etc/{Renviron,ldpaths,
+/// javaconf}: the front ends are .exe files (buildWindows; bin/R.exe and
+/// bin/Rscript.exe are winRfe's); Makeconf is installed separately by
+/// installWindowsCompilerContract, above.
 /// share/ and doc/ wholesale from the source tree into R_HOME — identical
 /// mechanism on every platform (same source dirs, same exclusions),
 /// parameterized only by `rhomeInstallDir`'s install-dir split. Was two
@@ -2412,6 +2466,79 @@ fn winCmdFrontend(ctx: *Ctx, libR: *std.Build.Step.Compile, rgraphapp: *std.Buil
     return b.addExecutable(.{ .name = name, .root_module = mod });
 }
 
+/// Rfe.exe, installed as R_HOME/bin/R.exe and R_HOME/bin/Rscript.exe
+/// (gnuwin32's front-ends/Makefile: `Rfe.exe: Rfe.o ../rhome.o ../shext.o
+/// rcico.o rcmdfn.o Renviron.o`, `Rfe-LIBS = -lole32 -luuid`; no icon
+/// resource, as above). It runs bin\x64\Rscript.exe when its own name ends
+/// in Rscript.exe or Rscript, else bin\x64\R.exe, with its arguments
+/// (R_ARCH or --arch picks another arch directory). Unlike R.exe and
+/// Rcmd.exe it does not link R.dll, which is in bin/x64, where the loader
+/// does not look for a program in bin. So rhome.c and shext.c are compiled
+/// in, as gnuwin32 does, and the Windows libraries are named here:
+/// advapi32 (rhome.c's registry lookup), shell32 (shext.c's Documents
+/// folder), user32 (MessageBox), ole32 and uuid.
+fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
+    const b = ctx.b;
+    const mod = newCMod(ctx);
+    mod.addIncludePath(ctx.geninc);
+    mod.addIncludePath(ctx.path("src/include"));
+    mod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
+    // R_ARCH="x64": Rfe.c's default arch directory, bin\x64. rcmdfn.c as
+    // in winCmdFrontend; Rfe calls only its argument quoting.
+    addCGroup(ctx, mod, "src/gnuwin32/front-ends", &.{ "Rfe.c", "rcmdfn.c" }, .{
+        .extra = &.{ "-I%S/src/gnuwin32", "-DBINDIR=\"bin/x64\"", "-DR_ARCH=\"x64\"" },
+    });
+    addCGroup(ctx, mod, "src/gnuwin32", &.{ "rhome.c", "shext.c" }, .{});
+    addCGroup(ctx, mod, "src/main", &.{"Renviron.c"}, .{
+        .extra = &.{"-DRENVIRON_WIN32_STANDALONE"},
+    });
+    for ([_][]const u8{ "advapi32", "shell32", "user32", "ole32", "uuid" }) |l| {
+        mod.linkSystemLibrary(l, .{ .use_pkg_config = .no });
+    }
+    return b.addExecutable(.{ .name = "Rfe", .root_module = mod });
+}
+
+/// etc/Rcmd_environ on Windows: gnuwin32's file, then r-zig's lines. R
+/// CMD (rcmdfn.c) reads it before every subcommand, so what it sets is in
+/// the environment of package builds (R CMD INSTALL, install.packages())
+/// and nowhere else. Each value is a default: one set in the environment
+/// wins (`${VAR-default}`; Renviron expands a nested default only when it
+/// is a whole ${...} term, hence the R_ZIG_ helpers, as in etc/Renviron).
+///   - CMAKE_GENERATOR: CMake builds of a package's bundled library
+///     (RcppParallel's TBB, Rhdf5lib's HDF5 through biocmake) pass no -G,
+///     and conda-forge's cmake then picks NMake Makefiles ("make: invalid
+///     option -- ?"). MSYS Makefiles are makefiles for make and sh, which
+///     R runs packages' own makefiles with (in a conda env m2-make, first
+///     on PATH, and m2-bash's sh).
+///   - RC, RCFLAGS: CMake compiles a .rc file (TBB's) with RC, else a
+///     windres on PATH, where there is none; the tree's is in
+///     bin/toolchain. windres preprocesses with a gcc it looks for by
+///     name; RCFLAGS names the toolchain's, with the arguments windres
+///     gives its default one (-E -xc -DRC_INVOKED), which --preprocessor
+///     drops.
+/// Tested in stress round 1 on kappa with these values in the
+/// environment (feat-stress-suite stress/results/2026-10-08.md, T3).
+fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
+    const b = ctx.b;
+    const src = try readSrcFile(ctx, io, "src/gnuwin32/fixed/etc/Rcmd_environ");
+    // R's file has CRLF line ends; ours follow it.
+    const eol = if (std.mem.indexOf(u8, src, "\r\n") != null) "\r\n" else "\n";
+    var out = std.ArrayList(u8).empty;
+    try out.appendSlice(b.allocator, src);
+    for ([_][]const u8{
+        "## r-zig: CMake for packages that build a bundled library with it.",
+        "CMAKE_GENERATOR=${CMAKE_GENERATOR-'MSYS Makefiles'}",
+        "R_ZIG_RC=${R_HOME}/bin/toolchain/windres.exe",
+        "RC=${RC-${R_ZIG_RC}}",
+        "R_ZIG_RCFLAGS=--preprocessor=${R_HOME}/bin/toolchain/gcc.exe --preprocessor-arg=-E --preprocessor-arg=-xc --preprocessor-arg=-DRC_INVOKED",
+        "RCFLAGS=${RCFLAGS-${R_ZIG_RCFLAGS}}",
+    }) |line| {
+        try out.appendSlice(b.allocator, line);
+        try out.appendSlice(b.allocator, eol);
+    }
+    return out.items;
+}
+
 /// rzig into R_HOME/bin/toolchain under the names Makeconf uses
 /// (feat-no-host-paths F3): one binary, a copy per name, dispatching on
 /// the name it was started as. The r-zig-toolchain packages own this
@@ -2419,7 +2546,9 @@ fn winCmdFrontend(ctx: *Ctx, libR: *std.Build.Step.Compile, rgraphapp: *std.Buil
 /// for its zig-cc on every OS.
 ///   unix:    zig-cc, zig-cxx (CC/CXX/OBJC/OBJCXX), zig-fc (FC), zig-ar,
 ///            zig-ranlib
-///   Windows: gcc.exe, g++.exe (Makeconf.win's $(BINPREF)gcc and g++),
+///   Windows: gcc.exe, g++.exe (Makeconf.win's $(BINPREF)gcc.exe and
+///            g++.exe: CMake takes R CMD config CC only when it names an
+///            existing file, stress round 1's RcppParallel and Rhdf5lib),
 ///            zig-fc.exe (FC, which names it without .exe), and zig-cc,
 ///            zig-cxx for the preflight. A real PE executable
 ///            is what R's Windows system() can run: it resolves a bare
@@ -3549,6 +3678,7 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     _ = stage.add("etc/Makeconf", makeconf);
     _ = stage.add("etc/javaconf", try substFile(ctx, io, "etc/javaconf.in"));
     _ = stage.addCopyFile(ctx.path("etc/repositories"), "etc/repositories");
+    if (ctx.os == .macos) _ = stage.add("etc/r-zig.cmake", macos_cmake_toolchain);
 
     // --- include/ (public headers) ---
     for (rspec.public_headers) |h| {
@@ -3661,12 +3791,57 @@ fn ldpaths(ctx: *const Ctx) []const u8 {
     };
 }
 
+/// etc/r-zig.cmake on macOS, in every tree (the conda build's too): a
+/// CMake toolchain file that keeps the host's package managers out of
+/// CMake's searches. etc/Renviron makes it CMAKE_TOOLCHAIN_FILE's default
+/// (finalRenviron), which CMake (>= 3.21) reads from the environment when
+/// the command line names no toolchain file: a package's own
+/// -DCMAKE_TOOLCHAIN_FILE wins, and so does the variable when it is set
+/// already, an empty one included (CMake then uses none).
+///   - Why: CMake's Platform/Darwin.cmake puts Homebrew's prefix (`brew
+///     --prefix`, else /opt/homebrew on arm64 and /usr/local on Intel)
+///     first in CMAKE_SYSTEM_PREFIX_PATH, before the environment's, and
+///     Fink's /sw and MacPorts' /opt/local last, whatever PATH says.
+///     Packages then link the host's libraries (stress round 2, H2: arrow
+///     linked /opt/homebrew/lib/libsnappy.a; feat-stress-suite
+///     stress/results/2026-10-08-round2.md). The four are the prefixes
+///     Darwin.cmake adds for a package manager, and $HOMEBREW_PREFIX
+///     (`brew shellenv` sets it) is Homebrew's when it lives elsewhere
+///     (`brew --prefix`); unset, it adds nothing.
+///   - CMAKE_SYSTEM_IGNORE_PREFIX_PATH (CMake >= 3.23; older ones skip it)
+///     drops exactly these prefixes from every find_* search: the
+///     system's, PATH's (find_package's <prefix> for each <prefix>/bin)
+///     and CMAKE_PREFIX_PATH's. A prefix below one of them (a conda env in
+///     /opt/homebrew/Caskroom) is kept, and so is a program found on PATH.
+///     The variable without SYSTEM stays the project's.
+///   - The environment's libraries: CMake finds them through the prefix
+///     of the cmake it runs (UnixPaths.cmake; the env's cmake), PATH's
+///     <env>/bin and CMAKE_PREFIX_PATH, none of them one of these four;
+///     the conda build's R_HOME is <env>/lib/R.
+///   - Not linux: CMake's Linux platform adds no package manager's prefix
+///     (UnixPaths.cmake: /usr/local, /usr, /, its own and the install
+///     prefix, /usr/X11R6, /usr/pkg, /opt); Linuxbrew is searched only
+///     when PATH or CMAKE_PREFIX_PATH names it. Not Windows: CMake adds
+///     Program Files and its own prefix there (WindowsPaths.cmake), and
+///     etc/Rcmd_environ sets its generator and windres (rcmdEnviron).
+const macos_cmake_toolchain =
+    \\# r-zig: CMake's default toolchain file for package builds on macOS.
+    \\# etc/Renviron sets CMAKE_TOOLCHAIN_FILE to it; a CMAKE_TOOLCHAIN_FILE
+    \\# already set (empty: none) or a package's -DCMAKE_TOOLCHAIN_FILE wins.
+    \\# CMake searches Homebrew's, Fink's and MacPorts' prefixes whatever
+    \\# PATH says. This leaves them out of every find_* search (CMake >= 3.23),
+    \\# so packages link their environment's libraries, not the host's.
+    \\set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local /opt/local /sw $ENV{HOMEBREW_PREFIX})
+    \\
+;
+
 /// etc/Renviron as it ships (phase A4, F1.4): untar() and unzip() use R's
 /// internal code (installing a package without compiling runs no tar or
 /// unzip), printing goes to a bare `lpr`, minimal's MAKE is the bundled
-/// GNU make, the compile preflight's hint comes from -Dtoolchain-hint, and
-/// a tree that is not the env names its CA bundle and, in full, Tcl's
-/// script library (installEnvRuntime).
+/// GNU make, the compile preflight's hint comes from -Dtoolchain-hint, on
+/// macOS CMake's default toolchain file is etc/r-zig.cmake
+/// (macos_cmake_toolchain), and a tree that is not the env names its CA
+/// bundle and, in full, Tcl's script library (installEnvRuntime).
 /// `${X-default}` keeps a value set in the environment, as upstream's
 /// Renviron does. The tool defaults PAGER/R_BROWSER/... come from the
 /// normalized configure table (zigbuild/tools/normalize-subst.sh).
@@ -3692,6 +3867,18 @@ fn finalRenviron(ctx: *const Ctx, raw: []const u8) ![]u8 {
     }
     if (ctx.toolchain_hint.len > 0) {
         try out.appendSlice(b.allocator, b.fmt("R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{s}'}}\n", .{ctx.toolchain_hint}));
+    }
+    // macOS: CMake's default toolchain file (macos_cmake_toolchain), in the
+    // conda build too. R reads this file at startup and R CMD sources it,
+    // so package builds get it either way. The helper variable: see MAKE
+    // above.
+    if (ctx.os == .macos) {
+        try out.appendSlice(b.allocator,
+            \\## r-zig: CMake leaves out Homebrew's, Fink's and MacPorts' prefixes.
+            \\R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake
+            \\CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}
+            \\
+        );
     }
     // etc/Renviron, not Renviron.site: `R --vanilla`/`Rscript --vanilla`
     // imply --no-environ, which skips Renviron.site but still reads this

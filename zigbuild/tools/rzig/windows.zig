@@ -77,6 +77,35 @@ pub fn exeSuffix(ctx: *Ctx, args: Args) !Args {
     return out;
 }
 
+/// MinGW gcc writes `-c a.c` without `-o` to a.o; zig writes a.obj, its
+/// COFF default. Packages compile that way and then name the .o (stress
+/// round 1, Z7: QuickJSR runs `$(R_CC) ... -c libquickjs.c`, then `ar -rs
+/// ... libquickjs.o`, which failed on kappa and skipped rstan). With `-c`,
+/// no -S, -E, -M or -MM, no output named (`-o <file>`, `-o<file>`) and one
+/// source file, name the output as gcc does: the source's base name with
+/// .o, in the current directory. Several sources keep zig's names (one -o
+/// cannot name them); autoconf's object-suffix probe then finds .o, as
+/// with gcc.
+pub fn objSuffix(ctx: *Ctx, args: Args) !Args {
+    var compile = false;
+    for (args) |x| {
+        if (mem.eql(u8, x, "-c")) compile = true;
+        for ([_][]const u8{ "-S", "-E", "-M", "-MM" }) |f| if (mem.eql(u8, x, f)) return args;
+        if (x.len > 2 and mem.startsWith(u8, x, "-o")) return args; // a joined -o<file>
+    }
+    if (!compile or cmdline.outputIndex(args) != null) return args;
+    var src: ?[]const u8 = null;
+    var it = cmdline.inputs(args);
+    while (it.next()) |i| {
+        if (!cmdline.isSource(args[i])) continue;
+        if (src != null) return args;
+        src = args[i];
+    }
+    const base = cmdline.baseName(src orelse return args);
+    const stem = base[0 .. mem.findScalarLast(u8, base, '.') orelse base.len];
+    return mem.concat(ctx.arena, []const u8, &.{ args, &.{ "-o", try ctx.fmt("{s}.o", .{stem}) } });
+}
+
 /// GNU ld's order in each directory, against what zig finds by itself.
 fn importLib(ctx: *Ctx, dirs: Args, name: []const u8) !?[]const u8 {
     for (dirs) |d| {
@@ -130,6 +159,28 @@ test "-lsynchronization: the API set's name, which both zigs have an import libr
     // only that name, as a one-argument -l
     const others: Args = &.{ "-lsynchronizationx", "-lsynch", "-l", "synchronization", "-Wl,-lsynchronization" };
     try expectArgs(others, try libs(&f.ctx, others));
+}
+
+test "objSuffix: gcc's .o for -c without -o" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    try expectArgs(&.{ "-O2", "-c", "libquickjs.c", "-o", "libquickjs.o" }, try objSuffix(&f.ctx, &.{ "-O2", "-c", "libquickjs.c" }));
+    try expectArgs(&.{ "-c", "src\\sub/a.cpp", "-I", "x.c", "-include", "b.h", "-o", "a.o" }, try objSuffix(&f.ctx, &.{ "-c", "src\\sub/a.cpp", "-I", "x.c", "-include", "b.h" }));
+    try expectArgs(&.{ "-c", "x.f90", "-o", "x.o" }, try objSuffix(&f.ctx, &.{ "-c", "x.f90" }));
+    // an output named, several sources, no -c, -E, -S, -M, -MM: unchanged
+    for ([_]Args{
+        &.{ "-c", "a.c", "-o", "b.o" },
+        &.{ "-c", "a.c", "-ob.o" },
+        &.{ "-c", "a.c", "b.c" },
+        &.{ "a.c", "-o", "a" },
+        &.{ "-E", "-c", "a.c" },
+        &.{ "-M", "-c", "a.c" },
+        &.{ "-MM", "-c", "a.c" },
+        &.{ "-S", "-c", "a.c" },
+        &.{ "-c", "-" },
+        &.{ "-c", "a.o" },
+    }) |args| try expectArgs(args, try objSuffix(&f.ctx, args));
 }
 
 test "exeSuffix: gcc's .exe for an executable named without an extension" {

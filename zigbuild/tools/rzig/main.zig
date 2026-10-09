@@ -41,7 +41,9 @@
 //!                      it has one, then the argv, one per line. Side
 //!                      effects of preparing the call still happen (the
 //!                      libc++ mirror, ar's archive seed, asking flang and
-//!                      xcrun).
+//!                      xcrun, compiling a linux shared library's
+//!                      finalization object or a Windows link's CFG stub,
+//!                      copying an archive to an .a name).
 //!   RZIG_OS=linux|macos|windows  with RZIG_PRINT_ARGV only: apply that
 //!                      OS's rewriting (what the shims' `uname -s` chose),
 //!                      so every OS's branches can be checked from one
@@ -107,6 +109,15 @@ pub fn main(init: std.process.Init) !u8 {
     const arg0 = args[0];
     // the name without directory or extension (gcc.exe is gcc)
     var tool = Tool.fromName(toolName(args[0]));
+    // R on Windows starts programs by the 8.3 short form of their path
+    // (system(), system2()), and g++.exe has a short name of its own
+    // (G__~1.EXE: + is no 8.3 character), so argv[0] names no tool there:
+    // R CMD INSTALL's `g++ --version` printed this usage and every C++ log
+    // said `using C++ compiler: 'NA'` (stress round 1, R1). The long form
+    // of this binary's path names it (zig-ranlib.exe's ZIG-RA~1.EXE too).
+    if (tool == null and builtin.os.tag == .windows) {
+        if (selfExe(io, arena, arg0)) |p| tool = Tool.fromName(toolName(p));
+    }
     if (tool == null and args.len > 1) {
         tool = Tool.fromName(toolName(args[1]));
         args = args[1..];
@@ -135,6 +146,9 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     const caller = args[1..];
+    // zig, found first: compiler.zig may compile with it (dso_fini.zig,
+    // cfguard.zig)
+    ctx.zig = try find_zig.find(&ctx);
     const cmd: Ctx.Command = switch (t) {
         .cc, .cxx => .{ .zig = try compiler.argv(&ctx, if (t == .cc) .c else .cxx, caller) },
         // no flang: 127, as a shell gives for a command it cannot find
@@ -145,13 +159,13 @@ pub fn main(init: std.process.Init) !u8 {
         .ar => .{ .zig = try ar.argv(&ctx, caller) },
         .ranlib => .{ .zig = try mem.concat(arena, []const u8, &.{ &.{"ranlib"}, caller }) },
     };
-    // zig, when the command is zig's: found, and for a compile or link
-    // the libc++ mirror prepared (a flang command needs neither)
+    // zig, when the command is zig's: for a compile or link with the
+    // libc++ mirror prepared (a flang command needs neither)
     var env_changed = false;
     const argv = switch (cmd) {
         .program => |p| p,
         .zig => |zig_args| zig: {
-            const zig = try find_zig.find(&ctx);
+            const zig = ctx.zig.?;
             if ((t == .cc or t == .cxx or t == .fc) and ctx.os != .windows) env_changed = try libcxx_mirror.apply(&ctx, zig[0]);
             break :zig try mem.concat(arena, []const u8, &.{ zig, zig_args });
         },
@@ -300,6 +314,8 @@ test toolName {
     try std.testing.expect(Tool.fromName(toolName("zig-ranlib")) == .ranlib);
     // no other Fortran name: FC is zig-fc, flang and gfortran stay themselves
     for ([_][]const u8{ "flang", "gfortran.exe", "zig-f77" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == null);
+    // 8.3 short names name no tool; the long path does (R1, Windows only)
+    for ([_][]const u8{ "C:/env/Library/lib/R/bin/TOOLCH~1/G__~1.EXE", "GCC~1.EXE", "ZIG-RA~1.EXE" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == null);
 }
 
 test printArgv {
@@ -333,6 +349,12 @@ test shellCommand {
 
 test {
     _ = @import("cmdline.zig");
+    _ = @import("cache.zig");
+    _ = @import("linker_args.zig");
+    _ = @import("archives.zig");
+    _ = @import("dso_fini.zig");
+    _ = @import("cfguard.zig");
+    _ = @import("strip.zig");
     _ = @import("darwin.zig");
     _ = @import("windows.zig");
     _ = @import("environment.zig");

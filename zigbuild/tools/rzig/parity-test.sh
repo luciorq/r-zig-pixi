@@ -22,7 +22,7 @@
 #   dry   rzig with RZIG_PRINT_ARGV=1 RZIG_OS=<os> RZIG_XCRUN=<stub>;
 #   real  linux cases only: rzig for real, execve into the same stub.
 # Standard output (and state a case inspects) and standard error must be
-# equal. Three kinds of difference are deliberate and reported as such
+# equal. Four kinds of difference are deliberate and reported as such
 # when they are the only ones:
 #   - rzig names the tree it is installed in without the shim's
 #     `<dir>/../../../..` (always applied to the bash side);
@@ -30,10 +30,22 @@
 #     LDFLAGS did that before, the shims never), on every link line: taken
 #     out of rzig's side (where it goes is compiler.zig's unit tests'
 #     business) and reported as "ok+";
+#   - rzig adds the finalization object of linux shared libraries
+#     (dso_fini.zig) and the CFG stub of Windows links (cfguard.zig), each
+#     compiled once into its cache, which a shim cannot reasonably do:
+#     taken out of its side too, after checking that it is there exactly
+#     when the rule says (a linux link with -shared as a word, no
+#     -nostartfiles or -nostdlib; a Windows command with -o as a word; no
+#     compile-only flag), and reported as "ok+". The zig stand-ins write
+#     the object rzig asks them to compile;
 #   - what a case's CASE_DELIBERATE sed script does to the bash side, with
 #     CASE_WHY: F3b's other differences (rzig never reads CONDA_PREFIX; the
-#     tree's headers on every call, -idirafter on Windows), and the message
-#     for an archive ar cannot seed.
+#     tree's headers on every call, -idirafter on Windows), the message
+#     for an archive ar cannot seed, an archive input passed as an .a
+#     copy in rzig's cache (archives.zig), and no -Wl,--strip-debug on a
+#     link whose input objects have debug info (strip.zig reads them; a
+#     shim cannot reasonably parse ELF).
+# check NAME COMMAND... adds a case that passes when COMMAND does.
 # zig-fc (F3c) has no bash shim to compare with: fortran.zig's unit tests
 # cover it.
 set -euo pipefail
@@ -93,6 +105,9 @@ stub() {
   {
     echo '#!/bin/sh'
     echo 'if [ -n "${ZIG_LIB_DIR+x}" ]; then printf "ZIG_LIB_DIR=%s\n" "$ZIG_LIB_DIR"; fi'
+    # the objects rzig compiles into its cache (dso_fini.zig, cfguard.zig):
+    # the compile's -o written
+    echo 'o=; p=; for a in "$@"; do [ "$p" = -o ] && o=$a; p=$a; done; case "$o" in */r-zig/dso-fini-*|*/r-zig/cfguard-*) : > "$o" ;; esac'
     if [ -n "${2:-}" ]; then echo "printf '%s\n' '$2' \"\$@\""; else echo 'printf "%s\n" "$0" "$@"'; fi
   } > "$1"
   chmod +x "$1"
@@ -144,6 +159,7 @@ for f in libgfortran.dll.a libquadmath.dll.a; do touchf "$W/gcclib/$f"; done
 prog "$W/gf/gfortran" "echo '$W/gcclib/libgfortran.dll.a'"
 
 pass=0 own=0 deliberate=0 fail=0
+obj_re='/r-zig/(dso-fini-[0-9a-f]*/dso_fini|cfguard-[0-9a-f]*/guard_dispatch)\.o$'
 why_tree="rzig names the tree it is installed in as such, not as the shim's <its dir>/../../../.."
 why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not installed in adds nothing"
 
@@ -157,13 +173,24 @@ why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not instal
 #   CASE_DELIBERATE  sed script for the bash side's output, and CASE_WHY
 run_case() {
   local name=$1 os=$2 tool=$3; shift 3
-  local shim=$tool uname_s side status ok=1 t=${CASE_TREE:-tree}
+  local shim=$tool uname_s side status ok=1 t=${CASE_TREE:-tree} obj_want=0 n a
   case $tool in gcc) shim=zig-cc ;; g++) shim=zig-cxx ;; esac
   case $os in linux) uname_s=Linux ;; macos) uname_s=Darwin ;; windows) uname_s=MINGW64_NT-10.0-26100 ;; esac
   local -a env=(HOME="$W/home" LC_ALL=C)
   if declare -p CASE_ENV > /dev/null 2>&1; then env+=("${CASE_ENV[@]}"); else env+=(ZIG_BIN="$STUB"); fi
   [ "$os" = macos ] && ! declare -p CASE_ENV > /dev/null 2>&1 && env+=(FAKE_SDK="$SDK")
   local p=${CASE_PATH:-}
+  # the finalization object's rule (dso_fini.zig's `wanted`, linux only)
+  # and the CFG stub's (cfguard.zig's `wanted`, Windows only: an -o)
+  if [ "$os" = linux ] && [ "$tool" != zig-ar ] && [ "$tool" != zig-ranlib ] &&
+    [[ " $* " == *" -shared "* && " $* " != *" -nostartfiles "* && " $* " != *" -nostdlib "* ]]; then
+    obj_want=1
+  elif [ "$os" = windows ] && [ "$tool" != zig-ar ] && [ "$tool" != zig-ranlib ] && [[ " $* " == *" -o "* ]]; then
+    obj_want=1
+  fi
+  if [ "$obj_want" = 1 ]; then
+    for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) obj_want=0 ;; esac; done
+  fi
   local -a sides=(bash dry)
   [ "$os" = linux ] && sides+=(real)
   for side in "${sides[@]}"; do
@@ -184,11 +211,15 @@ run_case() {
   done
   # always: the shim's unnormalized "<its dir>/../../../.." is rzig's tree
   sed -e "s|$W/$t/lib/R/bin/bash/\.\./\.\./\.\./\.\.|$W/$t|g" ${CASE_DELIBERATE:+-e "$CASE_DELIBERATE"} "$W/out.bash" > "$W/want"
-  # always: rzig's -L into its own environment (F3b), taken out of its side
+  # always: rzig's -L into its own environment (F3b) and the object it
+  # compiles (dso_fini.zig, cfguard.zig), taken out of its side
   local own_l="-L$W/$t/lib" own_added=0
   for side in "${sides[@]:1}"; do
     grep -qxF -- "$own_l" "$W/out.$side" && own_added=1
-    grep -vxF -- "$own_l" "$W/out.$side" > "$W/cmp.$side" || :
+    n=$(grep -cE -- "$obj_re" "$W/out.$side" || :)
+    [ "$n" = 0 ] || own_added=1
+    [ "$n" = "$obj_want" ] || { ok=0; echo "    $side: $n objects rzig compiled, want $obj_want" >> "$W/report"; }
+    grep -vxF -- "$own_l" "$W/out.$side" | { grep -vE -- "$obj_re" || :; } > "$W/cmp.$side"
     cmp -s "$W/want" "$W/cmp.$side" || { ok=0; diff -u "$W/want" "$W/cmp.$side" | sed 's/^/    /' >> "$W/report" || :; }
   done
   if [ "$ok" = 1 ] && ! cmp -s "$W/out.bash" "$W/cmp.dry"; then
@@ -207,6 +238,15 @@ run_case() {
   unset CASE_ENV CASE_PATH CASE_TREE CASE_RESET CASE_STATE CASE_DELIBERATE CASE_WHY
 }
 : > "$W/report"
+
+check() {
+  local name=$1; shift
+  if "$@" > /dev/null 2>&1; then
+    pass=$((pass + 1)); printf 'ok   %-8s %s\n' check "$name"
+  else
+    fail=$((fail + 1)); printf 'FAIL %-8s %s\n' check "$name"
+  fi
+}
 
 echo "== rzig parity against $shims ($RZIG)"
 
@@ -232,6 +272,63 @@ run_case "gcc name" linux gcc -c a.c
 run_case "g++ name, SONAME" linux g++ -shared -o libg.so a.o
 run_case "a package's own -march/-mcpu after -mcpu=baseline" linux zig-cxx -march=native -mcpu=haswell -O2 -c a.cpp
 run_case "-mtune= dropped (zig would take it as the CPU)" linux zig-cc -mtune=native -O2 -mtune=haswell -march=x86-64 -c a.c
+
+# --- debug info, __DATE__ (compiler.zig): every case has -Wno-error=date-time ----
+# (every linux link without a -g option has -Wl,--strip-debug; in rzig, not
+# one with an input object that has debug info)
+run_case "-g given: no -g0" linux zig-cc -g -O2 -c a.c -o a.o
+run_case "-ggdb3, -gdwarf-4: no -g0" linux zig-cxx -O2 -ggdb3 -gdwarf-4 -c a.cpp -o a.o
+run_case "-g on a shared link: no -g0, no --strip-debug" linux zig-cxx -g -shared -o pkg.so a.o
+run_case "-gline-tables-only on an executable link: no --strip-debug" linux zig-cc -O2 -gline-tables-only -o prog a.o
+# strip.zig's objects (testdata/): one compiled with -g, one with -g0
+cp "$here/testdata/f-g.o" "$W/cwd/dbg.o"; cp "$here/testdata/f-g0.o" "$W/cwd/nodbg.o"; cp "$here/testdata/f-g.o" "$W/cwd/libdbg.a"
+CASE_DELIBERATE='/^-Wl,--strip-debug$/d'
+CASE_WHY="rzig reads the link's input objects (strip.zig): one with debug info keeps it; the shims do not parse ELF"
+run_case "an input object with debug info: no --strip-debug (load_all())" linux zig-cxx -shared -o pkg.so nodbg.o dbg.o -lR
+run_case "objects without debug info, an archive with some: --strip-debug" linux zig-cc -shared -o pkg.so nodbg.o libdbg.a
+run_case "a caller's -Werror=date-time after ours" linux zig-cc -Werror=date-time -O2 -c a.c -o a.o
+
+# --- -march=armv<N>-a[+ext] in zig's words (compiler.zig's marchArgs) ------------
+run_case "-march=armv8-a+crc: -mcpu=generic+v8a+crc" linux zig-cc -march=armv8-a+crc -O2 -c a.c -o a.o
+run_case "-march=armv9-a, empty extension items" linux zig-cxx -O2 -march=armv9-a++sve2+ -c a.cpp
+run_case "-march=armv8-a, clang's fcma, jscvt, pmuv3, nopredres2" linux zig-cc -march=armv8-a+fcma+jscvt+pmuv3+nopredres2 -c a.c
+run_case "other -march values kept" linux zig-cc -march=armv8-r -march=armv-a -march=armvx-a -march=native -march= -c a.c
+
+# --- linker options zig cannot take (linker_args.zig) -----------------------------
+run_case "-Wl,-L<dir>: a plain -L (RcppParallel)" linux zig-cxx -shared -o RcppParallel.so a.o -Wl,-Ltbb/build/lib_release -ltbb '-Wl,-rpath,$ORIGIN/../lib'
+run_case "-Xlinker -L and --library-path forms" linux zig-cc -shared -o p.so a.o -Xlinker -L/a -Xlinker -L -Xlinker /b -Wl,--library-path=/c,--library-path,/d,-z,now -Wl,-L,/e -lx
+run_case "CMake's --dependency-file dropped" linux zig-cxx -shared -Xlinker --dependency-file=CMakeFiles/tbb.dir/link.d -o libtbb.so.2 a.o
+run_case "--dependency-file, other spellings" linux zig-cc -o x a.o -Wl,--dependency-file,x.d,-z,now -Xlinker --dependency-file -Xlinker y.d -Wl,--dependency-file=z.d
+run_case "-z muldefs and --allow-multiple-definition dropped, every form" linux zig-cc -shared -o p.so a.o -z muldefs -Wl,-z,muldefs,-z,now \
+  -Xlinker -z -Xlinker muldefs -Wl,-zmuldefs,-allow-multiple-definition -Xlinker --allow-multiple-definition -z defs
+run_case "other linker options kept, as they were" linux zig-cc -shared -o p.so a.o -Wl,-z,relro,,-L/x -Wl, -Xlinker -rpath -Xlinker /r -Wl,-L -Wl,-L, -Xlinker
+
+# --- version scripts on linux (compiler.zig) --------------------------------------
+run_case "version script: --undefined-version (tbbmalloc)" linux zig-cc -shared -Wl,--version-script=tbbmalloc.def -o libtbbmalloc.so.2 a.o
+run_case "the caller's --no-undefined-version after ours" linux zig-cxx -shared -Wl,-version-script,v.map -Wl,--no-undefined-version -o p.so a.o
+run_case "version script on a compile: nothing" linux zig-cc -Wl,--version-script=v.map -c a.c
+
+# --- linux shared libraries' finalization object (dso_fini.zig) -------------------
+CASE_RESET="rm -rf '$W/home/.cache/r-zig'/dso-fini-*"
+CASE_STATE='cd "$HOME/.cache/r-zig" 2> /dev/null && for f in dso-fini-*/*; do [ -e "$f" ] && echo "${f#*/}"; done; :'
+CASE_DELIBERATE='$a state: dso_fini.c
+$a state: dso_fini.o'
+CASE_WHY="rzig compiles dso_fini.c into its cache once (state: that directory's files)"
+run_case "shared link: the object, compiled once" linux zig-cxx -shared -o lme4.so a.o
+run_case "-nostartfiles: no object" linux zig-cc -shared -nostartfiles -o p.so crtbeginS.o a.o crtendS.o
+run_case "-nostdlib: no object" linux zig-cc -shared -nostdlib -o p.so a.o
+
+# --- an archive input without zig's extension (archives.zig) ----------------------
+mkdir -p "$W/cwd/.deps"; printf '!<arch>\nv8 member\n' > "$W/cwd/.deps/v8_monolith"
+printf 'not an archive\n' > "$W/cwd/.deps/notar"; cp "$W/cwd/.deps/v8_monolith" "$W/cwd/.deps/libv8.a"
+v8_copy="$W/home/.cache/r-zig/archive-$(sha256sum "$W/cwd/.deps/v8_monolith" | cut -c1-32)/v8_monolith.a"
+why_ar="zig takes a link input by its extension: rzig passes an archive named without one as an .a copy in its cache"
+for os in linux macos windows; do
+  CASE_DELIBERATE="s|^\.deps/v8_monolith\$|$v8_copy|"; CASE_WHY=$why_ar
+  run_case "an archive without an extension: an .a copy (V8)" $os zig-cxx -shared -o V8.so a.o .deps/v8_monolith -lR
+done
+check "the .a copy has the archive's bytes" cmp "$W/cwd/.deps/v8_monolith" "$v8_copy"
+run_case "not an archive, a name zig takes, an option's value: unchanged" linux zig-cc -shared -o p.so a.o .deps/notar .deps/libv8.a -Xlinker .deps/v8_monolith
 
 # --- the Fortran runtime (Makeconf's FLIBS = -lflang_rt.runtime) ---------------
 CASE_PATH="$W/flang"
@@ -259,8 +356,9 @@ run_case "-lgfortran5, -lquadmathx and a word inside an argument are other thing
 # --- OpenMP ------------------------------------------------------------------------
 # The shims took OpenMP from CONDA_PREFIX when their tree had no omp.h, and
 # put the tree's -L after the caller's arguments with -lomp; rzig ignores
-# CONDA_PREFIX and adds its environment's -L before -o on every link (F3b).
-why_omp="the shims' OpenMP -L<tree>/lib is rzig's own-environment -L (before -o on every link, F3b)"
+# CONDA_PREFIX and adds its environment's -L to every link (F3b), after the
+# caller's arguments (R2).
+why_omp="the shims' OpenMP -L<tree>/lib is rzig's own-environment -L (on every link, F3b)"
 CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_DELIBERATE="\|^-I$W/env/include\$|d"; CASE_WHY=$why_conda
 run_case "OpenMP compile (CONDA_PREFIX ignored)" linux zig-cc -fopenmp -c a.c
 CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_DELIBERATE="\|^-[IL]$W/env/|d
@@ -343,6 +441,13 @@ run_case "gcc name" macos gcc -c a.c
 run_case "a package's own -mcpu after -mcpu=baseline" macos zig-cc -mcpu=native -c a.c
 run_case "-mtune= dropped" macos zig-cxx -mtune=native -c a.cpp
 
+run_case "-g0 given: once" macos zig-cc -g0 -c a.c
+run_case "-march=armv8.2-a, clang's extension names" macos zig-cc -march=armv8.2-a+simd+nocrypto+fp16+sve2-aes+rdma+rng+memtag+profile -c a.c
+run_case "-Xarch_<arch>'s value kept (abseil's CMake)" macos zig-cxx -Xarch_x86_64 -maes -Xarch_arm64 -march=armv8-a+crypto -Xarch_arm64 -mtune=apple-m1 -c a.cpp
+run_case "-Wl,-L<dir>: a plain -L" macos zig-cc -dynamiclib -o p.so a.o -Wl,-L/opt/tbb -ltbb
+run_case "no --undefined-version off linux" macos zig-cc -dynamiclib -Wl,--version-script=v.map -o p.so a.o
+run_case "shared link: no finalization object off linux" macos zig-cxx -shared -o p.so a.o
+
 # --- macOS ar: ar.zig's archive seed ----------------------------------------------
 CASE_RESET='rm -f libnew.a'; CASE_STATE='od -c libnew.a | head -2'
 run_case "ar rcs, missing archive: seed + darwin format" macos zig-ar rcs libnew.a a.o
@@ -396,9 +501,18 @@ run_case "-lgfortran without flang: dropped" windows gcc -shared -o pkg.dll a.o 
 run_case "-lsynchronization: the API set's import library" windows gcc -shared -o pkg.dll a.o -L"$W/win/d1" -lws2_32 -lsynchronization -lntdll
 touchf "$W/win/d3/libapi-ms-win-core-synch-l1-2-0.dll.a"
 run_case "-lsynchronization: looked up under the API set's name" windows g++ -shared -o pkg.dll a.o -L"$W/win/d3" -lsynchronization
-CASE_ENV=(XDG_CACHE_HOME="$W/cache7"); CASE_PATH="$W/envB/bin"; CASE_STATE='ls "$XDG_CACHE_HOME" 2>&1 || :'
+run_case "-gline-tables-only: no -g0" windows gcc -gline-tables-only -c a.c -o a.o
+run_case "-c without -o: <stem>.o, as MinGW gcc (QuickJSR)" windows gcc -O2 -c quickjs/libquickjs.c
+run_case "-c without -o, C++ and a backslash path" windows g++ -c 'src\sub\a.cpp' -I/x
+run_case "-c with -o: unchanged" windows gcc -c a.c -o b.o
+run_case "-c with a joined -o: unchanged" windows gcc -c a.c -ob.o
+run_case "-c with two sources: unchanged" windows gcc -c a.c b.c
+run_case "-E, -M with -c: unchanged" windows gcc -E -M -c a.c
+run_case "--allow-multiple-definition dropped (StanHeaders)" windows g++ -shared -Wl,--allow-multiple-definition -o StanHeaders.dll a.o
+# (the cache holds the CFG stub, cfguard.zig, and no mirror)
+CASE_ENV=(XDG_CACHE_HOME="$W/cache7"); CASE_PATH="$W/envB/bin"; CASE_STATE='ls -d "$XDG_CACHE_HOME"/r-zig/zig-lib-* 2> /dev/null || echo "no mirror"'
 run_case "libc++ beside zig: no mirror on Windows" windows zig-cxx -shared -o pkg.dll a.o
 run_case "ar and ranlib passthrough" windows zig-ar rcs libw.a a.o
 
-echo "== $pass identical, $own identical but for rzig's own-environment -L, $deliberate deliberate differences, $fail failed"
+echo "== $pass identical, $own identical but for rzig's own-environment -L or compiled object, $deliberate deliberate differences, $fail failed"
 [ "$fail" = 0 ]

@@ -8,10 +8,14 @@
 #    and a C++ shared library, a static archive and a program using all
 #    three, which must run. The libraries must carry their SONAME, link no
 #    shared libc++ and need glibc 2.17 at most. The same commands through
-#    the bash shims in toolchain/ must produce byte-identical files. The
-#    copies sit in no R tree, so rzig has no environment of its own there
-#    (environment.zig), and R_ZIG_EXTRA_ENV is unset for this part: the
-#    shims know neither, and an extra environment would add an rpath.
+#    the bash shims in toolchain/ must produce byte-identical objects,
+#    archive and program; the shared libraries differ by rzig's
+#    finalization object (dso_fini.zig), which the shims do not add, and
+#    which a C++ library with a static destructor then needs to unload
+#    cleanly. The copies sit in no R tree, so rzig has no environment of
+#    its own there (environment.zig), and R_ZIG_EXTRA_ENV is unset for
+#    this part: the shims know neither, and an extra environment would add
+#    an rpath.
 # 2. With an R prefix (an installed tree such as dist/R-4.6.1-slim-zig,
 #    whose bin/toolchain is rzig since F3a): small C, C++, Fortran and
 #    OpenMP packages install from source and load, and with
@@ -97,10 +101,49 @@ fi
 glibc=$(objdump -T "$o/libgreet.so" "$o/main" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 || :)
 case "$glibc" in GLIBC_2.1[0-7]|GLIBC_2.[0-9]|GLIBC_2.[0-9].*|GLIBC_2.1[0-7].*|"") ;; *) echo "error: needs $glibc" >&2; exit 1 ;; esac
 echo "ok: SONAMEs set, no shared libc++, glibc floor ${glibc:-none} (<= 2.17)"
-for f in hello.o libhello.so greet.o libgreet.so twice.o libtwice.a main; do
+for f in hello.o greet.o twice.o libtwice.a main; do
   cmp "$T/out-bash/$f" "$o/$f" || { echo "error: $f differs between the bash shims and rzig" >&2; exit 1; }
 done
-echo "ok: every file byte-identical to the bash shims' build"
+echo "ok: objects, archive and program byte-identical to the bash shims' build"
+for f in libhello.so libgreet.so; do
+  readelf -S "$o/$f" | grep -q '\.fini_array' || { echo "error: rzig's $f has no .fini_array (dso_fini.zig)" >&2; exit 1; }
+  if readelf -S "$T/out-bash/$f" | grep -q '\.fini_array'; then echo "error: the shims' $f has a .fini_array" >&2; exit 1; fi
+done
+echo "ok: the shared libraries differ by rzig's finalization object only"
+
+# A C++ library with a static destructor, unloaded: the destructor runs at
+# dlclose, and the program exits 0 (stress round 1, Z9: without the
+# finalization object glibc ran it at exit, after dlclose, and crashed).
+cat > "$T/src/dtor.cpp" << 'EOF'
+#include <cstdio>
+#include <string>
+struct G { std::string s; G() : s(64, 'x') {} ~G() { std::puts("unloaded"); } };
+static G g;
+extern "C" int dtor_size() { return static_cast<int>(g.s.size()); }
+EOF
+cat > "$T/src/unload.c" << 'EOF'
+#include <dlfcn.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+  void *h = dlopen(argv[1], RTLD_NOW);
+  if (!h) { puts(dlerror()); return 2; }
+  int (*f)(void) = (int (*)(void))dlsym(h, "dtor_size");
+  printf("%d\n", f());
+  fflush(stdout);
+  return dlclose(h);
+}
+EOF
+(
+  cd "$o"
+  export ZIG_BIN="$ZIG"
+  unset R_ZIG_EXTRA_ENV
+  "$T/rzig/zig-cxx" -O2 -fpic -c ../src/dtor.cpp -o dtor.o
+  "$T/rzig/zig-cxx" -shared -o libdtor.so dtor.o
+  "$T/rzig/zig-cc" -o unload ../src/unload.c -ldl
+  out=$(./unload ./libdtor.so) || { echo "error: unloading libdtor.so failed (exit $?), printed '$out'" >&2; exit 1; }
+  [ "$out" = "$(printf '64\nunloaded')" ] || { echo "error: unloading libdtor.so printed '$out'" >&2; exit 1; }
+)
+echo "ok: a C++ library unloads cleanly (its static destructor runs at dlclose, exit 0)"
 
 # --- 2. R packages through an installed tree's own rzig -----------------------------
 [ $# -ge 1 ] || exit 0

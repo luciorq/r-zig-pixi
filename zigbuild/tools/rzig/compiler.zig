@@ -16,15 +16,22 @@ const windows = @import("windows.zig");
 const flang_rt = @import("flang_rt.zig");
 const environment = @import("environment.zig");
 const floors = @import("floors.zig");
+const linker_args = @import("linker_args.zig");
+const archives = @import("archives.zig");
+const dso_fini = @import("dso_fini.zig");
+const cfguard = @import("cfguard.zig");
+const strip = @import("strip.zig");
 const Args = cmdline.Args;
 
 pub const Lang = enum { c, cxx };
 
 /// zig's arguments after its own path:
-///   cc|c++ -fno-sanitize=undefined -mcpu=baseline [<target>]
-///          [-F<SDK frameworks>] [<soname>]
-///          <caller's, rewritten, no -mtune=, with the environments'
-///          -L/-rpath before the first -o> <environments' headers> [-lomp]
+///   cc|c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time
+///          [-g0] [<target>] [-F<SDK frameworks>] [<soname>]
+///          [-Wl,--undefined-version] [-Wl,--strip-debug] [<linux shared
+///          library's finalization object | Windows link's CFG stub>]
+///          <caller's, rewritten, no -mtune=>
+///          [<environments' -L/-rpath>] <environments' headers> [-lomp]
 ///          [-L<SDK>/usr/lib]
 pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     const a = ctx.arena;
@@ -47,9 +54,18 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
         .windows, .other => {},
     }
 
-    var args = try flang_rt.resolve(ctx, try dropTune(ctx, caller));
-    // the caller's arguments decide it, not a directory's name
+    var args = try marchArgs(ctx, try dropTune(ctx, caller));
+    args = try linker_args.rewrite(ctx, args);
+    args = try flang_rt.resolve(ctx, args);
+    args = try archives.rename(ctx, args);
+    if (ctx.os == .windows) args = try windows.objSuffix(ctx, args);
+    // the caller's arguments decide these, not a directory's name
     const soname = try sonameFlag(ctx, args);
+    const undefined_version = ctx.os == .linux and !cmdline.compileOnly(args) and cmdline.anyContains(args, "-version-script");
+    const fini = if (ctx.os == .linux and dso_fini.wanted(args)) try dso_fini.object(ctx, linux_target) else null;
+    const cfg = if (ctx.os == .windows and cfguard.wanted(args)) try cfguard.object(ctx) else null;
+    const g0 = !cmdline.debugOption(args);
+    const strip_debug = ctx.os == .linux and strip.wanted(ctx, args);
     args = try envFlags(ctx, args);
     // after envFlags: an -l, -lomp included, resolves in its directories
     if (ctx.os == .windows) {
@@ -70,8 +86,43 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     // benign UB that would SIGILL at run time.
     try out.append(a, "-fno-sanitize=undefined");
     try out.append(a, cpu_flag);
+    // zig cc adds -Werror=date-time at -O1 and above (reproducible
+    // builds), so a __DATE__ or __TIME__ stops the compile (stress round
+    // 1, Z1: duckdb's bundled pcg header, arrow's bundled mimalloc, on
+    // every OS). gcc and clang only warn, and only with -Wdate-time. After
+    // zig's own flag, before the caller's: a package's -Werror=date-time
+    // still wins.
+    try out.append(a, "-Wno-error=date-time");
+    // zig cc emits DWARF without -g (-debug-info-kind=constructor at -O2),
+    // and Makeconf's CFLAGS are -O2 alone: an installed linux .so kept it
+    // (stress round 1, Z10: mlpack 304 MB, duckdb 426 MB, arrow 402 MB).
+    // So no debug info unless the caller asks for some: any -g option
+    // (-g, -g0 to -g3, -ggdb, -gdwarf-5, -gline-tables-only, ...) leaves
+    // it to the caller. On a link line it changes nothing.
+    if (g0) try out.append(a, "-g0");
     try out.appendSlice(a, before);
     if (soname) |s| try out.append(a, s);
+    // ld.lld stops at a version script that names a symbol the link does
+    // not define (--no-undefined-version, its default since LLVM 16); GNU
+    // ld does not (stress round 1, Z4: oneTBB's tbbmalloc, bundled in
+    // RcppParallel). Linux links with a version script (-version-script
+    // in any argument, one dash or two) get GNU ld's behaviour, before
+    // the caller's arguments, so its own --no-undefined-version wins. It
+    // also lets a real mistake in a version script pass, as GNU ld does.
+    if (undefined_version) try out.append(a, "-Wl,--undefined-version");
+    // -g0 leaves the DWARF of zig's own libc++, libc++abi and libunwind,
+    // which zig builds with debug info whatever the caller asks: 4 to 6 MB
+    // in every linux C++ package (stress round 2, Z10's residual). So
+    // linux links strip all debug info when nothing asks for it: no -g
+    // option (-g0's test) and no input object with debug info (one
+    // compiled with -g whose link line has none, as devtools::load_all()
+    // builds); strip.zig. It changes nothing on a command that does not
+    // link (--version, -print-*, a header's -o).
+    if (strip_debug) try out.append(a, "-Wl,--strip-debug");
+    if (fini) |o| try out.append(a, o);
+    // zig's MinGW runtime lacks __guard_dispatch_icall_dummy (stress
+    // round 2, Z11: magick's bundle); cfguard.zig
+    if (cfg) |o| try out.append(a, o);
     try out.appendSlice(a, args);
     try out.appendSlice(a, link_last);
     return out.items;
@@ -104,13 +155,72 @@ const cpu_flag = "-mcpu=baseline";
 /// -mtune=native as a portable flag; through zig it would make a package
 /// that needs the compiling machine's CPU. Nothing is lost: zig tunes
 /// for "generic" anyway. zig-fc's flang commands keep it (flang:
-/// target-cpu "x86-64", tune-cpu the named one).
+/// target-cpu "x86-64", tune-cpu the named one). The value of
+/// `-Xarch_<arch>` stays: clang's driver reads it, as clang does.
 fn dropTune(ctx: *Ctx, caller: Args) !Args {
     var out: std.ArrayList([]const u8) = .empty;
-    for (caller) |x| {
-        if (!mem.startsWith(u8, x, "-mtune=")) try out.append(ctx.arena, x);
+    for (caller, 0..) |x, i| {
+        if (!mem.startsWith(u8, x, "-mtune=") or cmdline.xarchValue(caller, i)) try out.append(ctx.arena, x);
     }
     return out.items;
+}
+
+/// clang's `-march=armv<N>[.<M>]-a[+<ext>...]`, an Arm architecture, in
+/// zig's words: `-mcpu=generic+v<N>[_<M>]a[+<feature>...]` (stress round
+/// 1, Z5). zig cc reads -march as a CPU name and stops: "unknown CPU:
+/// 'armv8'", also with +crc (arrow's CMake probes and its bundled
+/// aws-checksums on aarch64, macOS and linux alike). clang's extension
+/// names in zig's spelling: the ones it names otherwise (simd neon, fp
+/// fp_armv8, fp16 fullfp16, rdma rdm, rng rand, memtag mte, profile spe,
+/// fcma complxnum, jscvt jsconv, pmuv3 perfmon, predres2 specres2),
+/// `-` as `_` (sve2-aes), no<x> as -<x>. Other -march values (CPU names,
+/// armv8-r) are kept. On every arch: it names an Arm architecture, which
+/// zig refuses elsewhere in either spelling.
+/// It stays where the caller put it, after -mcpu=baseline, so the
+/// package's architecture wins, as its -march would: generic+v8a+crc
+/// instead of the baseline (generic on linux aarch64, apple-m1 on macOS).
+/// The value of `-Xarch_<arch>` stays clang's -march: zig hands it to
+/// clang's driver, which refuses zig's -mcpu spelling ("unsupported
+/// argument 'generic+v8a+crypto' to option '-mcpu='", s2's bundled
+/// abseil on macOS, R2-4's --conda run).
+fn marchArgs(ctx: *Ctx, args: Args) !Args {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (args, 0..) |x, i| {
+        const v = (if (cmdline.xarchValue(args, i)) null else cmdline.flagValue(x, "-march=")) orelse {
+            try out.append(ctx.arena, x);
+            continue;
+        };
+        try out.append(ctx.arena, (try armMcpu(ctx.arena, v)) orelse x);
+    }
+    return out.items;
+}
+
+const arm_ext_names = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "simd", "neon" },    .{ "fp", "fp_armv8" },   .{ "fp16", "fullfp16" },     .{ "rdma", "rdm" },
+    .{ "rng", "rand" },     .{ "memtag", "mte" },    .{ "profile", "spe" },       .{ "fcma", "complxnum" },
+    .{ "jscvt", "jsconv" }, .{ "pmuv3", "perfmon" }, .{ "predres2", "specres2" },
+});
+
+/// `armv<N>[.<M>]-a[+ext...]` as zig's -mcpu, or null for any other value.
+fn armMcpu(a: mem.Allocator, v: []const u8) !?[]const u8 {
+    var it = mem.splitScalar(u8, v, '+');
+    const arch = it.first();
+    if (!mem.startsWith(u8, arch, "armv") or !mem.endsWith(u8, arch, "-a")) return null;
+    const ver = arch["armv".len .. arch.len - "-a".len];
+    if (ver.len == 0) return null;
+    for (ver) |c| if (!std.ascii.isDigit(c) and c != '.') return null;
+    var s: std.ArrayList(u8) = .empty;
+    try s.appendSlice(a, "-mcpu=generic+v");
+    for (ver) |c| try s.append(a, if (c == '.') '_' else c);
+    try s.append(a, 'a');
+    while (it.next()) |e| {
+        if (e.len == 0) continue;
+        const off = e.len > 2 and mem.startsWith(u8, e, "no");
+        const name = if (off) e[2..] else e;
+        try s.append(a, if (off) '-' else '+');
+        for (arm_ext_names.get(name) orelse name) |c| try s.append(a, if (c == '-') '_' else c);
+    }
+    return s.items;
 }
 
 /// zig's name for this binary's own architecture. The shim asked `uname
@@ -152,10 +262,15 @@ const windows_headers_always = true;
 ///     headers come first, and the environment's still before the C
 ///     library's and the SDK's;
 ///   -L<dir>/lib, and -Wl,-rpath,<dir>/lib for a conda env, on links,
-///     just before the first -o: where Makeconf's LDFLAGS sat on R CMD
-///     SHLIB's link line, ahead of a package's own -L directories, so the
-///     environment's libraries keep winning as they did. At the end when
-///     the line has no -o;
+///     after the caller's arguments too: a package's own -L directories
+///     are searched first, so a library it bundles wins over the
+///     environment's of the same name, and its own rpath comes first.
+///     Before (as Makeconf's LDFLAGS sat on R CMD SHLIB's link line) they
+///     went before the first -o, and with tbb-devel in the environment
+///     RcppParallel's -ltbb bound the environment's TBB, not its bundled
+///     one (stress round 1, R2: on Windows conda's MSVC tbb.lib, which
+///     does not link). Where an -L sits among -l's does not matter: zig
+///     (and lld) search every -L directory for every -l;
 ///   -lomp on a -fopenmp link: zig cc does -fopenmp codegen but bundles
 ///     neither omp.h nor libomp and won't link it, so llvm-openmp's, when
 ///     an environment has omp.h and the caller does not link libomp
@@ -188,8 +303,7 @@ fn envFlags(ctx: *Ctx, args: Args) !Args {
     if (link and cmdline.anyContains(args, "-fopenmp") and !linksLibomp(args) and try environment.openmp(ctx, envs) != null) {
         omp = &.{"-lomp"};
     }
-    const at = cmdline.outputIndex(args) orelse args.len;
-    return mem.concat(a, []const u8, &.{ args[0..at], lib.items, args[at..], inc.items, omp });
+    return mem.concat(a, []const u8, &.{ args, lib.items, inc.items, omp });
 }
 
 fn linksLibomp(args: Args) bool {
@@ -204,7 +318,9 @@ fn linksLibomp(args: Args) bool {
 const testing = std.testing;
 const testutil = @import("testutil.zig");
 const expectArgs = testutil.expectArgs;
-const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-target", linux_target };
+const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", linux_target };
+/// A linux link without a -g option: `pre` and -Wl,--strip-debug.
+const pre_link: Args = pre ++ &[_][]const u8{"-Wl,--strip-debug"};
 
 test "linux: glibc floor pinned, UBSan off, the caller's arguments kept" {
     var f: testutil.Fixture = undefined;
@@ -212,9 +328,9 @@ test "linux: glibc floor pinned, UBSan off, the caller's arguments kept" {
     defer f.deinit();
     try testing.expect(mem.endsWith(u8, linux_target, "-linux-gnu.2.17"));
     try expectArgs(pre ++ &[_][]const u8{ "-std=gnu23", "-c", "a.c", "-o", "a.o" }, try argv(&f.ctx, .c, &.{ "-std=gnu23", "-c", "a.c", "-o", "a.o" }));
-    try expectArgs(&.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-target", linux_target, "-c", "a.cpp" }, try argv(&f.ctx, .cxx, &.{ "-c", "a.cpp" }));
+    try expectArgs(&.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", linux_target, "-c", "a.cpp" }, try argv(&f.ctx, .cxx, &.{ "-c", "a.cpp" }));
     // nothing is de-duplicated off macOS
-    try expectArgs(pre ++ &[_][]const u8{ "-lm", "-lm" }, try argv(&f.ctx, .c, &.{ "-lm", "-lm" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-lm", "-lm" }, try argv(&f.ctx, .c, &.{ "-lm", "-lm" }));
 }
 
 test "every OS: the baseline CPU, once, before the target and the caller's own -march/-mcpu; -mtune dropped" {
@@ -234,15 +350,15 @@ test "every OS: the baseline CPU, once, before the target and the caller's own -
     for (targets) |t| {
         c.os = t.os;
         for ([_]Lang{ .c, .cxx }) |lang| {
-            const head: Args = &.{ if (lang == .c) "cc" else "c++", "-fno-sanitize=undefined", "-mcpu=baseline" };
+            const head: Args = &.{ if (lang == .c) "cc" else "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" };
             try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-O2", "-c", "a.c", "-o", "a.o" } }), try argv(c, lang, &.{ "-O2", "-c", "a.c", "-o", "a.o" }));
             // a package's own CPU choice comes later, so zig takes it
-            try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-march=native", "-mcpu=haswell", "-c", "a.c" } }), try argv(c, lang, &.{ "-march=native", "-mcpu=haswell", "-c", "a.c" }));
+            try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-march=native", "-mcpu=haswell", "-c", "a.c", "-o", "a.o" } }), try argv(c, lang, &.{ "-march=native", "-mcpu=haswell", "-c", "a.c", "-o", "a.o" }));
             // -mtune=, which zig would take as the CPU, goes; the rest stays
-            try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-O2", "-march=x86-64", "-mtune", "-c", "a.c" } }), try argv(c, lang, &.{ "-mtune=native", "-O2", "-march=x86-64", "-mtune=haswell", "-mtune", "-c", "a.c" }));
+            try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-O2", "-march=x86-64", "-mtune", "-c", "a.c", "-o", "a.o" } }), try argv(c, lang, &.{ "-mtune=native", "-O2", "-march=x86-64", "-mtune=haswell", "-mtune", "-c", "a.c", "-o", "a.o" }));
             // links too: a shared library carries the objects' code
             const link = try argv(c, lang, &.{ "-shared", "-mtune=native", "-o", "pkg.so", "a.o" });
-            try expectArgs(head, link[0..3]);
+            try expectArgs(head, link[0..5]);
             var n: usize = 0;
             for (link) |x| {
                 n += @intFromBool(mem.startsWith(u8, x, "-mcpu="));
@@ -258,17 +374,17 @@ test "SONAME for lib*.so* only, first -o only, never over an explicit one" {
     try f.init(.linux);
     defer f.deinit();
     const c = &f.ctx;
-    try expectArgs(pre ++ &[_][]const u8{ "-Wl,-soname,libR.so", "-shared", "-o", "../lib/libR.so", "x.o" }, try argv(c, .c, &.{ "-shared", "-o", "../lib/libR.so", "x.o" }));
-    try expectArgs(pre ++ &[_][]const u8{ "-Wl,-soname,libfoo.something", "-shared", "-o", "libfoo.something" }, try argv(c, .c, &.{ "-shared", "-o", "libfoo.something" }));
-    try expectArgs(pre ++ &[_][]const u8{ "-Wl,-soname,lib.so", "-shared", "-o", "lib.so" }, try argv(c, .c, &.{ "-shared", "-o", "lib.so" }));
-    try expectArgs(pre ++ &[_][]const u8{ "-shared", "-o", "pkg.so", "-o", "libx.so" }, try argv(c, .c, &.{ "-shared", "-o", "pkg.so", "-o", "libx.so" }));
-    try expectArgs(pre ++ &[_][]const u8{ "-shared", "-Wl,-soname,x", "-o", "libx.so" }, try argv(c, .c, &.{ "-shared", "-Wl,-soname,x", "-o", "libx.so" }));
-    try expectArgs(pre ++ &[_][]const u8{ "-o", "libx.so" }, try argv(c, .c, &.{ "-o", "libx.so" }));
-    try expectArgs(pre ++ &[_][]const u8{ "-shared", "-o" }, try argv(c, .c, &.{ "-shared", "-o" }));
-    try expectArgs(pre ++ &[_][]const u8{"-shared"}, try argv(c, .c, &.{"-shared"}));
-    try expectArgs(pre ++ &[_][]const u8{ "-shared", "-olibx.so" }, try argv(c, .c, &.{ "-shared", "-olibx.so" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-Wl,-soname,libR.so", "-Wl,--strip-debug", "-shared", "-o", "../lib/libR.so", "x.o" }, try argv(c, .c, &.{ "-shared", "-o", "../lib/libR.so", "x.o" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-Wl,-soname,libfoo.something", "-Wl,--strip-debug", "-shared", "-o", "libfoo.something" }, try argv(c, .c, &.{ "-shared", "-o", "libfoo.something" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-Wl,-soname,lib.so", "-Wl,--strip-debug", "-shared", "-o", "lib.so" }, try argv(c, .c, &.{ "-shared", "-o", "lib.so" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "pkg.so", "-o", "libx.so" }, try argv(c, .c, &.{ "-shared", "-o", "pkg.so", "-o", "libx.so" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-Wl,-soname,x", "-o", "libx.so" }, try argv(c, .c, &.{ "-shared", "-Wl,-soname,x", "-o", "libx.so" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-o", "libx.so" }, try argv(c, .c, &.{ "-o", "libx.so" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o" }, try argv(c, .c, &.{ "-shared", "-o" }));
+    try expectArgs(pre_link ++ &[_][]const u8{"-shared"}, try argv(c, .c, &.{"-shared"}));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-olibx.so" }, try argv(c, .c, &.{ "-shared", "-olibx.so" }));
     // a word inside one argument counts, as it did in " $* "
-    try expectArgs(pre ++ &[_][]const u8{ "-Wl,-soname,liby.so", "-DX=a -shared b", "-o", "liby.so" }, try argv(c, .c, &.{ "-DX=a -shared b", "-o", "liby.so" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-Wl,-soname,liby.so", "-Wl,--strip-debug", "-DX=a -shared b", "-o", "liby.so" }, try argv(c, .c, &.{ "-DX=a -shared b", "-o", "liby.so" }));
 }
 
 /// A decoy every environment test sets: an activated conda env with
@@ -294,7 +410,7 @@ fn tree(f: *testutil.Fixture, name: []const u8, conda: bool, omp: bool) ![]const
     return f.path(f.fmt("{s}/lib/R/bin/toolchain/zig-cc", .{name}));
 }
 
-test "R's environment: -I after the caller's, -L before -o, -lomp on -fopenmp links (standalone tree)" {
+test "R's environment: -I, -L after the caller's, -lomp on -fopenmp links (standalone tree)" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
@@ -313,26 +429,26 @@ test "R's environment: -I after the caller's, -L before -o, -lomp on -fopenmp li
         try argv(c, .c, &.{ "-std=gnu23", rinc, "-DNDEBUG", "-fopenmp", "-fpic", "-O2", "-c", "a.c", "-o", "a.o" }),
     );
     try expectArgs(
-        pre ++ &[_][]const u8{ "-std=gnu23", "-shared", rlib, l, "-o", "pkg.so", "a.o", "-fopenmp", rlib, "-lR", inc, "-lomp" },
+        pre_link ++ &[_][]const u8{ "-std=gnu23", "-shared", rlib, "-o", "pkg.so", "a.o", "-fopenmp", rlib, "-lR", l, inc, "-lomp" },
         try argv(c, .c, &.{ "-std=gnu23", "-shared", rlib, "-o", "pkg.so", "a.o", "-fopenmp", rlib, "-lR" }),
     );
-    // a package's own -L comes after the environment's, as after LDFLAGS
+    // a package's own -L comes before the environment's (R2): its bundled
+    // libfoo wins over the environment's
     try expectArgs(
-        pre ++ &[_][]const u8{ "-shared", rlib, l, "-o", "pkg.so", "a.o", "-L/opt/foo/lib", "-lfoo", "-lz", rlib, "-lR", inc },
+        pre_link ++ &[_][]const u8{ "-shared", rlib, "-o", "pkg.so", "a.o", "-L/opt/foo/lib", "-lfoo", "-lz", rlib, "-lR", l, inc },
         try argv(c, .c, &.{ "-shared", rlib, "-o", "pkg.so", "a.o", "-L/opt/foo/lib", "-lfoo", "-lz", rlib, "-lR" }),
     );
-    // configure's ac_link: -o first, so the -L goes first
+    // configure's ac_link
     try expectArgs(
-        pre ++ &[_][]const u8{ "-std=gnu23", l, "-o", "conftest", "-O2", "conftest.c", "-lz", inc },
+        pre_link ++ &[_][]const u8{ "-std=gnu23", "-o", "conftest", "-O2", "conftest.c", "-lz", l, inc },
         try argv(c, .c, &.{ "-std=gnu23", "-o", "conftest", "-O2", "conftest.c", "-lz" }),
     );
-    // no -o (a.out): after the caller's arguments; -lomp last
-    try expectArgs(pre ++ &[_][]const u8{ "-O2", "-fopenmp", "test-omp.c", l, inc, "-lomp" }, try argv(c, .c, &.{ "-O2", "-fopenmp", "test-omp.c" }));
+    // no -o (a.out); -lomp last
+    try expectArgs(pre_link ++ &[_][]const u8{ "-O2", "-fopenmp", "test-omp.c", l, inc, "-lomp" }, try argv(c, .c, &.{ "-O2", "-fopenmp", "test-omp.c" }));
     // the caller's own -lomp: none added; -fopenmp-simd counts (a substring, as in the shims)
-    try expectArgs(pre ++ &[_][]const u8{ "-shared", l, "-o", "dt.so", "a.o", "-fopenmp", "-lomp", inc }, try argv(c, .c, &.{ "-shared", "-o", "dt.so", "a.o", "-fopenmp", "-lomp" }));
-    try expectArgs(pre ++ &[_][]const u8{ "-fopenmp-simd", l, "-o", "p", "a.o", inc, "-lomp" }, try argv(c, .c, &.{ "-fopenmp-simd", "-o", "p", "a.o" }));
-    // an -o inside -Xlinker is not the output
-    try expectArgs(pre ++ &[_][]const u8{ "-Xlinker", "-o", "-Xlinker", "x", "a.o", l, inc }, try argv(c, .c, &.{ "-Xlinker", "-o", "-Xlinker", "x", "a.o" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "dt.so", "a.o", "-fopenmp", "-lomp", l, inc }, try argv(c, .c, &.{ "-shared", "-o", "dt.so", "a.o", "-fopenmp", "-lomp" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-fopenmp-simd", "-o", "p", "a.o", l, inc, "-lomp" }, try argv(c, .c, &.{ "-fopenmp-simd", "-o", "p", "a.o" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-Xlinker", "-o", "-Xlinker", "x", "a.o", l, inc }, try argv(c, .c, &.{ "-Xlinker", "-o", "-Xlinker", "x", "a.o" }));
     // compile only (-c -S -E -M -MM): headers, no -L, no -lomp
     for ([_][]const u8{ "-c", "-S", "-E", "-M", "-MM" }) |only| {
         try expectArgs(pre ++ &[_][]const u8{ only, "-fopenmp", "a.c", inc }, try argv(c, .c, &.{ only, "-fopenmp", "a.c" }));
@@ -349,12 +465,18 @@ test "conda env: rpath into its lib after its -L; missing directories add nothin
     const inc = f.fmt("-I{s}", .{f.path("env/include")});
     const l = f.fmt("-L{s}", .{f.path("env/lib")});
     const rp = f.fmt("-Wl,-rpath,{s}", .{f.path("env/lib")});
-    try expectArgs(pre ++ &[_][]const u8{ "-shared", l, rp, "-o", "z.so", "z.o", "-lz", inc }, try argv(c, .c, &.{ "-shared", "-o", "z.so", "z.o", "-lz" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "z.so", "z.o", "-lz", l, rp, inc }, try argv(c, .c, &.{ "-shared", "-o", "z.so", "z.o", "-lz" }));
+    // a package's own rpath and -L first (R2): its bundled libtbb.so.2
+    // is found, at link and at load time, before the environment's
+    try expectArgs(
+        pre_link ++ &[_][]const u8{ "-shared", "-Ltbb/lib", "-Wl,-rpath,$ORIGIN/../lib", "-o", "p.so", "a.o", "-ltbb", l, rp, inc },
+        try argv(c, .c, &.{ "-shared", "-Wl,-Ltbb/lib", "-Wl,-rpath,$ORIGIN/../lib", "-o", "p.so", "a.o", "-ltbb" }),
+    );
     try expectArgs(pre ++ &[_][]const u8{ "-c", "z.c", inc }, try argv(c, .c, &.{ "-c", "z.c" }));
     // no include/ (the wheel's r_zig/R): -L only; no omp.h: no -lomp
     c.self_exe = try tree(&f, "wheel", false, false);
     const wl = f.fmt("-L{s}", .{f.path("wheel/lib")});
-    try expectArgs(pre ++ &[_][]const u8{ "-shared", "-fopenmp", wl, "-o", "p.so", "a.o" }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "p.so", "a.o", wl }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }));
     try expectArgs(pre ++ &[_][]const u8{ "-fopenmp", "-c", "a.c" }, try argv(c, .c, &.{ "-fopenmp", "-c", "a.c" }));
 }
 
@@ -374,15 +496,15 @@ test "R_ZIG_EXTRA_ENV: after R's own; with no R tree; the decoy never" {
     const inc = f.fmt("-I{s}", .{f.path("tree/include")});
     const l = f.fmt("-L{s}", .{f.path("tree/lib")});
     try expectArgs(
-        pre ++ &[_][]const u8{ "-shared", "-fopenmp", l, el, erp, "-o", "p.so", "a.o", inc, einc, "-lomp" },
+        pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "p.so", "a.o", l, el, erp, inc, einc, "-lomp" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }),
     );
     // a bare copy of rzig: the extra environment alone
     c.self_exe = "/x/zig-out/bin/zig-cc";
-    try expectArgs(pre ++ &[_][]const u8{ "-shared", el, erp, "-o", "p.so", "a.o", einc }, try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "p.so", "a.o", el, erp, einc }, try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o" }));
     // and none at all: the caller's arguments only, CONDA_PREFIX or not
     _ = f.env.swapRemove("R_ZIG_EXTRA_ENV");
-    try expectArgs(pre ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }));
     try expectArgs(pre ++ &[_][]const u8{ "-fopenmp", "-c", "a.c" }, try argv(c, .c, &.{ "-fopenmp", "-c", "a.c" }));
     for ([_]Ctx.Os{ .linux, .macos, .windows }) |os| {
         c.os = os;
@@ -409,14 +531,14 @@ test "Windows: -idirafter, no rpath, -lz and -lomp through the environment's -L"
     const l = f.fmt("-L{s}", .{f.path("env/Library/lib")});
     const omp = f.path("env/Library/lib/libomp.lib");
     const z = f.path("env/Library/lib/libz.dll.a");
-    try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-c", "z.c", "-o", "z.o", "-idirafter", inc }, try argv(c, .c, &.{ "-c", "z.c", "-o", "z.o" }));
+    try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-c", "z.c", "-o", "z.o", "-idirafter", inc }, try argv(c, .c, &.{ "-c", "z.c", "-o", "z.o" }));
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-shared", "-fopenmp", l, "-o", "pkg.dll", "a.o", z, "-idirafter", inc, omp },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", z, l, "-idirafter", inc, omp },
         try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz" }),
     );
     // the caller's -lomp, resolved the same way; none added
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-shared", "-fopenmp", l, "-o", "pkg.dll", "a.o", omp, "-idirafter", inc },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lomp" }),
     );
 }
@@ -429,7 +551,7 @@ test "Windows: no target, the Fortran runtime before the -l lookup" {
     try f.touch("d/libz.dll.a");
     const l = f.fmt("-L{s}", .{f.path("d")});
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lc++" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lc++" },
         try argv(&f.ctx, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", l, "-lz", "-lflang_rt.runtime", "-lc++" }),
     );
 }
@@ -449,24 +571,24 @@ test "every OS: -lgfortran and -lquadmath link flang's runtime, once; no gfortra
     try f.write("bin/gfortran", f.fmt("#!/bin/sh\n: > '{s}'\necho '{s}'\n", .{ f.path("gfortran-ran"), f.path("gcc/libgfortran.dll.a") }), .fromMode(0o755));
     try f.env.put("PATH", f.path("bin"));
     const mac: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0" };
-    const targets = [_]struct { os: Ctx.Os, target: Args }{
-        .{ .os = .linux, .target = &.{ "-target", linux_target } },
+    const targets = [_]struct { os: Ctx.Os, target: Args, strip: Args = &.{} }{
+        .{ .os = .linux, .target = &.{ "-target", linux_target }, .strip = &.{"-Wl,--strip-debug"} },
         .{ .os = .macos, .target = mac },
         .{ .os = .windows, .target = &.{} },
     };
     for (targets) |t| {
         c.os = t.os;
-        const head: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" };
+        const head: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" };
         // R CMD SHLIB's link of a package whose Makevars was written for
         // gcc (PKG_LIBS = -lgfortran -lquadmath), then $(FLIBS)
         try expectArgs(
-            try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", rt, "-lm" } }),
+            try mem.concat(c.arena, []const u8, &.{ head, t.target, t.strip, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", rt, "-lm" } }),
             try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", "-lgfortran", "-lquadmath", "-lflang_rt.runtime", "-lm" }),
         );
         // either alone
         for ([_][]const u8{ "-lgfortran", "-lquadmath" }) |l| {
             try expectArgs(
-                try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-shared", "-o", "p.so", "a.o", rt } }),
+                try mem.concat(c.arena, []const u8, &.{ head, t.target, t.strip, &.{ "-shared", "-o", "p.so", "a.o", rt } }),
                 try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", l }),
             );
         }
@@ -491,22 +613,264 @@ test "macOS: target, SONAME, -l de-duplicated with the environment's, SDK -L las
     const rp = f.fmt("-Wl,-rpath,{s}", .{f.path("env/lib")});
     const t: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0", "-F/SDK/System/Library/Frameworks" };
     try expectArgs(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-Wl,-soname,libx.so", "-shared", "-fopenmp", l, rp, "-o", "libx.so", "-L/r", "-lR", "-lomp", inc, "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-Wl,-soname,libx.so", "-shared", "-fopenmp", "-o", "libx.so", "-L/r", "-lR", "-lomp", l, rp, inc, "-L/SDK/usr/lib" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "libx.so", "-L/r", "-lR", "-lomp", "-lR", "-lflang_rt.runtime", "-lomp" }),
     );
     // data.table: -lomp added once, then no second from the caller's; compiles get no SDK -L
     try expectArgs(
-        &[_][]const u8{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-Xclang", "-fopenmp", "-c", "a.cpp", inc },
+        &[_][]const u8{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-Xclang", "-fopenmp", "-c", "a.cpp", inc },
         try argv(c, .cxx, &.{ "-Xclang", "-fopenmp", "-c", "a.cpp" }),
     );
     try expectArgs(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-dynamiclib", l, rp, "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", inc, "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", l, rp, inc, "-L/SDK/usr/lib" },
         try argv(c, .c, &.{ "-dynamiclib", "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", "-lomp" }),
     );
     // a standalone tree: its -L before the SDK's, so its libz wins
     c.self_exe = try tree(&f, "tree", false, false);
     try expectArgs(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline" } ++ t ++ &[_][]const u8{ "-dynamiclib", f.fmt("-L{s}", .{f.path("tree/lib")}), "-o", "z.so", "z.o", "-lz", "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "z.so", "z.o", "-lz", f.fmt("-L{s}", .{f.path("tree/lib")}), "-L/SDK/usr/lib" },
         try argv(c, .c, &.{ "-dynamiclib", "-o", "z.so", "z.o", "-lz", "-lz" }),
     );
+}
+
+test "every OS: -Wno-error=date-time always; -g0 unless the caller passes a -g option" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    for ([_]Ctx.Os{ .linux, .macos, .windows }) |os| {
+        c.os = os;
+        const plain = try argv(c, .c, &.{ "-O2", "-c", "a.c", "-o", "a.o" });
+        try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" }, plain[0..5]);
+        // links too: the same flags (a link's output does not change)
+        try expectArgs(&.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" }, (try argv(c, .cxx, &.{ "-shared", "-o", "p.so", "a.o" }))[0..5]);
+        for ([_][]const u8{ "-g", "-g0", "-g1", "-g3", "-ggdb", "-ggdb3", "-gdwarf-4", "-gdwarf", "-gline-tables-only", "-gsplit-dwarf", "-gz" }) |g| {
+            const got = try argv(c, .c, &.{ "-O2", g, "-c", "a.c", "-o", "a.o" });
+            try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time" }, got[0..4]);
+            var n: usize = 0;
+            for (got) |x| n += @intFromBool(mem.eql(u8, x, "-g0"));
+            try testing.expectEqual(@as(usize, @intFromBool(mem.eql(u8, g, "-g0"))), n);
+        }
+    }
+    // a caller's -Werror=date-time comes after ours, so it wins
+    c.os = .linux;
+    try expectArgs(pre ++ &[_][]const u8{ "-Werror=date-time", "-c", "a.c" }, try argv(c, .c, &.{ "-Werror=date-time", "-c", "a.c" }));
+}
+
+test "linux links without a -g option or an object with debug info: --strip-debug, after the SONAME and --undefined-version" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    // a package's library and an executable (configure's, CMake's), C and C++
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "pkg.so", "a.o" }, try argv(c, .c, &.{ "-shared", "-o", "pkg.so", "a.o" }));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-o", "conftest", "conftest.c" }, try argv(c, .c, &.{ "-o", "conftest", "conftest.c" }));
+    try testing.expectEqualStrings("-Wl,--strip-debug", (try argv(c, .cxx, &.{ "-shared", "-o", "p.so", "a.o" }))[pre.len]);
+    // before the caller's arguments
+    try expectArgs(
+        pre ++ &[_][]const u8{ "-Wl,-soname,libx.so", "-Wl,--undefined-version", "-Wl,--strip-debug", "-shared", "-Wl,--version-script=v", "-o", "libx.so", "a.o" },
+        try argv(c, .c, &.{ "-shared", "-Wl,--version-script=v", "-o", "libx.so", "a.o" }),
+    );
+    // any -g option on the link line keeps the debug info, -g0 included
+    for ([_][]const u8{ "-g", "-g0", "-g3", "-ggdb", "-gdwarf-4", "-gline-tables-only", "-gsplit-dwarf" }) |g| {
+        try expectArgs(
+            &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-target", linux_target, "-shared", g, "-o", "p.so", "a.o" },
+            try argv(c, .c, &.{ "-shared", g, "-o", "p.so", "a.o" }),
+        );
+    }
+    // an input object with debug info keeps it: -g on the compile lines
+    // only (pkgbuild's compile_dll(debug = TRUE)); strip.zig
+    try f.write("dbg.o", @embedFile("testdata/f-g.o"), .default_file);
+    const dbg = f.path("dbg.o");
+    try expectArgs(pre ++ &[_][]const u8{ "-shared", "-o", "p.so", "a.o", dbg, "-lR" }, try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", dbg, "-lR" }));
+    // compiles: none
+    for ([_][]const u8{ "-c", "-S", "-E", "-M", "-MM" }) |only| {
+        try expectArgs(pre ++ &[_][]const u8{ only, "a.c" }, try argv(c, .c, &.{ only, "a.c" }));
+    }
+    // a command that links nothing gets it too; zig ignores it there
+    try expectArgs(pre_link ++ &[_][]const u8{"--version"}, try argv(c, .c, &.{"--version"}));
+    // macOS and Windows: none
+    for ([_]Ctx.Os{ .macos, .windows }) |os| {
+        c.os = os;
+        for ([_]Args{ &.{ "-shared", "-o", "p.so", "a.o" }, &.{ "-o", "prog", "a.o" } }) |args| {
+            for (try argv(c, .cxx, args)) |x| try testing.expect(!mem.eql(u8, x, "-Wl,--strip-debug"));
+        }
+    }
+}
+
+test "linux links with a version script: --undefined-version, before the caller's arguments" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    // oneTBB's tbbmalloc
+    try expectArgs(
+        pre ++ &[_][]const u8{ "-Wl,-soname,libtbbmalloc.so.2", "-Wl,--undefined-version", "-Wl,--strip-debug", "-shared", "-Wl,--version-script=tbbmalloc.def", "-o", "libtbbmalloc.so.2", "a.o" },
+        try argv(c, .c, &.{ "-shared", "-Wl,--version-script=tbbmalloc.def", "-o", "libtbbmalloc.so.2", "a.o" }),
+    );
+    // every spelling; the caller's own --no-undefined-version comes later and wins
+    for ([_][]const u8{ "-Wl,--version-script,v.map", "-Wl,-version-script=v.map" }) |vs| {
+        try expectArgs(pre ++ &[_][]const u8{ "-Wl,--undefined-version", "-Wl,--strip-debug", "-shared", vs, "-o", "p.so", "a.o" }, try argv(c, .c, &.{ "-shared", vs, "-o", "p.so", "a.o" }));
+    }
+    try expectArgs(
+        pre ++ &[_][]const u8{ "-Wl,--undefined-version", "-Wl,--strip-debug", "-shared", "-Xlinker", "--version-script", "-Xlinker", "v.map", "-Wl,--no-undefined-version", "-o", "p.so" },
+        try argv(c, .c, &.{ "-shared", "-Xlinker", "--version-script", "-Xlinker", "v.map", "-Wl,--no-undefined-version", "-o", "p.so" }),
+    );
+    // no version script, a compile, macOS and Windows: nothing
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "p.so", "a.o" }, try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-Wl,--version-script=v.map", "-c", "a.c" }, try argv(c, .c, &.{ "-Wl,--version-script=v.map", "-c", "a.c" }));
+    for ([_]Ctx.Os{ .macos, .windows }) |os| {
+        c.os = os;
+        for (try argv(c, .c, &.{ "-shared", "-Wl,--version-script=v.map", "-o", "p.so", "a.o" })) |x| try testing.expect(!mem.eql(u8, x, "-Wl,--undefined-version"));
+    }
+}
+
+test "-march=armv<N>-a[+ext]: zig's -mcpu, after -mcpu=baseline; other -march values kept" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    // arrow's CMake probe and aws-checksums
+    try expectArgs(pre ++ &[_][]const u8{ "-mcpu=generic+v8a", "-c", "a.c", "-o", "a.o" }, try argv(c, .c, &.{ "-march=armv8-a", "-c", "a.c", "-o", "a.o" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-O2", "-mcpu=generic+v8a+crc", "-c", "a.c", "-o", "a.o" }, try argv(c, .c, &.{ "-O2", "-march=armv8-a+crc", "-c", "a.c", "-o", "a.o" }));
+    // a minor version, clang's extension names, no<x>
+    try expectArgs(
+        pre ++ &[_][]const u8{ "-mcpu=generic+v8_2a+neon-crypto+fullfp16+sve2_aes+rdm+rand+mte+spe+fp_armv8+dotprod", "-c", "a.c", "-o", "a.o" },
+        try argv(c, .c, &.{ "-march=armv8.2-a+simd+nocrypto+fp16+sve2-aes+rdma+rng+memtag+profile+fp+dotprod", "-c", "a.c", "-o", "a.o" }),
+    );
+    try expectArgs(pre ++ &[_][]const u8{ "-mcpu=generic+v9a+sve2", "-c", "a.c", "-o", "a.o" }, try argv(c, .c, &.{ "-march=armv9-a++sve2+", "-c", "a.c", "-o", "a.o" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-mcpu=generic+v8a+complxnum+jsconv+perfmon-specres2", "-c", "a.c" }, try argv(c, .c, &.{ "-march=armv8-a+fcma+jscvt+pmuv3+nopredres2", "-c", "a.c" }));
+    // CPU names, other profiles, odd versions: kept
+    const kept: Args = &.{ "-march=native", "-march=haswell", "-march=armv8-r", "-march=armv8-m.main", "-march=armv-a", "-march=armvx-a", "-march=", "-march", "-c", "a.c", "-o", "a.o" };
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ pre, kept }), try argv(c, .c, kept));
+    // macOS: after the baseline (apple-m1 on arm64), so the package's wins
+    c.os = .macos;
+    const got = try argv(c, .cxx, &.{ "-march=armv8-a+crc", "-c", "a.cpp", "-o", "a.o" });
+    try testing.expectEqualStrings("-mcpu=baseline", got[2]);
+    try expectArgs(&.{ "-mcpu=generic+v8a+crc", "-c", "a.cpp", "-o", "a.o" }, got[got.len - 5 ..]);
+    // -Xarch_<arch>'s value is clang's: abseil's CMake on macOS, kept, and
+    // so is a -mtune there
+    const xarch: Args = &.{ "-Xarch_x86_64", "-maes", "-Xarch_arm64", "-march=armv8-a+crypto", "-Xarch_arm64", "-mtune=apple-m1", "-c", "a.cpp", "-o", "a.o" };
+    const got_x = try argv(c, .cxx, xarch);
+    try expectArgs(xarch, got_x[got_x.len - xarch.len ..]);
+}
+
+test "linker options zig cannot take, through the whole line" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    // RcppParallel's bundled TBB through CMake, then its PKG_LIBS
+    try expectArgs(
+        pre ++ &[_][]const u8{ "-Wl,-soname,libtbb.so.2", "-Wl,--undefined-version", "-Wl,--strip-debug", "-shared", "-Wl,--version-script=tbb.def", "-o", "libtbb.so.2", "a.o" },
+        try argv(c, .c, &.{ "-shared", "-Xlinker", "--dependency-file=CMakeFiles/tbb.dir/link.d", "-Wl,--version-script=tbb.def", "-o", "libtbb.so.2", "a.o" }),
+    );
+    try expectArgs(
+        pre_link ++ &[_][]const u8{ "-shared", "-o", "RcppParallel.so", "a.o", "-Ltbb/build/lib_release", "-ltbb", "-ltbbmalloc" },
+        try argv(c, .c, &.{ "-shared", "-o", "RcppParallel.so", "a.o", "-Wl,-Ltbb/build/lib_release", "-ltbb", "-ltbbmalloc" }),
+    );
+    // StanHeaders' Makevars.win
+    c.os = .windows;
+    try expectArgs(
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-shared", "-o", "StanHeaders.dll", "a.o" },
+        try argv(c, .cxx, &.{ "-shared", "-Wl,--allow-multiple-definition", "-o", "StanHeaders.dll", "a.o" }),
+    );
+}
+
+test "every OS: an archive input without zig's extension goes as a copy named .a" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.macos);
+    defer f.deinit();
+    const c = &f.ctx;
+    try f.env.put("XDG_CACHE_HOME", f.path("cache"));
+    try f.write("deps/v8_monolith", "!<arch>\nmember data", .default_file);
+    // V8's link line on macOS
+    const got = try argv(c, .cxx, &.{ "-dynamiclib", "-o", "V8.so", "a.o", f.path("deps/v8_monolith"), "-lR" });
+    try testing.expectEqualStrings(f.path("cache/r-zig/archive-7c6d5f344466ae401a4452a2a4a40ec7/v8_monolith.a"), got[got.len - 2]);
+    for ([_]Ctx.Os{ .linux, .windows }) |os| {
+        c.os = os;
+        const l = try argv(c, .c, &.{ "-shared", "-o", "p.so", f.path("deps/v8_monolith") });
+        try testing.expect(mem.endsWith(u8, l[l.len - 1], "/v8_monolith.a"));
+    }
+}
+
+test "Windows: -c without -o names <stem>.o, as MinGW gcc" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    // QuickJSR
+    try expectArgs(
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-O2", "-c", "quickjs/libquickjs.c", "-o", "libquickjs.o" },
+        try argv(c, .c, &.{ "-O2", "-c", "quickjs/libquickjs.c" }),
+    );
+    // unix: zig's default is <stem>.o already
+    c.os = .linux;
+    try expectArgs(pre ++ &[_][]const u8{ "-O2", "-c", "a.c" }, try argv(c, .c, &.{ "-O2", "-c", "a.c" }));
+}
+
+/// A zig stand-in for dso_fini.zig: answers `version`, writes its -o file.
+fn fakeZig(f: *testutil.Fixture) ![]const u8 {
+    try f.write("bin/zig", "#!/bin/sh\n[ \"$1\" = version ] && { echo 0.16.0; exit 0; }\no=; p=; for a in \"$@\"; do [ \"$p\" = -o ] && o=$a; p=$a; done\n: > \"$o\"\n", .fromMode(0o755));
+    return f.path("bin/zig");
+}
+
+test "linux shared links: the finalization object first among the inputs; nothing elsewhere" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for zig
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    try f.env.put("XDG_CACHE_HOME", f.path("cache"));
+    c.zig = &.{try fakeZig(&f)};
+    const fini = (try dso_fini.object(c, linux_target)).?;
+    try testing.expect(mem.startsWith(u8, fini, f.path("cache/r-zig/dso-fini-")));
+    // after the SONAME and --undefined-version, before the caller's
+    // arguments (and an -x it may give)
+    try expectArgs(pre_link ++ &[_][]const u8{ fini, "-shared", "-o", "pkg.so", "a.o" }, try argv(c, .c, &.{ "-shared", "-o", "pkg.so", "a.o" }));
+    try expectArgs(
+        pre ++ &[_][]const u8{ "-Wl,-soname,libx.so", "-Wl,--undefined-version", "-Wl,--strip-debug", fini, "-x", "c", "-shared", "-Wl,--version-script=v", "-o", "libx.so", "x.c" },
+        try argv(c, .c, &.{ "-x", "c", "-shared", "-Wl,--version-script=v", "-o", "libx.so", "x.c" }),
+    );
+    // executables, links that bring their own startup files, compiles
+    for ([_]Args{
+        &.{ "-o", "prog", "a.o" },
+        &.{ "-shared", "-nostartfiles", "-o", "p.so", "crtbeginS.o", "a.o", "crtendS.o" },
+        &.{ "-shared", "-nostdlib", "-o", "p.so", "a.o" },
+    }) |args| try expectArgs(try mem.concat(c.arena, []const u8, &.{ pre_link, args }), try argv(c, .c, args));
+    try expectArgs(pre ++ &[_][]const u8{ "-shared", "-c", "a.c", "-o", "a.o" }, try argv(c, .c, &.{ "-shared", "-c", "a.c", "-o", "a.o" }));
+    // macOS and Windows: none
+    for ([_]Ctx.Os{ .macos, .windows }) |os| {
+        c.os = os;
+        for (try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o" })) |x| try testing.expect(mem.find(u8, x, "dso_fini") == null);
+    }
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "Windows links: the CFG stub before the caller's arguments; nothing elsewhere" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for zig
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    try f.env.put("XDG_CACHE_HOME", f.path("cache"));
+    c.zig = &.{try fakeZig(&f)};
+    const stub = (try cfguard.object(c)).?;
+    try testing.expect(mem.startsWith(u8, stub, f.path("cache/r-zig/cfguard-")));
+    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" };
+    // magick's link, and an executable (CMake's)
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2" } }), try argv(c, .cxx, &.{ "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2" }));
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-o", "cmTC_1.exe", "a.obj" } }), try argv(c, .cxx, &.{ "-o", "cmTC_1.exe", "a.obj" }));
+    // compiles, windres' preprocessing, --version
+    for ([_]Args{
+        &.{ "-c", "a.cpp", "-o", "a.o" },
+        &.{ "-E", "-xc", "-DRC_INVOKED", "r.rc" },
+        &.{"--version"},
+    }) |args| for (try argv(c, .cxx, args)) |x| try testing.expect(mem.find(u8, x, "cfguard") == null);
+    // linux and macOS: none
+    for ([_]Ctx.Os{ .linux, .macos }) |os| {
+        c.os = os;
+        for (try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o" })) |x| try testing.expect(mem.find(u8, x, "cfguard") == null);
+    }
+    try testing.expectEqualStrings("", f.takeWarnings());
 }

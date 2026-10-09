@@ -131,7 +131,15 @@ build:
   # upstream zig; win-64's Makeconf says TCL_VERSION = 86t, the names of
   # conda-forge's Tcl/Tk (tcl86t, tk86t), so packages that link Tcl/Tk
   # through TCLTK_LIBS (tkrplot) link (fix-rzig-follow-ups PLAN.md).
-  number: 6
+  # 6 → 7 (2026-10-08): the stress suite's round 1 (feat-stress-suite
+  # stress/results/2026-10-08.md; fix-stress-round1 PLAN.md). rzig works
+  # around zig 0.16's behaviours that broke CRAN packages (S1-S11). The
+  # Windows tree takes CRAN's layout (S13-S15): Makeconf's R_ARCH = /x64
+  # and COMPILED_BY, R_HOME/bin/R.exe and Rscript.exe, CC and CXX named
+  # with .exe, and etc/Rcmd_environ sets CMake's generator and windres.
+  # libdeflate <1.26 in host, so r-zig-slim shares a conda env with
+  # conda-forge's GDAL (S19).
+  number: 7
 
 outputs:
   # One build (scripts/zig-build.sh), two packages split by
@@ -234,7 +242,14 @@ outputs:
         - libcurl
         - icu
         - tzdata
-        - libdeflate
+        # <1.26 while conda-forge's libgdal-core needs <1.26: libdeflate's
+        # run export pins r-zig-slim to the host's minor version, and builds
+        # 2 to 6, built against 1.26 on linux and macOS (win-64's took
+        # 1.25), could not share a conda env with sf, terra or gdalraster
+        # (stress round 1, U4). Lift it, with a build-number bump, when
+        # conda-forge's libgdal-core is built against 1.26 (its libdeflate
+        # migration).
+        - libdeflate <1.26
         # 23, as pixi.toml, so the conda build uses the libomp CI tests.
         # Its run export (>= the host version, 23.1.2 today) is the only
         # bound r-zig-slim's run gets (below).

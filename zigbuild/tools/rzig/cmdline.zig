@@ -29,10 +29,24 @@ pub fn compileOnly(args: Args) bool {
     return false;
 }
 
+/// Any -g option (-g, -g0 to -g3, -ggdb, -gdwarf-5, -gline-tables-only,
+/// ...): the caller's choice of debug info.
+pub fn debugOption(args: Args) bool {
+    for (args) |x| if (mem.startsWith(u8, x, "-g")) return true;
+    return false;
+}
+
 /// The value of the one-argument forms `-L<dir>` and `-l<name>`; the
 /// two-argument `-L dir` is not one (the shims' `-L?*`).
 pub fn flagValue(x: []const u8, comptime flag: []const u8) ?[]const u8 {
     return if (x.len > flag.len and mem.startsWith(u8, x, flag)) x[flag.len..] else null;
+}
+
+/// Whether args[i] is the value of `-Xarch_<arch>`: zig hands it to
+/// clang's driver as it is, for that architecture only, so it is clang's
+/// spelling (abseil's CMake on macOS: `-Xarch_arm64 -march=armv8-a+crypto`).
+pub fn xarchValue(args: Args, i: usize) bool {
+    return i > 0 and mem.startsWith(u8, args[i - 1], "-Xarch_");
 }
 
 /// The `-L<dir>` directories, in order.
@@ -72,6 +86,55 @@ pub fn outputIndex(args: Args) ?usize {
     return null;
 }
 
+/// The positions of the input files: arguments that are no option and no
+/// option's value (`-o`'s included). `-` (standard input) is none.
+pub fn inputs(args: Args) Inputs {
+    return .{ .args = args };
+}
+
+pub const Inputs = struct {
+    args: Args,
+    i: usize = 0,
+
+    pub fn next(it: *Inputs) ?usize {
+        while (it.i < it.args.len) {
+            const i = it.i;
+            const x = it.args[i];
+            it.i += 1;
+            if (mem.eql(u8, x, "-o") or takes_value.has(x)) {
+                it.i += 1;
+            } else if (x.len > 0 and x[0] != '-') {
+                return i;
+            }
+        }
+        return null;
+    }
+};
+
+/// A file a compiler driver would compile, by its extension: Fortran's
+/// (fixed and free form, preprocessed or not) and the C family's.
+pub fn isSource(x: []const u8) bool {
+    if (x.len == 0 or x[0] == '-') return false;
+    const dot = mem.findScalarLast(u8, x, '.') orelse return false;
+    if (mem.findAny(u8, x[dot..], "/\\") != null) return false;
+    return source_ext.has(x[dot + 1 ..]);
+}
+
+const source_ext = std.StaticStringMap(void).initComptime(.{
+    // Fortran (flang's driver)
+    .{"f"},   .{"for"}, .{"ftn"}, .{"fpp"}, .{"f77"}, .{"f90"}, .{"f95"}, .{"f03"}, .{"f08"}, .{"cuf"},
+    .{"F"},   .{"FOR"}, .{"FTN"}, .{"FPP"}, .{"F77"}, .{"F90"}, .{"F95"}, .{"F03"}, .{"F08"}, .{"CUF"},
+    // the C family, assembler, LLVM IR (clang's)
+    .{"c"},   .{"i"},   .{"cc"},  .{"cp"},  .{"cpp"}, .{"cxx"}, .{"c++"}, .{"C"},   .{"CC"},  .{"CPP"},
+    .{"CXX"}, .{"ii"},  .{"m"},   .{"mi"},  .{"mm"},  .{"mii"}, .{"M"},   .{"s"},   .{"S"},   .{"sx"},
+    .{"cu"},  .{"ll"},  .{"bc"},
+});
+
+/// The base name of a path, after its last `/` or `\`.
+pub fn baseName(x: []const u8) []const u8 {
+    return if (mem.findLastAny(u8, x, "/\\")) |i| x[i + 1 ..] else x;
+}
+
 const testing = std.testing;
 
 test outputIndex {
@@ -83,6 +146,24 @@ test outputIndex {
     try testing.expectEqual(@as(?usize, null), outputIndex(&.{"-Xclang"}));
     // the value of -o is the output's name, even when it is "-o"
     try testing.expectEqual(@as(?usize, 0), outputIndex(&.{ "-o", "-o" }));
+}
+
+test inputs {
+    const args: Args = &.{ "-o", "out", "a.o", "-x", "c", "-Iinc", "-I", "dir", "b.c", "-", "", "-Wl,x", "-Xlinker", "y", "z" };
+    var it = inputs(args);
+    for ([_]usize{ 2, 8, 14 }) |want| try testing.expectEqual(@as(?usize, want), it.next());
+    try testing.expectEqual(@as(?usize, null), it.next());
+    // an option's value at the end
+    var it2 = inputs(&.{ "a", "-MF" });
+    try testing.expectEqual(@as(?usize, 0), it2.next());
+    try testing.expectEqual(@as(?usize, null), it2.next());
+}
+
+test isSource {
+    for ([_][]const u8{ "a.f", "a.FOR", "dir/a.f03", "a.b.F95", "x.cpp", "y.c", "z.S", "C:\\s\\a.f08" }) |x| try testing.expect(isSource(x));
+    for ([_][]const u8{ "a.o", "a.so", "p.dll", "tmp.def", "-fa.f", "f", "dir.f/a", "liba.a", "x.mod", "" }) |x| try testing.expect(!isSource(x));
+    try testing.expectEqualStrings("a.c", baseName("src\\sub/a.c"));
+    try testing.expectEqualStrings("a.c", baseName("a.c"));
 }
 
 test anyWord {
