@@ -64,13 +64,15 @@ fi
 
 # -mtune=<cpu>: zig would take it as the CPU, not as tuning; dropped.
 # See zig-cc.
-_a=()
-for a in "$@"; do case "$a" in -mtune=*) ;; *) _a+=("$a") ;; esac; done
+_a=(); _p=
+for a in "$@"; do case "$_p:$a" in -Xarch_*:*) _a+=("$a") ;; *:-mtune=*) ;; *) _a+=("$a") ;; esac; _p=$a; done
 set -- "${_a[@]}"
 
 # -march=armv<N>[.<M>]-a[+ext...] in zig's words: see zig-cc.
-_a=()
+_a=(); _p=
 for a in "$@"; do
+  case "$_p" in -Xarch_*) _a+=("$a"); _p=$a; continue ;; esac
+  _p=$a
   case "$a" in
     -march=armv*)
       _v=${a#-march=}; _arch=${_v%%+*}; _ver=${_arch#armv}; _ver=${_ver%-a}

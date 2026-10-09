@@ -41,8 +41,10 @@
 #   - what a case's CASE_DELIBERATE sed script does to the bash side, with
 #     CASE_WHY: F3b's other differences (rzig never reads CONDA_PREFIX; the
 #     tree's headers on every call, -idirafter on Windows), the message
-#     for an archive ar cannot seed, and an archive input passed as an .a
-#     copy in rzig's cache (archives.zig).
+#     for an archive ar cannot seed, an archive input passed as an .a
+#     copy in rzig's cache (archives.zig), and no -Wl,--strip-debug on a
+#     link whose input objects have debug info (strip.zig reads them; a
+#     shim cannot reasonably parse ELF).
 # check NAME COMMAND... adds a case that passes when COMMAND does.
 # zig-fc (F3c) has no bash shim to compare with: fortran.zig's unit tests
 # cover it.
@@ -272,11 +274,18 @@ run_case "a package's own -march/-mcpu after -mcpu=baseline" linux zig-cxx -marc
 run_case "-mtune= dropped (zig would take it as the CPU)" linux zig-cc -mtune=native -O2 -mtune=haswell -march=x86-64 -c a.c
 
 # --- debug info, __DATE__ (compiler.zig): every case has -Wno-error=date-time ----
-# (every linux link without a -g option has -Wl,--strip-debug)
+# (every linux link without a -g option has -Wl,--strip-debug; in rzig, not
+# one with an input object that has debug info)
 run_case "-g given: no -g0" linux zig-cc -g -O2 -c a.c -o a.o
 run_case "-ggdb3, -gdwarf-4: no -g0" linux zig-cxx -O2 -ggdb3 -gdwarf-4 -c a.cpp -o a.o
 run_case "-g on a shared link: no -g0, no --strip-debug" linux zig-cxx -g -shared -o pkg.so a.o
 run_case "-gline-tables-only on an executable link: no --strip-debug" linux zig-cc -O2 -gline-tables-only -o prog a.o
+# strip.zig's objects (testdata/): one compiled with -g, one with -g0
+cp "$here/testdata/f-g.o" "$W/cwd/dbg.o"; cp "$here/testdata/f-g0.o" "$W/cwd/nodbg.o"; cp "$here/testdata/f-g.o" "$W/cwd/libdbg.a"
+CASE_DELIBERATE='/^-Wl,--strip-debug$/d'
+CASE_WHY="rzig reads the link's input objects (strip.zig): one with debug info keeps it; the shims do not parse ELF"
+run_case "an input object with debug info: no --strip-debug (load_all())" linux zig-cxx -shared -o pkg.so nodbg.o dbg.o -lR
+run_case "objects without debug info, an archive with some: --strip-debug" linux zig-cc -shared -o pkg.so nodbg.o libdbg.a
 run_case "a caller's -Werror=date-time after ours" linux zig-cc -Werror=date-time -O2 -c a.c -o a.o
 
 # --- -march=armv<N>-a[+ext] in zig's words (compiler.zig's marchArgs) ------------
@@ -434,6 +443,7 @@ run_case "-mtune= dropped" macos zig-cxx -mtune=native -c a.cpp
 
 run_case "-g0 given: once" macos zig-cc -g0 -c a.c
 run_case "-march=armv8.2-a, clang's extension names" macos zig-cc -march=armv8.2-a+simd+nocrypto+fp16+sve2-aes+rdma+rng+memtag+profile -c a.c
+run_case "-Xarch_<arch>'s value kept (abseil's CMake)" macos zig-cxx -Xarch_x86_64 -maes -Xarch_arm64 -march=armv8-a+crypto -Xarch_arm64 -mtune=apple-m1 -c a.cpp
 run_case "-Wl,-L<dir>: a plain -L" macos zig-cc -dynamiclib -o p.so a.o -Wl,-L/opt/tbb -ltbb
 run_case "no --undefined-version off linux" macos zig-cc -dynamiclib -Wl,--version-script=v.map -o p.so a.o
 run_case "shared link: no finalization object off linux" macos zig-cxx -shared -o p.so a.o

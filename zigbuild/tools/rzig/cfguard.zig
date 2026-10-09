@@ -14,7 +14,8 @@
 //! The fix is guard_dispatch.S's part: `source` below, assembled once with
 //! the zig that links into rzig's cache (cache.zig), as dso_fini.zig's
 //! object: <cache>/cfguard-<key>/guard_dispatch.o. compiler.zig passes it
-//! on every Windows link (an -o and no compile-only flag). Nothing uses it
+//! on every Windows link (an -o, no compile-only flag and no -r: a partial
+//! link makes no image, and zig's COFF -r takes one object). Nothing uses it
 //! unless libmingw32's mingw_cfguard_support.obj is pulled in; other links
 //! carry its 16 bytes of code. A zig whose libmingw32 has guard_dispatch.S's
 //! member never pulls that member, as the symbol is already defined. R on
@@ -55,10 +56,10 @@ pub const source =
 
 pub const target = "x86_64-windows-gnu";
 
-/// Whether a command links: an -o, and no compile-only flag (`--version`,
-/// `-E` for windres and `-c` get nothing).
+/// Whether a command links an image: an -o, no compile-only flag and no
+/// -r (`--version`, `-E` for windres, `-c` and a partial link get nothing).
 pub fn wanted(args: Args) bool {
-    return !cmdline.compileOnly(args) and cmdline.anyWord(args, "-o");
+    return !cmdline.compileOnly(args) and cmdline.anyWord(args, "-o") and !cmdline.anyWord(args, "-r");
 }
 
 /// The object, made if it is not there yet; null when ctx.zig is unset or
@@ -87,6 +88,7 @@ test wanted {
         &.{ "-E", "-xc", "-DRC_INVOKED", "r.rc" },
         &.{ "-c", "a.c", "-o", "a.o" },
         &.{ "-shared", "a.o" },
+        &.{ "-r", "a.o", "-o", "part.o" },
     }) |args| try testing.expect(!wanted(args));
 }
 

@@ -354,6 +354,7 @@ test {
     _ = @import("archives.zig");
     _ = @import("dso_fini.zig");
     _ = @import("cfguard.zig");
+    _ = @import("strip.zig");
     _ = @import("darwin.zig");
     _ = @import("windows.zig");
     _ = @import("environment.zig");

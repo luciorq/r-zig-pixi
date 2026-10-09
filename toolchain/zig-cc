@@ -120,19 +120,24 @@ fi
 # -mcpu=baseline, -mtune=native compiles for this machine's CPU, and a
 # gcc spelling zig has no CPU for (-mtune=generic) fails. So a Makevars'
 # portable -mtune=native would make a package that needs the compiling
-# machine's CPU. Dropped: zig tunes for "generic" anyway. rzig:
+# machine's CPU. Dropped: zig tunes for "generic" anyway. The value of
+# -Xarch_<arch> stays: zig hands it to clang's driver. rzig:
 # compiler.zig's dropTune.
-_a=()
-for a in "$@"; do case "$a" in -mtune=*) ;; *) _a+=("$a") ;; esac; done
+_a=(); _p=
+for a in "$@"; do case "$_p:$a" in -Xarch_*:*) _a+=("$a") ;; *:-mtune=*) ;; *) _a+=("$a") ;; esac; _p=$a; done
 set -- "${_a[@]}"
 
 # -march=armv<N>[.<M>]-a[+ext...], an Arm architecture: zig reads -march
 # as a CPU name ("unknown CPU: 'armv8'"), so the same request in zig's
 # words, -mcpu=generic+v<N>[_<M>]a[+feature...], clang's extension names
 # in zig's spelling (no<x> as -<x>, - as _). Where the caller put it,
-# after -mcpu=baseline, so it wins. rzig: compiler.zig's marchArgs.
-_a=()
+# after -mcpu=baseline, so it wins. The value of -Xarch_<arch> stays
+# clang's: zig hands it to clang's driver, which refuses zig's -mcpu
+# (abseil's CMake on macOS). rzig: compiler.zig's marchArgs.
+_a=(); _p=
 for a in "$@"; do
+  case "$_p" in -Xarch_*) _a+=("$a"); _p=$a; continue ;; esac
+  _p=$a
   case "$a" in
     -march=armv*)
       _v=${a#-march=}; _arch=${_v%%+*}; _ver=${_arch#armv}; _ver=${_ver%-a}
@@ -334,7 +339,9 @@ for a in "$@"; do case "$a" in -g*) g0=(); break;; esac; done
 # Linux links without a -g option: --strip-debug. -g0 leaves the DWARF of
 # zig's own libc++, libc++abi and libunwind, which zig builds with debug
 # info anyway (4 to 6 MB in every C++ package). A -g on the link line
-# keeps it. rzig: compiler.zig.
+# keeps it. rzig also keeps it when an input object has debug info
+# (strip.zig); this shim does not read ELF (a deliberate difference in
+# parity-test.sh). rzig: compiler.zig.
 if [[ "$(uname -s 2>/dev/null)" == "Linux" && ${#g0[@]} -gt 0 ]]; then
   _link=true
   for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) _link=false; break;; esac; done

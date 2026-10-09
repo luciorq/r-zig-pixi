@@ -129,11 +129,14 @@ package asked for. rzig's printed command lines, run with the target
 switched to aarch64-linux-gnu.2.17 and aarch64-macos.13.0, compile a
 `__crc32b` call.
 
-Open ("Review (2026-10-09)", 1): S5 also rewrites a -march that is the
-value of `-Xarch_<arch>`. zig hands that value to clang's driver as it
-is, and clang refuses zig's -mcpu spelling. abseil's CMake on macOS
-passes `-Xarch_arm64 -march=armv8-a+crypto`, so s2's bundled abseil
-fails (R2-4's conda run on omicron).
+The value of `-Xarch_<arch>` stays the caller's ("Review (2026-10-09)",
+1, applied): zig hands it to clang's driver as it is, and clang refuses
+zig's -mcpu spelling ("unsupported argument 'generic+v8a+crypto' to
+option '-mcpu='"). abseil's CMake on macOS passes `-Xarch_arm64
+-march=armv8-a+crypto`, so s2's bundled abseil failed (R2-4's conda run
+on omicron). cmdline.xarchValue, in marchArgs and dropTune (a -mtune
+there stays too), and the same in both shims. s2 builds its bundled
+abseil on omicron since ("Build 7's gate").
 
 ### S6 (Z6): an archive named without an extension
 
@@ -855,10 +858,11 @@ a `jmp *%rax`, the target of `__guard_dispatch_icall_fptr`. rzig
 assembles it once, with the zig that links, into its cache:
 `cfguard-<key>/guard_dispatch.o`, with guard_dispatch.S beside it. It
 goes through `cache.compiled`, which dso_fini.zig now uses too.
-compiler.zig passes it on every Windows command with `-o` as a word and
-no compile-only flag, where S9 puts its object: after the SONAME,
-before the caller's arguments. `--version`, windres's `-E` and `-c` get
-nothing.
+compiler.zig passes it on every Windows command with `-o` as a word, no
+compile-only flag and no `-r`, where S9 puts its object: after the
+SONAME, before the caller's arguments. `--version`, windres's `-E`, `-c`
+and a partial link get nothing (`-r`: "Review (2026-10-09)", 2,
+applied; zig's COFF -r takes one object).
 
 The change: the stub carries a `.drectve` directive,
 `-exclude-symbols:__guard_dispatch_icall_dummy`. clang writes the same
@@ -913,13 +917,17 @@ For the testers and implementer B: on Windows, the dry runs of a link
 compile the stub into rzig's cache as a side effect
 (%LOCALAPPDATA%/r-zig/cfguard-<key>/), as linux's dry runs compile S9's
 object, and print its path among the arguments. None of their checks
-looks at it.
+looks at it. recipe/test-toolchain.R now gives zig and rzig caches of
+their own in its temporary directory ("Review (2026-10-09)", 4,
+applied), so the conda package's test leaves none of them.
 
 ### R2-3 (Z10's residual): -Wl,--strip-debug on linux links
 
-Rule: a linux command with no -g option and no compile-only flag gets
-`-Wl,--strip-debug`. The -g test is S11's (an argument that starts with
--g; -g0 counts). Executables and shared libraries alike. The flag goes
+Rule: a linux command with no -g option, no compile-only flag and no
+input object with debug info gets `-Wl,--strip-debug`. The -g test is
+S11's (an argument that starts with -g; -g0 counts). The object test is
+the user's answer to decision A ("The answer: A(b)", below).
+Executables and shared libraries alike. The flag goes
 after the SONAME and S4's flag, before S9's object and the caller's
 arguments. macOS and Windows get nothing. A -g on the link line keeps
 the debug info.
@@ -939,7 +947,8 @@ strip --strip-unneeded`: no .symtab either). It is not binutils'
 --strip-debug, which keeps .symtab (the small library below: 345 KB
 with `strip --strip-debug`, 245 KB through zig).
 
-Consequences, for the user:
+Consequences, for the user, as first applied (A(b), below, removes the
+second and the third; the first and the fourth stay for release builds):
 - R CMD check's compiled-code check sees no symbols in a package built
   this way. tools:::check_compiled_code runs `nm -Pg` on the installed
   .so; nm prints "no symbols" and the check reports nothing. With S11
@@ -972,10 +981,11 @@ carries the flag on both sides. Two new cases: a shared link with -g,
 and an executable with -gline-tables-only (no -g0, no flag). Mutations
 on a scratch copy: a zig-cc that does not strip fails every linux
 zig-cc link case; an rzig that strips despite a -g fails the two new
-cases.
+cases. A(b)'s object test is rzig's alone (below).
 
-Unit test: compiler.zig's "linux links without a -g option:
---strip-debug, after the SONAME and --undefined-version". It covers
+Unit test: compiler.zig's "linux links without a -g option or an
+object with debug info: --strip-debug, after the SONAME and
+--undefined-version" (A(b) added "or an object with debug info"). It covers
 shared and executable links, C and C++, the order after the SONAME and
 S4's flag, seven -g options (the flag stays out), the compile-only
 flags, --version, and macOS and Windows (none). The existing tests'
@@ -1005,6 +1015,138 @@ Checked on gamma, both zigs (an rzig built by each, ZIG_BIN that zig):
   goes from 5,775,056 bytes (4,222,656 of .debug_*) to 1,162,176 (none).
   library(Rcpp), evalCpp("1 + 1"), Rcpp::stop() caught in R, a
   cppFunction that throws and catches, unloadNamespace: exit 0.
+
+#### The answer: A(b) (2026-10-09)
+
+The user chose (b) for decision A ("Review (2026-10-09)"): strip only
+when no input object of the link has debug info. Files:
+zigbuild/tools/rzig/strip.zig (new), testdata/f-g.o and testdata/f-g0.o
+(new), cmdline.zig, compiler.zig, main.zig, parity-test.sh;
+toolchain/zig-cc (a comment).
+
+The rule (strip.zig's `wanted`; compiler.zig asks it on linux only): the
+flag goes on a command with
+1. no -g option and no compile-only flag (S11's test, moved to
+   cmdline.debugOption), and
+2. no input named *.o that is an ELF relocatable object with a
+   .debug_info section (or .zdebug_info, the old compressed form).
+   Every -g writes one. Other .debug_* sections alone are no debug
+   info: Boost's gdb scripts (.debug_gdb_scripts) and an assembler's
+   .debug_frame ("Build 7's gate", review 1).
+
+How an object is read: std.elf's header, the section headers, and 12
+bytes of the name of each PROGBITS section that is not loaded (no
+SHF_ALLOC). In a release object these are .comment and .note.GNU-stack;
+in a debug object the read stops at .debug_info. ELF's
+extended numbering is read too (an object with 65280 sections or more
+keeps the count and the name table's index in section 0; a large C++
+object can). A file that cannot be read, or is no ELF relocatable
+object, counts as none. So does an LLVM bitcode object (-flto). Not
+read:
+- archives (.a). A member's DWARF reaches the output only when the link
+  pulls the member in, which only the linker knows. Their DWARF is often
+  their own build's choice, not the package's (oneTBB's CMake defaults
+  to RelWithDebInfo), so reading them would bring zig's libc++ DWARF
+  back into release builds. It would also mean reading every member's
+  headers.
+- shared libraries. A link does not copy their debug info.
+- objects with another name, and objects listed in a response file
+  (@file). rzig expands no response file. A link that names its objects
+  only there strips unless it has a -g.
+
+Cost: one open and a few small reads per *.o input of a linux link
+without -g. Compiles, links with a -g, macOS and Windows read nothing.
+
+The two side effects it fixes (the second and third consequences
+above):
+- `CFLAGS = -g -O2` (or CXXFLAGS) in ~/.R/Makevars, with no -g in
+  LDFLAGS, keeps the package's DWARF and its .symtab.
+- devtools::load_all(): pkgbuild 1.4.8's compile_dll(debug = TRUE)
+  (`-UNDEBUG -Wall -pedantic -g -O0` in CFLAGS, CXXFLAGS, CXX11FLAGS to
+  CXX20FLAGS; `-g -O0` in FFLAGS and FCFLAGS; nothing in LDFLAGS) keeps
+  them too. Backtraces through such a build show names.
+
+What remains, for release builds (no -g anywhere):
+- They still lose .symtab: zig's strip is a full one. So R CMD check's
+  compiled-code check sees no symbols in them. tools:::check_compiled_code
+  on a release Rcpp prints nm's "no symbols" twice and reports nothing.
+  On a debug build it sees the symbols again, and reports `abort` and
+  `stderr` (zig's static libc++abi), the false positive S11 alone had.
+  Measured below.
+- Backtraces through them show addresses, not names.
+- Keeping .symtab there takes a strip after the link, which zig 0.16.0
+  cannot do (above).
+
+Shims and parity: the shims do not read ELF, so zig-cc still strips a
+link whose objects have DWARF. One CASE_DELIBERATE case: a shared link
+of nodbg.o and dbg.o (copies of the fixtures): rzig has no flag, the
+shim has it. One more case, the same on both sides (ok+): nodbg.o and
+f-g.o's bytes named libdbg.a (not read, flag on).
+
+Unit tests: strip.zig's `hasDebugInfo` (the two fixtures; both with
+extended numbering, made in the test; f-g.o's bytes as ET_DYN; cut
+short, empty, an archive, text, a directory, no file) and `wanted` (-g
+options, a compile, objects with and without DWARF in a library and an
+executable, the -g object's bytes named .a, .so, .so.1, .obj and .lo,
+and as the output). compiler.zig's strip test gains a link with the -g
+object (no flag). Mutations on a scratch copy: hasDebugInfo always false
+fails three tests; no extended numbering fails `hasDebugInfo`; reading
+every input whatever its name fails `wanted`.
+
+The fixtures: `int f(void) { return 1; }` compiled by conda-forge's zig
+0.16.0, `zig cc -target x86_64-linux-gnu -O2 -g
+-fdebug-compilation-dir=. -c f.c` (f-g.o, 2,320 bytes: .debug_abbrev,
+.debug_info, .debug_str, .debug_line) and the same with -g0 (f-g0.o,
+1,192 bytes). No path of the machine is in them. parity-test.sh copies
+them too.
+
+Tested on gamma (pixi.lock 7aef60ff...a355a63, unchanged; R not built):
+- `pixi run --locked rzig-test`: 74 of 74 unit tests (72 before: strip.zig's
+  two); parity 60 identical, 58 ok+, 22 deliberate, 0 failed (140
+  cases; 138 before). The same with upstream zig (PyPI ziglang 0.16.0,
+  ZIG_BIN). `zig fmt --check` clean. rzig and its unit tests
+  cross-compiled (not run) for x86_64-windows-gnu, aarch64-macos,
+  x86_64-macos and aarch64-linux-musl.
+- (i) and (ii), real links through an rzig built by each zig (ZIG_BIN
+  that zig), a small C++ library (std::string, an exception thrown and
+  caught, a static destructor; sizes with conda-forge's zig, upstream's
+  in parentheses):
+  - objects with -g, link without: no flag; 2,197,936 (2,197,520)
+    bytes, seven .debug_* sections, .symtab;
+  - one object with -g among others: no flag; 2,164,160 (2,163,744),
+    seven, .symtab;
+  - an executable from an object with -g: 12,576 (12,296), eight
+    .debug_* sections, .symtab;
+  - objects without -g: the flag; 286,672 (286,488), none, no .symtab;
+  - objects without -g and an archive whose member has -g (zig ar): the
+    flag; 286,576 (286,392), none, no .symtab;
+  - -g on the link line, as before: 2,163,944 (2,163,336), seven,
+    .symtab;
+  - each library: dlopen, the call, dlclose, exit 0.
+- (iii) Rcpp 1.1.2, R CMD INSTALL through a copy of this branch's
+  dist/R-4.6.1-slim-zig with the new rzig in bin/toolchain (conda-forge's
+  zig, private caches). The link line has no -g in every case:
+  - no flags: 1,162,080 bytes, no .debug_*, no .symtab;
+  - PKG_CFLAGS=-g PKG_CXXFLAGS=-g in the environment: 9,331,360 bytes,
+    eight .debug_* sections (7,779,024 bytes), .symtab (4,962 nm
+    symbols), Rcpp's six sources among the compile units;
+  - pkgbuild's debug flags in R_MAKEVARS_USER (above): 8,399,368 bytes,
+    eight .debug_* sections (5,875,684 bytes), .symtab, the six compile
+    units. With upstream zig (a tree copy with its rzig): 8,394,816
+    bytes, eight .debug_* sections, .symtab;
+  - each: library(Rcpp), evalCpp("1 + 1"), unloadNamespace, exit 0;
+  - check_compiled_code: as in "What remains".
+- pkgbuild 1.4.8's compile_dll(debug = TRUE) itself, on the testers'
+  gpk package (r2ans/testlinux/gtest/pkg): f.o has five .debug_*
+  sections, gpk.so seven and .symtab, 1,567,560 bytes (before A(b):
+  none). dyn.load, the call (an exception thrown and caught),
+  dyn.unload: exit 0.
+
+Not run: macOS and Windows (they read nothing; their unit tests run
+strip.zig's tests, which need no zig); the stress suite. Run since
+("Build 7's gate"): rzig-test on omicron (74 of 74) and kappa (54
+passed, 20 skipped, strip.zig's two among the passed), and five quick
+stress rows on linux.
 
 ### Tested (implementer A, 2026-10-09)
 
@@ -1036,8 +1178,9 @@ Homebrew for users on macOS. Files: build.zig, scripts/verify-tree.sh.
 - etc/r-zig.cmake, macOS only, in every tree (the conda build's too).
   r-zig-slim ships it, beside etc/Renviron. build.zig's
   macos_cmake_toolchain holds a short comment and
-  `set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local /opt/local /sw)`.
-  installStaticTree stages it.
+  `set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local /opt/local /sw $ENV{HOMEBREW_PREFIX})`
+  (the last entry: "Review (2026-10-09)", 3, applied; unset, it adds
+  nothing). installStaticTree stages it.
 - etc/Renviron on macOS (finalRenviron):
 
       ## r-zig: CMake leaves out Homebrew's, Fink's and MacPorts' prefixes.
@@ -1100,7 +1243,10 @@ Added in review:
   when brew is on PATH, exports OPENSSL_ROOT_DIR, and links Homebrew's
   OpenSSL. pkg-config's own search path is not covered either. Stock R
   does the same. A Homebrew installed elsewhere (`brew --prefix` not one
-  of the four) is still searched first ("Review (2026-10-09)").
+  of the four) is left out when HOMEBREW_PREFIX names it, as `brew
+  shellenv` sets it ("Review (2026-10-09)", 3, applied; measured on
+  omicron in "Build 7's gate"). Without the variable it is still
+  searched first.
 
 Tested on linux-64 (gamma) by its implementer, lock 7aef60ff unchanged:
 - `pixi run --locked zig build --help`: rc 0. The macOS branches are
@@ -1339,18 +1485,22 @@ Decisions for the user:
     linux C++ package.
   Recommended: (a). `zig objcopy --strip-debug` after the link, which
   would keep .symtab, does not exist in zig 0.16.0 (R2-3).
+  Answered (2026-10-09): (b). Done in R2-3 ("The answer: A(b)").
 - B. Build 7's publish (R2-4). As it stands, the macOS conda run fails
   for s2, sf and lwgeom. Recommended: apply item 1, build the conda
   package on omicron, and run `stress.R --conda sf terra gdalraster
   lwgeom units s2 xml2` there again (or `--conda sf terra gdalraster
   lwgeom` with the suite's deprow diff). The linux and Windows runs
   stand: item 1 changes nothing their logs have.
+  Done ("Build 7's gate"): the user applied item 1 with the rest, and
+  the macOS run passes, 7 of 7.
 
 Found, not decided:
 - In `--conda` mode the inner R inherits what the outer tree R's
   etc/Renviron set: R_ZIG_CA_BUNDLE, and on macOS CMAKE_TOOLCHAIN_FILE
   naming the outer tree's file (the same content). Inferred from R's
-  reader and Rcmd.in, not measured.
+  reader and Rcmd.in, not measured. Measured since on omicron, with a
+  runner diff ("Build 7's gate", review 2).
 - cfguard's key hashes zig's path as spelled, so one zig gets two
   entries on kappa (`C:/.../Library/bin\x86_64-w64-mingw32-zig.exe` and
   `C:\...\Library\bin\...`); the stub's path mixes separators. Each
@@ -1397,3 +1547,198 @@ Checked in review:
   feat-stress-suite: the README's and `--help`'s `--keep-path` text,
   the cache entries (cfguard), round 2's record of where the answers
   landed, and feat-standalone-toolchain's H2 bullet.
+
+## After the review (2026-10-09)
+
+The user's answer to "Review (2026-10-09)", 2026-10-09: "Apply all
+recommendations." Applied, uncommitted:
+- this branch: items 1 to 4 (rzig-s5-xarch, rzig-cfguard-no-r,
+  cmake-homebrew-prefix-env, test-toolchain-caches). S5, R2-1 and R2-10
+  above say so now.
+- feat-stress-suite: stress-conda-deprow-sysdeps,
+  classifier-unsupported-argument, stress-cmake-tree-file and
+  packages-tsv-magick-windows.
+- Decision A: (b), in R2-3 ("The answer: A(b)").
+- Decision B: the macOS run again, below.
+
+## Build 7's gate (2026-10-09)
+
+### Tested on the hosts (testers)
+
+The worktree as the testers had it: HEAD 117e4cb plus the uncommitted
+changes (`git diff | sha256sum` 3ab2939a...; untracked strip.zig
+730db4eb..., testdata/f-g.o a32bb7e9..., testdata/f-g0.o e9aff9cf...),
+pixi.lock 7aef60ff...a355a63, unchanged on every host. The review then
+edited a comment in strip.zig and this file only. feat-stress-suite,
+read-only: HEAD 83aa29a, `git diff | sha256sum` e6a2bb4a..., stress.R
+18e898c5..., packages.tsv e6becce2..., its lock fbb64b7b...bb96.
+conda-forge's zig 0.16.0 unless named. Logs:
+/data/gamma/luciorq/workspaces/temp/r-zig-pixi/gate7/ (strip-ab/ for
+the implementer, linux/, omicron/, kappa/logs/).
+
+linux-64 (gamma):
+- A(b), the implementer (R2-3, "The answer: A(b)", has the detail):
+  rzig-test with both zigs (74 of 74; parity 60 identical, 58 ok+, 22
+  deliberate, 0 failed), the real links with both zigs, Rcpp through a
+  tree copy, and pkgbuild 1.4.8's compile_dll(debug = TRUE): gpk.so
+  1,567,560 bytes with seven .debug_* sections and .symtab (round 2:
+  none).
+- rzig-test, build (147 s), verify-tree, smoke, contract,
+  verify-package, hermetic: pass.
+- Rcpp 1.1.2 through the tree, private caches. The link line has no -g
+  in both cases. No Makevars: 1,162,176 bytes, no .debug_*, no .symtab.
+  `CXXFLAGS = -g` alone in R_MAKEVARS_USER: 8,404,800 bytes, eight
+  .debug_* sections, .symtab (7,333 nm symbols); zig's libc++,
+  libc++abi and libunwind units are among the compile units, as A(b)
+  means. Round 2 stripped this case. Both load, run evalCpp and a
+  cppFunction that throws and is caught, and unload.
+- The stress runner (read-only) through the tree, -j8, 4.5 min: curl,
+  xml2, Rcpp, RcppArmadillo and lme4 ok, 13 dependencies ok, 0
+  unexpected, each unloaded. Their 15 package .so files have round 2's
+  byte sizes (r2ans/testlinux/stress-tree), none with .debug_* or
+  .symtab: release builds are as before.
+
+osx-arm64 (omicron):
+- rzig-test (74 of 74), build (2.2 min), verify-tree (etc/r-zig.cmake
+  with `$ENV{HOMEBREW_PREFIX}`), smoke, contract, verify-package: pass.
+- conda-package (3.3 min): r-zig-slim-4.6.1-h41cfa24_7 (27.76 MiB) and
+  r-zig-toolchain-4.6.1-hadbdee1_7, all tests pass; libdeflate
+  `>=1.25,<1.26.0a0`. ~/.cache/zig and ~/.cache/r-zig are the same
+  before and after it (item 4).
+- Decision B: `stress.R --conda=<that channel> --jobs=6 sf terra
+  gdalraster lwgeom units s2 xml2` (5.2 min): 7 of 7 targets ok, 15
+  dependencies ok, 0 unexpected. The smoke logs have 22 loaded, 22
+  smoke ok and 22 unloaded. The env: build 7 from the local channel,
+  libgdal-core 3.13.3, libdeflate 1.25, geos 3.14.1, proj 9.9.0, cmake
+  4.4.4, no libabseil. Its sysdeps, from the deprow diff: cmake geos
+  libgdal-core libxml2-devel openssl proj udunits2. s2 builds its
+  bundled abseil, the randen_hwaes targets included; no log has
+  "unsupported argument" (item 1).
+- Tree mode, units and s2 with S2_FORCE_BUNDLED_ABSEIL=true and a
+  scratch TSV whose smoke calls print CMAKE_TOOLCHAIN_FILE: 2 of 2 ok.
+  No no-homebrew.cmake in the run; the children see the tree's
+  etc/r-zig.cmake (stress-cmake-tree-file).
+- Item 3, a CMake probe (find_library, find_path) run by `R CMD sh`
+  from `env -i`, through the tree's R and the conda build 7's R. With
+  HOMEBREW_PREFIX=/opt/homebrew and the real brew, the ignore list ends
+  in /opt/homebrew (listed twice, harmless) and snappy is the env's.
+  With a fake prefix that a fake brew prints, its library and header
+  are NOTFOUND. HOMEBREW_PREFIX unset, or stock CMake: found.
+- New, measured: a `--conda` run started by the tree's R gives the
+  conda R's children the tree's CMAKE_TOOLCHAIN_FILE and
+  R_ZIG_CA_BUNDLE, with R_HOME the conda env. Review 2, below.
+- No Falcon sign. The tester removed the rzig cache entry the tree runs
+  added (zig-lib-1455720819) and everything named rz4-* (its report).
+
+win-64 (kappa, the owning tester's logs; a duplicate tester loop did
+setup only and stood down):
+- rzig-test (54 passed, 20 skipped of 74; strip.zig's two pass), build,
+  verify-tree, smoke, contract, verify-package: pass. pixi.lock
+  unchanged.
+- magick 2.9.1 through the tree: ok in 0.80 min, 58.0 MB. The link line
+  has cfguard-<key>/guard_dispatch.o; ImageMagick 6.9.13.29; an SVG
+  read gives the right pixels; it unloads; magick.dll does not export
+  `__guard_dispatch_icall_dummy`.
+- Item 2: `gcc.exe -r a.o -o part.o` gets no stub and links (831
+  bytes). A `-shared` link and an .exe link of part.o get the stub, and
+  the .exe runs. Before the change `-r a.o <stub>` stopped at "coff does
+  not support linking multiple objects into one", as zig's own `-r a.o
+  b.o` does.
+- The run made %LOCALAPPDATA%\r-zig (absent at 15:17) with two
+  cfguard-<key>/ entries; %LOCALAPPDATA%\zig (89 MB) is older than the
+  run. Their cleanup and the rz4-* items': not in the logs.
+
+Not run: osx-64 and linux-aarch64; the full stress suite with this
+state; conda-package and `--conda` on linux and Windows with this state
+(round 2's runs stand for them); upstream zig on the hosts (the
+implementer ran it on linux); `pixi run check`.
+
+### Review
+
+Gate B on macOS: build 7 passes. The conda package built from this
+state on omicron runs the gate's seven targets, 7 of 7, with 0
+unexpected, and every one loads, runs its smoke call and unloads.
+Neither code item below changes that: item 1 reads objects on linux
+only, and in item 2 the inherited toolchain file had the conda one's
+content (the probe tested the conda package's own file through its R).
+
+Code items, for the user. Diffs in
+/data/gamma/luciorq/workspaces/temp/r-zig-pixi/gate7/review/diffs/;
+each passes `git apply --check`.
+
+1. A(b) takes a .debug_* section that is no debug info for one
+   (rzig-strip-debug-info.diff; medium, linux). Boost's headers put
+   gdb's pretty-printer scripts in a `.debug_gdb_scripts` section
+   (PROGBITS, not loaded) in every object that includes Boost.Unordered
+   (boost/unordered/detail/unordered_printers.hpp, from every
+   unordered container), Boost.Interprocess (offset_ptr.hpp) or
+   Boost.JSON, unless BOOST_ALL_NO_EMBEDDED_GDB_SCRIPTS is defined. BH
+   1.90.0-1 has all three, and Boost.Graph's adjacency_list includes
+   boost/unordered_set.hpp. strip.zig takes such a release object for a
+   debug one, so the link keeps zig's libc++ DWARF. Measured on gamma
+   through the tree: a release (-O2) object using boost's
+   unordered_flat_map links into 1,583,072 bytes with eight .debug_*
+   sections and .symtab; through the diff's rzig, 252,616 bytes, none,
+   and it loads and runs. Objects of `boost/unordered_set.hpp` and
+   adjacency_list have the section too. An assembler's `.cfi_sections
+   .debug_frame` gives a .debug_frame-only object, the same case. The
+   diff counts .debug_info and .zdebug_info only (C, C++, flang,
+   assembly, -gline-tables-only, -gsplit-dwarf and -gz all write one),
+   adds testdata/f-gdb.o (f.c plus such an asm block, -g0, 1,336 bytes,
+   no machine path) to both strip.zig tests, and updates strip.zig's
+   text and R2-3's. Tested on gamma: unit tests 74 of 74 with both zigs;
+   `zig fmt --check` clean; parity 60, 58, 22, 0 failed; the old prefix
+   test fails both strip.zig tests; a link with the -g fixture added
+   keeps eight .debug_* sections and .symtab. macOS and Windows read
+   nothing, so gate B does not move. The suite's one BH user (rstan)
+   includes none of the three directly; not rebuilt.
+2. `--conda` and the outer R's environment (omicron's
+   stress-conda-outer-renviron.diff, for feat-stress-suite; low). The
+   diff unsets CMAKE_TOOLCHAIN_FILE, R_ZIG_CMAKE_TOOLCHAIN_FILE and
+   R_ZIG_CA_BUNDLE when they point into the running R's R_HOME. Tested
+   on omicron with `--conda units`: the children then see the conda
+   env's r-zig.cmake and no R_ZIG_CA_BUNDLE (the conda build's
+   etc/Renviron sets none). The tree's etc/Renviron sets
+   R_ZIG_CA_BUNDLE on linux and macOS, CMAKE_TOOLCHAIN_FILE on macOS
+   only; the diff was run on macOS only.
+
+Notes:
+- Build 7's file names repeat. This conda-package made the names round
+  2's did (rattler warned "hash mismatch" on its cached copy): the hash
+  is the variant's, not the source's. Publish only builds of the final
+  source, from every OS, and check that universe has no _7 file first.
+  An upload with --skip-existing keeps a file of the same name (the
+  flang build 2 story).
+- Robustness of strip.zig as it is, measured with a scratch harness of
+  real objects: 32-bit (i386; ppc32, big-endian), s390x (64-bit
+  big-endian), aarch64, -gz=zlib and -gz=zstd (SHF_COMPRESSED),
+  objcopy's zlib-gnu .zdebug_*, -gline-tables-only, -gsplit-dwarf (zig
+  cc writes a skeleton with .debug_info, no .dwo) and real extended
+  numbering (66,016 sections from an assembler file): all right. An
+  -flto object is LLVM bitcode: none, as documented. Cost: about 25 us
+  for a small object; 10 ms without debug info and 16 ms with it for
+  the 66,016-section one. No unit test covers .zdebug_ (a fixture would
+  need GNU objcopy).
+- A `-r` link on linux with the flag, as `wanted` allows: lld ignores
+  -s with -r, the output keeps .symtab and links.
+- zig build prints "failed command:" for a step that wrote to stderr.
+  kappa's build log has one for dlamch.f: flang's -Wfolding-exception
+  warning, not a failure.
+- The testers' claims against their logs: the implementer's sizes and
+  section counts (link/, rcpp/run.out, gpk.so on disk), the linux Rcpp
+  pair and its stress report (all 15 .so sizes equal round 2's
+  stress-tree), omicron's chain, conda-package, report, smoke markers,
+  s2's abseil lines and the nine CMake probe logs, and kappa's chain,
+  magick and -r probe logs match. One note: omicron's hashes.txt holds
+  sha256 of its diff files (0d8cec75...), not of `git diff` output; the
+  two files are equal, and `git diff | sha256sum` is 3ab2939a..., as
+  reported.
+- After the review's edits, on gamma with conda-forge's zig: `zig fmt
+  --check` clean, unit tests 74 of 74, parity 60 identical, 58 ok+, 22
+  deliberate, 0 failed; both locks unchanged.
+- Comments and docs fixed: strip.zig's fixture comment (conda-forge's
+  zig, as the objects' .comment says); S5's open item, R2-1's -r and
+  test-toolchain.R lines, R2-10's list and its HOMEBREW_PREFIX limit,
+  A(b)'s "Not run", decision B and the "Found, not decided" bullet in
+  "Review (2026-10-09)", and this section. In feat-stress-suite: round
+  2's record of where the answers landed.

@@ -29,10 +29,24 @@ pub fn compileOnly(args: Args) bool {
     return false;
 }
 
+/// Any -g option (-g, -g0 to -g3, -ggdb, -gdwarf-5, -gline-tables-only,
+/// ...): the caller's choice of debug info.
+pub fn debugOption(args: Args) bool {
+    for (args) |x| if (mem.startsWith(u8, x, "-g")) return true;
+    return false;
+}
+
 /// The value of the one-argument forms `-L<dir>` and `-l<name>`; the
 /// two-argument `-L dir` is not one (the shims' `-L?*`).
 pub fn flagValue(x: []const u8, comptime flag: []const u8) ?[]const u8 {
     return if (x.len > flag.len and mem.startsWith(u8, x, flag)) x[flag.len..] else null;
+}
+
+/// Whether args[i] is the value of `-Xarch_<arch>`: zig hands it to
+/// clang's driver as it is, for that architecture only, so it is clang's
+/// spelling (abseil's CMake on macOS: `-Xarch_arm64 -march=armv8-a+crypto`).
+pub fn xarchValue(args: Args, i: usize) bool {
+    return i > 0 and mem.startsWith(u8, args[i - 1], "-Xarch_");
 }
 
 /// The `-L<dir>` directories, in order.

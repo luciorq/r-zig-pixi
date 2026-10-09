@@ -3805,7 +3805,9 @@ fn ldpaths(ctx: *const Ctx) []const u8 {
 ///     Packages then link the host's libraries (stress round 2, H2: arrow
 ///     linked /opt/homebrew/lib/libsnappy.a; feat-stress-suite
 ///     stress/results/2026-10-08-round2.md). The four are the prefixes
-///     Darwin.cmake adds for a package manager.
+///     Darwin.cmake adds for a package manager, and $HOMEBREW_PREFIX
+///     (`brew shellenv` sets it) is Homebrew's when it lives elsewhere
+///     (`brew --prefix`); unset, it adds nothing.
 ///   - CMAKE_SYSTEM_IGNORE_PREFIX_PATH (CMake >= 3.23; older ones skip it)
 ///     drops exactly these prefixes from every find_* search: the
 ///     system's, PATH's (find_package's <prefix> for each <prefix>/bin)
@@ -3829,7 +3831,7 @@ const macos_cmake_toolchain =
     \\# CMake searches Homebrew's, Fink's and MacPorts' prefixes whatever
     \\# PATH says. This leaves them out of every find_* search (CMake >= 3.23),
     \\# so packages link their environment's libraries, not the host's.
-    \\set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local /opt/local /sw)
+    \\set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local /opt/local /sw $ENV{HOMEBREW_PREFIX})
     \\
 ;
 

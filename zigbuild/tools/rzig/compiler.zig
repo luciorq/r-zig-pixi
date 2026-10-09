@@ -20,6 +20,7 @@ const linker_args = @import("linker_args.zig");
 const archives = @import("archives.zig");
 const dso_fini = @import("dso_fini.zig");
 const cfguard = @import("cfguard.zig");
+const strip = @import("strip.zig");
 const Args = cmdline.Args;
 
 pub const Lang = enum { c, cxx };
@@ -63,8 +64,8 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     const undefined_version = ctx.os == .linux and !cmdline.compileOnly(args) and cmdline.anyContains(args, "-version-script");
     const fini = if (ctx.os == .linux and dso_fini.wanted(args)) try dso_fini.object(ctx, linux_target) else null;
     const cfg = if (ctx.os == .windows and cfguard.wanted(args)) try cfguard.object(ctx) else null;
-    const g0 = !debugFlag(args);
-    const strip_debug = ctx.os == .linux and g0 and !cmdline.compileOnly(args);
+    const g0 = !cmdline.debugOption(args);
+    const strip_debug = ctx.os == .linux and strip.wanted(ctx, args);
     args = try envFlags(ctx, args);
     // after envFlags: an -l, -lomp included, resolves in its directories
     if (ctx.os == .windows) {
@@ -111,11 +112,11 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     if (undefined_version) try out.append(a, "-Wl,--undefined-version");
     // -g0 leaves the DWARF of zig's own libc++, libc++abi and libunwind,
     // which zig builds with debug info whatever the caller asks: 4 to 6 MB
-    // in every linux C++ package (stress round 2, Z10's residual: fstcore,
-    // Rcpp, mlpack, duckdb, arrow). So linux links without a -g option
-    // (-g0's test) strip all debug info. A -g on the link line keeps it;
-    // one only on the compile lines does not (R CMD SHLIB's link has
-    // LDFLAGS, not CFLAGS). It changes nothing on a command that does not
+    // in every linux C++ package (stress round 2, Z10's residual). So
+    // linux links strip all debug info when nothing asks for it: no -g
+    // option (-g0's test) and no input object with debug info (one
+    // compiled with -g whose link line has none, as devtools::load_all()
+    // builds); strip.zig. It changes nothing on a command that does not
     // link (--version, -print-*, a header's -o).
     if (strip_debug) try out.append(a, "-Wl,--strip-debug");
     if (fini) |o| try out.append(a, o);
@@ -125,12 +126,6 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     try out.appendSlice(a, args);
     try out.appendSlice(a, link_last);
     return out.items;
-}
-
-/// Any -g option: the caller's choice of debug info.
-fn debugFlag(args: Args) bool {
-    for (args) |x| if (mem.startsWith(u8, x, "-g")) return true;
-    return false;
 }
 
 /// The CPU packages are compiled for, on every OS: the baseline of the
@@ -160,11 +155,12 @@ const cpu_flag = "-mcpu=baseline";
 /// -mtune=native as a portable flag; through zig it would make a package
 /// that needs the compiling machine's CPU. Nothing is lost: zig tunes
 /// for "generic" anyway. zig-fc's flang commands keep it (flang:
-/// target-cpu "x86-64", tune-cpu the named one).
+/// target-cpu "x86-64", tune-cpu the named one). The value of
+/// `-Xarch_<arch>` stays: clang's driver reads it, as clang does.
 fn dropTune(ctx: *Ctx, caller: Args) !Args {
     var out: std.ArrayList([]const u8) = .empty;
-    for (caller) |x| {
-        if (!mem.startsWith(u8, x, "-mtune=")) try out.append(ctx.arena, x);
+    for (caller, 0..) |x, i| {
+        if (!mem.startsWith(u8, x, "-mtune=") or cmdline.xarchValue(caller, i)) try out.append(ctx.arena, x);
     }
     return out.items;
 }
@@ -183,10 +179,14 @@ fn dropTune(ctx: *Ctx, caller: Args) !Args {
 /// It stays where the caller put it, after -mcpu=baseline, so the
 /// package's architecture wins, as its -march would: generic+v8a+crc
 /// instead of the baseline (generic on linux aarch64, apple-m1 on macOS).
+/// The value of `-Xarch_<arch>` stays clang's -march: zig hands it to
+/// clang's driver, which refuses zig's -mcpu spelling ("unsupported
+/// argument 'generic+v8a+crypto' to option '-mcpu='", s2's bundled
+/// abseil on macOS, R2-4's --conda run).
 fn marchArgs(ctx: *Ctx, args: Args) !Args {
     var out: std.ArrayList([]const u8) = .empty;
-    for (args) |x| {
-        const v = cmdline.flagValue(x, "-march=") orelse {
+    for (args, 0..) |x, i| {
+        const v = (if (cmdline.xarchValue(args, i)) null else cmdline.flagValue(x, "-march=")) orelse {
             try out.append(ctx.arena, x);
             continue;
         };
@@ -657,7 +657,7 @@ test "every OS: -Wno-error=date-time always; -g0 unless the caller passes a -g o
     try expectArgs(pre ++ &[_][]const u8{ "-Werror=date-time", "-c", "a.c" }, try argv(c, .c, &.{ "-Werror=date-time", "-c", "a.c" }));
 }
 
-test "linux links without a -g option: --strip-debug, after the SONAME and --undefined-version" {
+test "linux links without a -g option or an object with debug info: --strip-debug, after the SONAME and --undefined-version" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
@@ -678,6 +678,11 @@ test "linux links without a -g option: --strip-debug, after the SONAME and --und
             try argv(c, .c, &.{ "-shared", g, "-o", "p.so", "a.o" }),
         );
     }
+    // an input object with debug info keeps it: -g on the compile lines
+    // only (pkgbuild's compile_dll(debug = TRUE)); strip.zig
+    try f.write("dbg.o", @embedFile("testdata/f-g.o"), .default_file);
+    const dbg = f.path("dbg.o");
+    try expectArgs(pre ++ &[_][]const u8{ "-shared", "-o", "p.so", "a.o", dbg, "-lR" }, try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", dbg, "-lR" }));
     // compiles: none
     for ([_][]const u8{ "-c", "-S", "-E", "-M", "-MM" }) |only| {
         try expectArgs(pre ++ &[_][]const u8{ only, "a.c" }, try argv(c, .c, &.{ only, "a.c" }));
@@ -743,6 +748,11 @@ test "-march=armv<N>-a[+ext]: zig's -mcpu, after -mcpu=baseline; other -march va
     const got = try argv(c, .cxx, &.{ "-march=armv8-a+crc", "-c", "a.cpp", "-o", "a.o" });
     try testing.expectEqualStrings("-mcpu=baseline", got[2]);
     try expectArgs(&.{ "-mcpu=generic+v8a+crc", "-c", "a.cpp", "-o", "a.o" }, got[got.len - 5 ..]);
+    // -Xarch_<arch>'s value is clang's: abseil's CMake on macOS, kept, and
+    // so is a -mtune there
+    const xarch: Args = &.{ "-Xarch_x86_64", "-maes", "-Xarch_arm64", "-march=armv8-a+crypto", "-Xarch_arm64", "-mtune=apple-m1", "-c", "a.cpp", "-o", "a.o" };
+    const got_x = try argv(c, .cxx, xarch);
+    try expectArgs(xarch, got_x[got_x.len - xarch.len ..]);
 }
 
 test "linker options zig cannot take, through the whole line" {
