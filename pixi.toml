@@ -537,7 +537,6 @@ geos = "*"              # sf, terra, lwgeom
 proj = "*"              # sf, terra, lwgeom
 udunits2 = "*"          # units
 libprotobuf = "*"       # protolite (protoc, protobuf.pc; brings libabseil)
-tbb-devel = "*"         # RcppParallel:system-tbb
 libxml2-devel = "*"     # xml2, igraph (xml2-config, libxml-2.0.pc)
 openssl = "*"           # openssl, s2
 imagemagick = "*"       # magick (Magick++.pc)
@@ -563,6 +562,20 @@ zstd = "*"              # qs2
 # where nloptr then builds its bundled NLopt with cmake.
 [feature.stress.target.win-64.dependencies]
 nlopt = "*"
+# RPostgres includes Rtools' boost headers (round 1's S1, decision 18).
+libboost-headers = "*"
+
+# RcppParallel:system-tbb. Not on win-64, where conda-forge's TBB is an
+# MSVC build that MinGW cannot link, and where it put -ltbb ahead of
+# RcppParallel's bundled TBB (round 1's R2, decision 18).
+[feature.stress.target.unix.dependencies]
+tbb-devel = "*"
+
+# conda-forge's libheif 1.23.4 to 1.23.6 for osx-arm64 links a Homebrew
+# path (/opt/homebrew/.../libsharpyuv), so magick cannot load (round 1's
+# U1, decision 18). Lift when a clean build is out.
+[feature.stress.target.osx-arm64.dependencies]
+libheif = "<1.23.4"
 
 # pixi run -e stress stress [target ...] [--conda[=universe]] [--jobs=N] ...
 # The dev tree's R runs stress/stress.R: `pixi run build` first. No

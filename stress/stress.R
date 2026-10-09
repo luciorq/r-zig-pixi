@@ -1,9 +1,10 @@
 # r-zig stress suite (stress/README.md). Installs hard-to-build CRAN and
 # Bioconductor packages from source with the R that runs this script, one
 # at a time, each with a timeout and a log. Then it loads each target, runs
-# one smoke call, and writes report.json and report.md (and the job summary
-# in CI). A diagnostic, never a gate: package failures do not change the
-# exit status (0), unless --strict. A broken harness exits 2.
+# one smoke call, unloads the namespace, checks that R exits cleanly, and
+# writes report.json and report.md (and the job summary in CI). A
+# diagnostic, never a gate: package failures do not change the exit status
+# (0), unless --strict. A broken harness exits 2.
 #
 # Base R only. It needs an R with r-zig's toolchain plus an environment of
 # system libraries:
@@ -27,7 +28,9 @@
 #   --jobs=N      make -jN and cmake's parallel level (default: cores, max 8)
 #   --resume      reuse --out's library: skip what is already installed
 #   --keep-path   keep the caller's PATH (default: only the libraries env's
-#                 programs and the OS's base directories)
+#                 programs and the OS's base directories) and, on macOS,
+#                 skip the runner's CMake toolchain file that leaves
+#                 Homebrew out (a tree's own etc/r-zig.cmake still applies)
 #   --trace       RZIG_TRACE=1: rzig prints its commands into the logs
 #   --list        print the install plan and stop
 #   --sysdeps     print the selected rows' sysdeps for this OS and stop
@@ -86,18 +89,19 @@ tab <- read.delim(text = grep("^#", readLines(tsv, warn = FALSE), value = TRUE, 
                   quote = "", comment.char = "", colClasses = "character", na.strings = character())
 tab$name <- sub(":.*", "", tab$package)
 tab$variant <- ifelse(grepl(":", tab$package), sub(".*:", "", tab$package), "")
-labels <- function(t) lapply(seq_len(nrow(t)), function(i) c(t$package[i], t$group[i], words(t$tags[i])))
+# name@os in tags and sysdeps: that OS only (any_os: every OS, to check names)
+on_os <- function(x, any_os = FALSE) { d <- words(x); sub("@.*", "", d[any_os | !grepl("@", d) | sub(".*@", "", d) == os]) }
+labels <- function(t, any_os = FALSE) lapply(seq_len(nrow(t)), function(i) c(t$package[i], t$group[i], on_os(t$tags[i], any_os)))
 named <- function(t, sel) vapply(labels(t), function(l) any(l %in% sel), NA)
 targets_arg <- argv[!startsWith(argv, "--")]
 skip <- if (is.null(opt("skip"))) character() else words(opt("skip"))
-unknown <- setdiff(c(targets_arg, skip), c(unlist(labels(tab)), "all"))
+unknown <- setdiff(c(targets_arg, skip), c(unlist(labels(tab, any_os = TRUE)), "all"))
 if (length(unknown)) stop("not in ", tsv, ": ", paste(unknown, collapse = " "), call. = FALSE)
 rows <- tab[vapply(tab$oses, function(x) any(words(x) %in% c("all", os)), NA), ]
 if (length(targets_arg) && !"all" %in% targets_arg) rows <- rows[named(rows, targets_arg), ]
 rows <- rows[!named(rows, skip), ]
 if (!nrow(rows)) stop("no rows of ", tsv, " left for ", os, ": ", paste(argv, collapse = " "), call. = FALSE)
-sysdeps_of <- function(x) { d <- words(x); sub("@.*", "", d[!grepl("@", d) | sub(".*@", "", d) == os]) }
-needed <- sort(unique(unlist(lapply(rows$sysdeps, sysdeps_of))))
+needed <- sort(unique(unlist(lapply(rows$sysdeps, on_os))))
 if (flag("sysdeps")) { writeLines(needed); quit(status = 0) }
 
 # --- what to install, in order ------------------------------------------------
@@ -150,6 +154,41 @@ out <- normalizePath(out, winslash = "/")
 lib <- file.path(out, "lib")
 if (!flag("resume") && length(list.files(lib))) stop(lib, " is not empty: use --resume or another --out", call. = FALSE)
 
+# --- the classifier --------------------------------------------------------------
+# The class is a suggestion from the failing part of the log; a person
+# decides (README). First match wins.
+patterns <- c(
+  network   = "cannot open URL|cannot open the connection to '?https?:|Could not resolve host|Failed to connect|Connection (timed out|refused|reset)|Temporary failure in name resolution|status was '[45][0-9][0-9]|HTTP (error|status) [45][0-9][0-9]|HTTP/[0-9.]+ [45][0-9][0-9]|Timeout of [0-9]+ seconds was reached|curl: \\([0-9]+\\)|download (failed|error)|SSL connect error",
+  resource  = "No space left on device|[Cc]annot allocate memory|[Oo]ut of memory|std::bad_alloc|Killed signal terminated|virtual memory exhausted|OutOfMemory",
+  abi       = "(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__cxx11|B5cxx11|St3__1|std::__1|__cxa_|__gxx_personality|_Unwind_|\\?[A-Za-z_][A-Za-z0-9_@?$]*@@)|undefined symbol: _Z|could not open 'lib(MSVCRT|OLDNAMES|LIBCMT|msvcprt)\\.a'|-LIBPATH:|Windows Kits/10/Lib|/(W[0-4]|bigobj|wd[0-9]+): unrecognized file extension",
+  toolchain = "unknown CPU: '|unrecognized file extension|Could NOT find Threads|thread [0-9]+ panic: |/bin/R(term\\.exe|script\\.exe)?: No such file or directory|is not a full path to an existing compiler tool|windres: command not found|Building for: NMake Makefiles|make: invalid option -- \\?|ar(\\.exe)?: [^ ]+\\.o: No such file or directory|unsupported linker arg: |-Werror,-Wdate-time|version script assignment of '[^']+' to symbol '[^']+' failed: symbol not defined|rzig: |(zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib): (cannot |waiting for |could not |no flang|warning: no |warning: R_ZIG_EXTRA_ENV)|zig: error|error: unable to (spawn|create|open|load|parse|emit)|LLVM ERROR|PLEASE submit a bug report|unknown target CPU|unsupported option|unknown argument|compiler cannot create executables|relocation R_[A-Z0-9_]+ .*against|(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__(u)?(div|mod|mul)ti3|___chkstk_ms|__extend|__trunc|__emutls|__guard_(dispatch|check)_icall)",
+  crash     = "\\*\\*\\* caught (segfault|bus error|illegal operation) \\*\\*\\*|R is aborting now|An irrecoverable exception occurred",
+  upstream  = "Library not loaded: (/opt/homebrew|/usr/local/(opt|Cellar))/|(system library '|cannot find -l|library not found for -l|unable to find library -l)(debug|optimized)\\b|[Tt]he specified procedure could not be found|failed to solve the environment|Cannot solve the request|[Cc]ould not solve for environment specs",
+  sysdep    = "(?m)configure: error|was not found in the pkg-config search path|No package '[^']+' found|fatal error: '?[^ ']+\\.h(pp|xx)?'?( file)? not found|\\.h: No such file|cannot find -l|unable to find (dynamic |static )?system library|library not found for -l|command not found|: not found$|[Cc][Mm]ake.*not found|Could NOT find")
+# a log's lines as valid UTF-8: one stray byte would stop trimws() and grep()
+read_log <- function(log) iconv(tryCatch(readLines(log, warn = FALSE), error = function(e) character()), "", "UTF-8", sub = "?")
+first_error <- function(log, after = NULL) {
+  x <- read_log(log)
+  if (length(after)) x <- tail(x, length(x) - match(after, trimws(x), 0))   # only what came after this line
+  strong <- grep("(^|[^A-Za-z])(error|Error|ERROR)(:| in | at |\\[)|undefined (symbol|reference)|[Ss]ymbol not found|cannot find -l|library not found for -l|unable to find (dynamic |static )?system library|Killed signal|No space left|\\*\\*\\* caught [a-z ]+ \\*\\*\\*|thread [0-9]+ panic: |syntax error near unexpected token|windres: command not found|/bin/R(term\\.exe|script\\.exe)?: No such file or directory|ar(\\.exe)?: [^ ]+\\.o: No such file or directory", x)
+  weak <- grep("not found|timed out|[Ff]ailed", x)
+  hit <- c(strong, weak)[1]
+  from <- if (!is.na(hit)) hit else max(1, length(x) - 40)
+  line <- if (!is.na(hit)) x[hit] else tail(c("", x[nzchar(trimws(x))]), 1)
+  # a load test's "package or namespace load failed" names the symbol (the
+  # library, Windows' reason) two lines on
+  sym <- grep("undefined symbol: |[Ss]ymbol not found: |Library not loaded: |LoadLibrary failure: ", x)
+  sym <- sym[!is.na(hit) & sym > hit & sym <= hit + 3]
+  if (length(sym)) line <- sub(".*(undefined symbol: |[Ss]ymbol not found: |Library not loaded: |LoadLibrary failure: )", "\\1", x[sym[1]])
+  # classify on the failing part only: a benign line earlier in the log
+  # (a download that was retried, a configure probe) must not decide it
+  list(line = substr(trimws(line), 1, 240), text = paste(x[from:max(from, length(x))], collapse = "\n"))
+}
+classify <- function(text) {
+  for (k in names(patterns)) if (grepl(patterns[[k]], text, perl = TRUE)) return(k)
+  "package"
+}
+
 # --- --conda: make the env, then run this script again with its R ---------------
 ws <- file.path(out, "conda")
 ws_env <- file.path(ws, ".pixi", "envs", "default")
@@ -190,11 +229,12 @@ if (!is.null(conda) && !in_ws) {
     why <- grep("[[:alnum:]]", readLines(elog, warn = FALSE), value = TRUE)
     msg <- sprintf("pixi install failed (%s) for r-zig-slim + r-zig-toolchain + %s from %s",
                    st, paste(needed, collapse = " "), paste(channels, collapse = ", "))
-    md <- c(sprintf("## r-zig stress: %s %s, conda", os, arch), "", sprintf("**The conda env could not be made**: %s.", msg),
+    cls <- classify(first_error(elog)$text)                   # upstream: the channels' packages conflict (U4)
+    md <- c(sprintf("## r-zig stress: %s %s, conda", os, arch), "", sprintf("**The conda env could not be made** (class %s): %s.", cls, msg),
             "", "Its log (`logs/conda-env.log`) ends:", "", "```", tail(why, 40), "```")
     writeLines(md, file.path(out, "report.md"))
     writeLines(js(list(info = list(os = os, arch = arch, dist = "conda", channel = channel, out = out,
-                                   args = paste(argv, collapse = " "), finished = TRUE, error = msg),
+                                   args = paste(argv, collapse = " "), finished = TRUE, error = msg, class = cls),
                        results = data.frame())), file.path(out, "report.json"))
     if (nzchar(Sys.getenv("GITHUB_STEP_SUMMARY"))) cat(md, file = Sys.getenv("GITHUB_STEP_SUMMARY"), sep = "\n", append = TRUE)
     writeLines(md)
@@ -241,8 +281,29 @@ if (win) Sys.setenv(TMP = tmp, TEMP = tmp)
 # zig caches every object it compiles: in the run directory, whatever the
 # caller set (as scripts/env.sh does for the build). --resume reuses it.
 Sys.setenv(ZIG_GLOBAL_CACHE_DIR = file.path(out, "zig-cache"), ZIG_LOCAL_CACHE_DIR = file.path(out, "zig-cache"))
+# rzig's own cache is outside the run directory, where cache.zig puts it
+# (an empty variable counts as unset). The run removes at its end what it
+# added there (V8's archive copy on macOS, a libc++ mirror per zig, linux's
+# dso-fini object, Windows' cfguard stub), never an older entry.
+cache_home <- c(Sys.getenv("XDG_CACHE_HOME"), if (win) Sys.getenv("LOCALAPPDATA"),
+                if (nzchar(Sys.getenv("HOME"))) file.path(Sys.getenv("HOME"), ".cache"), "/tmp/.cache")
+rzig_cache <- file.path(chartr("\\", "/", cache_home[nzchar(cache_home)][1]), "r-zig")
+rzig_cache_had <- dir.exists(rzig_cache)
+rzig_cache_old <- list.files(rzig_cache, all.files = TRUE, no.. = TRUE)
 if (win && nzchar(envdir)) Sys.setenv(R_TOOLS_SOFT = envdir)   # Rtools' place for libraries (sf/terra copy share/gdal, share/proj)
 if (flag("trace")) Sys.setenv(RZIG_TRACE = "1")
+# CMake searches Homebrew whatever PATH says: its Platform/Darwin.cmake adds
+# `brew --prefix`, or /opt/homebrew on arm64 when brew is not on PATH, before
+# the env's prefix (round 2: arrow's libarrow linked /opt/homebrew/lib/libsnappy.a).
+# A toolchain file from the environment (CMake >= 3.21) leaves Homebrew's
+# prefixes out of every find_*; a package's own -DCMAKE_TOOLCHAIN_FILE wins.
+# It also replaces a build-7 tree's own etc/r-zig.cmake (etc/Renviron keeps
+# a value that is already set); --keep-path leaves the tree's in place.
+if (os == "macos" && !flag("keep-path") && nzchar(sysroot)) {
+  tc <- file.path(out, "no-homebrew.cmake")
+  writeLines("set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local)", tc)
+  Sys.setenv(CMAKE_TOOLCHAIN_FILE = tc)
+}
 # PATH: the libraries env's programs (cmake, pkg-config, make, zig, flang)
 # first, then the OS's base directories, nothing else (no Homebrew, no
 # Rtools or Strawberry gcc). On Linux and macOS this is scripts/env.sh's
@@ -258,8 +319,8 @@ info <- list(
   r_home = rhome, libraries_env = sysroot, commit = commit, jobs = jobs, path = if (flag("keep-path")) "kept" else "narrowed",
   zig = if (nzchar(zig)) tryCatch(system2(zig, "version", stdout = TRUE, stderr = FALSE)[1], error = function(e) "") else "",
   cc = tryCatch(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "--no-user-files", "CC"), stdout = TRUE)[1], error = function(e) ""),
-  sysdeps_missing = paste(sysdeps_missing, collapse = " "), tsv = tsv, out = out,
-  args = paste(argv, collapse = " "), minutes = 0, finished = FALSE, error = "")
+  sysdeps_missing = paste(sysdeps_missing, collapse = " "), tsv = tsv, out = out, rzig_cache = rzig_cache,
+  rzig_cache_removed = "", args = paste(argv, collapse = " "), minutes = 0, finished = FALSE, error = "")
 
 # --- the report (written after every package, so a killed run keeps one) ------
 results <- list()
@@ -282,13 +343,15 @@ write_report <- function(final = FALSE) {
           sprintf("zig %s; CC `%s`; libraries env `%s`%s.", info$zig, info$cc, sysroot,
                   if (dist == "conda") sprintf(" (%s from %s)", info$r_zig, info$channel) else ""),
           if (length(sysdeps_missing)) sprintf("Sysdeps missing from the env: %s.", info$sysdeps_missing),
+          if (nzchar(info$rzig_cache_removed)) sprintf("The run added to rzig's cache `%s`, and removed at its end: %s.",
+                                                       info$rzig_cache, info$rzig_cache_removed),
           if (nzchar(info$error)) c("", sprintf("**The harness stopped: %s**", cell(info$error))), "",
           sprintf("Targets: %s. Unexpected (!): %d. Dependencies: %s.", count(tg$status), sum(tg$unexpected), count(deps$status)))
   if (nrow(tg)) md <- c(md, "", "| package | group | status | class | expect | min | MB | first error |", "|---|---|---|---|---|---|---|---|",
     sprintf("| %s%s | %s | %s | %s | %s | %s | %s | %s |", tg$package, ifelse(tg$unexpected, " (!)", ""), tg$group, tg$status,
             tg$class, tg$expect, tg$minutes, ifelse(is.na(tg$size_mb), "", tg$size_mb), cell(tg$first_error)))
   bad <- deps[deps$status != "ok", , drop = FALSE]
-  if (nrow(bad)) md <- c(md, "", "Dependencies that did not install:", "",
+  if (nrow(bad)) md <- c(md, "", "Dependencies that failed:", "",
     sprintf("- %s: %s, %s: %s", bad$package, bad$status, bad$class, cell(bad$first_error)))
   md <- c(md, "", "Logs: `logs/<package>.log` (install) and `logs/<package>-smoke.log` in the run directory.")
   writeLines(md, file.path(out, "report.md"))
@@ -319,30 +382,6 @@ row_env <- function(x) {
   if (!length(kv)) return(character())
   setNames(gsub("{env}", envdir, sub("^[^=]*=", "", kv), fixed = TRUE), sub("=.*", "", kv))
 }
-# The class is a suggestion from the failing part of the log; a person
-# decides (README). First match wins.
-patterns <- c(
-  network   = "cannot open URL|cannot open the connection to '?https?:|Could not resolve host|Failed to connect|Connection (timed out|refused|reset)|Temporary failure in name resolution|status was '[45][0-9][0-9]|HTTP (error|status) [45][0-9][0-9]|HTTP/[0-9.]+ [45][0-9][0-9]|Timeout of [0-9]+ seconds was reached|curl: \\([0-9]+\\)|download (failed|error)|SSL connect error",
-  resource  = "No space left on device|[Cc]annot allocate memory|[Oo]ut of memory|std::bad_alloc|Killed signal terminated|virtual memory exhausted|OutOfMemory",
-  abi       = "(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__cxx11|B5cxx11|St3__1|std::__1|__cxa_|__gxx_personality|_Unwind_|\\?[A-Za-z_][A-Za-z0-9_@?$]*@@)",
-  toolchain = "rzig: |(zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib): (cannot |waiting for |could not |no flang|warning: no |warning: R_ZIG_EXTRA_ENV)|zig: error|error: unable to (spawn|create|open|load|parse|emit)|LLVM ERROR|PLEASE submit a bug report|unknown target CPU|unsupported option|unknown argument|compiler cannot create executables|relocation R_[A-Z0-9_]+ .*against|(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__(u)?(div|mod|mul)ti3|___chkstk_ms|__extend|__trunc|__emutls)",
-  sysdep    = "(?m)configure: error|was not found in the pkg-config search path|No package '[^']+' found|fatal error: '?[^ ']+\\.h'?( file)? not found|\\.h: No such file|cannot find -l|unable to find (dynamic |static )?system library|library not found for -l|command not found|: not found$|[Cc][Mm]ake.*not found|Could NOT find")
-first_error <- function(log) {
-  x <- tryCatch(readLines(log, warn = FALSE), error = function(e) character())
-  x <- iconv(x, "", "UTF-8", sub = "?")
-  strong <- grep("(^|[^A-Za-z])(error|Error|ERROR)(:| in | at |\\[)|undefined (symbol|reference)|[Ss]ymbol not found|cannot find -l|library not found for -l|unable to find (dynamic |static )?system library|Killed signal|No space left", x)
-  weak <- grep("not found|timed out|[Ff]ailed", x)
-  hit <- c(strong, weak)[1]
-  from <- if (!is.na(hit)) hit else max(1, length(x) - 40)
-  line <- if (!is.na(hit)) x[hit] else tail(c("", x[nzchar(trimws(x))]), 1)
-  # classify on the failing part only: a benign line earlier in the log
-  # (a download that was retried, a configure probe) must not decide it
-  list(line = substr(trimws(line), 1, 240), text = paste(x[from:max(from, length(x))], collapse = "\n"))
-}
-classify <- function(text) {
-  for (k in names(patterns)) if (grepl(patterns[[k]], text, perl = TRUE)) return(k)
-  "package"
-}
 expected <- function(e) {
   e <- words(e)
   if (!length(e)) return("?")
@@ -369,7 +408,8 @@ for (i in seq_len(nrow(items))) {
               group = if (nrow(row)) row$group else "", os = os, arch = arch, dist = dist,
               version = if (it$name %in% rownames(db)) unname(db[it$name, "Version"]) else "",
               expect = if (nrow(row)) expected(row$expect) else "ok",
-              status = "", class = "", minutes = 0, size_mb = NA, first_error = "", log = paste0("logs/", id, ".log"))
+              status = "", class = "", minutes = 0, size_mb = NA, first_error = "", log = paste0("logs/", id, ".log"),
+              loads = NA)
   rec <- tryCatch({
     vlib <- if (nzchar(it$variant)) file.path(out, paste0("lib-", it$variant)) else lib
     dir.create(vlib, showWarnings = FALSE)
@@ -408,27 +448,42 @@ for (i in seq_len(nrow(items))) {
     if (installed) {
       files <- list.files(file.path(vlib, it$name), recursive = TRUE, full.names = TRUE)
       rec$size_mb <- round(sum(file.info(files)$size) / 2^20, 1)
-      # load every package; targets also run their smoke call. In a file:
-      # no quoting issues on any OS.
+      # load every package; targets also run their smoke call. Then unload
+      # it, as R CMD check does (here a warning, such as a failed .onUnload,
+      # is an error), and let R exit: a crash in either is how Z9 shows on
+      # linux (results/2026-10-08.md). gc() before the unload: the smoke
+      # call's objects run their finalizers while the package's code is
+      # still loaded, not after its .onUnload unloaded the DLL (a false
+      # crash). The markers (stderr, unbuffered) tell which step failed. In
+      # a file: no quoting issues on any OS.
       smoke <- if (nrow(row) && nzchar(row$smoke) && row$smoke != "-") row$smoke else "TRUE"
+      marks <- paste("stress:", c("loaded", "smoke ok", "unloaded"))
       sf <- file.path(out, "smoke", paste0(id, ".R"))
-      writeLines(c(sprintf("suppressPackageStartupMessages(library(%s))", it$name), sprintf("res <- local(%s)", smoke),
-                   "print(res)", "if (isFALSE(res)) stop(\"the smoke call returned FALSE\")"), sf)
+      writeLines(c(sprintf("suppressPackageStartupMessages(library(%s))", it$name), sprintf("message(\"%s\")", marks[1]),
+                   sprintf("res <- local(%s)", smoke), "print(res)", "if (isFALSE(res)) stop(\"the smoke call returned FALSE\")",
+                   "rm(res); invisible(gc())", sprintf("message(\"%s\")", marks[2]), "options(warn = 2)",
+                   sprintf("unloadNamespace(\"%s\")", it$name), sprintf("message(\"%s\")", marks[3])), sf)
       slog <- sub("\\.log$", "-smoke.log", log)
-      s <- run(c("--vanilla", "--no-echo", shQuote(paste0("--file=", sf))), slog, 5, env)
-      if (s$status == 0) rec$status <- "ok" else {
-        fe <- first_error(slog)
-        rec$status <- if (s$status == 124) "timeout" else "smoke-failed"
-        rec$class <- if (s$status == 124) "timeout" else classify(fe$text)
-        rec$first_error <- fe$line
+      # 10 min: rstan's smoke call compiles a Stan model (1.5 min on linux in round 1)
+      s <- run(c("--vanilla", "--no-echo", shQuote(paste0("--file=", sf))), slog, 10, env)
+      seen <- marks %in% trimws(read_log(slog))
+      if (s$status == 0 && all(seen)) rec$status <- "ok" else {
+        step <- if (!seen[2]) "smoke" else if (!seen[3]) "unload" else "exit"
+        fe <- first_error(slog, after = switch(step, unload = marks[2], exit = marks[3]))
+        rec$status <- if (step == "smoke" && s$status == 124) "timeout" else paste0(step, "-failed")
+        # a signal (unix: 128 + its number) or a Windows exception code (< 0)
+        rec$class <- if (s$status == 124) "timeout" else if (s$status >= 128 || s$status < 0) "crash" else classify(fe$text)
+        rec$first_error <- if (nzchar(fe$line)) fe$line else sprintf("R exited with status %s", s$status)
+        # it loaded, and the smoke call, the unload or the exit failed: its dependents still install
+        rec$loads <- seen[1]
       }
     }
     rec
   }, error = function(e) { rec$status <- "error"; rec$class <- "harness"; rec$first_error <- conditionMessage(e); rec })
-  # anything but ok (a failed install, load or smoke call) skips the
-  # package's dependents; variants live in their own library: nothing
-  # depends on them
-  if (rec$status != "ok" && !nzchar(it$variant)) failed <- c(failed, it$name)
+  # anything but ok skips the package's dependents, except a package that
+  # loaded (its smoke call, unload or exit failed); variants live in their
+  # own library: nothing depends on them
+  if (rec$status != "ok" && !nzchar(it$variant) && !isTRUE(rec$loads)) failed <- c(failed, it$name)
   message(sprintf("[%d/%d] %s: %s%s (%s min)", i, nrow(items), it$package, rec$status,
                   if (nzchar(rec$class) && rec$status != "ok") paste0(", ", rec$class) else "", rec$minutes))
   results[[i]] <- rec
@@ -437,6 +492,11 @@ for (i in seq_len(nrow(items))) {
   unlink(list.files(tmp, full.names = TRUE, all.files = TRUE, no.. = TRUE), recursive = TRUE)
 }
 
+# what the run added to rzig's cache, and the cache itself if the run made
+# it; unlink() removes a symlink (the libc++ mirror's), not what it points to
+added <- setdiff(list.files(rzig_cache, all.files = TRUE, no.. = TRUE), rzig_cache_old)
+unlink(c(file.path(rzig_cache, added), if (!rzig_cache_had) rzig_cache), recursive = TRUE)
+info$rzig_cache_removed <- paste(added, collapse = " ")
 res <- write_report(final = TRUE)
 writeLines(readLines(file.path(out, "report.md")))
 message("report: ", file.path(out, "report.md"))
