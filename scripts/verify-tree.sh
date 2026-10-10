@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Static checks of the installed R tree, the tree that ships
 # (feat-no-host-paths PLAN.md, F1, F1.6 and F1.7). `zig build` installs
-# it into dist/R-<ver>-<flavor>-zig (Windows: its Library/ layout) with
+# it into dist/<flavor>/R-<ver>-zig (Windows: its Library/ layout) with
 # the runtime data it needs from the env (build.zig's installEnvRuntime),
 # zig-build.sh then vendors the env's shared libraries into it
 # (vendor-libs.sh), and package-standalone.sh only archives it. CI runs
@@ -68,9 +68,9 @@
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
 
-TREE="${1:-${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}}"
+TREE="${1:-$PREFIX}"
 command -v cygpath > /dev/null 2>&1 && TREE="$(cygpath -u "$TREE")"
-if [ "$OS" = windows ]; then rh="Library/lib/R"; else rh="lib/R"; fi
+rh="$RH"
 test -d "$TREE/$rh" || { echo "error: no R tree at $TREE ($rh missing): run 'pixi run build' first" >&2; exit 1; }
 TREE="$(cd "$TREE" && pwd)"
 echo "== verifying the installed tree $TREE ($OS/$FLAVOR)"

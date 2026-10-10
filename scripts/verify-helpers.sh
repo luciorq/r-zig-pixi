@@ -1,11 +1,64 @@
-# Helpers shared by verify-tree.sh, verify-bundle.sh, hermetic-check.sh
-# and vendor-libs.sh (whose Windows walk copies what needed_of names, the
-# imports verify-tree.sh then checks, and which removes what
-# vendored_files names, the files verify-tree.sh counts as conda's).
-# Source this after env.sh (which sets OS and holds MACOS_MIN, macho_minos
-# and version_gt); do not execute it. Each reads what a binary needs and
-# where it looks for it from the file itself: patchelf on linux, otool on
-# macOS, binutils' objdump on Windows.
+# Helpers shared by verify-tree.sh, verify-toolchain.sh, verify-bundle.sh,
+# hermetic-check.sh, unpack-toolchain.sh and vendor-libs.sh (whose Windows
+# walk copies what needed_of names, the imports verify-tree.sh then
+# checks, and which removes what vendored_files names, the files
+# verify-tree.sh counts as conda's). Source this after env.sh (which sets
+# OS and holds MACOS_MIN, macho_minos and version_gt); do not execute it.
+# Each reads what a binary needs and where it looks for it from the file
+# itself: patchelf on linux, otool on macOS, binutils' objdump on Windows.
+
+# An archive's members that are files or links, one per line, as stored
+# (R-<ver>-zig/...): not its directories, which every archive of a tree
+# repeats (zip stores them as members of their own). The lists of archives
+# extracted into one directory compare on these (PHASE3 C6).
+archive_files() {
+  case "$1" in
+    *.zip) unzip -Z1 "$1" ;;
+    *) tar -tzf "$1" ;;
+  esac | awk '!/\/$/'
+}
+
+# Extract archive $1 into directory $2. unzip -n: an archive extracted
+# beside another never overwrites its files, and never stops to ask
+# (unzip's overwrite prompt waits on stdin, which hangs a CI leg; C6).
+extract_archive() {
+  case "$1" in
+    *.zip) unzip -q -n "$1" -d "$2" ;;
+    *) tar -xzf "$1" -C "$2" ;;
+  esac
+}
+
+# Each directory named, as it is set and resolved (Windows: also C:/...,
+# and with long names), one per line: what a build path in a file may look
+# like (verify-tree.sh's and verify-toolchain.sh's scans).
+path_forms() {
+  local d
+  for d in "$@"; do
+    [ -n "$d" ] || continue
+    printf '%s\n' "$d"
+    if [ -d "$d" ]; then (cd "$d" && pwd -P); fi
+    if [ "$OS" = windows ]; then
+      cygpath -m "$d"
+      if [ -d "$d" ]; then cygpath -m -l "$d"; fi
+    fi
+  done
+}
+
+# One ERE for the paths on stdin: trailing separators dropped, each
+# separator either one, once or more (a newline stands in while the regex
+# characters are escaped), duplicates once. More than once: a Windows
+# binary can hold a path with every backslash doubled (the conda package's
+# R.dll built in CI on 2026-09-25 named its work dir 84 times as
+# D:\\a\\..., and no other way).
+path_re() {
+  local f r re=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    r="$(printf '%s' "$f" | sed -e 's#[/\\]*$##' -e 's#[/\\]#\n#g' -e 's#[][*.^$+?(){}|]#\\&#g' -e 's#\n#[/\\\\]+#g')"
+    if [ -n "$r" ]; then re="${re:+$re|}$r"; fi
+  done < <(sort -u)
+  printf '%s\n' "$re"
+}
 
 # The files vendor-libs.sh vendored from the env $2 into the tree at
 # prefix $1, one path per line, recognised by name, the one rule both

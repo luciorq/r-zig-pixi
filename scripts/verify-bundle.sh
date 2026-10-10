@@ -30,51 +30,20 @@
 # Tcl/Tk and DLL closure) read files, headers and load commands, which
 # moving the tree does not change: verify-tree.sh runs them on the
 # installed tree right after the build. Shared helpers: verify-helpers.sh
-# (rpaths_of, needed_of, cxx_deps, minos_over_floor).
+# (extract_archive, rpaths_of, needed_of, cxx_deps, minos_over_floor).
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
 
-case "$OS" in
-  linux)
-    case "$(uname -m)" in
-      x86_64) plat=linux-64 ;;
-      aarch64) plat=linux-aarch64 ;;
-      *) plat="linux-$(uname -m)" ;;
-    esac
-    ext=tar.gz
-    ;;
-  macos)
-    case "$(uname -m)" in
-      arm64) plat=osx-arm64 ;;
-      x86_64) plat=osx-64 ;;
-      *) plat="osx-$(uname -m)" ;;
-    esac
-    ext=tar.gz
-    ;;
-  windows)
-    plat=win-64
-    ext=zip
-    ;;
-esac
-
-artifact="$ROOT/dist/R-$R_VERSION-$FLAVOR-$plat.$ext"
+artifact="$ROOT/dist/R-$R_VERSION-$FLAVOR-$PLAT.$ARCHIVE_EXT"
 test -f "$artifact" || { echo "error: $artifact not found — run 'pixi run package' first" >&2; exit 1; }
 
 VERIFY_DIR="$(mktemp -d)"
 trap 'rm -rf "$VERIFY_DIR"' EXIT
 echo "== extracting $artifact to $VERIFY_DIR"
-if [ "$ext" = zip ]; then
-  unzip -q "$artifact" -d "$VERIFY_DIR"
-else
-  tar -xzf "$artifact" -C "$VERIFY_DIR"
-fi
-# Same $PREFIX-basename derivation as package-standalone.sh's own
-# prefix_base — the archive's top-level directory name matches
-# whatever $PREFIX actually was at package time (zig-built prefixes carry
-# a "-zig" suffix), not a hardcoded "R-$R_VERSION-$FLAVOR" (found via a
-# real verify-bundle run against a zig-built prefix on kappa: extraction
-# succeeded but the hardcoded BUNDLE_DIR guess didn't exist).
-BUNDLE_DIR="$VERIFY_DIR/$(basename "$PREFIX")"
+extract_archive "$artifact" "$VERIFY_DIR"
+# The archive's top directory, R-<ver>-zig/ (feat-standalone-toolchain
+# B36): package-standalone.sh archives only a tree of that name.
+BUNDLE_DIR="$VERIFY_DIR/$TOP"
 
 # minimal (the wheel profile) has no cairo/png by design — assert that
 # instead, so a graphics stack creeping back in fails here too.

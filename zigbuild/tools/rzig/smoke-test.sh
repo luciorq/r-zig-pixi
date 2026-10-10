@@ -16,7 +16,7 @@
 #    its own there (environment.zig), and R_ZIG_EXTRA_ENV is unset for
 #    this part: the shims know neither, and an extra environment would add
 #    an rpath.
-# 2. With an R prefix (an installed tree such as dist/R-4.6.1-slim-zig,
+# 2. With an R prefix (an installed tree such as dist/slim/R-4.6.1-zig,
 #    whose bin/toolchain is rzig since F3a): small C, C++, Fortran and
 #    OpenMP packages install from source and load, and with
 #    RZIG_SMOKE_CRAN=1 also CRAN's Rcpp, data.table and quadprog.

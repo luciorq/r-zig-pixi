@@ -235,18 +235,26 @@ choices made, and "Phase 2 tested" the results and the review.
 Needs (answered): B7, B12, B13, B17, B23, B24, B25, B26, B30, B31, B36,
 B38, B42, B43.
 
-- [ ] env.sh: platform name once; prefixes `dist/<flavor>/R-<ver>-zig`
+- [x] env.sh: platform name once; prefixes `dist/<flavor>/R-<ver>-zig`
       and `dist/toolchain/R-<ver>-zig` (replacing env.sh:29's PREFIX);
       the seven scripts (zig-build, zig-package, zig-verify-package,
       zig-smoke, zig-contract, verify-tree, hermetic-check) read them;
-      make-wheel.py:350 derives the same prefix
-- [ ] build.zig toolchain step (pixi task `toolchain`), each directory
+      make-wheel.py:350 derives the same prefix (step 1, 2026-10-10,
+      uncommitted: zig-package.sh and zig-verify-package.sh deleted;
+      package-standalone.sh, verify-bundle.sh and fetch-zig.sh read the
+      platform too; tested on linux-64, PLAN.md's "Phase 3 record")
+- [x] build.zig toolchain step (pixi task `toolchain`), each directory
       with `LICENSES/` and `SOURCES`: `openmp/` (moved out of the base),
       unix `usr/bin/make` (moved out of minimal's tree), Windows
       `binutils/`: nm, dlltool, as, strip, windres (moved out of
       installWindowsCompilerContract) and objdump (new, from
       binutils_impl_win-64; check it ships it); ar, ranlib and ld.exe
-      dropped
+      dropped (step 2, 2026-10-10, uncommitted: its own build root,
+      zigbuild/toolchain/build.zig (open point A a), with
+      `toolchain-test`, `verify-toolchain` and `unpack-toolchain`;
+      objdump ships; `binutils/` also gets zstd.dll and vcruntime140.dll;
+      the R trees keep their copies until step 3; tested on linux-64,
+      PLAN.md's "Phase 3 record: step 2")
 - [ ] The base's TC holds only rzig; Windows adds `zig-ar.exe`,
       `zig-ranlib.exe`, `gcc-ar.exe`, `gcc-ranlib.exe` and drops `zig-cc`
       and `zig-cxx`; verify-tree.sh's rzig names (76) follow
@@ -277,11 +285,14 @@ B38, B42, B43.
 - [ ] Check mode lines on Windows, before the preflight shows them: one
       path separator (find_zig joins with `\`, rzig's own path has `/`);
       a zig that cannot start says so, not "does not say its zig version"
-- [ ] package-standalone.sh: base archive + compilers + build-tools
-      archives, `.sha256` each
+- [x] package-standalone.sh: base archive + compilers + build-tools
+      archives, `.sha256` each (step 2: `package-standalone.sh
+      toolchain`, pixi task `package-toolchain`)
 - [ ] hermetic-check.sh: the R tree is the base, nothing deleted
 - [ ] verify-tree.sh: base TC = rzig only; toolchain tree records,
       closures (OS, own directory, base runtime), glibc 2.28 ceiling
+      (the toolchain tree's part: verify-toolchain.sh, step 2; the base's
+      and the move of the 2.28 tier: step 3)
 - [ ] verify-bundle.sh: the three scenarios (scenario 2 takes zig from
       `ZIG_BIN=$ZIG` and flang from the env until phases 5 and 6; Windows
       scenario 3 takes sh/make from the env until phase 7); file-list

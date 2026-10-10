@@ -2,7 +2,7 @@
 """Assemble the r-zig wheels from the minimal variant's standalone tree.
 
 Input is the tree `pixi run -e minimal build` leaves in
-dist/R-<ver>-minimal-zig, the same tree the standalone archive packs
+dist/minimal/R-<ver>-zig, the same tree the standalone archive packs
 (feat-no-host-paths F1.7): installed by zig build (location-independent
 launchers, $ORIGIN/@loader_path rpaths, rzig + GNU make in
 lib/R/bin/toolchain, a Makeconf that names no build path, the env's CA
@@ -348,7 +348,7 @@ def main() -> None:
     variant = os.environ.get("R_BUILD_VARIANT", "slim")
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--prefix", default=os.path.join(ROOT, "dist", f"R-{r_version}-{variant}-zig"),
+    ap.add_argument("--prefix", default=os.path.join(ROOT, "dist", variant, f"R-{r_version}-zig"),
                     help="installed R tree, as zig-build.sh leaves it (default: %(default)s)")
     ap.add_argument("--out-dir", default=os.path.join(ROOT, "dist", "wheel"))
     ap.add_argument("--version", default=r_version, help="wheel version (default: the R version)")

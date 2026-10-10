@@ -2541,6 +2541,280 @@ Tests:
   routing check moved, on the packages that use it.
 - File lists: base ∪ groups = R tree ∪ toolchain tree, no overlap.
 
+**Status (2026-10-10): steps 1 and 2 of 6 implemented and tested on
+linux-64, not committed.** The worktree feat-standalone-phase3 (branch
+feat-standalone-phase3, from main 966d661) follows the reviewed
+implementation plan (PHASE3-IMPLEMENTATION.md and CRITIQUE.md, in
+/data/gamma/luciorq/workspaces/temp/r-zig-pixi/phase3plan/critic/), with
+the user's answers to its open points: A (a), the toolchain build in its
+own zigbuild/toolchain/build.zig, run by `pixi run toolchain` through
+`zig build --build-file`; B (a), a compile tree (step 3). Steps 1 and 2
+touch none of PR #23's (fix-no-build-leftovers) regions; steps 3 to 6
+follow once it merges. Step 3 (the base and the three scenarios) is
+next.
+
+#### Phase 3 record: step 1, paths (2026-10-10, linux-64)
+
+What changed (B36, B17):
+- env.sh computes each of these once: `PLAT` (conda's name for the
+  platform), `ARCHIVE_EXT` (zip on Windows, else tar.gz), `RH` (R_HOME
+  in a prefix), `TOP` (`R-<ver>-zig`), `PREFIX`
+  (`dist/<flavor>/R-<ver>-zig`) and `TOOLCHAIN_PREFIX`
+  (`dist/toolchain/R-<ver>-zig`, used from step 2). `R_HOME_DIR` is
+  `$PREFIX/$RH`. The old `PREFIX`, `dist/R-<ver>-<flavor>`, was a path
+  nothing installed into: only configure-only.sh's capture passed it to
+  R's configure, and gen-subst.sh turns it into `@ZR_PREFIX@` before
+  `$ROOT`, so the vendored configs do not change (C37).
+- zig-build.sh, zig-smoke.sh, zig-contract.sh, hermetic-check.sh and
+  verify-tree.sh read `PREFIX` and `RH` instead of deriving
+  `dist/R-<ver>-<flavor>-zig` each.
+- package-standalone.sh archives `$PREFIX` from its parent, so the top
+  directory is `R-<ver>-zig/`. A prefix of another name fails (B1). The
+  archive's name is unchanged. verify-bundle.sh reads `PLAT`,
+  `ARCHIVE_EXT` and `TOP`. Their two copies of the platform table are
+  gone.
+- zig-package.sh and zig-verify-package.sh are deleted. The tasks
+  `package` and `verify-package` call package-standalone.sh and
+  verify-bundle.sh.
+- make-wheel.py's `--prefix` default is `dist/<variant>/R-<ver>-zig`.
+- The stress task runs `dist/slim/R-<ver>-zig`'s Rscript.
+- clean.sh removes the flavor's tree, since `PREFIX` names it now.
+- Comments that named `dist/R-*-zig` follow: pixi.toml, recipe/build.sh,
+  rzig's smoke-test.sh, verify-tree.sh's first lines.
+- Trees from before, `dist/R-<ver>-<flavor>-zig/`, stay on disk and
+  nothing reads them. Delete them by hand.
+
+Three changes the plan puts elsewhere, each from the same rule (every
+script reads env.sh's names):
+- verify-bundle.sh's `BUNDLE_DIR` is `$VERIFY_DIR/$TOP` now, not in step
+  3's rewrite: the top directory changes in this step.
+- make-wheel.py's default moves now, not in step 3 (TODO.md lists it
+  with env.sh): the wheel reads the moved tree.
+- fetch-zig.sh's wheel table is keyed on `PLAT`: it computed the
+  platform name too.
+
+PR #23 overlap: this step changes verify-tree.sh's lines 4, 71 and 73
+only, outside #23's hunks. `git merge-file` of verify-tree.sh,
+vendor-libs.sh, build.zig and recipe.yaml against #23's worktree (merged
+with 966d661) gives no conflict.
+
+Tests (linux-64, conda-forge zig 0.16.0, every task with `--locked`;
+the code diff, records left out, had sha256 1f83a7ee...877218; pixi.lock
+had sha256 fbb64b7b...a68bb96 before and after):
+- `rzig-test`: 94/94 unit tests; parity 76 / 59 / 34 deliberate / 0
+  failed.
+- default (slim), from an empty worktree: build (R fetched, then 2m56s)
+  into `dist/slim/R-4.6.1-zig`, verify-tree, smoke, contract, hermetic
+  and verify-package pass.
+- minimal: build into `dist/minimal/R-4.6.1-zig`, verify-tree and
+  verify-package pass.
+- wheel: wheel (from `dist/minimal/R-4.6.1-zig`) and wheel-test pass.
+- The archives keep their names (`dist/R-4.6.1-slim-linux-64.tar.gz`,
+  `dist/R-4.6.1-minimal-linux-64.tar.gz`), and each has the one top
+  directory `R-4.6.1-zig`. Their `.sha256` files check.
+- package-standalone.sh with `R_INSTALL_PREFIX` naming the slim tree
+  through a link of another name fails with the B36 message and writes
+  nothing.
+- `pixi run -e stress stress --help` and `--list g1` run the moved
+  tree's Rscript.
+- `fetch-zig` prints `build/zig-upstream/ziglang-0.16.0-linux-64/...`,
+  the same directory as before, and that zig says 0.16.0.
+
+#### Phase 3 record: step 2, the toolchain tree (2026-10-10, linux-64)
+
+What changed (B30, B17, point 3; open point A (a)):
+- zigbuild/toolchain/build.zig, a build root of its own, as rzig's is:
+  `zig build --build-file zigbuild/toolchain/build.zig --prefix <tree>`.
+  It needs no R source and runs no R configure. It copies the groups'
+  third-party files from the env (CONDA_PREFIX) into
+  `<tree>/<RH>/bin/toolchain/`: `openmp/` (llvm-openmp's omp.h, and
+  ompx.h, omp-tools.h and ompt.h where the env has them, installOpenMP's
+  list; Windows also `lib/libomp.lib`), unix `usr/bin/make`, Windows
+  `binutils/` (nm, dlltool, as, strip, windres and objdump, with the two
+  DLLs they load, below). R's build.zig is not touched: the R trees keep
+  their copies until step 3, at other paths, so nothing breaks.
+- zigbuild/toolchain/conda.zig: the conda-meta reader and the SOURCES
+  writer, with 5 unit tests on fixture records (paths_data, a prefix
+  placeholder, a file in no record, a file missing from paths_data, a
+  path with a blank, a Windows record's `\`; C31).
+- A file's package is the conda-meta record whose `files` lists its path
+  (C23). A file no record lists, one with no sha256 in paths_data, one
+  with a prefix placeholder, and a package with no licence files stop
+  the build and name it.
+- `SOURCES` in each directory: one block per package (`package:`,
+  `version:`, `build:`, `url:`, `sha256:`, `license:`), then one line per
+  file, `file: <path in the package> -> <path here> <sha256>`. It names
+  no local path. `LICENSES/<package>/` is the package's
+  `info/licenses/` from the package cache (the record's
+  `extracted_package_dir`), subdirectories kept. A missing cache stops
+  the build with "reinstall the env (pixi reinstall; in CI, setup-pixi
+  with cache: false)" (C33, risk 2).
+- When the prefix is the env (the conda build, from step 3), only
+  Windows' six binutils are installed, with their records (B41); conda's
+  packages provide the rest. On unix nothing is installed.
+- scripts/zig-toolchain.sh runs it with env.sh's `$ZIG` (both zigs).
+  A plain install first removes env.sh's toolchain tree (zig's install
+  keeps files it no longer installs), never an `R_TOOLCHAIN_PREFIX`.
+  Its arguments go to zig build: `zig-toolchain.sh test` runs the unit
+  tests.
+- package-standalone.sh takes a mode, `base` (the default, as before) or
+  `toolchain`: one archive per group,
+  `dist/R-<ver>-<plat>-<group>.<ext>` and its `.sha256`, holding the
+  group's directories under `R-<ver>-zig/<RH>/bin/toolchain/` (B17,
+  B36). It checks first that every file of the tree is in a group
+  directory and that each group has a directory, then writes.
+- scripts/verify-toolchain.sh, the tree's static checks: layout (group
+  directories only), records (SOURCES, a non-empty `LICENSES/<package>/`
+  per package and no other), each copy's sha256 against SOURCES, build
+  paths (in SOURCES or LICENSES: an error; in a copy: listed, C18),
+  closures (linux: glibc's libraries only, GLIBC at most 2.28, relative
+  rpaths; macOS: /usr/lib and /System, minos at most 13.0; Windows:
+  every import beside the file or the system's) and OpenMP's files.
+- scripts/unpack-toolchain.sh rebuilds the tree from the two archives
+  in `dist/`: it checks each `.sha256` and that each archive's members
+  lie under its own group's directories, removes env.sh's tree and
+  extracts both (C6).
+- env.sh: `TOOLCHAIN_GROUPS` and `group_dirs` (compilers: zig, flang,
+  openmp; build-tools: usr, binutils). Only directories that exist count.
+- verify-helpers.sh: `archive_files` (an archive's files and links, no
+  directories) and `extract_archive` (`unzip -q -n`); verify-bundle.sh
+  extracts with it. Also `path_forms` and `path_re`, verify-tree.sh's
+  build-path helpers, for verify-toolchain.sh. verify-tree.sh keeps its
+  own copies until step 3, since they sit in PR #23's block. #23's
+  `path_forms` also prints each directory's 8.3 short name on Windows
+  (`cygpath -m -s`); the helper's copy does not yet. Step 3, which
+  drops verify-tree.sh's copies, takes #23's body into the helper.
+- pixi.toml, `[feature.pipeline.tasks]`: `toolchain`, `toolchain-test`,
+  `verify-toolchain`, `package-toolchain` (depends on `toolchain`) and
+  `unpack-toolchain`. No dependency change.
+
+Choices, with their reasons:
+- `binutils/` copies zstd.dll and vcruntime140.dll, where the plan's
+  table names zstd.dll alone. C23's check, done from linux on the lock's
+  win-64 packages (sha256 as in pixi.lock), read with objdump -p: the six
+  tools of binutils_impl_win-64 2.46.1 import KERNEL32, API sets and
+  zstd.dll; zstd.dll (zstd 1.5.7) imports VCRUNTIME140.dll
+  (vc14_runtime) besides KERNEL32 and API sets; vcruntime140.dll imports
+  only KERNEL32 and API sets. With both, the tools load with only the
+  system beside them on any Windows, also one without the VC++
+  redistributable, which is what the plan wanted from zstd.dll there.
+  It is the base's rule too: vendor-libs.sh copies every import the
+  env's Library/bin has beside R.dll, vcruntime140.dll included.
+  verify-toolchain.sh checks the closure on kappa. The same check shows
+  objdump ships in binutils_impl_win-64 (the phase's "check that it
+  ships it").
+- The linux closure rule is "glibc's libraries" (libc, libm, libdl,
+  libpthread, librt, libutil, libresolv, ld-linux), not the plan's
+  "libc, libdl and ld.so": one rule for the system's C library. make
+  needs libc and libdl.
+- `group_dirs` is a function: a group name has a `-`, which the plan's
+  `GROUP_DIRS_<group>` variables cannot have.
+- `toolchain-test` runs `zig-toolchain.sh test`, as `check` runs
+  `zig-build.sh check`, rather than an inline `bash -c`.
+
+Tests (linux-64, conda-forge zig 0.16.0 unless named, every task with
+`--locked`; the code diff, records left out, had sha256
+f59cc4a0...feae69; pixi.lock had sha256 fbb64b7b...a68bb96 before and
+after):
+- The chain: `rzig-test` (94/94; parity 76 / 59 / 34 deliberate / 0
+  failed), `toolchain-test` (5/5), then default (slim) build,
+  verify-tree, smoke, contract, hermetic and verify-package; minimal
+  build, verify-tree and verify-package; wheel and wheel-test; `stress
+  --help` and `--list g1` (dist/slim's Rscript); toolchain,
+  verify-toolchain, package-toolchain, verify-toolchain. All pass.
+- `toolchain-test` and `toolchain` with upstream zig (ZIG_BIN from
+  fetch-zig) pass, and so does `-e minimal toolchain`. Both trees are
+  identical to the default env's with conda-forge zig. Its configure
+  step takes about a second.
+- The toolchain tree, `dist/toolchain/R-4.6.1-zig/lib/R/bin/toolchain/`:
+  `openmp/include/{omp.h,ompx.h,omp-tools.h,ompt.h}`, `openmp/SOURCES`
+  (llvm-openmp 23.1.2), `openmp/LICENSES/llvm-openmp/openmp/LICENSE.TXT`,
+  `usr/bin/make`, `usr/SOURCES` (make 4.4.1),
+  `usr/LICENSES/make/COPYING`. verify-toolchain: 9 files, 5 copies with
+  the packages' sha256, make needs libc and libdl and GLIBC 2.17.
+- The archives: `R-4.6.1-linux-64-compilers.tar.gz` (32K: the 4
+  headers, SOURCES, LICENSE.TXT) and `R-4.6.1-linux-64-build-tools.tar.gz`
+  (152K: make, SOURCES, COPYING), each under `R-4.6.1-zig/`, with
+  `.sha256` files that check.
+- One directory, base + compilers + build-tools: the slim base archive
+  (1,941 files and links) and the groups (6 and 3) have disjoint lists,
+  the base's equals the slim tree's, the groups' together equal the
+  toolchain tree's; extracted into one directory, all 1,950 are there,
+  under one `R-4.6.1-zig/`, with `openmp/` and `usr/` beside rzig in
+  `lib/R/bin/toolchain`. That make says GNU Make 4.4.1 and the
+  extracted Rscript runs, both under `env -i`. The same with minimal's
+  base (1,402): its `TC/make` (until step 3) sits beside the group's
+  `usr/bin/make`, no overlap.
+- unpack-toolchain rebuilds the tree from the two archives, identical
+  to the built one (a stray file put in before is gone). It refuses an
+  archive that fails its `.sha256`, and a build-tools archive (with a
+  matching `.sha256`) that holds a file of `openmp/`.
+- verify-toolchain fails, naming the file, on: a copy changed (sha256),
+  a file directly in TC, a file in a directory of no group, a missing
+  `LICENSES/make/`, a SOURCES that names the checkout, a file with no
+  SOURCES line, a SOURCES line with a short sha256. A copy that names
+  `$HOME` (with SOURCES' sha256 matching it) is listed and passes.
+- package-standalone.sh's toolchain mode fails, writing no archive, on
+  a file outside the group directories, a tree with no build-tools
+  directory, and a tree not named `R-4.6.1-zig`; an unknown mode prints
+  the usage. The helpers' zip branch (Windows' format) round-trips with
+  the env's zip and unzip, and a second extract over it asks nothing.
+- With `R_TOOLCHAIN_PREFIX` naming the env, the build installs nothing
+  on unix ("the prefix is the env") and the env is unchanged.
+- PR #23 overlap: this step does not touch build.zig, verify-tree.sh,
+  vendor-libs.sh or recipe.yaml (verify-tree.sh keeps step 1's three
+  lines).
+
+Not tested in this step: the Windows table (`binutils/`, libomp.lib,
+`Library/` paths, the closure check with objdump) and macOS (kappa,
+omicron); CI; conda-package (recipe/build.sh calls the toolchain build
+from step 3).
+
+
+After the steps 1-2 review (2026-10-10), applied and re-run on linux-64
+(lock fbb64b7b): gen-subst.sh keeps its config name in its own variable
+(cfg_plat), not env.sh's PLAT; package-standalone.sh and
+unpack-toolchain.sh convert an override path with cygpath -u on Windows;
+zig-toolchain.sh starts from no tree on every install, arguments or not
+(only `test` keeps it); conda.zig stops on a file two packages list
+(TwoOwners). toolchain-test, toolchain, verify-toolchain,
+package-toolchain and unpack-toolchain pass; a stray file is gone after
+`pixi run toolchain --summary none`. Left for step 3, once #23 is on
+main: verify-helpers.sh's path forms get #23's Windows 8.3 short names.
+#### Phase 3 review: steps 1 and 2 (2026-10-10)
+
+An adversarial review of the uncommitted diff against steps 1 and 2 and
+B1, B17, B20, B23, B24, B30, B36, B43 and open point A. No blocking
+problem. Checked:
+- No script, task, workflow, recipe file, make-wheel.py or stress file
+  still names `dist/R-<ver>-<flavor>-zig` (only historical records do).
+- The packages in pixi.lock ship what the tables copy, with no prefix
+  placeholder: win-64 binutils_impl_win-64 2.46.1 (the six
+  `x86_64-w64-mingw32-*.exe`, each importing KERNEL32, API sets and
+  zstd.dll), zstd 1.5.7 (`Library/bin/zstd.dll`), vc14_runtime
+  (`Library/bin/vcruntime140.dll`), llvm-openmp (`Library/include/omp.h`,
+  `ompx.h`, `Library/lib/libomp.lib`); osx-arm64 and osx-64 make 4.4.1
+  (`bin/make`: minos 11.0, only /usr/lib/libSystem.B.dylib,
+  `@loader_path/../lib/` rpath; osx-arm64's is ad-hoc signed by its
+  linker, and an unchanged copy keeps that signature valid, so nothing
+  re-signs). Each has `info/licenses`. macOS make holds conda-forge's
+  build path under /Users/runner: verify-toolchain.sh lists it on
+  GitHub's runners (C18).
+- No linux-64 env here records two owners for a copied file, and pixi
+  0.81.0's records have `extracted_package_dir` and `paths_data`.
+- `git merge-file` against PR #23's commit (cb386b8) gives no conflict
+  in verify-tree.sh, vendor-libs.sh, build.zig or recipe.yaml.
+- toolchain-test, package-toolchain, verify-toolchain, unpack-toolchain
+  and verify-toolchain pass again here; pixi.lock is unchanged.
+
+Code suggestions, not applied (the review changes comments and docs
+only): the helper's `path_forms` takes #23's 8.3 line (above);
+zigbuild/tools/gen-subst.sh no longer reuses env.sh's name `PLAT` for its
+own `linux-x86_64`-style config name; package-standalone.sh and
+unpack-toolchain.sh turn a Windows-form `R_TOOLCHAIN_PREFIX` into `/c/...`
+with cygpath, as verify-toolchain.sh does; zig-toolchain.sh removes the
+tree before any install, not only one with no arguments.
+
 ### Phase 4 — conda and PyPI on the same boundary
 
 Goal: r-zig-slim and the r-zig wheel carry rzig; the group packages

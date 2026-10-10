@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Run contract-test.sh against the zig-built prefix. Mirrors zig-build.sh's
-# own prefix derivation so callers (CI, `pixi run zig-contract`) don't need
-# to know $FLAVOR to find it.
+# Run contract-test.sh against the installed tree, env.sh's prefix
+# (dist/<flavor>/R-<ver>-zig), so that callers (CI, `pixi run contract`)
+# need not know $FLAVOR to find it.
 . "$(dirname "$0")/env.sh"
 
-PREFIX_ZIG="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
 if [ "$OS" = windows ]; then
-  export R_TEST_R_BIN="$PREFIX_ZIG/Library/lib/R/bin/x64/Rscript.exe"
+  export R_TEST_R_BIN="$R_HOME_DIR/bin/x64/Rscript.exe"
 else
-  export R_TEST_R_BIN="$PREFIX_ZIG/lib/R/bin/Rscript"
+  export R_TEST_R_BIN="$R_HOME_DIR/bin/Rscript"
 fi
 exec bash "$(dirname "$0")/contract-test.sh"

@@ -41,9 +41,9 @@ case "$OS" in
   linux|macos|windows) ;;
   *) echo "hermetic-check: unsupported OS '$OS'" >&2; exit 1 ;;
 esac
-TREE="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
+TREE="$PREFIX"
 command -v cygpath > /dev/null 2>&1 && TREE="$(cygpath -u "$TREE")"
-if [ "$OS" = windows ]; then rh="Library/lib/R"; else rh="lib/R"; fi
+rh="$RH"
 test -d "$TREE/$rh" || { echo "error: no R tree at $TREE; run 'pixi run build' first" >&2; exit 1; }
 # Resolved, so that cp -a below copies the directory and not a symlink
 # to it (which would put R back in its original place and let the

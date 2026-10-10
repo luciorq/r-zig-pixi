@@ -25,14 +25,14 @@ chmod +x scripts/*.sh
 
 # zig build alone (no autoconf, no make) — the default path since
 # Milestone 5's F1-F6 (see .github/devdocs/feat-zig-build/). $R_INSTALL_
-# PREFIX is already rattler's own $PREFIX (set above), so zig-build.sh's
-# PREFIX_ZIG resolves to it directly (no "-zig" suffix leaks into the
-# conda package). zig build installs the final tree: relative rpaths,
-# relocatable launchers, rzig as the compilers in lib/R/bin/toolchain
-# (feat-no-host-paths PLAN.md, F1 and F3); nothing runs after it. What a
-# standalone tree takes from the env (build.zig's installEnvRuntime: the
-# CA bundle, fontconfig's configuration, Tcl/Tk; vendor-libs.sh: the
-# shared libraries) is left out here, since the prefix is the env: its
-# own packages provide all of it. On Windows, etc/Renviron.site points
-# tcltk at the tk package's DLLs instead (MY_TCLTK, installEnvRuntime).
+# PREFIX is already rattler's own $PREFIX (set above), so env.sh's PREFIX
+# is that, not a dev tree's dist/<flavor>/R-<ver>-zig. zig build installs
+# the final tree: relative rpaths, relocatable launchers, rzig as the
+# compilers in lib/R/bin/toolchain (feat-no-host-paths PLAN.md, F1 and
+# F3); nothing runs after it. What a standalone tree takes from the env
+# (build.zig's installEnvRuntime: the CA bundle, fontconfig's
+# configuration, Tcl/Tk; vendor-libs.sh: the shared libraries) is left
+# out here, since the prefix is the env: its own packages provide all of
+# it. On Windows, etc/Renviron.site points tcltk at the tk package's DLLs
+# instead (MY_TCLTK, installEnvRuntime).
 bash scripts/zig-build.sh
