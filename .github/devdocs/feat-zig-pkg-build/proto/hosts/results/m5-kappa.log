@@ -1,0 +1,165 @@
+== host
+
+Microsoft Windows [Version 10.0.22621.4317]
+0.16.0
+R version 4.6.1 (2026-06-24 ucrt) x86_64-w64-mingw32 
+== tree
+ar.exe
+as.exe
+dlltool.exe
+g++.exe
+gcc.exe
+ld.exe
+nm.exe
+ranlib.exe
+rzig.exe
+strip.exe
+windres.exe
+zig-cc
+zig-cxx
+zig-fc.exe
+build_t1.zig
+build_t2.zig
+rpkg.zig
+== cli zig  7:18:28.76
+cli zig rc=0  7:19:47.47
+rzig build: tier 1, root C:/Users/admin/AppData/Local/Temp/RtmpQv0Lgv/R.INSTALL3028653c46bd/cli/src/.rzig
+1
+0
+== cli make  7:19:47.52
+cli make rc=0  7:20:24.57
+== digest zig  7:20:24.58
+digest zig rc=0  7:21:01.10
+rzig build: tier 1, root C:/Users/admin/AppData/Local/Temp/RtmpWWt789/R.INSTALL14a4604b755c/digest/src/.rzig
+2
+0
+== digest make  7:21:01.20
+digest make rc=1  7:21:11.57
+== quadprog zig  7:21:11.57
+quadprog zig rc=0  7:21:14.88
+rzig build: tier 1, root C:/Users/admin/AppData/Local/Temp/Rtmp4iLeiJ/R.INSTALL323c5f624537/quadprog/src/.rzig
+2
+0
+== quadprog make  7:21:14.92
+quadprog make rc=1  7:21:16.03
+== Rcpp zig  7:21:16.03
+Rcpp zig rc=0  7:21:36.64
+rzig build: tier 1, root C:/Users/admin/AppData/Local/Temp/RtmpMPgyGq/R.INSTALL312ce0360b/Rcpp/src/.rzig
+1
+0
+== Rcpp make  7:21:36.67
+Rcpp make rc=1  7:22:04.29
+== parity (objdump exports, imports, rzig argv)
+cli       exports zig: 186 | make: 188 | DIFFER: zig-only +base[   7]  0006 cleancall_MakeExternalPtrFn +base[   8]  0007 cleancall_SetExternalPtrAddrFn +base[   9]  0008 cleancall_call +base[  10]  0009 cleancall_fns_dot_call +base[  11]  000a cleancall_init +base[  12]  000b cli__kill_thread +base[  13]  000c cli__progress_update +base[  14]  000d cli__reset +base[  15]  000e cli__start_thread +base[  16]  000f cli__tick_ts +base[  17]  0010 cli__timer_flag +base[  18]  0011 cli_init_altrep +base[  19]  0012 cli_keypress +base[  20]  0013 cli_pkgenv +base[  21]  0014 cli_progress_add +base[  22]  0015 cli_progress_bar +base[  23]  0016 cli_progress_done +base[  24]  0017 cli_progress_init_timer +base[  25]  0018 cli_progress_num +base[  26]  0019 cli_progress_set +base[  27]  001a cli_progress_set_clear +base[  28]  001b cli_progress_set_format +base[  29]  001c cli_progress_set_name +base[  30]  001d cli_progress_set_status +base[  31]  001e cli_progress_set_type +base[  32]  001f cli_progress_sleep +base[  33]  0020 cli_progress_update +base[  34]  0021 cli_speed_time +base[  35]  0022 cli_term_clear_cells +base[  36]  0023 cli_term_clear_line +base[  37]  0024 cli_term_clear_screen +base[  38]  0025 cli_term_color_bg_to_string +base[  39]  0026 cli_term_color_fg_to_string +base[  40]  0027 cli_term_csi_dispatch +base[  41]  0028 cli_term_execute +base[  42]  0029 cli_term_execute_cbt +base[  43]  002a cli_term_execute_cha +base[  44]  002b cli_term_execute_cht +base[  45]  002c cli_term_execute_cnl +base[  46]  002d cli_term_execute_cpl +base[  47]  002e cli_term_execute_ctc +base[  48]  002f cli_term_execute_cub +base[  49]  0030 cli_term_execute_cud +base[  50]  0031 cli_term_execute_cuf +base[  51]  0032 cli_term_execute_cup +base[  52]  0033 cli_term_execute_cuu +base[  53]  0034 cli_term_execute_dch +base[  54]  0035 cli_term_execute_decstbm +base[  55]  0036 cli_term_execute_dl +base[  56]  0037 cli_term_execute_ech +base[  57]  0038 cli_term_execute_ed +base[  58]  0039 cli_term_execute_el +base[  59]  003a cli_term_execute_ich +base[  60]  003b cli_term_execute_il +base[  61]  003c cli_term_execute_rep +base[  62]  003d cli_term_execute_rm +base[  63]  003e cli_term_execute_sd +base[  64]  003f cli_term_execute_sgr +base[  65]  0040 cli_term_execute_sm +base[  66]  0041 cli_term_execute_su +base[  67]  0042 cli_term_execute_vpa +base[  68]  0043 cli_term_get_param +base[  69]  0044 cli_term_init +base[  70]  0045 cli_term_link_to_string +base[  71]  0046 cli_term_links +base[  72]  0047 cli_term_move_cursor_down +base[  73]  0048 cli_term_move_cursor_rel_col +base[  74]  0049 cli_term_osc_end +base[  75]  004a cli_term_osc_put +base[  76]  004b cli_term_osc_start +base[  77]  004c cli_term_pen_empty +base[  78]  004d cli_term_pen_to_string +base[  79]  004e cli_term_reset_pen +base[  80]  004f cli_term_scroll_up +base[  81]  0050 cli_term_state +base[  82]  0051 cli_timer_DataPtr +base[  83]  0052 cli_timer_Elt +base[  84]  0053 cli_timer_Length +base[  85]  0054 cli_timer_flag +base[  86]  0055 cli_timer_t +base[  87]  0056 clic__ansi_iterator +base[  88]  0057 clic__find_var +base[  89]  0058 clic__gcov_flush +base[  90]  0059 clic__get_time +base[  91]  005a clic_ansi_has_any +base[  92]  005b clic_ansi_html +base[  93]  005c clic_ansi_nchar +base[  94]  005d clic_ansi_simplify +base[  95]  005e clic_ansi_strip +base[  96]  005f clic_ansi_substr +base[  97]  0060 clic_dataptr +base[  98]  0061 clic_diff_chr +base[  99]  0062 clic_get_embedded_utf8 +base[ 100]  0063 clic_get_time +base[ 101]  0064 clic_getppid +base[ 102]  0065 clic_make_timer +base[ 103]  0066 clic_md5 +base[ 104]  0067 clic_md5_file +base[ 105]  0068 clic_md5_raw +base[ 106]  0069 clic_progress_along +base[ 107]  006a clic_set_embedded_utf8 +base[ 108]  006b clic_sha1 +base[ 109]  006c clic_sha1_file +base[ 110]  006d clic_sha1_raw +base[ 111]  006e clic_sha256 +base[ 112]  006f clic_sha256_file +base[ 113]  0070 clic_sha256_raw +base[ 114]  0071 clic_start_thread +base[ 115]  0072 clic_stop_thread +base[ 116]  0073 clic_thread_func +base[ 117]  0074 clic_tick_pause +base[ 118]  0075 clic_tick_reset +base[ 119]  0076 clic_tick_resume +base[ 120]  0077 clic_tick_set +base[ 121]  0078 clic_tty_size +base[ 122]  0079 clic_unload +base[ 123]  007a clic_update_due +base[ 124]  007b clic_utf8_display_width +base[ 125]  007c clic_utf8_graphemes +base[ 126]  007d clic_utf8_graphscan_make +base[ 127]  007e clic_utf8_graphscan_next +base[ 128]  007f clic_utf8_nchar_graphemes +base[ 129]  0080 clic_utf8_substr +base[ 130]  0081 clic_vt_callback +base[ 131]  0082 clic_vt_output +base[ 132]  0083 clic_xxhash +base[ 133]  0084 clic_xxhash64 +base[ 134]  0085 clic_xxhash64_file +base[ 135]  0086 clic_xxhash64_raw +base[ 136]  0087 clic_xxhash_file +base[ 137]  0088 clic_xxhash_raw +base[ 138]  0089 disable_gc_DataPtr +base[ 139]  008a disable_gc_t +base[ 140]  008b fopen_file +base[ 141]  008c getWinChar +base[ 142]  008d glue_ +base[ 143]  008e keypress_key_names +base[ 144]  008f keypress_read +base[ 145]  0090 keypress_special +base[ 146]  0091 keypress_unix_dummy +base[ 147]  0092 keypress_utf8 +base[ 148]  0093 keypress_win_dummy +base[ 149]  0094 open_file +base[ 150]  0095 progress_along_Dataptr +base[ 151]  0096 progress_along_Dataptr_or_null +base[ 152]  0097 progress_along_Duplicate +base[ 153]  0098 progress_along_Elt +base[ 154]  0099 progress_along_Get_region +base[ 155]  009a progress_along_Inspect +base[ 156]  009b progress_along_Is_sorted +base[ 157]  009c progress_along_Length +base[ 158]  009d progress_along_Max +base[ 159]  009e progress_along_Min +base[ 160]  009f progress_along_Sum +base[ 161]  00a0 progress_along_t +base[ 162]  00a1 r_call_on_early_exit +base[ 163]  00a2 r_call_on_exit +base[ 164]  00a3 r_cleancall_is_active +base[ 165]  00a4 r_throw_error +base[ 166]  00a5 r_throw_posix_error +base[ 167]  00a6 r_throw_system_error +base[ 168]  00a7 r_with_cleanup_context +base[ 169]  00a8 resize +base[ 170]  00a9 set +base[ 171]  00aa sha1_final +base[ 172]  00ab sha1_init +base[ 173]  00ac sha1_transform +base[ 174]  00ad sha1_update +base[ 175]  00ae sha256_final +base[ 176]  00af sha256_init +base[ 177]  00b0 sha256_transform +base[ 178]  00b1 sha256_update +base[ 179]  00b2 test +base[ 180]  00b3 tick_thread +base[ 181]  00b4 trim_ +base[ 182]  00b5 utf8lite_decode_utf8 +base[ 183]  00b6 utf8lite_encode_utf8 +base[ 184]  00b7 vtparse +base[ 185]  00b8 vtparse_init make-only +base[   7]  0006 _CRT_INIT +base[   8]  0007 __mingw_module_is_dll +base[   9]  0008 cleancall_MakeExternalPtrFn +base[  10]  0009 cleancall_SetExternalPtrAddrFn +base[  11]  000a cleancall_call +base[  12]  000b cleancall_fns_dot_call +base[  13]  000c cleancall_init +base[  14]  000d cli__kill_thread +base[  15]  000e cli__progress_update +base[  16]  000f cli__reset +base[  17]  0010 cli__start_thread +base[  18]  0011 cli__tick_ts +base[  19]  0012 cli__timer_flag +base[  20]  0013 cli_init_altrep +base[  21]  0014 cli_keypress +base[  22]  0015 cli_pkgenv +base[  23]  0016 cli_progress_add +base[  24]  0017 cli_progress_bar +base[  25]  0018 cli_progress_done +base[  26]  0019 cli_progress_init_timer +base[  27]  001a cli_progress_num +base[  28]  001b cli_progress_set +base[  29]  001c cli_progress_set_clear +base[  30]  001d cli_progress_set_format +base[  31]  001e cli_progress_set_name +base[  32]  001f cli_progress_set_status +base[  33]  0020 cli_progress_set_type +base[  34]  0021 cli_progress_sleep +base[  35]  0022 cli_progress_update +base[  36]  0023 cli_speed_time +base[  37]  0024 cli_term_clear_cells +base[  38]  0025 cli_term_clear_line +base[  39]  0026 cli_term_clear_screen +base[  40]  0027 cli_term_color_bg_to_string +base[  41]  0028 cli_term_color_fg_to_string +base[  42]  0029 cli_term_csi_dispatch +base[  43]  002a cli_term_execute +base[  44]  002b cli_term_execute_cbt +base[  45]  002c cli_term_execute_cha +base[  46]  002d cli_term_execute_cht +base[  47]  002e cli_term_execute_cnl +base[  48]  002f cli_term_execute_cpl +base[  49]  0030 cli_term_execute_ctc +base[  50]  0031 cli_term_execute_cub +base[  51]  0032 cli_term_execute_cud +base[  52]  0033 cli_term_execute_cuf +base[  53]  0034 cli_term_execute_cup +base[  54]  0035 cli_term_execute_cuu +base[  55]  0036 cli_term_execute_dch +base[  56]  0037 cli_term_execute_decstbm +base[  57]  0038 cli_term_execute_dl +base[  58]  0039 cli_term_execute_ech +base[  59]  003a cli_term_execute_ed +base[  60]  003b cli_term_execute_el +base[  61]  003c cli_term_execute_ich +base[  62]  003d cli_term_execute_il +base[  63]  003e cli_term_execute_rep +base[  64]  003f cli_term_execute_rm +base[  65]  0040 cli_term_execute_sd +base[  66]  0041 cli_term_execute_sgr +base[  67]  0042 cli_term_execute_sm +base[  68]  0043 cli_term_execute_su +base[  69]  0044 cli_term_execute_vpa +base[  70]  0045 cli_term_get_param +base[  71]  0046 cli_term_init +base[  72]  0047 cli_term_link_to_string +base[  73]  0048 cli_term_links +base[  74]  0049 cli_term_move_cursor_down +base[  75]  004a cli_term_move_cursor_rel_col +base[  76]  004b cli_term_osc_end +base[  77]  004c cli_term_osc_put +base[  78]  004d cli_term_osc_start +base[  79]  004e cli_term_pen_empty +base[  80]  004f cli_term_pen_to_string +base[  81]  0050 cli_term_reset_pen +base[  82]  0051 cli_term_scroll_up +base[  83]  0052 cli_term_state +base[  84]  0053 cli_timer_DataPtr +base[  85]  0054 cli_timer_Elt +base[  86]  0055 cli_timer_Length +base[  87]  0056 cli_timer_flag +base[  88]  0057 cli_timer_t +base[  89]  0058 clic__ansi_iterator +base[  90]  0059 clic__find_var +base[  91]  005a clic__gcov_flush +base[  92]  005b clic__get_time +base[  93]  005c clic_ansi_has_any +base[  94]  005d clic_ansi_html +base[  95]  005e clic_ansi_nchar +base[  96]  005f clic_ansi_simplify +base[  97]  0060 clic_ansi_strip +base[  98]  0061 clic_ansi_substr +base[  99]  0062 clic_dataptr +base[ 100]  0063 clic_diff_chr +base[ 101]  0064 clic_get_embedded_utf8 +base[ 102]  0065 clic_get_time +base[ 103]  0066 clic_getppid +base[ 104]  0067 clic_make_timer +base[ 105]  0068 clic_md5 +base[ 106]  0069 clic_md5_file +base[ 107]  006a clic_md5_raw +base[ 108]  006b clic_progress_along +base[ 109]  006c clic_set_embedded_utf8 +base[ 110]  006d clic_sha1 +base[ 111]  006e clic_sha1_file +base[ 112]  006f clic_sha1_raw +base[ 113]  0070 clic_sha256 +base[ 114]  0071 clic_sha256_file +base[ 115]  0072 clic_sha256_raw +base[ 116]  0073 clic_start_thread +base[ 117]  0074 clic_stop_thread +base[ 118]  0075 clic_thread_func +base[ 119]  0076 clic_tick_pause +base[ 120]  0077 clic_tick_reset +base[ 121]  0078 clic_tick_resume +base[ 122]  0079 clic_tick_set +base[ 123]  007a clic_tty_size +base[ 124]  007b clic_unload +base[ 125]  007c clic_update_due +base[ 126]  007d clic_utf8_display_width +base[ 127]  007e clic_utf8_graphemes +base[ 128]  007f clic_utf8_graphscan_make +base[ 129]  0080 clic_utf8_graphscan_next +base[ 130]  0081 clic_utf8_nchar_graphemes +base[ 131]  0082 clic_utf8_substr +base[ 132]  0083 clic_vt_callback +base[ 133]  0084 clic_vt_output +base[ 134]  0085 clic_xxhash +base[ 135]  0086 clic_xxhash64 +base[ 136]  0087 clic_xxhash64_file +base[ 137]  0088 clic_xxhash64_raw +base[ 138]  0089 clic_xxhash_file +base[ 139]  008a clic_xxhash_raw +base[ 140]  008b disable_gc_DataPtr +base[ 141]  008c disable_gc_t +base[ 142]  008d fopen_file +base[ 143]  008e getWinChar +base[ 144]  008f glue_ +base[ 145]  0090 keypress_key_names +base[ 146]  0091 keypress_read +base[ 147]  0092 keypress_special +base[ 148]  0093 keypress_unix_dummy +base[ 149]  0094 keypress_utf8 +base[ 150]  0095 keypress_win_dummy +base[ 151]  0096 open_file +base[ 152]  0097 progress_along_Dataptr +base[ 153]  0098 progress_along_Dataptr_or_null +base[ 154]  0099 progress_along_Duplicate +base[ 155]  009a progress_along_Elt +base[ 156]  009b progress_along_Get_region +base[ 157]  009c progress_along_Inspect +base[ 158]  009d progress_along_Is_sorted +base[ 159]  009e progress_along_Length +base[ 160]  009f progress_along_Max +base[ 161]  00a0 progress_along_Min +base[ 162]  00a1 progress_along_Sum +base[ 163]  00a2 progress_along_t +base[ 164]  00a3 r_call_on_early_exit +base[ 165]  00a4 r_call_on_exit +base[ 166]  00a5 r_cleancall_is_active +base[ 167]  00a6 r_throw_error +base[ 168]  00a7 r_throw_posix_error +base[ 169]  00a8 r_throw_system_error +base[ 170]  00a9 r_with_cleanup_context +base[ 171]  00aa resize +base[ 172]  00ab set +base[ 173]  00ac sha1_final +base[ 174]  00ad sha1_init +base[ 175]  00ae sha1_transform +base[ 176]  00af sha1_update +base[ 177]  00b0 sha256_final +base[ 178]  00b1 sha256_init +base[ 179]  00b2 sha256_transform +base[ 180]  00b3 sha256_update +base[ 181]  00b4 test +base[ 182]  00b5 tick_thread +base[ 183]  00b6 trim_ +base[ 184]  00b7 utf8lite_decode_utf8 +base[ 185]  00b8 utf8lite_encode_utf8 +base[ 186]  00b9 vtparse +base[ 187]  00ba vtparse_init
+          imports identical | zig: api-ms-win-crt-convert-l1-1-0.dll api-ms-win-crt-environment-l1-1-0.dll api-ms-win-crt-heap-l1-1-0.dll api-ms-win-crt-locale-l1-1-0.dll api-ms-win-crt-private-l1-1-0.dll api-ms-win-crt-runtime-l1-1-0.dll api-ms-win-crt-stdio-l1-1-0.dll api-ms-win-crt-string-l1-1-0.dll KERNEL32.dll R.dll
+          rzig argv DIFFER (108 zig / 111 make lines)
+          zig-only:
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 guard_dispatch.o' -shared -s -static-libgcc -o cli.dll' cli.def' ansi.o' cleancall.o' diff.o' errors.o' glue.o' init.o' inst.o' keypress-unix.o' keypress-win.o' keypress.o' md5.o' progress-altrep.o' progress.o' sha1.o' sha256.o' thread.o' tty.o' utf8.o' utils.o' vt.o' vtparse.o' vtparse_table.o' win-utf8.o' winfiles.o' xxhash.o' xxhash2.o' -lpthread x64 -lR lib lib -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG include -O2 -Wall -std=gnu2x -c ansi.c' -o ansi.o' -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG include -O2 -Wall -std=gnu2x -c cleancall.c' -o cleancall.o' -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG include -O2 -Wall -std=gnu2x -c diff.c' -o diff.o' -idirafter include -idirafter include
+          make-only:
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 guard_dispatch.o' -shared -s -static-libgcc -o cli.dll tmp.def ansi.o cleancall.o diff.o errors.o glue.o init.o inst.o keypress-unix.o keypress-win.o keypress.o md5.o progress-altrep.o progress.o sha1.o sha256.o thread.o tty.o utf8.o utils.o vt.o vtparse.o vtparse_table.o win-utf8.o winfiles.o xxhash.o xxhash2.o -lpthread x64 -lR lib lib -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG include -O2 -Wall -std=gnu2x -c ansi.c -o ansi.o -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG include -O2 -Wall -std=gnu2x -c cleancall.c -o cleancall.o -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG include -O2 -Wall -std=gnu2x -c diff.c -o diff.o -idirafter include -idirafter include
+digest    exports zig: 129 | make: no dll | 
+          rzig argv DIFFER (80 zig / 82 make lines)
+          zig-only:
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG -I. -O2 -Wall -std=gnu2x -c aes.c' -o aes.o' -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG -I. -O2 -Wall -std=gnu2x -c blake3.c' -o blake3.o' -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG -I. -O2 -Wall -std=gnu2x -c blake3_dispatch.c' -o blake3_dispatch.o' -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG -I. -O2 -Wall -std=gnu2x -c blake3_portable.c' -o blake3_portable.o' -idirafter include -idirafter include
+          make-only:
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG -I. -O2 -Wall -std=gnu2x -c aes.c -o aes.o -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG -I. -O2 -Wall -std=gnu2x -c blake3.c -o blake3.o -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG -I. -O2 -Wall -std=gnu2x -c blake3_dispatch.c -o blake3_dispatch.o -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG -I. -O2 -Wall -std=gnu2x -c blake3_portable.c -o blake3_portable.o -idirafter include -idirafter include
+quadprog  exports zig: 2 | make: no dll | 
+          rzig argv DIFFER (24 zig / 6 make lines)
+          zig-only:
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 guard_dispatch.o' -shared -s -static-libgcc -o quadprog.dll' quadprog-win.def' aind.o' init.o' solve.QP.compact.o' solve.QP.o' util.o' x64 -lRblas libflang_rt.runtime.a -lc++ -lc++ x64 -lR lib lib -idirafter include -idirafter include
+            zig-cc: x86_64-w64-mingw32-zig.exe' cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 include -DNDEBUG -O2 -Wall -std=gnu2x -c init.c' -o init.o' -idirafter include -idirafter include
+            zig-fc: flang.exe' -O2 -O2 -c aind.f' -o aind.o'
+            zig-fc: flang.exe' -O2 -O2 -c solve.QP.compact.f' -o solve.QP.compact.o'
+          make-only:
+            
+Rcpp      exports zig: 738 | make: no dll | 
+          rzig argv DIFFER (28 zig / 27 make lines)
+          zig-only:
+            zig-cxx: x86_64-w64-mingw32-zig.exe' c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -std=gnu++20 include -DNDEBUG include/ -O2 -Wall -c api.cpp' -o api.o' -idirafter include -idirafter include
+            zig-cxx: x86_64-w64-mingw32-zig.exe' c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -std=gnu++20 include -DNDEBUG include/ -O2 -Wall -c attributes.cpp' -o attributes.o' -idirafter include -idirafter include
+            zig-cxx: x86_64-w64-mingw32-zig.exe' c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -std=gnu++20 include -DNDEBUG include/ -O2 -Wall -c barrier.cpp' -o barrier.o' -idirafter include -idirafter include
+            zig-cxx: x86_64-w64-mingw32-zig.exe' c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -std=gnu++20 include -DNDEBUG include/ -O2 -Wall -c date.cpp' -o date.o' -idirafter include -idirafter include
+          make-only:
+            zig-cxx: x86_64-w64-mingw32-zig.exe' c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -std=gnu++20 include -DNDEBUG include/ -O2 -Wall -c api.cpp -o api.o -idirafter include -idirafter include
+            zig-cxx: x86_64-w64-mingw32-zig.exe' c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -std=gnu++20 include -DNDEBUG include/ -O2 -Wall -c attributes.cpp -o attributes.o -idirafter include -idirafter include
+            zig-cxx: x86_64-w64-mingw32-zig.exe' c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -std=gnu++20 include -DNDEBUG include/ -O2 -Wall -c barrier.cpp -o barrier.o -idirafter include -idirafter include
+            zig-cxx: x86_64-w64-mingw32-zig.exe' c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -std=gnu++20 include -DNDEBUG include/ -O2 -Wall -c date.cpp -o date.o -idirafter include -idirafter include
+quadprog zig exports: 	          Ordinal   Hint Name +base[   1]  0000 R_init_quadprog 
+cli       def step in trace: FALSE | .def on the link line: FALSE
+quadprog  def step in trace: FALSE | .def on the link line: FALSE
+== smoke zig
+cli        TRUE
+cli-md5    900150983cd24fb0d6963f7d28e17f72
+digest     ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+quadprog   1 1
+Rcpp       FALSE
+Rcpp-reg   23
+dll-cli    cli.dll
+dll-digest digest.dll
+dll-quadprog quadprog.dll
+dll-Rcpp   Rcpp.dll
+unloaded all; exiting
+smoke zig rc=0
+== smoke make
+cli        TRUE
+cli-md5    900150983cd24fb0d6963f7d28e17f72
+Error in library(digest) : there is no package called 'digest'
+Execution halted
+smoke make rc=1
+== tier 2: zighello from its directory  7:22:10.53
+zighello rc=0  7:23:14.96
+using zig: '0.16.0'
+rzig build: tier 2, root C:/Users/admin/rz-m5/zighello/src/.rzig
+** testing if installed package can be loaded from temporary location
+** testing if installed package can be loaded from final location
+** testing if installed package keeps a record of temporary installation path
+build.zig
+hello.zig
+zighello.dll
+zighello again rc=0  7:23:16.49
+[1] 42
+      numParameters
+hello             1
+[1] "zighello.dll"
+ok
+zighello load rc=0
+== tier 3 (configure.win) falls through to make
+neg3 rc=0
+rzig build: cli needs make: a configure.win script
+0
+== R_ZIG_PKG_BUILDER=zig on a tier-3 package
+rc=1
+rzig build: cli needs make: a configure.win script
+ERROR: this package needs make, and R_ZIG_PKG_BUILDER is 'zig' for package 'cli'
+== no make or sh on PATH (System32 + a copy of flang; zig through ZIG_BIN)
+flang-compile.cfg
+flang-new.exe
+flang.cfg
+flang.exe
+where rc=1 (1 = neither found)
+quadprog no-make rc=0
+** using staged installation
+using C compiler: 'clang version 21.1.8'
+using Fortran compiler: 'flang version 23.1.1'
+rzig build: tier 1, root C:/Users/admin/AppData/Local/Temp/RtmpeWsSKS/R.INSTALL140c285e1080/quadprog/src/.rzig
+cli no-make (with test load) rc=0
+== cache
+ Directory of C:\Users\admin\AppData\Local\r-zig
+10-Oct-26  07:18    <DIR>          .
+10-Oct-26  07:18    <DIR>          ..
+10-Oct-26  07:18    <DIR>          cfguard-bf618c90c6d6d10d2aaa86913b16d7c9
+10-Oct-26  07:18    <DIR>          zig-build
+               4 Dir(s)  30,694,596,608 bytes free
+EXIT=done

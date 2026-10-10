@@ -8,8 +8,10 @@
 //! nm's [BCDRT]: a global symbol defined in a code, data or bss section, or
 //! a common. Not undefined (U), not weak (w/W), not a local (lowercase),
 //! not a section or debug symbol, and not the compiler's own `.refptr.*`
-//! and `.weak.*` helpers, which the make path's DLLs do not export either
-//! (kappa: cli's 187 exports, 2026-10-09).
+//! and `.weak.*` helpers. Oracle: cli's 185 symbols on kappa (M5,
+//! 2026-10-10) are the M1 "make" list (187) without `_CRT_INIT` and
+//! `__mingw_module_is_dll`, which that list only had because kappa has no
+//! sed: winshlib.mk's tmp.def came out empty and lld auto-exported.
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;

@@ -5,7 +5,8 @@ Milestone 1 (2026-10-09): the design, a hand-run prototype on linux-64,
 and measurements; no file of R, rzig or build.zig changed. Milestone 2
 (2026-10-09, below): `rzig build`, the evaluator and the shipped roots.
 Milestone 3 (2026-10-09, below): R CMD INSTALL calls it (patches 0012,
-0013).
+0013). Milestone 5 (2026-10-10, below): the patched R on macOS and
+Windows; M4 (the parity script in the repo) is still open.
 
 ## The question (the user, 2026-10-08)
 
@@ -487,6 +488,95 @@ make would leave the library), no `.rzig`, no `.zig-cache`.
 - `symbols.rds` (R CMD check's `_R_SHLIB_BUILD_OBJECTS_SYMBOL_TABLES_`)
   is not produced on the zig path; check falls back to the library.
 
+## Milestone 5 (2026-10-10): the patched R on macOS and Windows
+
+The branch (commit 4a167f5) synced to the two test hosts (omicron
+`~/r-zig-pixi`, kappa `C:\Users\admin\r-zig-pixi`, working copies as
+before), R rebuilt there with `pixi run build` (the pixi lock of main
+b490bdf; conda-forge zig 0.16.0, flang 23.1.1), then the M3 acceptance
+run against those dists: `R CMD INSTALL -l <lib> <CRAN tarball>` with the
+test load, `RZIG_TRACE=1` on both paths, `R_ZIG_PKG_BUILDER=make` for the
+reference. Drivers `proto/hosts/m5-omicron.sh`, `m5-kappa.bat` +
+`m5-kappa.R`; raw output in `proto/hosts/results/m5-*.log`. Scratch
+(`~/rz-m5`, `C:\Users\admin\rz-m5`) deleted afterwards. The argv
+comparison takes rzig's `RZIG_TRACE` command lines from both logs
+(basenames, sorted; the `self` and `environment` lines dropped).
+
+### omicron, macOS 26.4.1 arm64
+
+Rebuild 5 min (incremental). `bin/toolchain/` holds `rzig`,
+`share/zig/rpkg/` the three roots. `spawnWait`: 0, 1, 127, 124 with the
+timeout warning, as on linux.
+
+| package | zig path | make path | exports (`nm -gU`) | rzig argv | install name, minos |
+|---|---|---|---|---|---|
+| cli | tier 1, 11.1 s, no make line | 10.4 s | identical, 3 | identical, 27 lines | `cli.so` both, 13.0 both |
+| digest | tier 1, 3.4 s | 7.3 s | identical, 129 | identical, 20 | `digest.so`, 13.0 |
+| quadprog | tier 1, 2.5 s | 3.0 s | identical, 8 | identical, 6 | `quadprog.so`, 13.0; deps `@rpath/libRblas.dylib`, `@rpath/libR.dylib` |
+| Rcpp | tier 1, 6.2 s | 11.2 s | identical, 228 | identical, 7 | `Rcpp.so`, 13.0 |
+
+"identical" argv means every compile and the link are the same words,
+except the one token rzig adds on macOS, `-Wl,-install_name,<pkg>.so`
+(M1 finding (b)): with it the zig-linked library's LC_ID_DYLIB is
+`<pkg>.so`, as make's. Smoke (`proto/smoke.R`) identical on both
+libraries, unload 0. zighello from its directory: 7.7 s with the test
+load (`using zig: '0.16.0'`, `rzig build: tier 2`), 1.7 s again,
+`hello(21)` → 42, exports `_R_init_zighello` plus the dylib's own
+`___dso_handle`/`__mh_dylib_header`, install name `zighello.so`, minos
+13.0. A cli copy with `configure` falls through (`rzig build: cli needs
+make: a configure script`, make builds it, exit 0);
+`R_ZIG_PKG_BUILDER=zig` stops with the ERROR. **No make on PATH**
+(`env -i`, PATH = `sh`, `zig`, `flang`): quadprog and cli (with test
+load) install. Cache `~/.cache/r-zig` 65 MB after the run.
+
+### kappa, Windows 11 22621 x64
+
+Rebuild 35 min (the whole series re-extracted). `bin/toolchain/` holds
+`rzig.exe` beside `gcc.exe`, `g++.exe`, `zig-fc.exe` and the binutils
+names; `share/zig/rpkg/` the three roots. Times from the driver's
+`%TIME%` stamps, test load included; the first zig-path install also
+compiles the build runner and fills a cold zig cache.
+
+| package | zig path | make path (kappa: pixi's make.exe and sh.exe, no sed, no Rtools) | exports (`objdump -p`) | rzig argv |
+|---|---|---|---|---|
+| cli | tier 1, 79 s | 37 s | zig 185 through `rzig def`; make 187: `tmp.def` is empty because `sed` is missing, so lld auto-exports and adds `_CRT_INIT`, `__mingw_module_is_dll`; imports identical (`R.dll`, `KERNEL32.dll`, `api-ms-win-crt-*`) | identical, 27 lines, except `cli.def` for `tmp.def` on the link line |
+| digest | tier 1, 37 s | fails: `sed: command not found`, then `g++.exe -std=gnu++20  : No such file or directory` (SHLIB_CXXLD's quoting through kappa's non-MSYS make and sh) | zig 129 | 19 compile lines identical; make has no link line |
+| quadprog | tier 1, 3 s | fails: `No rule to make target '$(FCLIBS_XTRA)''` (M1 finding (c)) | `R_init_quadprog` alone: the package ships `src/quadprog-win.def`, which winshlib.mk links instead of the nm \| sed list, and rzig does the same; `solve.QP` → 1 1 | 6 lines (make: none) |
+| Rcpp | tier 1, 21 s | fails as digest | zig 738 | 6 compile lines identical |
+
+The cli export set settles M1's Windows question: `rzig def`'s 185
+symbols are exactly the M1 "make" list (`proto/hosts/results/kappa-exports-cli-make.txt`,
+187) without `_CRT_INIT` and `__mingw_module_is_dll`. Those two were
+never in a nm \| sed `.def`: they came from the same empty `tmp.def`, so
+M1's "make vs `--export-all-symbols` identical, 187" compared two
+auto-exports. On a host with Rtools' sed, make's DLL exports the 185.
+Smoke (`proto/smoke.R`) on the zig library: the same values as linux and
+macOS, `*.dll` loaded, unload 0 (the make library lacks digest, so the
+make smoke stops there). zighello from its directory: 64 s with the test
+load (the translate-c tool's first compile), 1.5 s again, `hello(21L)` →
+42, `getDLLRegisteredRoutines` lists `hello`, exports exactly
+`R_init_zighello`. A cli copy with `configure.win` falls through (`rzig
+build: cli needs make: a configure.win script`, make's C link works on
+kappa, exit 0); `R_ZIG_PKG_BUILDER=zig` stops with the ERROR. **No make
+or sh on PATH** (PATH = `System32` plus a directory holding copies of
+`flang.exe`, `flang-new.exe` and their two `.cfg` files; `ZIG_BIN` names
+the env's zig; `where make sh` finds nothing): quadprog and cli (with
+test load) install, the log reporting `clang version 21.1.8`, `flang
+version 23.1.1`, `tier 1`. Cache `%LOCALAPPDATA%\r-zig\zig-build`.
+
+Observed: the Fortran link carries `-lc++` twice (Makeconf's FLIBS has
+one, rzig's flang-rt rule adds one); harmless and the same on both
+paths, since the rule is rzig's. `rzig def` prints nothing under
+`RZIG_TRACE`; the evidence of the `.def` link is `<pkg>.def` on the link
+line.
+
+### Not in M5
+
+- The stress suite through the zig path, and the docs entries in the
+  feat-no-host-paths and feat-standalone-toolchain records.
+- `R_runR`/`install.packages()` spawns, `symbols.rds`, `rzig --version`
+  (as "Not in M3").
+
 ## Cleanup before merge
 
 The milestone-1 commit keeps every prototype file so the record is
@@ -495,23 +585,35 @@ redundant and keeps what M2 and M4 build on (decided 2026-10-09):
 
 | remove in the last commit | why |
 |---|---|
-| `proto/hosts/results/` | raw host logs and export lists; the step-4 tables above carry every number, and the cli lists are two identical copies |
+| `proto/hosts/results/` | raw host logs and export lists (M1 step 4 and M5); the tables above carry every number |
 | `proto/hosts/plans-win/` | hand-derived Windows plans; `rzig build` generates them |
-| `proto/hosts/omicron.sh`, `kappa-step[123].bat`, `smoke-win.R`, `t2.R`, `root-t2.build.zig.zon` | host-specific drivers for the prototype; superseded by M4/M5 parity tests through `rzig build` |
+| `proto/hosts/omicron.sh`, `kappa-step[123].bat`, `smoke-win.R`, `root-t2.build.zig.zon` | host-specific drivers for the prototype; superseded by the M5 drivers, which run through `R CMD INSTALL` |
 | `proto/mkplan.sh`, `proto/plan-cli.example.zon` | M2 reproduces them (acceptance above); removed once M4 asserts it in a script of the repo |
 | `proto/rpkg/` | superseded by `zigbuild/rpkg/` in M2 |
 
 Keep: `PLAN.md`, `proto/zighello/` (M4 fixture), `proto/hosts/defs/*.def`
-(the Windows export oracle for `rzig def`), `proto/smoke.R`.
+(the Windows export oracle for `rzig def`), `proto/smoke.R`, and the M5
+host drivers `proto/hosts/m5-omicron.sh`, `m5-kappa.bat`, `m5-kappa.R`,
+`t2.R` (the rerun recipe for the hosts).
 
     git rm -r -q .github/devdocs/feat-zig-pkg-build/proto/hosts/{results,plans-win} \
-      .github/devdocs/feat-zig-pkg-build/proto/hosts/{omicron.sh,kappa-step1.bat,kappa-step2.bat,kappa-step3.bat,smoke-win.R,t2.R,root-t2.build.zig.zon} \
+      .github/devdocs/feat-zig-pkg-build/proto/hosts/{omicron.sh,kappa-step1.bat,kappa-step2.bat,kappa-step3.bat,smoke-win.R,root-t2.build.zig.zon} \
       .github/devdocs/feat-zig-pkg-build/proto/{mkplan.sh,plan-cli.example.zon} \
       .github/devdocs/feat-zig-pkg-build/proto/rpkg
 
 Then drop the prototype part of the rerun section below.
 
 ## How to rerun
+
+M3 and M5, with a dist of this branch (`pixi run build`) and the pixi
+env's zig and flang on PATH (any OS; `R` is the dist's `bin/R`, on
+Windows `bin\x64\Rcmd.exe INSTALL`):
+
+    RZIG_TRACE=1 R CMD INSTALL -l <lib> <pkg.tar.gz>             # zig path: the log says `rzig build: tier N`
+    R_ZIG_PKG_BUILDER=make R CMD INSTALL -l <lib> <pkg.tar.gz>   # the make reference
+    R CMD INSTALL -l <lib> .github/devdocs/feat-zig-pkg-build/proto/zighello   # tier 2
+    # hosts: proto/hosts/m5-omicron.sh (scratch ~/rz-m5 with pkgs/{cli,digest,quadprog,Rcpp}.tar.gz);
+    # m5-kappa.bat with m5-kappa.R, proto/smoke.R and proto/hosts/t2.R in C:\Users\admin\rz-m5
 
 M2, with a built dist (`pixi run build`) and the pixi env's zig and
 flang on PATH:

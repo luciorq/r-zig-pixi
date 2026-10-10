@@ -1,0 +1,125 @@
+== host
+ProductName:		macOS ProductVersion:		26.4.1 BuildVersion:		25E253 
+arm64
+0.16.0
+R version 4.6.1 (2026-06-24) -- "Happy Hop"
+Oct 10 07:06
+== tree
+rzig zig-ar zig-cc zig-cxx zig-fc zig-ranlib 
+build_t1.zig build_t2.zig rpkg.zig 
+== spawnWait
+[1] 0
+[1] 1
+[1] 127
+[1] 124
+Warning message:
+In print(.Internal(spawnWait(c("sleep", "5"), 1L))) :
+  command 'sleep' timed out after 1s
+cli       zig  rc=0  11.1s  tier:tier 1  compilers:1  make-lines:0
+cli       make rc=0  10.4s
+          exports identical (3)
+          RZIG ARGV DIFFER
+27a28
+> zig-cc: environment default (conda)
+54a56
+> zig-cc: environment R-4.6.1-slim-zig
+82c84,85
+< zig-cc: zig zig cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -target aarch64-native.13.0 Frameworks -std=gnu23 -dynamiclib -Wl,-headerpad_max_install_names -undefined dynamic_lookup lib -Wl,-install_name,cli.so -o cli.so ansi.o cleancall.o diff.o errors.o glue.o init.o inst.o keypress-unix.o keypress-win.o keypress.o md5.o progress-altrep.o progress.o sha1.o sha256.o thread.o tty.o utf8.o utils.o vt.o vtparse.o vtparse_table.o win-utf8.o winfiles.o xxhash.o xxhash2.o -lpthread lib -lR lib lib lib include include lib
+---
+> zig-cc: self zig-cc
+          install name zig: cli.so | make: cli.so
+          minos zig: 13.0 make: 13.0 | deps zig: cli.so @rpath/libR.dylib /usr/lib/libSystem.B.dylib 
+digest    zig  rc=0   3.4s  tier:tier 1  compilers:2  make-lines:0
+digest    make rc=0   7.3s
+          exports identical (129)
+          RZIG ARGV DIFFER
+15a16
+> zig-cc: environment default (conda)
+30a32
+> zig-cc: environment R-4.6.1-slim-zig
+45a48
+> zig-cc: self zig-cc
+65a69
+> zig-cxx: environment default (conda)
+          install name zig: digest.so | make: digest.so
+          minos zig: 13.0 make: 13.0 | deps zig: digest.so @rpath/libR.dylib /usr/lib/libSystem.B.dylib 
+quadprog  zig  rc=0   2.5s  tier:tier 1  compilers:2  make-lines:0
+quadprog  make rc=0   3.0s
+          exports identical (8)
+          RZIG ARGV DIFFER
+2a3
+> zig-cc: environment default (conda)
+4a6
+> zig-cc: environment R-4.6.1-slim-zig
+7c9,10
+< zig-cc: zig zig cc -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -target aarch64-native.13.0 Frameworks -std=gnu23 -dynamiclib -Wl,-headerpad_max_install_names -undefined dynamic_lookup lib -Wl,-install_name,quadprog.so -o quadprog.so aind.o init.o solve.QP.compact.o solve.QP.o util.o lib -lRblas libflang_rt.runtime.a -lm lib -lR lib lib lib include include lib
+---
+> zig-cc: self zig-cc
+          install name zig: quadprog.so | make: quadprog.so
+          minos zig: 13.0 make: 13.0 | deps zig: quadprog.so @rpath/libRblas.dylib @rpath/libR.dylib /usr/lib/libSystem.B.dylib 
+Rcpp      zig  rc=0   6.2s  tier:tier 1  compilers:1  make-lines:0
+Rcpp      make rc=0  11.2s
+          exports identical (228)
+          RZIG ARGV DIFFER
+7a8
+> zig-cxx: environment default (conda)
+14a16
+> zig-cxx: environment R-4.6.1-slim-zig
+22c24,25
+< zig-cxx: zig zig c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time -g0 -target aarch64-native.13.0 Frameworks -std=gnu++20 -dynamiclib -Wl,-headerpad_max_install_names -undefined dynamic_lookup lib -Wl,-install_name,Rcpp.so -o Rcpp.so api.o attributes.o barrier.o date.o module.o rcpp_init.o lib -lR lib lib lib include include lib
+---
+> zig-cxx: self zig-cxx
+          install name zig: Rcpp.so | make: Rcpp.so
+          minos zig: 13.0 make: 13.0 | deps zig: Rcpp.so @rpath/libR.dylib /usr/lib/libSystem.B.dylib 
+== smoke zig
+cli        TRUE
+cli-md5    900150983cd24fb0d6963f7d28e17f72
+digest     ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+quadprog   1 1
+Rcpp       FALSE
+Rcpp-reg   23
+dll-cli    cli.so
+dll-digest digest.so
+dll-quadprog quadprog.so
+dll-Rcpp   Rcpp.so
+unloaded all; exiting
+== smoke make
+cli        TRUE
+cli-md5    900150983cd24fb0d6963f7d28e17f72
+digest     ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+quadprog   1 1
+Rcpp       FALSE
+Rcpp-reg   23
+dll-cli    cli.so
+dll-digest digest.so
+dll-quadprog quadprog.so
+dll-Rcpp   Rcpp.so
+unloaded all; exiting
+== tier 2: zighello from its directory
+rc=0   7.7s
+using zig: '0.16.0'
+rzig build: tier 2, root /Users/luciorq/rz-m5/zighello/src/.rzig
+** testing if installed package can be loaded from temporary location
+** testing if installed package can be loaded from final location
+** testing if installed package keeps a record of temporary installation path
+src after: . .. build.zig hello.zig zighello.so 
+again rc=0   1.7s
+[1] 42
+      numParameters
+hello             1
+ok
+install name: zighello.so | minos 13.0 | exports: _R_init_zighello ___dso_handle __mh_dylib_header | deps: zighello.so @rpath/libR.dylib /usr/lib/libSystem.B.dylib 
+== tier 3 (configure) falls through to make
+rc=0
+rzig build: cli needs make: a configure script
+make lines: 0, compiler lines: 1
+== R_ZIG_PKG_BUILDER=zig on a tier-3 package
+rzig build: cli needs make: a configure script
+ERROR: this package needs make, and R_ZIG_PKG_BUILDER is 'zig' for package ‘cli’
+== no make on PATH
+flang flang-new sh zig 
+quadprog no-make rc=0
+cli no-make (with test load) rc=0
+== cache
+65M	/Users/luciorq/.cache/r-zig
+EXIT=done
