@@ -38,8 +38,10 @@ self_exe: ?[]const u8 = null,
 /// What asks macOS for the SDK. A test hook may point it elsewhere.
 xcrun: []const u8 = "/usr/bin/xcrun",
 /// The command that runs zig (find_zig.zig), for what rzig compiles itself
-/// (dso_fini.zig, cfguard.zig). main.zig sets it; unit tests leave it null
-/// (nothing is compiled) or point it at a stand-in.
+/// (dso_fini.zig, cfguard.zig). main.zig sets it, null when there is no
+/// zig (a command that runs zig then stops, naming the compilers group);
+/// unit tests leave it null (nothing is compiled) or point it at a
+/// stand-in.
 zig: ?[]const []const u8 = null,
 /// Unit tests collect `warn`'s messages here instead of stderr.
 warnings: ?*std.ArrayList(u8) = null,

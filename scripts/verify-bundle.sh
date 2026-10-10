@@ -171,7 +171,9 @@ echo "== standalone bundle verified relocatable ($OS/$FLAVOR)"
 # -mcpu=baseline and no target: x86-64 on linux and Windows x86_64,
 # generic on linux aarch64, apple-m1 on macOS arm64, core2 on macOS
 # x86_64 (also under Rosetta). The same zig: env.sh's $ZIG, which the
-# compiler finds as env.sh did (ZIG_BIN, exported absolute, else PATH's).
+# compiler finds as env.sh did (ZIG_BIN, exported absolute, else PATH's:
+# the bundle has no toolchain zig/ and no zig in its bin/, which rzig
+# would try first).
 # Once more with -mtune=native, which a Makevars may pass as a portable
 # tuning flag: zig would take it as the CPU, so rzig drops it (dropTune).
 # (verify-tree.sh checks R's own x86_64 binaries for AVX instructions.)
@@ -380,7 +382,8 @@ if [ "$OS" != windows ]; then
     pkg_dir="$VERIFY_DIR/shlib"
     mkdir -p "$pkg_dir"
     # rzig takes ZIG_BIN only when it names a zig from the compile's own
-    # directory, and otherwise quietly runs PATH's, the env's. env.sh makes
+    # directory, and otherwise quietly looks further (the toolchain's zig/,
+    # the tree's bin/, then PATH's, the env's). env.sh makes
     # $ZIG absolute; this checks that the compiles below do run it: the
     # command's first word, after the ZIG_LIB_DIR= line rzig prints first
     # where it gives conda-forge's zig the libc++ mirror (every macOS env).
@@ -479,21 +482,23 @@ FORTRAN
       echo "== compiled package verified: USE_FC_TO_LINK links through zig-fc, static flang runtime, no rpath, loads (Fortran)"
     fi
 
-    # FC names zig-fc whether or not a flang is installed: with none on
-    # PATH, a Fortran compile stops at once with exit 127 and a message
-    # naming flang as the remedy (never R_ZIG_TOOLCHAIN_HINT: zig-fc ships
-    # in the toolchain, so installing the toolchain cannot be the fix).
+    # FC names zig-fc whether or not a flang is installed: with none (not
+    # in the toolchain's flang/, the tree's bin or PATH), a Fortran compile
+    # stops at once with exit 127 and the compilers group's text, which
+    # names flang (feat-standalone-toolchain B35; rzig never reads
+    # R_ZIG_TOOLCHAIN_HINT).
     if ! [ -x /usr/bin/flang ] && ! [ -x /bin/flang ]; then
       printf '      end\n' > "$pkg_dir/nofc.f"
       rc=0
       (cd "$pkg_dir" && env -i HOME="$HOME" PATH=/usr/bin:/bin TMPDIR="${TMPDIR:-/tmp}" \
         "$BUNDLE_DIR/lib/R/bin/toolchain/zig-fc" -c nofc.f -o nofc.o > nofc.log 2>&1) || rc=$?
-      if [ "$rc" != 127 ] || ! grep -q '^zig-fc: no flang on PATH' "$pkg_dir/nofc.log"; then
+      if [ "$rc" != 127 ] || ! grep -q '^zig-fc: no flang (' "$pkg_dir/nofc.log" ||
+        ! grep -q '^Compiling needs the r-zig compilers for R ' "$pkg_dir/nofc.log"; then
         cat "$pkg_dir/nofc.log" >&2
-        echo "error: zig-fc with no flang on PATH: exit $rc, or no message naming flang" >&2
+        echo "error: zig-fc with no flang: exit $rc, or not the compilers group's text naming flang" >&2
         exit 1
       fi
-      echo "== zig-fc with no flang on PATH: exit 127, '$(head -1 "$pkg_dir/nofc.log")'"
+      echo "== zig-fc with no flang: exit 127, '$(head -1 "$pkg_dir/nofc.log")'"
     fi
 
     # $(FLIBS) on a C package's link (CRAN's usual PKG_LIBS = $(LAPACK_LIBS)

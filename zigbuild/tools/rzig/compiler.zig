@@ -256,7 +256,8 @@ fn sonameFlag(ctx: *Ctx, args: Args) !?[]const u8 {
 const windows_headers_always = true;
 
 /// The environments' flags (environment.zig), each only when its directory
-/// exists, R's own environment first:
+/// exists, R's own environment first, then the toolchain's openmp/ (when
+/// the base has libomp, B40; its lib/ only on Windows, with libomp.lib):
 ///   -I<dir>/include (Windows: -idirafter <dir>/include) on every call,
 ///     after the caller's arguments: a package's own and its LinkingTo
 ///     headers come first, and the environment's still before the C
@@ -273,11 +274,12 @@ const windows_headers_always = true;
 ///     (and lld) search every -L directory for every -l;
 ///   -lomp on a -fopenmp link: zig cc does -fopenmp codegen but bundles
 ///     neither omp.h nor libomp and won't link it, so llvm-openmp's, when
-///     an environment has omp.h and the caller does not link libomp
-///     itself. Some packages (data.table) probe OpenMP themselves and put
-///     -lomp in PKG_LIBS on top of R's SHLIB_OPENMP_CFLAGS; a second
-///     libomp would be a duplicate LC_LOAD_DYLIB, which newer macOS dyld
-///     refuses to load. On Windows windows.libs resolves it to libomp.lib.
+///     an environment (openmp/ included) has omp.h and the caller does not
+///     link libomp itself. Some packages (data.table) probe OpenMP
+///     themselves and put -lomp in PKG_LIBS on top of R's
+///     SHLIB_OPENMP_CFLAGS; a second libomp would be a duplicate
+///     LC_LOAD_DYLIB, which newer macOS dyld refuses to load. On Windows
+///     windows.libs resolves it to libomp.lib.
 fn envFlags(ctx: *Ctx, args: Args) !Args {
     const a = ctx.arena;
     const envs = try environment.list(ctx);
@@ -541,6 +543,61 @@ test "Windows: -idirafter, no rpath, -lz and -lomp through the environment's -L"
         &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lomp" }),
     );
+}
+
+test "the toolchain's openmp/: headers on every call, -lomp on -fopenmp links, only with the base's libomp (B40)" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    try decoy(&f);
+    const c = &f.ctx;
+    // a standalone tree after phase 3: no include/omp.h of its own
+    c.self_exe = try tree(&f, "tree", false, false);
+    try f.touch("tree/lib/R/bin/toolchain/openmp/include/omp.h");
+    const l = f.fmt("-L{s}", .{f.path("tree/lib")});
+    const oinc = f.fmt("-I{s}", .{f.path("tree/lib/R/bin/toolchain/openmp/include")});
+    // minimal: no libomp in the base, so nothing from openmp/
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "p.so", "a.o", l }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-fopenmp", "-c", "a.c" }, try argv(c, .c, &.{ "-fopenmp", "-c", "a.c" }));
+    // slim and full: libomp.so in <top>/lib, where -lomp then finds it
+    try f.touch("tree/lib/libomp.so");
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "p.so", "a.o", l, oinc, "-lomp" }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-c", "a.c", oinc }, try argv(c, .c, &.{ "-c", "a.c" }));
+    // the caller's own -lomp: none added
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "dt.so", "a.o", "-lomp", l, oinc }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "dt.so", "a.o", "-lomp" }));
+    // after R's own environment's headers, before R_ZIG_EXTRA_ENV's
+    try f.touch("tree/include/zlib.h");
+    _ = try tree(&f, "env", true, true);
+    try f.env.put("R_ZIG_EXTRA_ENV", f.path("env"));
+    try expectArgs(
+        pre ++ &[_][]const u8{ "-c", "a.c", f.fmt("-I{s}", .{f.path("tree/include")}), oinc, f.fmt("-I{s}", .{f.path("env/include")}) },
+        try argv(c, .c, &.{ "-c", "a.c" }),
+    );
+}
+
+test "Windows: the toolchain's openmp/: -idirafter, -L openmp/lib and libomp.lib, with libomp.dll beside R.dll" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    try decoy(&f);
+    const c = &f.ctx;
+    try f.env.put("PATH", f.path("nothing"));
+    for ([_][]const u8{ "env/Library/lib/R/bin/toolchain/gcc.exe", "env/Library/lib/R/bin/toolchain/openmp/include/omp.h", "env/Library/lib/R/bin/toolchain/openmp/lib/libomp.lib" }) |p| try f.touch(p);
+    c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
+    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" };
+    const l = f.fmt("-L{s}", .{f.path("env/Library/lib")});
+    const ol = f.fmt("-L{s}", .{f.path("env/Library/lib/R/bin/toolchain/openmp/lib")});
+    const oinc = f.path("env/Library/lib/R/bin/toolchain/openmp/include");
+    const omp = f.path("env/Library/lib/R/bin/toolchain/openmp/lib/libomp.lib");
+    // no libomp.dll beside R.dll: nothing from openmp/
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l } }), try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o" }));
+    try f.touch("env/Library/lib/R/bin/x64/libomp.dll");
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l, ol, "-idirafter", oinc, omp } }),
+        try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o" }),
+    );
+    // a compile: the headers only
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ "-c", "a.cpp", "-o", "a.o", "-idirafter", oinc } }), try argv(c, .cxx, &.{ "-c", "a.cpp", "-o", "a.o" }));
 }
 
 test "Windows: no target, the Fortran runtime before the -l lookup" {

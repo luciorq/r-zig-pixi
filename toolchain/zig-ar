@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# zig: $ZIG_BIN if executable, else PATH, else the ziglang package — see zig-cc.
+# zig: $ZIG_BIN if executable, else the compilers group's zig, else the
+# environment's bin/, else PATH, else the ziglang package — see zig-cc.
+_env="${BASH_SOURCE[0]//\\//}"; _env="${_env%/*}/../../../.."
+ZIG=()
 if [ -n "${ZIG_BIN:-}" ] && [ -x "$ZIG_BIN" ]; then
   ZIG=("$ZIG_BIN")
-elif _zig="$(command -v zig || command -v x86_64-w64-mingw32-zig)"; then
-  ZIG=("$_zig")
 else
-  ZIG=(python3 -m ziglang)
+  for _c in "$_env/lib/R/bin/toolchain/zig/zig" "$_env/bin/zig" "$_env/bin/x86_64-w64-mingw32-zig" \
+    "$(command -v zig || command -v x86_64-w64-mingw32-zig)"; do
+    if [ -f "$_c" ] && [ -x "$_c" ]; then ZIG=("$_c"); break; fi
+  done
+  [ ${#ZIG[@]} -gt 0 ] || ZIG=(python3 -m ziglang)
 fi
 
 # macOS-only workaround for conda-forge's osx-64 zig 0.16.0: its `zig ar`

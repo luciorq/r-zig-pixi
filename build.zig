@@ -521,9 +521,11 @@ pub fn build(b: *std.Build) !void {
     // rzig (zigbuild/tools/rzig/main.zig): the compiler front Makeconf
     // names, for R's own target (glibc floor, deployment target,
     // windows-gnu), installed under the toolchain names by installRzig.
+    // R's version goes into the text rzig prints for a missing toolchain
+    // group (groups.zig); the platform there is this target's.
     // `zig build rzig-test` runs its unit tests on the build machine.
     {
-        const rz = rzig_build.add(b, b.path("zigbuild/tools/rzig"), target, rzig_build.default_optimize);
+        const rz = rzig_build.add(b, b.path("zigbuild/tools/rzig"), target, rzig_build.default_optimize, r_version);
         ctx.addSdkPaths(rz.exe.root_module);
         ctx.rzig = rz.bin;
         const inst = installRzig(&ctx);
@@ -570,9 +572,10 @@ pub fn build(b: *std.Build) !void {
     ctx.devcairo = ctx.subst.get("BUILD_DEVCAIRO_TRUE").?.len == 0;
     // FC is the toolchain's Fortran front, rzig's zig-fc (feat-no-host-
     // paths F3c, zigbuild/tools/rzig/fortran.zig), as CC and CXX are its
-    // zig-cc and zig-cxx: it runs the flang on PATH, on macOS with the
-    // floor packages' Fortran objects get (floors.zig, as fortranOne's;
-    // FC carried it before), and links a USE_FC_TO_LINK package
+    // zig-cc and zig-cxx: it runs the flang rzig finds (the toolchain's
+    // flang/, the environment's bin, PATH), on macOS with the floor
+    // packages' Fortran objects get (floors.zig, as fortranOne's; FC
+    // carried it before), and links a USE_FC_TO_LINK package
     // (SHLIB_FCLD = $(FC)) through zig with the static runtime, which
     // flang's own driver cannot find. Makeconf only: R's own build runs
     // flang itself (fortranOne).
@@ -1770,7 +1773,8 @@ const WinPkgLib = struct { pkg: []const u8, lib: *std.Build.Step.Compile };
 /// unrelated compiler happens to be on PATH. flang is NOT bundled here
 /// (see the FC replacement below) — it locates its own pieces relative to
 /// its own install location, so a standalone copy breaks it; FC is rzig's
-/// zig-fc.exe, which runs the flang on PATH.
+/// zig-fc.exe, which runs the flang rzig finds (the toolchain's flang/,
+/// the environment's bin, PATH).
 fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     const b = ctx.b;
     const toolchain_dir: std.Build.InstallDir = ctx.rhomeInstallDir("bin/toolchain");
@@ -1834,20 +1838,20 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     // that also matched DYLIB_LDFLAGS, SHLIB_LDFLAGS and ten more.
     try mk.put("LDFLAGS", "");
     // FC: rzig's zig-fc.exe (installRzig; MSYS make and sh find it by the
-    // name without .exe), as on unix (F3c): it runs the flang on PATH (an
-    // activated env has Library/bin there) and links a USE_FC_TO_LINK
-    // package through zig with the static runtime and libc++. flang
-    // itself is not copied into bin/toolchain: its driver finds its own
-    // pieces (flang.cfg and its intrinsic modules) relative to where it is
-    // installed. Fortran that calls into R under USE_FC_TO_LINK needs
-    // $(LIBR) in PKG_LIBS (install.R drops it from that link), as with
-    // upstream's gfortran.
+    // name without .exe), as on unix (F3c): it runs the flang rzig finds
+    // (the toolchain's flang/, the environment's Library/bin, PATH) and
+    // links a USE_FC_TO_LINK package through zig with the static runtime
+    // and libc++. flang itself is not copied into bin/toolchain: its
+    // driver finds its own pieces (flang.cfg and its intrinsic modules)
+    // relative to where it is installed. Fortran that calls into R under
+    // USE_FC_TO_LINK needs $(LIBR) in PKG_LIBS (install.R drops it from
+    // that link), as with upstream's gfortran.
     try mk.put("FC", "$(R_HOME)/bin/toolchain/zig-fc");
     // FLIBS: what R CMD SHLIB appends to every package link that has
     // Fortran sources (tools:::.SHLIB → shlib_libadd "$(FLIBS)"); the
     // link itself goes through SHLIB_LD = gcc.exe (rzig), not the Fortran
     // driver, so the runtime must be spelled out here: flang's runtime,
-    // which rzig resolves to the archive of the flang on PATH (as on
+    // which rzig resolves to the archive of the flang zig-fc runs (as on
     // unix), plus zig's libc++ — libflang_rt.runtime is C++ and PE refuses
     // unresolved symbols (flang-pixi handoff: only Linux's archive is
     // libc++-free).
@@ -3014,8 +3018,9 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
 /// runs: the conda env, the standalone prefix, the wheel's r_zig/R (on
 /// Windows R_HOME is <prefix>/Library/lib/R, so it is <prefix>/Library).
 /// The flang runtime is -lflang_rt.runtime, which rzig (zig-cc and
-/// zig-cxx) turns into the static archive of the flang on PATH, whatever
-/// its LLVM major. R's own build keeps the absolute values in ctx.subst.
+/// zig-cxx) turns into the static archive of the flang zig-fc runs,
+/// whatever its LLVM major. R's own build keeps the absolute values in
+/// ctx.subst.
 fn makeconfValue(ctx: *const Ctx, raw: []const u8) ![]const u8 {
     const a = ctx.b.allocator;
     var v = try std.mem.replaceOwned(u8, a, raw, "@ZR_CONDA@/bin/", "");

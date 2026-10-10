@@ -230,8 +230,9 @@ def renviron_site(existing: bytes | None) -> bytes:
     # R_HOME is <site-packages>/r_zig/R/lib/R; ziglang installs its binary
     # as <site-packages>/ziglang/zig. Renviron expands a nested default
     # only when it is a whole ${...} term, hence the helper variable. When
-    # ziglang lives elsewhere this names a missing file and rzig
-    # fall back to PATH, then `python3 -m ziglang`.
+    # ziglang lives elsewhere this names a missing file and rzig looks
+    # further (zigbuild/tools/rzig/find_zig.zig): PATH, then
+    # `python3 -m ziglang` when that python3 has ziglang.
     add = (
         "## r-zig wheel: compile packages with the PyPI ziglang package\n"
         "## installed next to this one (see r_zig/__init__.py).\n"
