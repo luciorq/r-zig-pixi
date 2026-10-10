@@ -1,0 +1,103 @@
+R CMD INSTALL: build the native library with rzig build (zig build alone)
+
+Before the make path, run_shlib asks R_HOME/bin/toolchain/rzig to build
+the package's library: `rzig build` classifies the package (no
+configure, no src/Makefile, a Makevars of assignments only, or its own
+src/build.zig), derives from etc/Makeconf and the Makevars the compile
+and link lines make would have run, and runs them as zig build steps
+that call the same compilers (zig-cc, zig-cxx, zig-fc). The library
+lands in src/ as make's does, and shlib_install() takes it from there
+(install.libs.R, strip, dSYM as before). Exit 3 means the package needs
+make, and the make path runs unchanged. On unix rzig is started with
+.Internal(spawnWait()) (patch 0012), no shell; on Windows system2()
+spawns without one already. R_ZIG_PKG_BUILDER=auto|zig|make chooses
+(zig: a tier-3 package is an error; make: rzig is never asked), for
+parity runs and bisecting. R_ZIG_JOBS, else MAKEFLAGS' -j, is the job
+count. A src/build.zig alone (a zig package, no C source) counts as
+compiled code. patch_rpaths reads the OS from Sys.info() instead of
+`uname -a`.
+.github/devdocs/feat-zig-pkg-build/PLAN.md, milestone 3.
+
+--- a/src/library/tools/R/install.R
++++ b/src/library/tools/R/install.R
+@@ -683,12 +683,58 @@
+             }
+         }
+ 
++        ## r-zig: the native library through zig build alone, no make and
++        ## no shell, when the package qualifies (no configure, no
++        ## src/Makefile, a Makevars of assignments only, or its own
++        ## src/build.zig): `rzig build` in R_HOME/bin/toolchain classifies
++        ## the package, derives from Makeconf and the Makevars what make
++        ## would have run, and runs it as zig build steps that call the same
++        ## compilers. Exit 3 means the package needs make, and the make
++        ## path below runs as before. R_ZIG_PKG_BUILDER = auto (default),
++        ## zig (never make: an error instead), make (never rzig).
++        ## R_ZIG_JOBS, else MAKEFLAGS' -j, sets the parallelism.
++        ## .github/devdocs/feat-zig-pkg-build/PLAN.md.
++        rzig_build <- function(pkg_name, instdir, arch, use_LTO)
++        {
++            builder <- Sys.getenv("R_ZIG_PKG_BUILDER", "auto")
++            if (builder == "make") return(NA)
++            rzig <- file.path(R.home(), "bin", "toolchain",
++                              if (WINDOWS) "rzig.exe" else "rzig")
++            if (!file.exists(rzig)) return(NA)
++            args <- c("build", "--pkg", "..", "--src", ".", "--out", ".",
++                      "--flat", "--name", pkg_name)
++            if (isTRUE(use_LTO)) args <- c(args, "--use-lto", "yes")
++            else if (isFALSE(use_LTO)) args <- c(args, "--use-lto", "no")
++            if (!is.na(use_C)) args <- c(args, "--c-std", as.character(use_C))
++            if (WINDOWS && debug) args <- c(args, "--debug")
++            jobs <- Sys.getenv("R_ZIG_JOBS")
++            if (!nzchar(jobs))
++                jobs <- regmatches(Sys.getenv("MAKEFLAGS"),
++                                   regexpr("(?<=-j)[0-9]+", Sys.getenv("MAKEFLAGS"),
++                                           perl = TRUE))
++            if (length(jobs) == 1L && grepl("^[0-9]+$", jobs))
++                args <- c(args, "-j", jobs)
++            status <- if (WINDOWS) system2(rzig, shQuote(args))
++                      else .Internal(spawnWait(c(rzig, args), 0L))
++            if (identical(status, 3L)) {
++                if (builder == "zig")
++                    pkgerrmsg("this package needs make, and R_ZIG_PKG_BUILDER is 'zig'",
++                              pkg_name)
++                return(NA)
++            }
++            if (status != 0L) return(TRUE)
++            shlib_install(instdir, arch)
++            FALSE
++        }
++
+         ## This is only called for Makevars[.win], so assume it
+         ## does create a shlib: not so reliably reported on Windows
+         ## Note though that it may not create pkg_name.dll, and
+         ## graph does not.
+         run_shlib <- function(pkg_name, srcs, instdir, arch, use_LTO = NA)
+         {
++            zig <- rzig_build(pkg_name, instdir, arch, use_LTO)
++            if (!is.na(zig)) return(zig)
+             args <- c(shargs,
+                       if(isTRUE(use_LTO)) "--use-LTO",
+                       if(isFALSE(use_LTO)) "--no-use-LTO",
+@@ -746,8 +792,8 @@
+ 
+             starsmsg(stars, "checking absolute paths in shared objects and dynamic libraries")
+ 
+-            uname <- system("uname -a", intern = TRUE)
+-            os <- sub(" .*", "", uname)
++            ## r-zig: Sys.info() in place of `uname -a` (no shell, no uname)
++            os <- Sys.info()[["sysname"]]
+             have_chrpath <- nzchar(Sys.which("chrpath"))
+             have_patchelf <- nzchar(Sys.which("patchelf"))
+             have_readelf <- nzchar(Sys.which("readelf"))
+@@ -1521,7 +1567,9 @@
+                     srcs <- dir(pattern = "\\.([cfmM]|cc|cpp|f90|f95|mm)$",
+                                 all.files = TRUE)
+                     ## This allows Makevars to set OBJECTS or its own targets.
+-                    allfiles <- if (file.exists("Makevars")) c("Makevars", srcs) else srcs
++                    ## r-zig: a src/build.zig is a native build too (rzig_build)
++                    allfiles <- if (file.exists("Makevars") || file.exists("build.zig"))
++                                    c("Makevars", srcs) else srcs
+                     wd2 <- setwd(file.path(R.home("bin"), "exec"))
+                     archs <- Sys.glob("*")
+                     setwd(wd2)

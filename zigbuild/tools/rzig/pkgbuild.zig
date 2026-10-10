@@ -6,9 +6,15 @@
 //! install.R calls it before its make path (M3); exit 3 means "this
 //! package needs make", and R goes on as it did.
 //!
-//!   rzig build --pkg <dir> --out <instdir> [--name <pkg>] [--linkingto <dir>]...
-//!              [--cxx-std NN] [--c-std NN] [--use-lto yes|no] [--debug] [-j N]
-//!              [--r-home <dir>] [--rpkg-dir <dir>] [--cache-dir <dir>] [--keep-root]
+//!   rzig build --pkg <dir> --out <dir> [--src <dir>] [--flat] [--name <pkg>]
+//!              [--linkingto <dir>]... [--cxx-std NN] [--c-std NN] [--use-lto yes|no]
+//!              [--debug] [-j N] [--r-home <dir>] [--rpkg-dir <dir>] [--cache-dir <dir>]
+//!              [--keep-root]
+//!
+//! The library goes to <out>/libs<R_ARCH>/<pkg>.so (a package's installed
+//! layout), or with --flat to <out>/<pkg>.so, where make leaves it in
+//! src/ and install.R's shlib_install takes it (patch 0013 runs
+//! `rzig build --pkg .. --src . --out . --flat` from src/).
 //!   rzig build --pkg <dir> --plan-only     the plan.zon to stdout
 //!   rzig build --pkg <dir> --classify      the tier to stdout
 //!
@@ -26,16 +32,19 @@ const cache = @import("cache.zig");
 pub const exit_needs_make: u8 = 3;
 
 const usage =
-    \\usage: rzig build --pkg <dir> --out <dir> [--name <pkg>] [--linkingto <dir>]...
-    \\                  [--cxx-std NN] [--c-std NN] [--use-lto yes|no] [--debug] [-j N]
-    \\                  [--r-home <dir>] [--rpkg-dir <dir>] [--cache-dir <dir>] [--keep-root]
+    \\usage: rzig build --pkg <dir> --out <dir> [--src <dir>] [--flat] [--name <pkg>]
+    \\                  [--linkingto <dir>]... [--cxx-std NN] [--c-std NN] [--use-lto yes|no]
+    \\                  [--debug] [-j N] [--r-home <dir>] [--rpkg-dir <dir>] [--cache-dir <dir>]
+    \\                  [--keep-root]
     \\       rzig build --pkg <dir> --plan-only | --classify
     \\
 ;
 
 const Args = struct {
     pkg: ?[]const u8 = null,
+    src: ?[]const u8 = null,
     out: ?[]const u8 = null,
+    flat: bool = false,
     name: ?[]const u8 = null,
     linkingto: std.ArrayList([]const u8) = .empty,
     cxx_std: ?[]const u8 = null,
@@ -56,7 +65,7 @@ fn parseArgs(ctx: *Ctx, argv: []const []const u8) !?Args {
     var i: usize = 0;
     while (i < argv.len) : (i += 1) {
         const x = argv[i];
-        const takes_value = mem.eql(u8, x, "--pkg") or mem.eql(u8, x, "--out") or mem.eql(u8, x, "--name") or mem.eql(u8, x, "--linkingto") or
+        const takes_value = mem.eql(u8, x, "--pkg") or mem.eql(u8, x, "--src") or mem.eql(u8, x, "--out") or mem.eql(u8, x, "--name") or mem.eql(u8, x, "--linkingto") or
             mem.eql(u8, x, "--cxx-std") or mem.eql(u8, x, "--c-std") or mem.eql(u8, x, "--use-lto") or mem.eql(u8, x, "-j") or
             mem.eql(u8, x, "--r-home") or mem.eql(u8, x, "--rpkg-dir") or mem.eql(u8, x, "--cache-dir");
         if (takes_value) {
@@ -66,7 +75,7 @@ fn parseArgs(ctx: *Ctx, argv: []const []const u8) !?Args {
             }
             const v = argv[i + 1];
             i += 1;
-            if (mem.eql(u8, x, "--pkg")) a.pkg = v else if (mem.eql(u8, x, "--out")) a.out = v else if (mem.eql(u8, x, "--name")) a.name = v else if (mem.eql(u8, x, "--linkingto")) try a.linkingto.append(ctx.arena, v) else if (mem.eql(u8, x, "--cxx-std")) a.cxx_std = v else if (mem.eql(u8, x, "--c-std")) a.c_std = v else if (mem.eql(u8, x, "--use-lto")) {
+            if (mem.eql(u8, x, "--pkg")) a.pkg = v else if (mem.eql(u8, x, "--src")) a.src = v else if (mem.eql(u8, x, "--out")) a.out = v else if (mem.eql(u8, x, "--name")) a.name = v else if (mem.eql(u8, x, "--linkingto")) try a.linkingto.append(ctx.arena, v) else if (mem.eql(u8, x, "--cxx-std")) a.cxx_std = v else if (mem.eql(u8, x, "--c-std")) a.c_std = v else if (mem.eql(u8, x, "--use-lto")) {
                 a.use_lto = if (mem.eql(u8, v, "yes") or mem.eql(u8, v, "true") or mem.eql(u8, v, "TRUE")) true else if (mem.eql(u8, v, "no") or mem.eql(u8, v, "false") or mem.eql(u8, v, "FALSE")) false else {
                     ctx.warn("build: --use-lto takes yes or no, not '{s}'", .{v});
                     return null;
@@ -74,6 +83,8 @@ fn parseArgs(ctx: *Ctx, argv: []const []const u8) !?Args {
             } else if (mem.eql(u8, x, "-j")) a.jobs = v else if (mem.eql(u8, x, "--r-home")) a.r_home = v else if (mem.eql(u8, x, "--rpkg-dir")) a.rpkg_dir = v else if (mem.eql(u8, x, "--cache-dir")) a.cache_dir = v;
         } else if (mem.startsWith(u8, x, "-j") and x.len > 2) {
             a.jobs = x[2..];
+        } else if (mem.eql(u8, x, "--flat")) {
+            a.flat = true;
         } else if (mem.eql(u8, x, "--debug")) {
             a.debug = true;
         } else if (mem.eql(u8, x, "--keep-root")) {
@@ -158,7 +169,7 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     };
     const r_home = canonical(ctx, r_home_in) catch return 2;
     const pkg_dir = canonical(ctx, pkg_in) catch return 2;
-    const src_dir = try ctx.fmt("{s}/src", .{pkg_dir});
+    const src_dir = if (args.src) |d| canonical(ctx, d) catch return 2 else try ctx.fmt("{s}/src", .{pkg_dir});
     const name = args.name orelse packageName(ctx, pkg_dir) orelse {
         ctx.warn("no --name and no Package: field in {s}/DESCRIPTION", .{pkg_dir});
         return 2;
@@ -187,6 +198,7 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     var plan = planner.plan(.{
         .r_home = r_home,
         .pkg_dir = pkg_dir,
+        .src_dir = src_dir,
         .name = name,
         .linkingto = if (args.linkingto.items.len > 0) args.linkingto.items else null,
         .cxx_std = args.cxx_std,
@@ -201,6 +213,7 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         error.OutOfMemory => return error.OutOfMemory,
     };
 
+    if (args.flat) plan.libs_dir = "";
     if (args.plan_only) {
         var buf: [4096]u8 = undefined;
         var w = Io.File.stdout().writerStreaming(ctx.io, &buf);
@@ -281,6 +294,11 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         ctx.warn("no zig to build with: {t}", .{err});
         return 1;
     };
+    try reportCompilers(ctx, &plan, class.tier, zig);
+    // zig build makes an (empty) .zig-cache in a path dependency's directory,
+    // the package's src/ here; leave src/ as it was found
+    const dep_cache = try ctx.fmt("{s}/.zig-cache", .{src_dir});
+    const dep_cache_existed = class.tier == .zig and ctx.exists(dep_cache);
     var cmd: std.ArrayList([]const u8) = .empty;
     try cmd.appendSlice(ctx.arena, zig);
     try cmd.appendSlice(ctx.arena, &.{ "build", "--build-file", build_file, "--cache-dir", cache_dir, "--prefix", out, try ctx.fmt("-Dplan={s}", .{plan_path}) });
@@ -305,14 +323,37 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         .exited => |c| c,
         else => 1,
     };
+    if (class.tier == .zig and !dep_cache_existed) Io.Dir.cwd().deleteTree(ctx.io, dep_cache) catch {};
+    const keep = args.keep_root or isSet(ctx, "RZIG_KEEP_ROOT");
     if (code != 0) {
-        ctx.warn("zig build failed ({d}); the build root is kept in {s}", .{ code, root });
-        return 1;
+        if (keep) ctx.warn("zig build failed ({d}); the build root is kept in {s}", .{ code, root }) else ctx.warn("zig build failed ({d})", .{code});
     }
-    if (!args.keep_root and !isSet(ctx, "RZIG_KEEP_ROOT")) {
-        Io.Dir.cwd().deleteTree(ctx.io, root) catch |err| ctx.warn("cannot remove {s}: {t}", .{ root, err });
+    if (!keep) Io.Dir.cwd().deleteTree(ctx.io, root) catch |err| ctx.warn("cannot remove {s}: {t}", .{ root, err });
+    return if (code != 0) 1 else 0;
+}
+
+/// install.R's "using C compiler: '...'" lines (R CMD check greps them from
+/// the install log), from the toolchain compilers' --version; and the zig
+/// of a tier-2 build.
+fn reportCompilers(ctx: *Ctx, plan: *const pkgplan.Plan, tier: pkgplan.Tier, zig: []const []const u8) !void {
+    var langs = std.EnumSet(pkgplan.Lang).initEmpty();
+    for (plan.sources) |s| if (std.meta.stringToEnum(pkgplan.Lang, s.lang)) |l| langs.insert(l);
+    const report = [_]struct { lang: pkgplan.Lang, what: []const u8, tool: []const u8 }{
+        .{ .lang = .c, .what = "C", .tool = plan.cc_tool },
+        .{ .lang = .cxx, .what = "C++", .tool = plan.cxx_tool },
+        .{ .lang = .f, .what = "Fortran", .tool = plan.fc_tool },
+    };
+    for (report) |r| {
+        if (!(langs.contains(r.lang) or (r.lang == .f and langs.contains(.f9x)))) continue;
+        const out = ctx.capture(&.{ try ctx.fmt("{s}/{s}", .{ plan.toolchain, r.tool }), "--version" });
+        if (!out.ok) continue;
+        const first = out.stdout[0 .. mem.findScalar(u8, out.stdout, '\n') orelse out.stdout.len];
+        try stdoutPrint(ctx, "using {s} compiler: '{s}'\n", .{ r.what, mem.trimEnd(u8, first, "\r") });
     }
-    return 0;
+    if (tier == .zig) {
+        const v = ctx.capture(try mem.concat(ctx.arena, []const u8, &.{ zig, &.{"version"} }));
+        if (v.ok) try stdoutPrint(ctx, "using zig: '{s}'\n", .{v.stdout});
+    }
 }
 
 fn needsMake(ctx: *Ctx, name: []const u8, reason: []const u8) u8 {
@@ -345,8 +386,10 @@ test "arguments" {
     try std.testing.expectEqual(false, a.use_lto.?);
     try std.testing.expectEqualStrings("17", a.cxx_std.?);
     try std.testing.expect(a.plan_only);
-    const b = (try parseArgs(&f.ctx, &.{ "--pkg", "/p", "-j8" })).?;
+    const b = (try parseArgs(&f.ctx, &.{ "--pkg", "/p", "-j8", "--src", "/p/src-x64", "--flat" })).?;
     try std.testing.expectEqualStrings("8", b.jobs.?);
+    try std.testing.expectEqualStrings("/p/src-x64", b.src.?);
+    try std.testing.expect(b.flat);
     try std.testing.expect((try parseArgs(&f.ctx, &.{"--bogus"})) == null);
     try std.testing.expect((try parseArgs(&f.ctx, &.{"--pkg"})) == null);
     // no R_HOME: usage, exit 2

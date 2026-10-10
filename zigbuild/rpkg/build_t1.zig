@@ -15,7 +15,7 @@ pub const Plan = struct {
     name: []const u8,
     srcdir: []const u8,
     output: []const u8,
-    /// "libs", or "libs/x64" on Windows (R_ARCH)
+    /// "libs", or "libs/x64" on Windows (R_ARCH); "" = the prefix itself
     libs_dir: []const u8 = "libs",
     toolchain: []const u8,
     /// rzig itself, for `rzig def` (Windows); "" when not needed
@@ -108,9 +108,15 @@ pub fn link(b: *std.Build, plan: *const Plan, objs: []const std.Build.LazyPath) 
     return out;
 }
 
+/// "libs" or "libs/x64" under the prefix; "" (rzig build --flat) the
+/// prefix itself, where make leaves the library in src/.
+pub fn installDir(libs_dir: []const u8) std.Build.InstallDir {
+    return if (libs_dir.len == 0) .prefix else .{ .custom = libs_dir };
+}
+
 pub fn build(b: *std.Build) void {
     const plan = readPlan(b);
     if (plan.sources.len == 0) return; // make: `if test "z$(OBJECTS)" != "z"`
     const lib = link(b, plan, compileAll(b, plan));
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(lib, .{ .custom = plan.libs_dir }, plan.output).step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(lib, installDir(plan.libs_dir), plan.output).step);
 }

@@ -3,8 +3,9 @@
 Branch feat-zig-pkg-build, from main 7a3004d, rebased on b490bdf.
 Milestone 1 (2026-10-09): the design, a hand-run prototype on linux-64,
 and measurements; no file of R, rzig or build.zig changed. Milestone 2
-(2026-10-09, below): `rzig build`, the evaluator and the shipped roots;
-R itself is still untouched (M3).
+(2026-10-09, below): `rzig build`, the evaluator and the shipped roots.
+Milestone 3 (2026-10-09, below): R CMD INSTALL calls it (patches 0012,
+0013).
 
 ## The question (the user, 2026-10-08)
 
@@ -426,6 +427,65 @@ outputs are right. Noted in main.zig's header.
 - `rzig --version` (compiler report for install.R), `rzig cache prune`,
   the M4 parity script that replaces mkplan.sh as the asserted oracle
   (the ZON comparison above was a scratch script).
+
+## Milestone 3 (2026-10-09): R calls `rzig build`
+
+Two R source patches, applied by scripts/zig-build.sh with the series:
+
+| patch | what |
+|---|---|
+| `0012-spawn-wait.patch` | `.Internal(spawnWait(argv, timeout))` on unix: `R_system_timeout`'s fork-and-wait machinery (timeout, signals, process group) with `execvp(argv[0], argv)` in place of `execl("/bin/sh", "-c", cmd)`; the shared body is `R_run_timeout(cmd, argv, timeout)`. Status as `system()`'s: exit code, 127 when the program cannot start, 124 after the timeout. Not defined on Windows, whose `system2()` already spawns without a shell. feat-no-host-paths S1, the part R CMD INSTALL needs |
+| `0013-install-rzig-build.patch` | install.R: `rzig_build()` before `run_shlib`'s make path runs `R_HOME/bin/toolchain/rzig build --pkg .. --src . --out . --flat --name <pkg> [--use-lto yes\|no] [--c-std NN] [--debug] [-j N]` from `src/` (unix through `spawnWait`, Windows through `system2`), then `shlib_install()` as for make (so `install.libs.R`, strip and dSYM behave as before). Exit 3 falls through to the make path. `R_ZIG_PKG_BUILDER=auto\|zig\|make` (zig: a tier-3 package is an error naming it; make: rzig is never asked). `R_ZIG_JOBS`, else `MAKEFLAGS`' `-j`, is the job count. A `src/build.zig` alone counts as compiled code (install.R's `allfiles`), so a zig package without C sources reaches the hook. `patch_rpaths` reads the OS from `Sys.info()` instead of `uname -a`. CLINK_CPPFLAGS and R_PKG_CXX_STD reach rzig through the environment install.R already sets |
+
+rzig side: `--src <dir>` (install.R's `src-<arch>` copies), `--flat`
+(the library in `<out>` itself, where make leaves it), the compiler
+report (`using C compiler: 'clang version …'`, `using Fortran compiler:
+'flang version …'`, `using zig: '0.16.0'` for tier 2, from the
+toolchain's `--version`: R CMD check greps these from the install log),
+the build root removed after a failed build too (`--keep-root` /
+`RZIG_KEEP_ROOT` keep it), and the empty `.zig-cache` zig build leaves in
+a path dependency's directory removed from the package's `src/` after a
+tier-2 build when it was not there before.
+
+### Acceptance (linux-64, gamma, 2026-10-09; the worktree's own
+`pixi run build`, dist with patches 0001-0013)
+
+`R CMD INSTALL --no-test-load -l <lib> <CRAN tarball>`, with `RZIG_TRACE=1`
+once (the zig path) and `R_ZIG_PKG_BUILDER=make` once (the make path):
+
+| package | zig path | make path | exports | smoke |
+|---|---|---|---|---|
+| cli | tier 1, 7.0 s, no make line in the log | 8.1 s | identical, 185 | identical |
+| digest | tier 1, 2.5 s | 2.9 s | identical, 127 | identical |
+| quadprog | tier 1, 1.5 s | 2.2 s | identical, 6 | identical |
+| mgcv | tier 1, 34.2 s (first OpenMP compiles) | 42.9 s | identical, 318 | |
+| Rcpp | tier 1, 9.5 s | 3.7 s (zig cc's object cache warm from the zig run) | identical, 642 | identical |
+
+Every zig-path log carries `using C compiler` (and Fortran) lines and no
+make output. `spawnWait`: `true` 0, `false` 1, a missing program 127, a
+timed-out `sleep` 124 with R's warning. A cli copy with a `configure`
+script falls through: the log says `rzig build: cli needs make: a
+configure script`, then make builds it; with `R_ZIG_PKG_BUILDER=zig` it
+stops with `ERROR: this package needs make, and R_ZIG_PKG_BUILDER is
+'zig'`. **No make on PATH** (`env -i`, PATH = a directory holding only
+`sh`, `zig`, `flang`): quadprog and cli install, cli with its test load.
+`sh` is still needed by `bin/R` itself (feat-no-host-paths C), `zig` by
+rzig (ZIG_BIN, PATH, or python's ziglang), `flang` by zig-fc.
+`R CMD INSTALL proto/zighello` (a directory, test load included): `**
+libs`, `using zig: '0.16.0'`, `rzig build: tier 2`, `hello(21)` → 42;
+afterwards `src/` holds `build.zig`, `hello.zig` and `zighello.so` (as
+make would leave the library), no `.rzig`, no `.zig-cache`.
+
+### Not in M3
+
+- `R_runR` (test load) and `install.packages()`'s start of `R CMD
+  INSTALL` still spawn through `system2()` and `/bin/sh`: they need
+  stdin and output redirection, the rest of feat-no-host-paths S1/S2.
+- Windows and macOS runs of the patched R (M5): the hook's Windows
+  branch (`system2(rzig.exe, shQuote(args))`, `src-x64` copies) is
+  untested there.
+- `symbols.rds` (R CMD check's `_R_SHLIB_BUILD_OBJECTS_SYMBOL_TABLES_`)
+  is not produced on the zig path; check falls back to the library.
 
 ## Cleanup before merge
 

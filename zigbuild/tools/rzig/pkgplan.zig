@@ -72,6 +72,9 @@ pub const Options = struct {
     r_home: []const u8,
     /// The unpacked package (where DESCRIPTION is), absolute.
     pkg_dir: []const u8,
+    /// Its src/ (install.R's multi-arch copies are src-<arch>); default
+    /// <pkg_dir>/src.
+    src_dir: ?[]const u8 = null,
     name: []const u8,
     /// Installed LinkingTo packages' directories: `-I'<dir>/include'` each,
     /// as install.R's CLINK_CPPFLAGS. null keeps the environment's value.
@@ -145,7 +148,7 @@ pub const Planner = struct {
         const ctx = p.ctx;
         const a = ctx.arena;
         const windows = ctx.os == .windows;
-        const src_dir = try ctx.fmt("{s}/src", .{opts.pkg_dir});
+        const src_dir = opts.src_dir orelse try ctx.fmt("{s}/src", .{opts.pkg_dir});
         const r_arch = ctx.getenv("R_ARCH") orelse if (windows) "/x64" else "";
         const etc = try ctx.fmt("{s}/etc{s}", .{ opts.r_home, r_arch });
         const makeconf_path = try ctx.fmt("{s}/Makeconf", .{etc});

@@ -1,0 +1,116 @@
+spawnWait: run a program by argument vector, without /bin/sh (unix)
+
+R's system() and system2() on unix start every program through
+/bin/sh -c. R CMD INSTALL now starts `rzig build` (patch 0013), which
+must work where no shell is installed: .Internal(spawnWait(argv,
+timeout)) runs argv[0] (PATH lookup for a bare name) with the given
+arguments through R's existing fork-and-wait machinery
+(R_system_timeout's, with its timeout, signal handling and process
+group), execvp in place of execl("/bin/sh", "-c", ...). The status is
+system()'s: the exit code, 127 when the program cannot start, 124 after
+the timeout. Windows' system2() already spawns without a shell (run.c),
+so there it is not defined. feat-no-host-paths PLAN.md, S1;
+feat-zig-pkg-build PLAN.md, milestone 3.
+
+--- a/src/unix/sys-unix.c
++++ b/src/unix/sys-unix.c
+@@ -638,12 +638,12 @@
+ /* Similar to system, but supports timeout in seconds.
+    Calls to R_system_timeout cannot be used when a pipe is open using
+    R_popen_timeout.
+-*/
+-static int R_system_timeout(const char *cmd, int timeout)
+-{
+-    if (!cmd)
+-	return R_system(cmd);
+ 
++   r-zig: the same machinery runs a program by argument vector, without
++   /bin/sh, when argv is given (R_spawn_timeout, .Internal(spawnWait)):
++   what R CMD INSTALL uses to start rzig build. */
++static int R_run_timeout(const char *cmd, char *const argv[], int timeout)
++{
+     /* Earlier version of R would block SIGPROF here on old Apple systems
+        following Luke's recommendation on how to fix PR#1140 (see R_open,
+        R_system). */
+@@ -665,8 +665,11 @@
+ 	signal(SIGTTIN, SIG_DFL);
+ 	signal(SIGTTOU, SIG_DFL);
+ 
+-	execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+-	_exit(127); /* execl failed */
++	if (argv)
++	    execvp(argv[0], argv);
++	else
++	    execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
++	_exit(127); /* exec failed */
+     } else if (tost.child_pid > 0) {
+ 	/* parent */
+ 	if (tost.have_alarm) {
+@@ -700,6 +703,45 @@
+ 	return -1;
+ }
+ 
++static int R_system_timeout(const char *cmd, int timeout)
++{
++    if (!cmd)
++	return R_system(cmd);
++    return R_run_timeout(cmd, NULL, timeout);
++}
++
++/* r-zig: .Internal(spawnWait(argv, timeout)): run argv[0] with these
++   arguments, found on PATH when it is a bare name, no shell; wait for it
++   and return its exit status as system() does (127 when it cannot be
++   started, 124 after the timeout, in seconds; 0 = none). */
++attribute_hidden SEXP do_spawnwait(SEXP call, SEXP op, SEXP args, SEXP rho)
++{
++    checkArity(op, args);
++    SEXP sargv = CAR(args);
++    if (!isString(sargv) || LENGTH(sargv) < 1)
++	error(_("non-empty character argument expected"));
++    int timeout = asInteger(CADR(args));
++    if (timeout == NA_INTEGER || timeout < 0)
++	error(_("invalid '%s' argument"), "timeout");
++    int n = LENGTH(sargv);
++    const void *vmax = vmaxget();
++    char **argv = (char **) R_alloc(n + 1, sizeof(char *));
++    for (int i = 0; i < n; i++)
++	argv[i] = (char *) translateCharFP(STRING_ELT(sargv, i));
++    argv[n] = NULL;
++    int res = R_run_timeout(NULL, argv, timeout);
++    if (res == -1) {
++	warning(_("system call failed: %s"), strerror(errno));
++	res = 127;
++    }
++    if (timeout && tost.timedout) {
++	res = 124;
++	warning(_("command '%s' timed out after %ds"), argv[0], timeout);
++    }
++    vmaxset(vmax);
++    return ScalarInteger(res);
++}
++
+ /* R_popen_pg, R_pclose_pg are implementations of popen/pclose which run the
+    background processes in a new process group, therefore guarding them from
+    signals sent to the group R is in. The advantage is that Ctrl+C does not
+--- a/src/main/names.c
++++ b/src/main/names.c
+@@ -669,6 +669,7 @@
+ {"system",	do_system,	0,	211,	7,	{PP_FUNCALL, PREC_FN,	0}},
+ #else
+ {"system",	do_system,	0,	211,	4,	{PP_FUNCALL, PREC_FN,	0}},
++{"spawnWait",	do_spawnwait,	0,	211,	2,	{PP_FUNCALL, PREC_FN,	0}},
+ #endif
+ 
+ #ifdef Win32
+--- a/src/include/Internal.h
++++ b/src/include/Internal.h
+@@ -440,6 +440,9 @@
+ SEXP do_sysbrowser(SEXP, SEXP, SEXP, SEXP);
+ SEXP do_sysgetpid(SEXP, SEXP, SEXP, SEXP);
+ SEXP do_system(SEXP, SEXP, SEXP, SEXP);
++#ifndef Win32
++SEXP do_spawnwait(SEXP, SEXP, SEXP, SEXP);
++#endif
+ SEXP do_systime(SEXP, SEXP, SEXP, SEXP);
+ SEXP do_tabulate(SEXP, SEXP, SEXP, SEXP);
+ SEXP do_tailcall(SEXP, SEXP, SEXP, SEXP);

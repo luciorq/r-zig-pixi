@@ -20,5 +20,5 @@ pub fn build(b: *std.Build) void {
     };
     const dep = b.dependency("pkg", .{});
     const lib = pkg.rbuild(rpkg, dep.builder, opts);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(lib, .{ .custom = plan.libs_dir }, plan.output).step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(lib, t1.installDir(plan.libs_dir), plan.output).step);
 }
