@@ -85,6 +85,13 @@ smoke = "bash scripts/zig-smoke.sh"
 # Makeconf (R CMD SHLIB/INSTALL: Rcpp, data.table, minqa + OpenMP), on
 # every OS (Windows: etc/x64/Makeconf and R.exe's CMD dispatcher).
 contract = "bash scripts/zig-contract.sh"
+# pkg-parity: R CMD INSTALL through `rzig build` (install.R's hook, no
+# make) against the make path, on the installed tree: cli, digest,
+# quadprog and Rcpp from CRAN give identical exports and identical rzig
+# command lines on both paths; the tier-2 zig package, the tier-3 fall
+# through and an install with no make or sh on PATH
+# (.github/devdocs/feat-zig-pkg-build/PLAN.md, scripts/pkg-parity.sh).
+pkg-parity = "bash scripts/pkg-parity.sh"
 # `zig build` installs the final tree (feat-no-host-paths PLAN.md, F1);
 # kept as an alias of build for existing commands.
 install = { depends-on = ["build"] }

@@ -6,7 +6,8 @@ and measurements; no file of R, rzig or build.zig changed. Milestone 2
 (2026-10-09, below): `rzig build`, the evaluator and the shipped roots.
 Milestone 3 (2026-10-09, below): R CMD INSTALL calls it (patches 0012,
 0013). Milestone 5 (2026-10-10, below): the patched R on macOS and
-Windows; M4 (the parity script in the repo) is still open.
+Windows. Milestone 4 (2026-10-10, below, done after M5): the parity
+check in the repo, `pixi run pkg-parity`, in CI.
 
 ## The question (the user, 2026-10-08)
 
@@ -488,6 +489,37 @@ make would leave the library), no `.rzig`, no `.zig-cache`.
 - `symbols.rds` (R CMD check's `_R_SHLIB_BUILD_OBJECTS_SYMBOL_TABLES_`)
   is not produced on the zig path; check falls back to the library.
 
+## Milestone 4 (2026-10-10): `pixi run pkg-parity`
+
+`scripts/pkg-parity.sh`, the pixi task `pkg-parity`, and a CI step after
+`contract` in build-r.yaml (every env, every OS). On the installed tree
+of the build it asserts what M3 and M5 checked by hand, so the prototype
+oracle (`proto/mkplan.sh`) and the M1 drivers can go:
+
+| step | assertion |
+|---|---|
+| cli, digest, quadprog, Rcpp from CRAN (fetched once into `build/pkg-parity-<flavor>/src`) | `R CMD INSTALL` with the test load, once traced on the zig path (`rzig build: tier 1` in the log, no make line, a `using … compiler` line) and once with `R_ZIG_PKG_BUILDER=make` (no `rzig build:` line); the two libraries export identical symbols (nm; Windows objdump's export table); rzig received identical command lines on both paths (sorted sets, paths by basename, quotes dropped, the known differences normalised: macOS `-Wl,-install_name,<pkg>.so`, Windows `tmp.def`/`<pkg>.def`) |
+| smoke | a script loads and exercises the four packages from each library; the outputs are identical and carry no ERROR |
+| tier 2 | `proto/zighello` copied and installed: `rzig build: tier 2`, `using zig:`, `hello(21L)` is 42, `R_init_zighello` exported, no `.rzig` or `.zig-cache` left in `src/` |
+| tier 3 | cli with a `configure` (`configure.win`) script: `rzig build: cli needs make: a configure script`, make builds it; with `R_ZIG_PKG_BUILDER=zig` the install fails with the `R_ZIG_PKG_BUILDER is 'zig'` message |
+| no make | `env -i` with PATH = a directory holding `sh`, `zig`, `flang` (Windows: System32 plus a copy of flang and its two `.cfg`, zig through `ZIG_BIN`): quadprog installs (cli when there is no flang) |
+
+linux-64, 2026-10-10 (the worktree's dist): 1 min 47 s; cli 185, digest
+127, quadprog 6, Rcpp 642 exports identical; 27, 20, 6 and 7 rzig
+command lines identical; smoke 10 lines identical; zighello 8 s with
+the test load; quadprog with `flang sh zig` on PATH 12 s (a fresh HOME,
+so the build runner compiles again).
+
+### Not in M4
+
+- The strace deny-list of the plan ("hermetic-check.sh denying sh,
+  make, nm, sed, uname, cat"): the restricted PATH is the check, as
+  hermetic-check.sh does on macOS and Windows. A traced variant can
+  join hermetic-check.sh when `bin/R` no longer needs `sh`.
+- The stress suite through the zig path (how many of its packages are
+  tier 1), and the docs entries in the feat-no-host-paths and
+  feat-standalone-toolchain records.
+
 ## Milestone 5 (2026-10-10): the patched R on macOS and Windows
 
 The branch (commit 4a167f5) synced to the two test hosts (omicron
@@ -588,10 +620,10 @@ redundant and keeps what M2 and M4 build on (decided 2026-10-09):
 | `proto/hosts/results/` | raw host logs and export lists (M1 step 4 and M5); the tables above carry every number |
 | `proto/hosts/plans-win/` | hand-derived Windows plans; `rzig build` generates them |
 | `proto/hosts/omicron.sh`, `kappa-step[123].bat`, `smoke-win.R`, `root-t2.build.zig.zon` | host-specific drivers for the prototype; superseded by the M5 drivers, which run through `R CMD INSTALL` |
-| `proto/mkplan.sh`, `proto/plan-cli.example.zon` | M2 reproduces them (acceptance above); removed once M4 asserts it in a script of the repo |
+| `proto/mkplan.sh`, `proto/plan-cli.example.zon` | M2 reproduces them (acceptance above) and M4's `pkg-parity` asserts the command lines against make's in CI |
 | `proto/rpkg/` | superseded by `zigbuild/rpkg/` in M2 |
 
-Keep: `PLAN.md`, `proto/zighello/` (M4 fixture), `proto/hosts/defs/*.def`
+Keep: `PLAN.md`, `proto/zighello/` (pkg-parity's tier-2 fixture), `proto/hosts/defs/*.def`
 (the Windows export oracle for `rzig def`), `proto/smoke.R`, and the M5
 host drivers `proto/hosts/m5-omicron.sh`, `m5-kappa.bat`, `m5-kappa.R`,
 `t2.R` (the rerun recipe for the hosts).
@@ -604,6 +636,8 @@ host drivers `proto/hosts/m5-omicron.sh`, `m5-kappa.bat`, `m5-kappa.R`,
 Then drop the prototype part of the rerun section below.
 
 ## How to rerun
+
+    pixi run pkg-parity        # M4: everything below for the four fixtures, asserted
 
 M3 and M5, with a dist of this branch (`pixi run build`) and the pixi
 env's zig and flang on PATH (any OS; `R` is the dist's `bin/R`, on
