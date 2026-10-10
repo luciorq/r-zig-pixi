@@ -26,6 +26,9 @@ pub const Record = struct {
     /// Every path the package installed, relative to the env.
     files: []const []const u8 = &.{},
     paths_data: PathsData = .{},
+    /// Not conda-meta's: read from the package cache by build.zig
+    /// (readUpstream), for SOURCES.
+    upstream: ?Upstream = null,
 
     pub const PathsData = struct {
         paths: []const Path = &.{},
@@ -41,6 +44,113 @@ pub const Record = struct {
         prefix_placeholder: ?[]const u8 = null,
     };
 };
+
+/// Where a package's program comes from and the recipe that built it, as
+/// the package cache has them (the package's info/): its recipe's sources
+/// and the feedstock, the repository and commit of that recipe, whose
+/// patches the sources take.
+pub const Upstream = struct {
+    sources: []const Source = &.{},
+    /// about.json's extra.remote_url and extra.sha.
+    feedstock: []const u8 = "",
+    commit: []const u8 = "",
+};
+
+/// One source of a recipe: a URL (the first of its mirrors) and its
+/// checksum, or a git repository and its revision.
+pub const Source = struct {
+    url: []const u8 = "",
+    sha256: []const u8 = "",
+    md5: []const u8 = "",
+    git: []const u8 = "",
+    rev: []const u8 = "",
+};
+
+/// The feedstock of a package's info/about.json. `arena` owns the result.
+pub fn parseAbout(arena: mem.Allocator, json: []const u8) !Upstream {
+    const About = struct {
+        extra: ?struct {
+            remote_url: ?[]const u8 = null,
+            sha: ?[]const u8 = null,
+        } = null,
+    };
+    const a = try std.json.parseFromSliceLeaky(About, arena, json, .{ .ignore_unknown_fields = true });
+    const e = a.extra orelse return .{};
+    return .{ .feedstock = e.remote_url orelse "", .commit = e.sha orelse "" };
+}
+
+/// The sources of a rendered recipe: the top-level block `key:` of
+/// conda-build's info/recipe/meta.yaml (`source`) or rattler-build's
+/// info/recipe/rendered_recipe.yaml (`finalized_sources`), one mapping or
+/// a list of them. Both tools write that YAML themselves, in block style,
+/// so a line scanner reads it: each entry's url (the first of a list of
+/// mirrors), sha256 and md5, or git_url (git) and git_rev (rev, tag). An
+/// entry with neither a url nor a repository (a path source) is left out.
+pub fn recipeSources(arena: mem.Allocator, yaml: []const u8, key: []const u8) ![]const Source {
+    var lines = mem.splitScalar(u8, yaml, '\n');
+    while (lines.next()) |raw| {
+        const l = mem.trimEnd(u8, raw, " \r");
+        if (l.len == key.len + 1 and mem.startsWith(u8, l, key) and l[key.len] == ':') break;
+    } else return &.{};
+    var out: std.ArrayList(Source) = .empty;
+    var cur: ?Source = null;
+    // The column of an entry's keys, and of a list's `-`.
+    var key_col: ?usize = null;
+    var dash_col: ?usize = null;
+    // The key whose value is the list that follows (url: its mirrors).
+    var list_key: []const u8 = "";
+    while (lines.next()) |raw| {
+        const l = mem.trimEnd(u8, raw, " \r");
+        const indent = mem.indexOfNone(u8, l, " ") orelse continue;
+        if (indent == 0 and l[0] != '-') break;
+        var s = l[indent..];
+        if (s[0] == '-' and (s.len == 1 or s[1] == ' ')) {
+            if (dash_col == null and key_col == null) dash_col = indent;
+            if (dash_col == null or indent != dash_col.?) {
+                if (mem.eql(u8, list_key, "url") and cur.?.url.len == 0)
+                    cur.?.url = unquote(mem.trim(u8, s[1..], " "));
+                continue;
+            }
+            if (cur) |c| try out.append(arena, c);
+            cur = .{};
+            s = mem.trimStart(u8, s[1..], " ");
+            key_col = l.len - s.len;
+            if (s.len == 0) continue;
+        } else if (key_col == null) {
+            key_col = indent;
+            cur = .{};
+        } else if (indent != key_col.?) continue;
+        const colon = mem.indexOfScalar(u8, s, ':') orelse continue;
+        const k = s[0..colon];
+        const v = unquote(mem.trim(u8, s[colon + 1 ..], " "));
+        list_key = if (v.len == 0) k else "";
+        const c = &cur.?;
+        if (mem.eql(u8, k, "url")) {
+            c.url = v;
+        } else if (mem.eql(u8, k, "sha256")) {
+            c.sha256 = v;
+        } else if (mem.eql(u8, k, "md5")) {
+            c.md5 = v;
+        } else if (mem.eql(u8, k, "git_url") or mem.eql(u8, k, "git")) {
+            c.git = v;
+        } else if (mem.eql(u8, k, "git_rev") or mem.eql(u8, k, "rev") or mem.eql(u8, k, "tag")) {
+            c.rev = v;
+        }
+    }
+    if (cur) |c| try out.append(arena, c);
+    var n: usize = 0;
+    for (out.items) |c| {
+        if (c.url.len == 0 and c.git.len == 0) continue;
+        out.items[n] = c;
+        n += 1;
+    }
+    return out.items[0..n];
+}
+
+fn unquote(v: []const u8) []const u8 {
+    if (v.len >= 2 and (v[0] == '\'' or v[0] == '"') and v[v.len - 1] == v[0]) return v[1 .. v.len - 1];
+    return v;
+}
 
 /// A conda-meta record from its JSON. `arena` owns the result.
 pub fn parse(arena: mem.Allocator, json: []const u8) !Record {
@@ -120,7 +230,11 @@ fn copyLess(_: void, a: Copy, b: Copy) bool {
 }
 
 /// SOURCES, plain text: one block per package (by name), its fields, then
-/// a `file:` line per copy (by its path here), the path in the package, the
+/// where its program comes from (its upstream, when read): a `source:`
+/// line per source of its recipe, the URL and `sha256:`/`md5:` checksum
+/// or the repository and `rev:`, and a `feedstock:` line, the recipe's
+/// repository and commit (`unknown` when the package has none); then a
+/// `file:` line per copy (by its path here), the path in the package, the
 /// path here (relative to the directory SOURCES is in) and the sha256 of
 /// both; a blank line between blocks. verify-toolchain.sh reads the `file:`
 /// lines as five space-separated fields, so a path with a blank is refused.
@@ -136,9 +250,33 @@ pub fn writeSources(gpa: mem.Allocator, w: *std.Io.Writer, copies: []const Copy)
             if (last != null) try w.writeByte('\n');
             const r = c.record;
             try w.print("package: {s}\nversion: {s}\nbuild: {s}\nurl: {s}\nsha256: {s}\nlicense: {s}\n", .{ r.name, r.version, r.build, r.url, r.sha256, r.license });
+            if (r.upstream) |u| try writeUpstream(w, u);
             last = r;
         }
         try w.print("file: {s} -> {s} {s}\n", .{ c.from, c.to, c.sha256 });
+    }
+}
+
+fn writeUpstream(w: *std.Io.Writer, u: Upstream) !void {
+    for (u.sources) |s| {
+        if (s.url.len > 0) {
+            try w.print("source: {s}", .{s.url});
+            if (s.sha256.len > 0) {
+                try w.print(" sha256:{s}", .{s.sha256});
+            } else if (s.md5.len > 0) {
+                try w.print(" md5:{s}", .{s.md5});
+            }
+        } else {
+            try w.print("source: {s}", .{s.git});
+            if (s.rev.len > 0) try w.print(" rev:{s}", .{s.rev});
+        }
+        try w.writeByte('\n');
+    }
+    if (u.sources.len == 0) try w.writeAll("source: unknown (the package's recipe lists none)\n");
+    if (u.feedstock.len == 0) {
+        try w.writeAll("feedstock: unknown (the package's about.json names none)\n");
+    } else {
+        try w.print("feedstock: {s}{s}{s}\n", .{ u.feedstock, if (u.commit.len == 0) "" else " ", u.commit });
     }
 }
 
@@ -219,10 +357,16 @@ test "find: a file in no record, one missing from paths_data, a prefix placehold
     try std.testing.expectError(error.PrefixPlaceholder, find(&rs, "lib/libomp.so", "lib/libomp.so"));
 }
 
-test "SOURCES: one block per package by name, its files by their path here" {
+test "SOURCES: one block per package by name, its upstream, its files by their path here" {
     var a = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer a.deinit();
-    const rs = try fixtures(a.allocator());
+    var rs = try fixtures(a.allocator());
+    rs[0].upstream = .{
+        .sources = &.{.{ .url = "https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz", .sha256 = "dd16" }},
+        .feedstock = "https://github.com/conda-forge/make-feedstock",
+        .commit = "1060",
+    };
+    rs[1].upstream = .{};
     const copies = [_]Copy{
         try find(&rs, "include/ompx.h", "include/ompx.h"),
         try find(&rs, "bin/make", "bin/make"),
@@ -238,6 +382,8 @@ test "SOURCES: one block per package by name, its files by their path here" {
         \\url: https://conda.anaconda.org/conda-forge/linux-64/llvm-openmp-23.1.2-h7148c6a_0.conda
         \\sha256: 2926
         \\license: Apache-2.0 WITH LLVM-exception
+        \\source: unknown (the package's recipe lists none)
+        \\feedstock: unknown (the package's about.json names none)
         \\file: include/omp.h -> include/omp.h 4066
         \\file: include/ompx.h -> include/ompx.h 615f
         \\
@@ -247,11 +393,122 @@ test "SOURCES: one block per package by name, its files by their path here" {
         \\url: https://conda.anaconda.org/conda-forge/linux-64/make-4.4.1-hb03c661_3.conda
         \\sha256: 4c65
         \\license: GPL-3.0-or-later
+        \\source: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz sha256:dd16
+        \\feedstock: https://github.com/conda-forge/make-feedstock 1060
         \\file: bin/make -> bin/make 8a9d
         \\
     , aw.written());
     // no path of this machine: extracted_package_dir is not written
     try std.testing.expect(mem.indexOf(u8, aw.written(), "/home/u") == null);
+}
+
+test "SOURCES: each kind of source, the first mirror" {
+    const u: Upstream = .{ .sources = &.{
+        .{ .url = "https://a/x.tar.gz", .md5 = "9e10" },
+        .{ .git = "https://github.com/o/r.git", .rev = "v1.2" },
+        .{ .url = "https://a/y.zip" },
+    }, .feedstock = "https://github.com/conda-forge/x-feedstock" };
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeUpstream(&aw.writer, u);
+    try std.testing.expectEqualStrings(
+        \\source: https://a/x.tar.gz md5:9e10
+        \\source: https://github.com/o/r.git rev:v1.2
+        \\source: https://a/y.zip
+        \\feedstock: https://github.com/conda-forge/x-feedstock
+        \\
+    , aw.written());
+}
+
+// The recipe shapes of the package cache, trimmed: conda-build's
+// meta.yaml (make 4.4.1, a mapping; binutils and gcc, lists, url mirrors,
+// patches before the url) and rattler-build's rendered_recipe.yaml
+// (adwaita-icon-theme 51.0's finalized_sources, at column 0).
+test "recipe sources: a mapping, lists with mirrors and patches, column 0, git" {
+    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const make =
+        \\package:
+        \\  name: make
+        \\source:
+        \\  url: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+        \\  sha256: dd16fb1d
+        \\build:
+        \\  number: '3'
+    ;
+    var s = try recipeSources(arena, make, "source");
+    try std.testing.expectEqual(@as(usize, 1), s.len);
+    try std.testing.expectEqualStrings("https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz", s[0].url);
+    try std.testing.expectEqualStrings("dd16fb1d", s[0].sha256);
+
+    const gcc =
+        \\source:
+        \\  - patches:
+        \\      - patches/0001-fallback-sysroot.diff
+        \\    sha256: 324ed40a
+        \\    url:
+        \\      - https://ftp.gnu.org/gnu/binutils/binutils-2.46.1.tar.bz2
+        \\      - https://mirrors.ocf.berkeley.edu/gnu/binutils/binutils-2.46.1.tar.bz2
+        \\  - url: 'https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz'
+        \\    sha256: 9a93b2b7
+        \\    folder: zlib2
+        \\  - git_url: https://github.com/o/r.git
+        \\    git_rev: v1.2
+        \\  - path: ../src
+        \\requirements:
+        \\  build:
+        \\    - url: not-a-source
+    ;
+    s = try recipeSources(arena, gcc, "source");
+    try std.testing.expectEqual(@as(usize, 3), s.len);
+    try std.testing.expectEqualStrings("https://ftp.gnu.org/gnu/binutils/binutils-2.46.1.tar.bz2", s[0].url);
+    try std.testing.expectEqualStrings("324ed40a", s[0].sha256);
+    try std.testing.expectEqualStrings("https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz", s[1].url);
+    try std.testing.expectEqualStrings("9a93b2b7", s[1].sha256);
+    try std.testing.expectEqualStrings("https://github.com/o/r.git", s[2].git);
+    try std.testing.expectEqualStrings("v1.2", s[2].rev);
+
+    const rattler =
+        \\recipe:
+        \\  source:
+        \\  - url: https://download.gnome.org/sources/adwaita-icon-theme/51/adwaita-icon-theme-51.0.tar.xz
+        \\    sha256: ba561cf3
+        \\finalized_sources:
+        \\- url:
+        \\  - https://download.gnome.org/sources/adwaita-icon-theme/51/adwaita-icon-theme-51.0.tar.xz
+        \\  - https://mirror/adwaita-icon-theme-51.0.tar.xz
+        \\  sha256: ba561cf3
+        \\- git: https://github.com/o/r.git
+        \\  rev: 0a1b2c
+        \\system_tools:
+        \\  rattler-build: 0.76.1
+    ;
+    s = try recipeSources(arena, rattler, "finalized_sources");
+    try std.testing.expectEqual(@as(usize, 2), s.len);
+    try std.testing.expectEqualStrings("https://download.gnome.org/sources/adwaita-icon-theme/51/adwaita-icon-theme-51.0.tar.xz", s[0].url);
+    try std.testing.expectEqualStrings("ba561cf3", s[0].sha256);
+    try std.testing.expectEqualStrings("https://github.com/o/r.git", s[1].git);
+    try std.testing.expectEqualStrings("0a1b2c", s[1].rev);
+
+    // no block, an empty one
+    try std.testing.expectEqual(@as(usize, 0), (try recipeSources(arena, make, "finalized_sources")).len);
+    try std.testing.expectEqual(@as(usize, 0), (try recipeSources(arena, "finalized_sources: null\nsystem_tools:\n", "finalized_sources")).len);
+}
+
+test "about.json: the feedstock and its commit, or none" {
+    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer a.deinit();
+    const u = try parseAbout(a.allocator(),
+        \\{"home": "https://www.gnu.org/software/make/", "extra": {"final": true,
+        \\ "remote_url": "https://github.com/conda-forge/make-feedstock", "sha": "1060ed0e"}}
+    );
+    try std.testing.expectEqualStrings("https://github.com/conda-forge/make-feedstock", u.feedstock);
+    try std.testing.expectEqualStrings("1060ed0e", u.commit);
+    const none = try parseAbout(a.allocator(), "{\"home\": \"x\"}");
+    try std.testing.expectEqualStrings("", none.feedstock);
+    const nulls = try parseAbout(a.allocator(), "{\"extra\": {\"remote_url\": null}}");
+    try std.testing.expectEqualStrings("", nulls.feedstock);
 }
 
 test "SOURCES: a path with a blank is refused" {

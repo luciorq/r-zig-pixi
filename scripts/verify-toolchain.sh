@@ -6,8 +6,10 @@
 # file copied unchanged from a conda package, or that package's record:
 #   - layout: group directories under R_HOME/bin/toolchain only (env.sh's
 #     group_dirs), and no file directly in it;
-#   - records: each directory has SOURCES, and a non-empty
-#     LICENSES/<package>/ for each package SOURCES names, and no other;
+#   - records: each directory has SOURCES, each package block of it with
+#     a `source:` line or more and one `feedstock:` line (P3-C), and a
+#     non-empty LICENSES/<package>/ for each package SOURCES names, and
+#     no other;
 #   - copies: every other file is the target of a `file:` line of
 #     SOURCES, with the sha256 that line gives (the package's, from
 #     conda-meta's paths_data), and every such target is there;
@@ -93,6 +95,15 @@ for d in "${dirs[@]}"; do
     grep -qxF -- "${l##*/}" <<< "$pkgs" || bad="$bad
   $d/LICENSES/${l##*/}/ (no package of SOURCES)"
   done
+  while IFS= read -r p; do
+    bad="$bad
+  $d/SOURCES: $p"
+  done < <(tr -d '\r' < "$D/SOURCES" | awk '
+    function check() { if (p != "" && (s == 0 || f != 1)) print p " (" s " source: lines, " f " feedstock: lines; one or more and one)" }
+    $1 == "package:" { check(); p = $2; s = 0; f = 0 }
+    $1 == "source:" { s++ }
+    $1 == "feedstock:" { f++ }
+    END { check() }')
   # file: <path in the package> -> <path here> <sha256>
   tr -d '\r' < "$D/SOURCES" | awk -v d="$d" '
     $1 != "file:" { next }

@@ -255,6 +255,12 @@ B38, B42, B43.
       objdump ships; `binutils/` also gets zstd.dll and vcruntime140.dll;
       the R trees keep their copies until step 3; tested on linux-64,
       PLAN.md's "Phase 3 record: step 2")
+- [x] P3-C (a): each SOURCES package block names its recipe's sources
+      (`source:`, URL and checksum or repository and revision) and its
+      feedstock and commit (`feedstock:`), from the package cache; a GPL
+      package with no source stops the build; verify-toolchain.sh
+      checks the lines (2026-10-10, uncommitted; tested on linux-64,
+      PLAN.md's "Phase 3 record: P3-C")
 - [ ] The base's TC holds only rzig; Windows adds `zig-ar.exe`,
       `zig-ranlib.exe`, `gcc-ar.exe`, `gcc-ranlib.exe` and drops `zig-cc`
       and `zig-cxx`; verify-tree.sh's rzig names (76) follow

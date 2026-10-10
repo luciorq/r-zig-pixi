@@ -29,8 +29,8 @@ extract_archive() {
 }
 
 # Each directory named, as it is set and resolved (Windows: also C:/...,
-# and with long names), one per line: what a build path in a file may look
-# like (verify-tree.sh's and verify-toolchain.sh's scans).
+# and with long and short, 8.3, names), one per line: what a build path in
+# a file may look like (verify-tree.sh's and verify-toolchain.sh's scans).
 path_forms() {
   local d
   for d in "$@"; do
@@ -39,7 +39,7 @@ path_forms() {
     if [ -d "$d" ]; then (cd "$d" && pwd -P); fi
     if [ "$OS" = windows ]; then
       cygpath -m "$d"
-      if [ -d "$d" ]; then cygpath -m -l "$d"; fi
+      if [ -d "$d" ]; then cygpath -m -l "$d"; cygpath -m -s "$d"; fi
     fi
   done
 }

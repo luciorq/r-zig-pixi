@@ -210,35 +210,8 @@ if [ -z "$conda_tree" ]; then
   esac
   # Windows: MSYS' HOME need not be the user's profile directory.
   if [ "$OS" = windows ] && [ -n "${USERPROFILE:-}" ]; then home_dirs+=("$(cygpath -u "$USERPROFILE")"); fi
-  # Each directory as it is set and resolved (Windows: also C:/..., and
-  # with long and short, 8.3, names).
-  path_forms() {
-    local d
-    for d in "$@"; do
-      [ -n "$d" ] || continue
-      printf '%s\n' "$d"
-      if [ -d "$d" ]; then (cd "$d" && pwd -P); fi
-      if [ "$OS" = windows ]; then
-        cygpath -m "$d"
-        if [ -d "$d" ]; then cygpath -m -l "$d"; cygpath -m -s "$d"; fi
-      fi
-    done
-  }
-  # One ERE for the paths on stdin: trailing separators dropped, each
-  # separator either one, once or more (a newline stands in while the
-  # regex characters are escaped), duplicates once. More than once: a
-  # Windows binary can hold a path with every backslash doubled (the
-  # conda package's R.dll built in CI on 2026-09-25 named its work dir
-  # 84 times as D:\\a\\..., and no other way).
-  path_re() {
-    local f r re=""
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      r="$(printf '%s' "$f" | sed -e 's#[/\\]*$##' -e 's#[/\\]#\n#g' -e 's#[][*.^$+?(){}|]#\\&#g' -e 's#\n#[/\\\\]+#g')"
-      if [ -n "$r" ]; then re="${re:+$re|}$r"; fi
-    done < <(sort -u)
-    printf '%s\n' "$re"
-  }
+  # Each directory in its forms, as one regex (path_forms, path_re:
+  # verify-helpers.sh).
   re="$(path_forms "${build_dirs[@]}" "${home_dirs[@]}" | path_re)"
   re_build="$(path_forms "${build_dirs[@]}" | path_re)"
   n_paths="$(path_forms "${build_dirs[@]}" "${home_dirs[@]}" | sort -u | grep -c .)"

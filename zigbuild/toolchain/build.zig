@@ -23,13 +23,15 @@
 //! group_dirs.
 //!
 //! Each file's package is the conda-meta record whose `files` lists its
-//! path (conda.zig). SOURCES names the package, its URL and sha256, and
-//! each file with the package's sha256 of it; LICENSES/<package>/ is the
-//! package's info/licenses/, from the package cache the env was installed
-//! from (the record's extracted_package_dir). A file no record lists, one
-//! with a prefix placeholder (conda rewrote it), or a package with no
-//! licence files stops this build and names it. R's own build
-//! (build.zig) never reads the package cache.
+//! path (conda.zig). SOURCES names the package, its URL and sha256, where
+//! its program comes from (its recipe's sources, P3-C) and the feedstock
+//! that built it, and each file with the package's sha256 of it;
+//! LICENSES/<package>/ is the package's info/licenses/. Both come from the
+//! package cache the env was installed from (the record's
+//! extracted_package_dir). A file no record lists, one with a prefix
+//! placeholder (conda rewrote it), a package with no licence files, or a
+//! GPL one whose recipe lists no source stops this build and names it.
+//! R's own build (build.zig) never reads the package cache.
 //!
 //! The conda build (recipe/build.sh, from step 3) runs this into the env
 //! itself, with R_TOOLCHAIN_PREFIX=$PREFIX: there conda's own packages
@@ -152,6 +154,15 @@ pub fn build(b: *std.Build) !void {
             b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = src }, dest, c.to).step);
         }
         if (copies.items.len == 0) continue;
+        for (records) |*r| {
+            if (r.upstream != null) continue;
+            for (copies.items) |c| {
+                if (c.record == r) {
+                    r.upstream = try readUpstream(b, io, r);
+                    break;
+                }
+            }
+        }
 
         var sources: std.Io.Writer.Allocating = .init(arena);
         try conda.writeSources(arena, &sources.writer, copies.items);
@@ -187,7 +198,7 @@ fn fail(comptime fmt: []const u8, args: anytype) error{ToolchainBuild} {
 /// those whose JSON has one of the files' names, quoted, at the end of a
 /// path. Reading only those keeps the configure step quick (zig's own
 /// record alone lists 19,546 files); conda.find then matches whole paths.
-fn readRecords(b: *std.Build, io: std.Io, env: []const u8, dirs: []const Dir) ![]const conda.Record {
+fn readRecords(b: *std.Build, io: std.Io, env: []const u8, dirs: []const Dir) ![]conda.Record {
     const arena = b.allocator;
     var needles: std.ArrayList([]const u8) = .empty;
     for (dirs) |d| {
@@ -216,6 +227,37 @@ fn readRecords(b: *std.Build, io: std.Io, env: []const u8, dirs: []const Dir) ![
     return records.items;
 }
 
+const cache_how = "the toolchain tree copies the licence files and sources from the package cache the env was installed from: reinstall the env (pixi reinstall; in CI, setup-pixi with cache: false)";
+
+/// Where the package's program comes from, as SOURCES says it (P3-C):
+/// its recipe's sources, from the rendered recipe in the package cache
+/// (rattler-build's info/recipe/rendered_recipe.yaml, else conda-build's
+/// info/recipe/meta.yaml), and its feedstock, from info/about.json. A GPL
+/// package (GPL, LGPL, AGPL) whose recipe lists no source stops the
+/// build: its binaries ship only with a pointer to their source.
+fn readUpstream(b: *std.Build, io: std.Io, r: *const conda.Record) !conda.Upstream {
+    const arena = b.allocator;
+    if (r.extracted_package_dir.len == 0)
+        return fail("{s}: its conda-meta record names no extracted_package_dir; {s}", .{ r.name, cache_how });
+    const info = b.fmt("{s}/info", .{r.extracted_package_dir});
+    const about_path = b.fmt("{s}/about.json", .{info});
+    const about = std.Io.Dir.cwd().readFileAlloc(io, about_path, arena, .limited(16 * 1024 * 1024)) catch |err|
+        return fail("{s}: cannot read {s} ({t}); {s}", .{ r.name, about_path, err, cache_how });
+    var u = conda.parseAbout(arena, about) catch |err|
+        return fail("{s}: {s} is not an about.json ({t})", .{ r.name, about_path, err });
+    for ([_][2][]const u8{ .{ "rendered_recipe.yaml", "finalized_sources" }, .{ "meta.yaml", "source" } }) |f| {
+        const yaml = std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/recipe/{s}", .{ info, f[0] }), arena, .limited(64 * 1024 * 1024)) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return fail("{s}: cannot read {s}/recipe/{s} ({t})", .{ r.name, info, f[0], err }),
+        };
+        u.sources = try conda.recipeSources(arena, yaml, f[1]);
+        break;
+    }
+    if (u.sources.len == 0 and mem.indexOf(u8, r.license, "GPL") != null)
+        return fail("{s} ({s}): its recipe in {s}/recipe lists no source, and SOURCES must name the source of a GPL package's binaries", .{ r.name, r.license, info });
+    return u;
+}
+
 /// LICENSES/<package>/: every file of the package's info/licenses/ in the
 /// package cache, subdirectories kept (a link to a file arrives as that
 /// file). None stops the build: pixi keeps the cache, but an env restored
@@ -223,12 +265,11 @@ fn readRecords(b: *std.Build, io: std.Io, env: []const u8, dirs: []const Dir) ![
 /// directory does not exist (PHASE3 C33, risk 2).
 fn installLicenses(b: *std.Build, io: std.Io, r: *const conda.Record, dest: std.Build.InstallDir) !void {
     const arena = b.allocator;
-    const how = "the toolchain tree copies the licence files from the package cache the env was installed from: reinstall the env (pixi reinstall; in CI, setup-pixi with cache: false)";
     if (r.extracted_package_dir.len == 0)
-        return fail("{s}: its conda-meta record names no extracted_package_dir; {s}", .{ r.name, how });
+        return fail("{s}: its conda-meta record names no extracted_package_dir; {s}", .{ r.name, cache_how });
     const src = b.fmt("{s}/info/licenses", .{r.extracted_package_dir});
     var dir = std.Io.Dir.cwd().openDir(io, src, .{ .iterate = true }) catch |err|
-        return fail("{s}: cannot read {s} ({t}); {s}", .{ r.name, src, err, how });
+        return fail("{s}: cannot read {s} ({t}); {s}", .{ r.name, src, err, cache_how });
     defer dir.close(io);
     var walker = try dir.walk(arena);
     defer walker.deinit();
@@ -247,7 +288,7 @@ fn installLicenses(b: *std.Build, io: std.Io, r: *const conda.Record, dest: std.
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = from }, dest, b.fmt("LICENSES/{s}/{s}", .{ r.name, rel })).step);
         n += 1;
     }
-    if (n == 0) return fail("{s}: no licence files in {s}; {s}", .{ r.name, src, how });
+    if (n == 0) return fail("{s}: no licence files in {s}; {s}", .{ r.name, src, cache_how });
 }
 
 /// Whether two paths name the same directory, by real path (build.zig's

@@ -2781,6 +2781,40 @@ zig-toolchain.sh starts from no tree on every install, arguments or not
 package-toolchain and unpack-toolchain pass; a stray file is gone after
 `pixi run toolchain --summary none`. Left for step 3, once #23 is on
 main: verify-helpers.sh's path forms get #23's Windows 8.3 short names.
+
+#### Phase 3 record: P3-C, where the sources are (2026-10-10, linux-64)
+
+P3-C (a), the user's answer after the steps 1-2 review: SOURCES says
+where each package's program comes from, for the GPL tools above all
+(make, binutils), whose binaries ship with a pointer to their source.
+- Each package block gains, after `license:`, a `source:` line per
+  source of the package's recipe (its URL, the first of its mirrors, and
+  `sha256:` or `md5:`; or a git repository and `rev:`) and one
+  `feedstock:` line, the recipe's repository and commit (conda-forge's
+  feedstock: its patches are there). A package with none says `unknown`.
+- Both come from the package cache, as LICENSES does: the rendered
+  recipe (rattler-build's `info/recipe/rendered_recipe.yaml`,
+  `finalized_sources`, else conda-build's `info/recipe/meta.yaml`,
+  `source`) and `info/about.json` (`extra.remote_url`, `extra.sha`).
+  conda.zig reads the YAML with a line scanner (both tools write it in
+  block style); unit tests on the shapes in this cache: a mapping
+  (make), lists with mirrors and patches first (binutils, gcc), column-0
+  lists and git sources (rattler-build).
+- A GPL package (GPL, LGPL, AGPL in its licence) whose recipe lists no
+  source stops the toolchain build.
+- verify-toolchain.sh checks each block has a `source:` line or more and
+  one `feedstock:` line (a SOURCES without its feedstock line fails).
+
+Run on linux-64: toolchain-test (8 tests), toolchain, verify-toolchain,
+package-toolchain, unpack-toolchain. `openmp/SOURCES` names
+llvmorg-23.1.2.zip and openmp-feedstock 51dc92fc; `usr/SOURCES` names
+make-4.4.1.tar.gz and make-feedstock 1060ed0e.
+
+main (888faa6, PR #23) merged into the branch with no conflict.
+verify-helpers.sh's `path_forms` takes #23's 8.3 short names, and
+verify-tree.sh uses the helpers' `path_forms` and `path_re` instead of
+its own copies.
+
 #### Phase 3 review: steps 1 and 2 (2026-10-10)
 
 An adversarial review of the uncommitted diff against steps 1 and 2 and
