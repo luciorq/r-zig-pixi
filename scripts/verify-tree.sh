@@ -100,7 +100,8 @@ echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig"
 # rpath, and nothing edits the file afterwards. Comment lines count.
 # CPPFLAGS and LDFLAGS are empty (F3b): the compilers, rzig, add the
 # environment's -I and -L (and a conda env's rpath) themselves. FC is
-# rzig's zig-fc (F3c), which runs the flang on PATH.
+# rzig's zig-fc (F3c), which runs the flang rzig finds (the toolchain's
+# flang/, the environment's bin, PATH).
 if [ "$OS" = windows ]; then mk="$TREE/$rh/etc/x64/Makeconf"; else mk="$TREE/$rh/etc/Makeconf"; fi
 bad=""
 # Windows: ROOT and TREE are env.sh's /c/... form; PIXI_PROJECT_ROOT is the

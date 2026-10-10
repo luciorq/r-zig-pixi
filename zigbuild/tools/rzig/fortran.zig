@@ -1,5 +1,6 @@
 //! zig-fc (zig-fc.exe on Windows): R's Fortran compiler, Makeconf's FC
-//! (feat-no-host-paths F3c). It runs the flang on PATH, adding what the
+//! (feat-no-host-paths F3c). It runs the flang flang_rt.flang finds (the
+//! compilers group's, the environment's bin, PATH's), adding what the
 //! toolchain owns:
 //!
 //! - A shared link of objects (`-shared` or `-dynamiclib` as a word, and
@@ -35,13 +36,13 @@
 //!   into compiles and a zig link is the kind of trickery the toolchain
 //!   avoids, and a configure probe's executable is no package's library.
 //!
-//! No flang on PATH: nothing runs; zig-fc says so (no_flang) and exits
-//! 127, as a shell does for a command it cannot find (main.zig). FC names
-//! zig-fc whether or not a flang is installed, so a test such as
-//! `Sys.which(<R CMD config FC>)` finds a file either way: this message,
-//! at the first Fortran compile, is where a missing flang shows. It names
-//! the remedy itself, not R_ZIG_TOOLCHAIN_HINT: zig-fc ships only in the
-//! toolchain, so that hint (install the toolchain) could never help here.
+//! No flang: nothing runs; zig-fc names the compilers group, flang's
+//! (groups.zig, feat-standalone-toolchain B35), and exits 127, as a shell
+//! does for a command it cannot find (main.zig). FC names zig-fc whether
+//! or not a flang is installed, so a test such as `Sys.which(<R CMD config
+//! FC>)` finds a file either way: this message, at the first Fortran
+//! compile, is where a missing flang shows, unless the preflight's
+//! `--rzig-check=fortran` showed it first (check.zig).
 const std = @import("std");
 const mem = std.mem;
 const Ctx = @import("Ctx.zig");
@@ -49,13 +50,14 @@ const cmdline = @import("cmdline.zig");
 const compiler = @import("compiler.zig");
 const flang_rt = @import("flang_rt.zig");
 const floors = @import("floors.zig");
+const groups = @import("groups.zig");
 const Args = cmdline.Args;
 
-/// What zig-fc runs for the caller's arguments. error.NoFlang, after a
-/// message, when there is no flang on PATH.
+/// What zig-fc runs for the caller's arguments. error.NoFlang, after the
+/// compilers group's text, when there is no flang.
 pub fn command(ctx: *Ctx, caller: Args) !Ctx.Command {
     const flang = (try flang_rt.flang(ctx)) orelse {
-        ctx.warn("{s}", .{no_flang});
+        try groups.report(ctx, groups.no_flang, .compilers);
         return error.NoFlang;
     };
     if (sharedLink(caller)) {
@@ -64,14 +66,6 @@ pub fn command(ctx: *Ctx, caller: Args) !Ctx.Command {
     const floor: Args = if (ctx.os == .macos) &.{floors.macos_min_flag} else &.{};
     return .{ .program = try mem.concat(ctx.arena, []const u8, &.{ &.{flang}, floor, caller }) };
 }
-
-/// What zig-fc says with no flang on PATH. The toolchain is installed
-/// wherever zig-fc runs, so the remedy is flang alone: r-zig-toolchain's
-/// conda package depends on one, which is on PATH once its environment
-/// is activated; the wheels and the standalone tree ship none.
-const no_flang = "no flang on PATH: compiling Fortran needs an LLVM flang on PATH " ++
-    "(in a conda env, r-zig-toolchain brings one: activate that env; " ++
-    "the wheels and the standalone tree bring none: install LLVM flang)";
 
 /// The Fortran runtime as Makeconf's FLIBS spells it (build.zig): flang's,
 /// plus libm; on Windows plus libc++ instead, since the runtime is C++
@@ -280,20 +274,21 @@ test "Windows: the shared link resolves -l to import libraries, adds -lc++, no .
     try expectProgram(&.{ f.path("bin/flang"), "-o", "px", "a.o" }, try command(c, &.{ "-o", "px", "a.o" }));
 }
 
-test "no flang on PATH: nothing runs, the message names flang's remedy, not the toolchain hint" {
+test "no flang: nothing runs, the compilers group's text; R_ZIG_TOOLCHAIN_HINT not read" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
     const c = &f.ctx;
     try f.env.put("PATH", f.path("nothing"));
-    const msg = "rzig-test: no flang on PATH: compiling Fortran needs an LLVM flang on PATH " ++
-        "(in a conda env, r-zig-toolchain brings one: activate that env; " ++
-        "the wheels and the standalone tree bring none: install LLVM flang)\n";
+    // the same text a compile with no zig and the check mode print (groups.zig)
+    const msg = f.fmt("rzig-test: no flang (R_HOME/bin/toolchain/flang/bin, the environment's bin, PATH)\n{s}", .{try groups.text(c.arena, .compilers, groups.this)});
+    try testing.expect(mem.find(u8, msg, "\nCompiling needs the r-zig compilers for R ") != null);
     for ([_]Args{ &.{ "-c", "a.f" }, &.{"--version"}, &.{ "-shared", "-o", "p.so", "a.o" } }) |call| {
         try testing.expectError(error.NoFlang, command(c, call));
         try testing.expectEqualStrings(msg, f.takeWarnings());
     }
-    // R_ZIG_TOOLCHAIN_HINT (install the toolchain zig-fc came in) changes nothing
+    // R_ZIG_TOOLCHAIN_HINT (the channels still write it, phase 4 removes
+    // that) changes nothing: the wheel's would name the wrong remedy
     for ([_][]const u8{
         "pip install r-zig-toolchain (same Python environment as r-zig)",
         "add the r-zig-toolchain package to this environment",
@@ -312,4 +307,16 @@ test "no flang on PATH: nothing runs, the message names flang's remedy, not the 
         try f.env.put("PATH", f.path("bin"));
         try testing.expectError(error.NoFlang, command(c, &.{ "-c", "a.f" }));
     }
+}
+
+test "the compilers group's flang wins over PATH's; zig-fc runs it" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    try f.tmp.dir.createDirPath(testing.io, "tree/lib/R/bin/toolchain");
+    c.self_exe = f.path("tree/lib/R/bin/toolchain/zig-fc");
+    _ = try plainFlang(&f);
+    const tc = try f.touchProgram("tree/lib/R/bin/toolchain/flang/bin/flang");
+    try expectProgram(&.{ tc, "-c", "a.f90" }, try command(c, &.{ "-c", "a.f90" }));
 }

@@ -42,10 +42,13 @@
 #     CASE_WHY: F3b's other differences (rzig never reads CONDA_PREFIX; the
 #     tree's headers on every call, -idirafter on Windows), the message
 #     for an archive ar cannot seed, an archive input passed as an .a
-#     copy in rzig's cache (archives.zig), and no -Wl,--strip-debug on a
+#     copy in rzig's cache (archives.zig), no -Wl,--strip-debug on a
 #     link whose input objects have debug info (strip.zig reads them; a
-#     shim cannot reasonably parse ELF).
-# check NAME COMMAND... adds a case that passes when COMMAND does.
+#     shim cannot reasonably parse ELF), and the toolchain's openmp/
+#     (feat-standalone-toolchain B40: rzig counts it when the base has the
+#     libomp runtime; the shims never knew it).
+# check NAME COMMAND... adds a case that passes when COMMAND does: the
+# check mode (check.zig) runs that way, the real binary with the real zig.
 # zig-fc (F3c) has no bash shim to compare with: fortran.zig's unit tests
 # cover it.
 set -euo pipefail
@@ -83,7 +86,7 @@ chmod +x "$W/tools/uname" "$W/tools/xcrun"
 tree() {
   local tc=$W/$1/lib/R/bin/toolchain sh=$W/$1/lib/R/bin/bash n
   mkdir -p "$tc" "$sh"
-  for n in zig-cc zig-cxx zig-ar zig-ranlib gcc g++; do cp "$RZIG" "$tc/$n"; done
+  for n in zig-cc zig-cxx zig-ar zig-ranlib gcc g++ gcc-ar gcc-ranlib; do cp "$RZIG" "$tc/$n"; done
   for n in zig-cc zig-cxx zig-ar zig-ranlib; do
     sed "s|/usr/bin/xcrun|$W/tools/xcrun|g" "$shims/$n" > "$sh/$n"
     chmod +x "$sh/$n"
@@ -151,6 +154,25 @@ prog "$W/flang-fails/flang" "echo '$W/llvm/lib/clang/23'; exit 1"
 winrd=$(printf '%s' "$W/winllvm/lib/clang/23" | tr / '\\')
 prog "$W/flang-win/flang" "printf '%s\\r\\n' '$winrd'"
 
+# The toolchain's groups (feat-standalone-toolchain phase 2): zig and flang
+# in R_HOME/bin/toolchain/{zig,flang/bin}, which win over the ones in the
+# environment's bin/ (no archive there), which win over PATH's; openmp/,
+# which counts only when the base has the libomp runtime (B40).
+tree tctree
+stub "$W/tctree/lib/R/bin/toolchain/zig/zig"
+prog "$W/tctree/lib/R/bin/toolchain/flang/bin/flang" "echo '$W/llvm/lib/clang/23'"
+stub "$W/tctree/bin/zig"; prog "$W/tctree/bin/flang" "echo '$W/llvm2/lib/clang/23'"
+tree bintree
+stub "$W/bintree/bin/zig"; prog "$W/bintree/bin/flang" "echo '$W/llvm/lib/clang/23'"
+W_BIN=winbintree/Library
+mkdir -p "$W/$W_BIN/lib"; tree "$W_BIN"; stub "$W/$W_BIN/bin/x86_64-w64-mingw32-zig"
+for t in omptc omptcmin; do tree $t; touchf "$W/$t/lib/R/bin/toolchain/openmp/include/omp.h"; done
+touchf "$W/omptc/lib/libomp.so"          # omptcmin has none, as minimal
+W_OMPTC=winomptc/Library
+mkdir -p "$W/$W_OMPTC/lib"; tree "$W_OMPTC"
+touchf "$W/$W_OMPTC/lib/R/bin/toolchain/openmp/include/omp.h"; touchf "$W/$W_OMPTC/lib/R/bin/toolchain/openmp/lib/libomp.lib"
+touchf "$W/$W_OMPTC/lib/R/bin/x64/libomp.dll"
+
 # Library directories for the Windows -l logic.
 for f in libdlla.dll.a ziglib.lib libmsvc.lib stop.dll; do touchf "$W/win/d1/$f"; done
 for f in libstop.dll.a libdlla.lib libonly2.dll.a; do touchf "$W/win/d2/$f"; done
@@ -174,7 +196,7 @@ why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not instal
 run_case() {
   local name=$1 os=$2 tool=$3; shift 3
   local shim=$tool uname_s side status ok=1 t=${CASE_TREE:-tree} obj_want=0 n a
-  case $tool in gcc) shim=zig-cc ;; g++) shim=zig-cxx ;; esac
+  case $tool in gcc) shim=zig-cc ;; g++) shim=zig-cxx ;; gcc-ar) shim=zig-ar ;; gcc-ranlib) shim=zig-ranlib ;; esac
   case $os in linux) uname_s=Linux ;; macos) uname_s=Darwin ;; windows) uname_s=MINGW64_NT-10.0-26100 ;; esac
   local -a env=(HOME="$W/home" LC_ALL=C)
   if declare -p CASE_ENV > /dev/null 2>&1; then env+=("${CASE_ENV[@]}"); else env+=(ZIG_BIN="$STUB"); fi
@@ -182,10 +204,10 @@ run_case() {
   local p=${CASE_PATH:-}
   # the finalization object's rule (dso_fini.zig's `wanted`, linux only)
   # and the CFG stub's (cfguard.zig's `wanted`, Windows only: an -o)
-  if [ "$os" = linux ] && [ "$tool" != zig-ar ] && [ "$tool" != zig-ranlib ] &&
+  if [ "$os" = linux ] && [ "$shim" != zig-ar ] && [ "$shim" != zig-ranlib ] &&
     [[ " $* " == *" -shared "* && " $* " != *" -nostartfiles "* && " $* " != *" -nostdlib "* ]]; then
     obj_want=1
-  elif [ "$os" = windows ] && [ "$tool" != zig-ar ] && [ "$tool" != zig-ranlib ] && [[ " $* " == *" -o "* ]]; then
+  elif [ "$os" = windows ] && [ "$shim" != zig-ar ] && [ "$shim" != zig-ranlib ] && [[ " $* " == *" -o "* ]]; then
     obj_want=1
   fi
   if [ "$obj_want" = 1 ]; then
@@ -378,6 +400,18 @@ run_case "OpenMP from the tree, caller's -lomp" linux zig-cc -shared -fopenmp -o
 CASE_TREE=omptree; CASE_DELIBERATE="\$a -I$W/omptree/include"
 CASE_WHY="rzig adds its environment's headers to every call, not only -fopenmp ones (F3b)"
 run_case "no -fopenmp: the tree's headers, no -lomp" linux zig-cc -shared -o pkg.so a.o -lomp
+# the toolchain's openmp/ (feat-standalone-toolchain B40)
+why_tc_omp="rzig counts the toolchain's openmp/ when the base has the libomp runtime (B40): its headers on every call, -lomp on a -fopenmp link; the shims never knew it"
+tc_omp=$W/omptc/lib/R/bin/toolchain/openmp
+CASE_TREE=omptc; CASE_DELIBERATE="\$a -I$tc_omp/include
+\$a -lomp"; CASE_WHY=$why_tc_omp
+run_case "OpenMP from the toolchain's openmp/ (libomp.so in the base)" linux zig-cc -shared -fopenmp -o pkg.so a.o
+CASE_TREE=omptc; CASE_DELIBERATE="\$a -I$tc_omp/include"; CASE_WHY=$why_tc_omp
+run_case "the toolchain's openmp/ headers on a compile" linux zig-cxx -c a.cpp
+CASE_TREE=omptc; CASE_DELIBERATE="\$a -I$tc_omp/include"; CASE_WHY=$why_tc_omp
+run_case "the toolchain's openmp/: the caller's -lomp, none added" linux zig-cc -shared -fopenmp -o dt.so a.o -lomp
+CASE_TREE=omptcmin
+run_case "openmp/ without the base's libomp (minimal): nothing" linux zig-cc -shared -fopenmp -o pkg.so a.o
 
 # --- ar, ranlib ----------------------------------------------------------------------
 CASE_RESET='rm -f libstat.a'; CASE_STATE='ls libstat.a 2>&1 || :'
@@ -413,6 +447,24 @@ run_case "python3 -m ziglang for ranlib" linux zig-ranlib libx.a
 CASE_ENV=(ZIG_LIB_DIR="$W/envB/lib/zig" XDG_CACHE_HOME="$W/cache5"); CASE_PATH="$W/py"; CASE_RESET="rm -rf '$W/cache5'"
 run_case "python3 -m ziglang with ZIG_LIB_DIR: mirror" linux zig-cc -c a.c
 
+# --- the toolchain's groups: zig/, flang/bin/, the environment's bin/ (B2, B34) ---
+CASE_ENV=(); CASE_PATH="$W/envA/bin:$W/flang-noarchive"; CASE_TREE=tctree
+run_case "zig/ and flang/bin/ in the toolchain, before the environment's bin and PATH" linux zig-cc -shared -o p.so a.o -lflang_rt.runtime -lm
+CASE_ENV=(); CASE_PATH="$W/envA/bin:$W/flang-noarchive"; CASE_TREE=tctree
+run_case "the toolchain's flang/bin/ after -march=armv8-a+crc" linux zig-cc -march=armv8-a+crc -shared -o p.so a.o -lflang_rt.runtime
+CASE_ENV=(); CASE_PATH="$W/envA/bin:$W/flang-noarchive"; CASE_TREE=tctree
+run_case "the toolchain's flang/bin/ after -march=armv8-a+crc (C++)" linux zig-cxx -march=armv8-a+crc -shared -o p.so a.o -lflang_rt.runtime
+CASE_ENV=(); CASE_PATH="$W/envA/bin"; CASE_TREE=tctree
+run_case "the toolchain's zig for ar" linux zig-ar rcs libt.a a.o
+CASE_PATH="$W/envA/bin"; CASE_TREE=tctree
+run_case "ZIG_BIN before the toolchain's zig" linux zig-cxx -c a.cpp
+CASE_ENV=(); CASE_PATH="$W/envA/bin:$W/flang-noarchive"; CASE_TREE=bintree
+run_case "the environment's bin, before PATH (a conda env, not activated)" linux zig-cxx -shared -o p.so a.o -lflang_rt.runtime
+CASE_ENV=(); CASE_PATH="$W/envA/bin"; CASE_TREE=$W_BIN
+run_case "Windows: the environment's bin/x86_64-w64-mingw32-zig, before PATH's zig" windows gcc -c a.c
+CASE_ENV=(); CASE_PATH="$W/envA/bin"; CASE_TREE=$W_BIN
+run_case "Windows: gcc-ranlib through the environment's zig" windows gcc-ranlib libw.a
+
 # --- macOS compiler lines: darwin.zig ------------------------------------------------
 run_case "compile: target, SDK frameworks, no SDK -L, -L kept" macos zig-cc -std=gnu23 -I"$RH/include" -fPIC -O2 -c a.c -o a.o -L"$W/mac/a"
 run_case "compile: -l deduplicated" macos zig-cc -c -L"$W/mac/a" -lX -lX a.c
@@ -434,6 +486,9 @@ CASE_ENV=(ZIG_BIN="$STUB" FAKE_SDK="$SDK" CONDA_PREFIX="$W/macenv"); CASE_DELIBE
 run_case "OpenMP compile (CONDA_PREFIX ignored)" macos zig-cxx -Xclang -fopenmp -c a.cpp
 CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d"; CASE_WHY=$why_omp
 run_case "OpenMP from the tree" macos zig-cxx -dynamiclib -fopenmp -o pkg.so a.o -lomp
+CASE_TREE=omptc; CASE_DELIBERATE="\$i -I$tc_omp/include
+\$i -lomp"; CASE_WHY=$why_tc_omp
+run_case "OpenMP from the toolchain's openmp/, before the SDK -L" macos zig-cc -dynamiclib -fopenmp -o pkg.so a.o
 run_case "lib*.so link: SONAME (all OSes)" macos zig-cc -shared -o libfoo.so a.o
 CASE_ENV=(XDG_CACHE_HOME="$W/cache6" FAKE_SDK="$SDK"); CASE_PATH="$W/envD/bin"; CASE_RESET="rm -rf '$W/cache6'"; CASE_STATE=$mirror_state
 run_case "libc++.1.dylib beside zig: mirror" macos zig-cxx -dynamiclib -o pkg.so a.o
@@ -491,6 +546,13 @@ CASE_TREE=$W_LIB2; CASE_WHY="$why_win; $why_omp"
 CASE_DELIBERATE="s|^-I\\($W/$W_LIB2/include\\)\$|-idirafter\\n\\1|
 \|^-L$W/$W_LIB2/lib\$|d"
 run_case "OpenMP from the tree, no libomp.lib: -lomp" windows gcc -fopenmp -shared -o pkg.dll a.o
+win_tc_omp=$W/$W_OMPTC/lib/R/bin/toolchain/openmp
+CASE_TREE=$W_OMPTC; CASE_WHY=$why_tc_omp
+CASE_DELIBERATE="\$a -L$win_tc_omp/lib
+\$a -idirafter
+\$a $win_tc_omp/include
+\$a $win_tc_omp/lib/libomp.lib"
+run_case "the toolchain's openmp/ (libomp.dll beside R.dll): -L, -idirafter, libomp.lib" windows g++ -shared -fopenmp -o pkg.dll a.o
 CASE_PATH="$W/flang-win"
 run_case "FLIBS: Windows flang's answer, then -lc++" windows gcc -shared -o pkg.dll a.o -L"$W/win/d1" -lflang_rt.runtime -lc++ -lflang_rt.runtime -lc++
 # a gfortran on PATH (Rtools'), which neither asks any more
@@ -513,6 +575,45 @@ run_case "--allow-multiple-definition dropped (StanHeaders)" windows g++ -shared
 CASE_ENV=(XDG_CACHE_HOME="$W/cache7"); CASE_PATH="$W/envB/bin"; CASE_STATE='ls -d "$XDG_CACHE_HOME"/r-zig/zig-lib-* 2> /dev/null || echo "no mirror"'
 run_case "libc++ beside zig: no mirror on Windows" windows zig-cxx -shared -o pkg.dll a.o
 run_case "ar and ranlib passthrough" windows zig-ar rcs libw.a a.o
+# Makeconf.win's LTO names (B43): rzig as zig-ar and zig-ranlib
+run_case "gcc-ar: zig ar" windows gcc-ar rcs libw.a a.o
+run_case "gcc-ranlib: zig ranlib" windows gcc-ranlib libw.a
+CASE_RESET='rm -f libgnew.a'; CASE_STATE='od -c libgnew.a | head -2'
+run_case "gcc-ar on macOS: zig-ar's seed" macos gcc-ar rcs libgnew.a a.o
+
+# --- the check mode (check.zig): the real binary ----------------------------------
+# a group's tools found: one line on stdout, 0; one missing: its group's
+# text, 127; a zig whose major.minor is not R's (rzig's own): 1
+tc=$W/tree/lib/R/bin/toolchain
+real_zig=$(command -v "${ZIG:-zig}" || :)
+if [ -n "$real_zig" ]; then
+  check "--rzig-check: zig and its version (ZIG_BIN)" \
+    bash -c "env -i ZIG_BIN='$real_zig' '$tc/zig-cc' --rzig-check | grep -q '^zig-cc: compilers ok: zig [0-9]'"
+  check "--rzig-check: the toolchain's zig/" \
+    bash -c "mkdir -p '$W/realtc/lib/R/bin/toolchain/zig' && cp '$RZIG' '$W/realtc/lib/R/bin/toolchain/gcc' && ln -sf '$real_zig' '$W/realtc/lib/R/bin/toolchain/zig/zig' &&
+      env -i '$W/realtc/lib/R/bin/toolchain/gcc' --rzig-check | grep -qF 'zig-cc: compilers ok: zig ' "
+  check "--rzig-check=fortran: no flang, 127, the compilers group" \
+    bash -c "env -i ZIG_BIN='$real_zig' PATH='$W/nothing' '$tc/zig-cc' --rzig-check=fortran 2>&1 >/dev/null | grep -q '^Compiling needs the r-zig compilers for R '; [ \"\${PIPESTATUS[0]}\" = 127 ]"
+  check "zig-fc --rzig-check checks flang too" \
+    bash -c "cp '$RZIG' '$tc/zig-fc' && env -i ZIG_BIN='$real_zig' PATH='$W/flang' '$tc/zig-fc' --rzig-check | grep -qF '; flang at $W/flang/flang'"
+fi
+check "--rzig-check: no zig, 127, the compilers group" \
+  bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' --rzig-check 2>&1 | grep -q '^zig-cc: no zig (ZIG_BIN, '; [ \"\${PIPESTATUS[0]}\" = 127 ]"
+check "--rzig-check: a zig that does not say its version, 1" \
+  bash -c "env -i ZIG_BIN='$STUB' '$tc/zig-cc' --rzig-check 2> /dev/null; [ \$? = 1 ]"
+prog "$W/zig-other/zig" '[ "$1" = version ] && echo 0.99.0'
+check "--rzig-check: a zig whose major.minor is not R's, 1" \
+  bash -c "env -i ZIG_BIN='$W/zig-other/zig' '$tc/zig-cc' --rzig-check 2>&1 > /dev/null | grep -q ' is zig 0.99.0, not R.s zig '; [ \"\${PIPESTATUS[0]}\" = 1 ]"
+check "--rzig-check with R_ZIG_NO_PREFLIGHT: no version check, 0" \
+  env -i ZIG_BIN="$STUB" R_ZIG_NO_PREFLIGHT=1 "$tc/zig-cc" --rzig-check
+check "--rzig-check=build-tools: make on PATH" \
+  bash -c "env -i PATH='$(dirname "$(command -v make)")' '$tc/zig-cc' --rzig-check=build-tools | grep -q '^zig-cc: build-tools ok: make at '"
+check "--rzig-check=build-tools: no make, 127, the build-tools group" \
+  bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' --rzig-check=build-tools 2>&1 | grep -q '^Building packages needs the r-zig build tools for R '; [ \"\${PIPESTATUS[0]}\" = 127 ]"
+check "--rzig-check=other: usage, 2" \
+  bash -c "env -i '$tc/zig-cc' --rzig-check=other 2> /dev/null; [ \$? = 2 ]"
+check "a compile with no zig: 127, the compilers group" \
+  bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' -c a.c 2>&1 | grep -q '^Compiling needs the r-zig compilers for R '; [ \"\${PIPESTATUS[0]}\" = 127 ]"
 
 echo "== $pass identical, $own identical but for rzig's own-environment -L or compiled object, $deliberate deliberate differences, $fail failed"
 [ "$fail" = 0 ]

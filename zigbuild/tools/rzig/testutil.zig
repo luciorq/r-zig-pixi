@@ -59,6 +59,17 @@ pub const Fixture = struct {
         return f.write(sub, "", .fromMode(0o755));
     }
 
+    /// A program rzig's lookups find as <dir>/<name> (find_zig.inDir): an
+    /// empty executable file, or on a Windows host an empty <name>.exe (a
+    /// file is what counts there). Its path, as rzig finds it.
+    pub fn touchProgram(f: *Fixture, sub: []const u8) ![]const u8 {
+        const windows = @import("builtin").os.tag == .windows;
+        const exe = if (windows) f.fmt("{s}.exe", .{sub}) else sub;
+        if (windows) try f.touch(exe) else try f.touchExe(exe);
+        const dir = std.fs.path.dirname(sub) orelse ".";
+        return f.fmt("{s}{s}{s}", .{ f.path(dir), if (windows) "\\" else "/", std.fs.path.basename(exe) });
+    }
+
     pub fn write(f: *Fixture, sub: []const u8, data: []const u8, permissions: std.Io.File.Permissions) !void {
         if (std.fs.path.dirname(sub)) |d| try f.tmp.dir.createDirPath(testing.io, d);
         try f.tmp.dir.writeFile(testing.io, .{ .sub_path = sub, .data = data, .flags = .{ .permissions = permissions } });

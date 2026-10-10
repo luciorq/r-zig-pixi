@@ -12,6 +12,13 @@ them.
   records were committed in 9bbce0b (PR #15), on top of the original
   single-archive plan (afd59a2). They are kept verbatim in "History" at
   the end.
+- Phase 2 (2026-10-09): implemented in the worktree feat-standalone-phase2
+  (branch feat-standalone-phase2, from main b2e73a5), not committed.
+  Every test passed on linux-64, omicron (osx-arm64, osx-64) and kappa
+  (win-64). The review found two code problems, in the bash shims and in
+  Windows' build-tools check, and a mislabelled parity check; its diff is
+  applied (rzig-test 94/94, parity 0 failed, both zigs). CI has not run.
+  Its record and test results are under "Phase 2" below.
 - This plan replaces the single toolchain archive of 2026-10-05/06 with
   the user's layered model of 2026-10-07: a base that holds R, rzig and
   R's external runtime, and toolchain groups that hold only third-party
@@ -2112,6 +2119,295 @@ Tests:
 - conda: test-toolchain.R still compiles with the env's zig and flang.
 - wheel-test.sh still uses ziglang through ZIG_BIN.
 - verify-bundle as today; its zig-cc still runs the build's zig.
+
+**Status (2026-10-09): implemented and tested, not committed.** The
+worktree feat-standalone-phase2 (branch feat-standalone-phase2, from main
+b2e73a5, build 7 published) has every step. Every test above passed on
+linux-64, omicron (osx-arm64, osx-64) and kappa (win-64): "Phase 2
+tested". Still to do: the review's code fixes (same section), then CI,
+then the commit.
+
+#### Phase 2 record (2026-10-09, linux-64)
+
+What changed (zigbuild/tools/rzig unless named):
+- find_zig.zig: `ZIG_BIN`, `<rzig dir>/zig/zig`, then zig and
+  x86_64-w64-mingw32-zig in `<env dir>/bin`, then the same two names on
+  PATH, then `python3 -m ziglang`. `find` returns the command and the
+  file it found, or null. The python3 step first runs
+  `python3 -c "import ziglang"`, quietly; when that fails there is no
+  zig.
+- flang_rt.flang(): `<rzig dir>/flang/bin/flang`, `<env dir>/bin/flang`,
+  PATH. zig-fc and the runtime lookup still share it.
+- environment.zig: `toolchain()` is rzig's own directory. `list()`
+  counts `<rzig dir>/openmp` as one more environment, right after R's
+  own, when it exists and R's own environment has `lib/libomp.so` or
+  `lib/libomp.dylib` (Windows `lib/R/bin/x64/libomp.dll`). So its
+  include/ goes on every compile (`-idirafter` on Windows), its lib/ on
+  links where it exists (Windows), and the `-lomp` rule sees its omp.h.
+- groups.zig (new): the group names (B38) and B35's text, built from R's
+  version (a build option) and the platform. `report` prints a first
+  line (what is missing) and the group's text on stderr.
+- check.zig (new): `--rzig-check`, `--rzig-check=fortran`,
+  `--rzig-check=build-tools`, as the only argument of any rzig name.
+  zig-fc's plain `--rzig-check` is fortran's.
+- main.zig: `gcc-ar` and `gcc-ranlib` in the name map (as zig-ar and
+  zig-ranlib); the check mode; a command that runs zig with none found
+  prints the compilers group's text and exits 127.
+- fortran.zig: the no-flang text is the compilers group's.
+- build.zig (both): rzig's build takes R's version (`-Dr-version` in
+  rzig's own build.zig; "dev" by default, for the parity and smoke
+  tests).
+- The shims (toolchain/zig-cc, zig-cxx, zig-ar, zig-ranlib) mirror the
+  zig lookup, and zig-cc and zig-cxx the flang lookup. They do not probe
+  python3.
+- parity-test.sh: 15 new cases (the lookups, the toolchain's openmp/,
+  gcc-ar and gcc-ranlib) and 11 checks of the real binary's check mode.
+- wheel-test.sh and verify-bundle.sh check the new no-flang text;
+  make-wheel.py's comment on the fallback is corrected.
+
+Choices made while implementing (each within the answered decisions):
+- **The text names what exists on the day it is printed.** conda and pip
+  name r-zig-toolchain, the one package with every group today. The
+  standalone line names the tools themselves (zig 0.16 on PATH or in
+  `ZIG_BIN`, LLVM flang on PATH; GNU make on PATH; on Windows sh and
+  make on PATH), since no group archive exists yet. The pip line says
+  "no Fortran" (B29) and "no wheels for Windows". The text lives only in
+  groups.zig. Phase 3 names R-<ver>-<plat>-build-tools.tar.gz (unix;
+  Windows' usr/bin and its .zip come in phase 7), phases 5 and 6 name
+  R-<ver>-<plat>-compilers.tar.gz (zig, then flang), and phase 4 names
+  r-zig-compilers and r-zig-build-tools. Why: a text that names an
+  archive or a package nobody can install sends users nowhere. No wheel
+  is on PyPI yet ("What exists today"), so the pip line names the wheel
+  make-wheel.py builds beside r-zig, as the wheel's own hint does.
+- **rzig does not read R_ZIG_TOOLCHAIN_HINT.** Until phase 4 the conda
+  and wheel builds still write it, for patches 0009 and 0010, and the
+  wheel's value ("pip install r-zig-toolchain") is wrong for a missing
+  flang. After phase 4 it is only a user's override; where the preflight
+  shows it is phase 3's patch work.
+- **The platform comes from the target rzig is built for**
+  (`builtin.cpu.arch`, `builtin.os.tag`, mapped to linux-64,
+  linux-aarch64, osx-64, osx-arm64, win-64). build.zig passes R's
+  version only. Why: it is the target build.zig gives rzig's build, and
+  it cannot disagree with the binary.
+- **`<rzig dir>` is rzig's own directory**, from its own path. Installed,
+  that is TC. A bare copy (zig-out/bin) looks in its own `zig/` and
+  `flang/bin/`; openmp/ also needs R's own environment (the base), so a
+  bare copy never counts it.
+- **The environment's bin is searched for both PATH names**, zig then
+  x86_64-w64-mingw32-zig, on every OS: one rule. conda's win-64 layout
+  has only the second.
+- **Exit codes of the check mode:** 0, with one line on stdout; 127 when
+  a tool is missing, as for a compile; 1 when zig's major.minor is not
+  R's, or zig does not say its version; 2 for an unknown
+  `--rzig-check=` value. Every failure prints the group's text on
+  stderr. `R_ZIG_NO_PREFLIGHT` (non-empty, as R's `nzchar` test) skips
+  only the version comparison.
+- **make "as R runs it":** the first word of `MAKE`, else make; a word
+  with a separator must be an executable file, any other is looked up on
+  PATH (`command -v`). sh is checked when the OS is Windows.
+- **zig-fc's compiles do not need zig.** find_zig runs first, as before,
+  but only a command that runs zig stops when there is none. A Fortran
+  compile with no flang shows the flang text, not the zig one.
+- **The python3 probe** also ends fix-stress-round1's note that the last
+  fallback reached the Microsoft Store alias on Windows ("Python was not
+  found", exit 49): that python3 fails the probe, and rzig names the
+  compilers group.
+
+What a user sees (rzig built with `-Dr-version=4.6.1`, linux-64):
+
+```
+$ env -i PATH=/nowhere zig-cc -c a.c          # exit 127
+zig-cc: no zig (ZIG_BIN, R_HOME/bin/toolchain/zig, the environment's bin, PATH, python3 -m ziglang)
+Compiling needs the r-zig compilers for R 4.6.1 on linux-64: zig 0.16, and flang for Fortran.
+  standalone:  zig 0.16 on PATH or in ZIG_BIN, LLVM flang on PATH
+  conda, pixi: pixi add r-zig-toolchain (or conda install r-zig-toolchain)
+  pip:         pip install r-zig-toolchain (no Fortran)
+$ zig-fc --rzig-check                          # exit 0
+zig-fc: compilers ok: zig 0.16.0 at <env>/bin/zig; flang at <env>/bin/flang
+$ ZIG_BIN=<a zig 0.17.0> zig-cc --rzig-check   # exit 1
+zig-cc: <a zig 0.17.0> is zig 0.17.0, not R's zig 0.16 (R_ZIG_NO_PREFLIGHT=1 skips this check)
+Compiling needs the r-zig compilers for R 4.6.1 on linux-64: ...
+$ MAKE=gmake zig-cc --rzig-check=build-tools   # exit 127, no gmake on PATH
+zig-cc: no gmake on PATH (MAKE=gmake)
+Building packages needs the r-zig build tools for R 4.6.1 on linux-64: make.
+  standalone:  GNU make on PATH
+  conda, pixi: pixi add r-zig-toolchain (or conda install r-zig-toolchain)
+  pip:         pip install r-zig-toolchain
+```
+
+Tests (linux-64, pixi.lock sha256
+7aef60ff4b270486cf70786f20e21b50cde2638eb6b6deba62d934e780355a63,
+unchanged):
+- `pixi run --locked rzig-test`, conda-forge zig 0.16.0: 94 unit tests
+  pass (74 before). Parity: 75 identical, 59 identical but for rzig's
+  own -L or compiled object, 32 deliberate, 0 failed (before: 60, 58,
+  22). The 12 checks are among the identical.
+- The same with upstream zig (`ZIG_BIN` from `pixi run --locked
+  fetch-zig`, PyPI ziglang 0.16.0): the same counts.
+- rzig cross-builds for x86_64-windows-gnu, aarch64-macos, x86_64-macos
+  and aarch64-linux-musl, and the unit tests compile for Windows and
+  macOS hosts (`zig test -fno-emit-bin`). They have not run there.
+- The repo's build.zig compiles with the new argument. Its `rzig-test`
+  step was not run: the worktree has no extracted R source, which
+  build.zig checks first.
+
+#### Phase 2 tested (2026-10-09)
+
+Every host tested the worktree as the implementer left it. At the start
+and the end of each run, `git diff` had sha256 1fb0dd29...169e6 and
+pixi.lock had sha256 7aef60ff...355a63 (unchanged). Nothing is committed
+or pushed, so CI has not run. The review then changed comments only, and
+`rzig-test` passed again on linux-64 with the same counts.
+
+linux-64 (local):
+- `rzig-test`: 94/94 unit tests with conda-forge zig 0.16.0 and with
+  upstream zig (fetch-zig). Parity 75 / 59 / 32 deliberate / 0 failed
+  with both.
+- default (slim): build, verify-tree, smoke, contract and verify-package
+  pass. verify-package's no-flang check prints the new line, exit 127.
+- minimal: build and verify-package pass, the same check included.
+- wheel: wheel and wheel-test pass. The no-flang check shows the
+  compilers text with "pip install r-zig-toolchain (no Fortran)". R CMD
+  INSTALL works three ways: ZIG_BIN from `import ziglang`, Renviron.site's
+  sibling ziglang, and `python3 -m ziglang` with ZIG_BIN naming nothing.
+- pkg: conda-package passes. r-zig-slim-4.6.1-hb0f4dca_7 and
+  r-zig-toolchain-4.6.1-hbd87d40_7 each report "all tests passed";
+  test-toolchain.R compiles its C, C++, zlib, FLIBS-Fortran and
+  USE_FC_TO_LINK packages with the env's zig and flang.
+- 189 behaviour checks on copies of the built slim and minimal trees, all
+  pass:
+  - zig: ZIG_BIN, then TC/zig/, then `<top>/bin` (zig, then the mingw
+    name), then PATH. A real upstream zig tree in TC/zig/ with
+    PATH=/usr/bin:/bin compiles, links, runs and builds an R CMD SHLIB
+    package. A bare copy of rzig does not look in `<top>/bin`.
+  - No zig: every name and the check exit 127 with B35's text alone on
+    stderr. The same with a python3 without ziglang, with no python3, and
+    with a python3 that fails like the Store alias. With PyPI's ziglang on
+    PYTHONPATH, `python3 -m ziglang` compiles, links and runs.
+  - flang: TC/flang/bin, then `<top>/bin`, then PATH, for the compile and
+    for the runtime archive. No flang: 127 and the compilers text, also
+    from zig-fc with no zig.
+  - openmp/ (B40): counted only with `<top>/lib/libomp.so` (or
+    `.dylib`). Its -I comes after the tree's include and before
+    R_ZIG_EXTRA_ENV's; -lomp appears once; a real OpenMP R CMD SHLIB
+    package runs 3 threads. minimal has no libomp, so openmp/ is never
+    counted there.
+  - Check mode: the exit codes and texts of the record. MAKE='make -j8'
+    and an absolute MAKE pass. A stand-in zig 0.17.0 exits 1, and 0 with
+    R_ZIG_NO_PREFLIGHT=1. 0.16.9 passes, 0.15.2 fails.
+  - gcc-ar and gcc-ranlib build an archive that links.
+
+omicron:
+- osx-arm64: `rzig-test` 94/94 with both zigs. build, verify-tree (62
+  Mach-O files), smoke, contract (Rcpp, data.table, minqa, quadprog, pak,
+  ps) and verify-package pass, the no-flang check included.
+- osx-64 under Rosetta, in a copy with `platforms = ["osx-64"]` re-solved
+  once (the same osx-64 packages in all 7 environments): `rzig-test`
+  94/94, build and verify-package pass.
+- 55 checks on the osx-arm64 tree, all as designed. The script counted 2
+  as failed, but there it expected "gcc-ar:" where rzig prints "zig-ar:".
+  They cover the lookups (upstream zig in TC/zig/ with an empty PATH, R
+  CMD SHLIB and dyn.load), flang/bin, openmp/ (a 3-thread OpenMP load),
+  the python3 step with the Command Line Tools' python3, the check mode,
+  and gcc-ar and gcc-ranlib.
+
+kappa (win-64):
+- `rzig-test`: 69 passed and 25 skipped of 94, with both zigs. The 5 new
+  skips use shell-script stand-ins (check.zig's three, find_zig's python3
+  test, flang_rt's runtime test); the tree checks below cover them.
+- build, verify-tree, smoke, contract and verify-package pass.
+- On a copy of the tree:
+  - B35's text names R 4.6.1 on win-64 and "no wheels for Windows". The
+    Store alias python3 (exit 9009) gives the text and 127; nothing of its
+    message leaks.
+  - ZIG_BIN works with and without .exe and with `/`. Upstream zig.exe in
+    TC\zig is found with PATH=System32, also through the 8.3 path, and
+    compiles, links and runs. In `Library\bin`, zig.exe comes before the
+    mingw name, both before PATH; zig.bat is ignored; R_ZIG_EXTRA_ENV's bin
+    is not searched.
+  - flang in TC\flang\bin and in `Library\bin` is found.
+  - openmp\ with libomp.dll beside R.dll: -idirafter, -L openmp/lib and
+    libomp.lib. Phase 3's layout (omp.h and libomp.lib only in openmp\)
+    compiles, links and runs 3 threads; without libomp.dll nothing is
+    added.
+  - build-tools: sh and make from pixi global or from `Library\usr\bin`.
+  - gcc-ar and gcc-ranlib copies build an archive.
+
+Review (2026-10-09), against the decisions:
+- Lookup order and conda: an activated env sees the same zig and flang,
+  as B34 says. One effect: a zig put first on PATH no longer wins over
+  the zig in R's own env's bin; ZIG_BIN is the way to pick another one.
+- The wheel: Renviron.site's ZIG_BIN default is still the first step. A
+  ZIG_BIN that names nothing falls through to PATH and python3
+  (wheel-test's third install).
+- The dev tree: env.sh exports ZIG_BIN only when it is set. Without it
+  the build's zig is PATH's, and a dev tree has no TC/zig/ and no
+  `<top>/bin/zig`, so rzig runs PATH's too. verify-bundle passes
+  `ZIG_BIN=$ZIG` and checks that its compiles run the build's zig; that
+  passed on the four unix builds. Phase 5's scenario 2 unsets it
+  (TODO.md).
+- Windows paths: `Library/bin`, `.exe` and 8.3 paths hold (kappa).
+- The openmp rule: the runtime test is right per OS and flavor (linux
+  .so, macOS .dylib, Windows R_HOME/bin/x64/libomp.dll; none in minimal;
+  conda and the wheel have no openmp/).
+- The check mode is ready for patches 0009 and 0010: fixed flags; exit 0,
+  127, 1 or 2; one line on stdout (`<name>: compilers ok: ...`,
+  `<name>: build-tools ok: ...`); failures on stderr. R_ZIG_NO_PREFLIGHT
+  counts when non-empty, as 0009's `nzchar` test.
+- B35: the text is in groups.zig only, and true today, with the PyPI
+  caveat in the record's choices.
+- The version check: a tree built with conda-forge zig 0.16.0 passes with
+  upstream zig 0.16.0 on all three hosts, and the upstream `rzig-test`
+  runs pass. A 0.17.0 zig fails.
+- Parity: the counts hold. Of the 10 new deliberate cases, 5 are
+  openmp/'s and 5 differ only in the shim's unnormalized path.
+
+Code problems found by the review, fixed after it (2026-10-09: the
+diff applied in the worktree, then rzig-test re-run on linux-64 with
+conda-forge and upstream zig). The exact diff was handed over; on a copy, rzig's unit tests (94/94) and the parity test
+(76 / 59 / 34 deliberate / 0 failed) pass with it, with both zigs:
+- **The shims lose the environment after -march=armv*-a.** zig-cc and
+  zig-cxx keep the environment's directory in `_e`, and the -march loop
+  reuses `_e` and leaves it empty. The flang lookup that follows then
+  skips TC/flang/bin and `<top>/bin` and drops the runtime archive. rzig
+  is right. Fix: name the variable `_env` in the four shims, and add two
+  parity cases, `-march=armv8-a+crc` with the toolchain's flang (zig-cc
+  and zig-cxx). Today's shims fail both. Found by the linux tester.
+- **Windows' build-tools check reads MAKE, but R runs make there.**
+  install.R:174 and R CMD config set `MAKE=make` on Windows, so
+  `MAKE=gmake` fails the check although R would run make. Fix: on Windows
+  check make and ignore MAKE, with one more unit-test line; the record's
+  "make as R runs it" choice then says that MAKE is unix's.
+- **A parity check's name is wrong.** "a zig that is not R's" runs the
+  stub, which gives no version. Fix: rename it, and add a check with a
+  zig that says 0.99.0.
+
+Observations (no change needed now):
+- On Windows the check lines mix separators
+  (`.../toolchain/zig\zig.exe`): find_zig joins with `\`, rzig's own
+  path uses `/`. Phase 3's preflight shows these lines, so one separator
+  would read better (TODO.md).
+- A zig that cannot start, such as conda-forge's win-64 zig.exe copied
+  without its DLLs (zlib.dll, zstd.dll, libxml2.dll), gets "does not say
+  its zig version". Upstream zig.exe runs alone, which B4 (a) already
+  takes for phase 5.
+- gcc-ar and gcc-ranlib print their messages as zig-ar and zig-ranlib,
+  by design.
+- In the last fallback rzig starts python3 twice per call (the probe,
+  then the run).
+- On Windows the pipeline leaves rzig's cache in `%LOCALAPPDATA%\r-zig`,
+  since XDG_CACHE_HOME is unset. This predates phase 2.
+- On macOS with PATH=/usr/bin:/bin the build-tools check finds Apple's
+  GNU make 3.81 and passes; it does not check make's version.
+
+Not run: CI; a full R build with upstream zig on any host; `check`,
+hermetic, full and openblas; wheel-test on macOS; conda-package on
+omicron and kappa; the repo's `zig build rzig-test` step.
+
+The review also corrected comments that still said rzig runs PATH's zig
+or flang (env.sh, verify-bundle.sh, verify-tree.sh, build.zig), the
+check mode's comment (exit 1 for a zig with no version, exit 2), and
+groups.zig's (the preflight calls the check mode from phase 3).
 
 ### Phase 3 — the standalone layout: base, toolchain tree, groups with today's contents
 

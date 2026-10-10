@@ -8,8 +8,9 @@
 #     preflight naming r-zig-toolchain (phase T of feat-no-host-paths)
 #   - then r-zig-toolchain (which brings ziglang and GNU make):
 #   - zig-fc (FC) is shipped, and with no flang it stops with exit 127 and
-#     a message naming flang's remedy, not the toolchain hint (the toolchain
-#     is installed by then), feat-no-host-paths F3c
+#     the compilers group's text, which says pip brings no Fortran, not the
+#     toolchain hint (the toolchain is installed by then), feat-no-host-paths
+#     F3c and feat-standalone-toolchain B35
 #   - R CMD INSTALL of a small package with C and C++ sources that calls
 #     BLAS through CRAN's usual `$(BLAS_LIBS) $(FLIBS)` — compiled by the
 #     PyPI ziglang package and built by the bundled GNU make, three times:
@@ -148,10 +149,13 @@ run Rscript -e '
 echo "== zig-fc: shipped, and with no flang it stops naming flang"
 # FC is the toolchain's zig-fc (feat-no-host-paths F3c), shipped like
 # zig-cc. Neither wheel brings a Fortran compiler, so here a Fortran
-# compile stops at once: exit 127, with a message naming LLVM flang as the
-# remedy. Not R_ZIG_TOOLCHAIN_HINT (etc/Renviron, which R CMD applies):
-# its "pip install r-zig-toolchain" is already done once zig-fc exists.
-# C packages build as before.
+# compile stops at once: exit 127, with rzig's text for the compilers group
+# (feat-standalone-toolchain B35, the same on every channel): its pip line
+# says the wheels bring no Fortran, its standalone line names LLVM flang on
+# PATH. Not R_ZIG_TOOLCHAIN_HINT (etc/Renviron, which R CMD applies; rzig
+# does not read it): its "pip install r-zig-toolchain (same Python
+# environment as r-zig)" is already done once zig-fc exists. C packages
+# build as before.
 tc="$r_home/bin/toolchain"
 cmp -s "$tc/zig-fc" "$tc/zig-cc" || { echo "error: $tc/zig-fc is missing or not the same rzig as zig-cc" >&2; exit 1; }
 if [ -x /usr/bin/flang ] || [ -x /bin/flang ]; then
@@ -160,9 +164,10 @@ else
   printf '      end\n' > "$T/nofc.f"
   rc=0
   (cd "$T" && run "$r_home/bin/R" CMD toolchain/zig-fc -c nofc.f -o nofc.o) > "$T/nofc.log" 2>&1 || rc=$?
-  if [ "$rc" != 127 ] || ! grep '^zig-fc: no flang on PATH' "$T/nofc.log" | grep -qF "install LLVM flang" ||
-    grep -qF "pip install r-zig-toolchain" "$T/nofc.log"; then
-    cat "$T/nofc.log" >&2; echo "error: zig-fc with no flang: exit $rc, or no message naming LLVM flang (or one still naming the installed toolchain)" >&2; exit 1
+  if [ "$rc" != 127 ] || ! grep -q '^zig-fc: no flang (' "$T/nofc.log" ||
+    ! grep -qF "LLVM flang on PATH" "$T/nofc.log" || ! grep -qF "pip install r-zig-toolchain (no Fortran)" "$T/nofc.log" ||
+    grep -qF "same Python environment as r-zig" "$T/nofc.log"; then
+    cat "$T/nofc.log" >&2; echo "error: zig-fc with no flang: exit $rc, or not the compilers group's text (LLVM flang on PATH; pip: no Fortran), or the toolchain hint" >&2; exit 1
   fi
   echo "ok: exit 127: $(cat "$T/nofc.log")"
 fi

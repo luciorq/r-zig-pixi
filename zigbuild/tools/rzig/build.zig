@@ -8,7 +8,9 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Default: " ++ @tagName(default_optimize)) orelse default_optimize;
-    const steps = add(b, b.path("."), target, optimize);
+    // the repo's build.zig passes R's own; a test build has none
+    const r_version = b.option([]const u8, "r-version", "R's version, for the text that names a missing toolchain group (default: dev)") orelse "dev";
+    const steps = add(b, b.path("."), target, optimize, r_version);
     b.getInstallStep().dependOn(&b.addInstallBinFile(steps.bin, if (target.result.os.tag == .windows) "rzig.exe" else "rzig").step);
     b.step("test", "Run rzig's unit tests").dependOn(&b.addRunArtifact(steps.tests).step);
 }
@@ -29,7 +31,11 @@ pub const default_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
 /// machine has (macOS links libSystem, Windows kernel32/ntdll, as every
 /// program there does). Stripped in release modes: it ships as several
 /// copies (a wheel has no symlinks, Windows needs gcc.exe and g++.exe).
-pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) Artifacts {
+/// `r_version` is R's: the text that names a missing toolchain group says
+/// which R it is for (groups.zig); the platform there is the target's.
+pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, r_version: []const u8) Artifacts {
+    const options = b.addOptions();
+    options.addOption([]const u8, "r_version", r_version);
     const mod = b.createModule(.{
         .root_source_file = dir.path(b, "main.zig"),
         .target = target,
@@ -41,6 +47,8 @@ pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTar
         .target = b.graph.host,
         .optimize = .Debug,
     });
+    mod.addOptions("build_options", options);
+    test_mod.addOptions("build_options", options);
     const exe = b.addExecutable(.{ .name = "rzig", .root_module = mod });
     var bin = exe.getEmittedBin();
     if (target.result.os.tag == .macos) {
