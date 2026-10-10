@@ -42,7 +42,7 @@ const arch = switch (builtin.cpu.arch) {
     .aarch64 => "aarch64",
     else => "x86_64",
 };
-const triple = arch ++ "-native." ++ floors.majorMinor(floors.macos);
+pub const triple = arch ++ "-native." ++ floors.majorMinor(floors.macos);
 
 /// The installed SDK, asked the way zig itself asks
 /// (std.zig.system.darwin.getSdk) and build.zig asks for R: `xcrun --sdk

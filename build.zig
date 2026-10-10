@@ -2545,7 +2545,8 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 /// directory; the compile preflight (zigbuild/patches/, install.R) looks
 /// for its zig-cc on every OS.
 ///   unix:    zig-cc, zig-cxx (CC/CXX/OBJC/OBJCXX), zig-fc (FC), zig-ar,
-///            zig-ranlib
+///            zig-ranlib, and rzig itself (`rzig build`, `rzig def`:
+///            feat-zig-pkg-build)
 ///   Windows: gcc.exe, g++.exe (Makeconf.win's $(BINPREF)gcc.exe and
 ///            g++.exe: CMake takes R CMD config CC only when it names an
 ///            existing file, stress round 1's RcppParallel and Rhdf5lib),
@@ -2563,11 +2564,17 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
     const b = ctx.b;
     const step = b.step("install-rzig", "Install rzig into R_HOME/bin/toolchain");
     const names: []const []const u8 = switch (ctx.os) {
-        .windows => &.{ "gcc.exe", "g++.exe", "zig-fc.exe", "zig-cc", "zig-cxx" },
-        else => &.{ "zig-cc", "zig-cxx", "zig-fc", "zig-ar", "zig-ranlib" },
+        .windows => &.{ "gcc.exe", "g++.exe", "zig-fc.exe", "zig-cc", "zig-cxx", "rzig.exe" },
+        else => &.{ "zig-cc", "zig-cxx", "zig-fc", "zig-ar", "zig-ranlib", "rzig" },
     };
     for (names) |n| {
         step.dependOn(&b.addInstallFileWithDir(ctx.rzig, ctx.rhomeInstallDir("bin/toolchain"), n).step);
+    }
+    // `rzig build`'s zig build roots (feat-zig-pkg-build): the tier-1 root
+    // reads a plan, the tier-2 root adds a package's own src/build.zig, and
+    // rpkg.zig is the helper a package's rbuild receives. zigbuild/rpkg/.
+    for ([_][]const u8{ "build_t1.zig", "build_t2.zig", "rpkg.zig" }) |n| {
+        step.dependOn(&b.addInstallFileWithDir(b.path(b.fmt("zigbuild/rpkg/{s}", .{n})), ctx.rhomeInstallDir("share/zig/rpkg"), n).step);
     }
     return step;
 }

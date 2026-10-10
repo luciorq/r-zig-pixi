@@ -82,9 +82,9 @@ trap 'rm -rf "$WORK"' EXIT
 # binary under every name: compiling runs no shell script of ours. FC is
 # rzig's zig-fc (F3c).
 if [ "$OS" = windows ]; then
-  tc_dir="$rh/bin/toolchain"; tc_names="gcc.exe g++.exe zig-fc.exe zig-cc zig-cxx"
+  tc_dir="$rh/bin/toolchain"; tc_names="gcc.exe g++.exe zig-fc.exe zig-cc zig-cxx rzig.exe"
 else
-  tc_dir="$rh/bin/toolchain"; tc_names="zig-cc zig-cxx zig-fc zig-ar zig-ranlib"
+  tc_dir="$rh/bin/toolchain"; tc_names="zig-cc zig-cxx zig-fc zig-ar zig-ranlib rzig"
 fi
 for t in $tc_names; do
   f="$TREE/$tc_dir/$t"
@@ -94,6 +94,15 @@ for t in $tc_names; do
   fi
 done
 echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig"
+
+# rzig build's zig build roots (feat-zig-pkg-build), beside the compilers
+for f in build_t1.zig build_t2.zig rpkg.zig; do
+  if [ ! -f "$TREE/$rh/share/zig/rpkg/$f" ]; then
+    echo "error: $rh/share/zig/rpkg/$f is missing" >&2
+    exit 1
+  fi
+done
+echo "== rzig build roots verified: $rh/share/zig/rpkg/{build_t1.zig,build_t2.zig,rpkg.zig}"
 
 # Makeconf names no build path (feat-no-host-paths F1.5): build.zig writes
 # the environment as $(R_HOME)/../.., FLIBS as -lflang_rt.runtime and no

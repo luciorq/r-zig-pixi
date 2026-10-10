@@ -33,7 +33,12 @@
 //!                      the other use.
 //!   RZIG_TRACE=1       print the command rzig runs to stderr (one line,
 //!                      shell-quoted), then run it: R CMD INSTALL's log
-//!                      then shows every flag rzig added.
+//!                      then shows every flag rzig added. Under `rzig
+//!                      build`, zig build echoes each step whose rzig wrote
+//!                      to stderr, headed "failed command:" although it
+//!                      passed (build_runner.zig reports stderr that way).
+//!   RZIG_KEEP_ROOT=1   rzig build: keep <out>/.rzig (the plan and the zig
+//!                      build root) after a successful build
 //!
 //! Test hooks (not for builds):
 //!   RZIG_PRINT_ARGV=1  print what would run instead of running it: the
@@ -61,6 +66,8 @@ const ar = @import("ar.zig");
 const find_zig = @import("find_zig.zig");
 const environment = @import("environment.zig");
 const libcxx_mirror = @import("libcxx_mirror.zig");
+const pkgbuild = @import("pkgbuild.zig");
+const def = @import("def.zig");
 
 const Tool = enum {
     cc,
@@ -91,9 +98,22 @@ const Tool = enum {
     }
 };
 
+/// rzig's own commands, when it is started as itself (`rzig build`): never
+/// through a compiler's name, where `build` could be a source file.
+const Subcommand = enum {
+    build,
+    def,
+
+    fn fromName(name: []const u8) ?Subcommand {
+        return std.meta.stringToEnum(Subcommand, name);
+    }
+};
+
 const usage =
     \\usage: zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib|gcc|g++ [args...]
     \\       rzig <one of those names> [args...]
+    \\       rzig build --pkg <dir> --out <dir> [options]   (rzig build --help)
+    \\       rzig def -o <file>.def <object>...
     \\
 ;
 
@@ -119,6 +139,20 @@ pub fn main(init: std.process.Init) !u8 {
         if (selfExe(io, arena, arg0)) |p| tool = Tool.fromName(toolName(p));
     }
     if (tool == null and args.len > 1) {
+        if (Subcommand.fromName(args[1])) |sub| {
+            var ctx: Ctx = .{
+                .io = io,
+                .arena = arena,
+                .env = init.environ_map,
+                .os = Ctx.Os.host,
+                .name = "rzig",
+                .self_exe = selfExe(io, arena, arg0),
+            };
+            return switch (sub) {
+                .build => pkgbuild.run(&ctx, args[2..]),
+                .def => def.run(&ctx, args[2..]),
+            };
+        }
         tool = Tool.fromName(toolName(args[1]));
         args = args[1..];
     }
@@ -359,6 +393,11 @@ test {
     _ = @import("windows.zig");
     _ = @import("environment.zig");
     _ = @import("flang_rt.zig");
+    _ = @import("makefile.zig");
+    _ = @import("shellwords.zig");
+    _ = @import("pkgplan.zig");
+    _ = pkgbuild;
+    _ = def;
     _ = compiler;
     _ = fortran;
     _ = ar;

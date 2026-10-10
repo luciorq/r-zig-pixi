@@ -1,9 +1,10 @@
 # feat-zig-pkg-build: R installs source packages with zig alone
 
-Branch feat-zig-pkg-build, from main 7a3004d. Milestone 1 (2026-10-09):
-the design, a hand-run prototype on linux-64, and measurements. No
-file of R, rzig or build.zig is changed; the other worktrees
-(feat-stress-suite, fix-stress-round1) were not touched.
+Branch feat-zig-pkg-build, from main 7a3004d, rebased on b490bdf.
+Milestone 1 (2026-10-09): the design, a hand-run prototype on linux-64,
+and measurements; no file of R, rzig or build.zig changed. Milestone 2
+(2026-10-09, below): `rzig build`, the evaluator and the shipped roots;
+R itself is still untouched (M3).
 
 ## The question (the user, 2026-10-08)
 
@@ -358,6 +359,74 @@ spawn, `uname`, shlib-clean, compiler version, `packages2.R`), M4
 parity in contract-test.sh and hermetic-check.sh, M5 hosts, stress
 suite through the zig path, docs.
 
+## Milestone 2 (2026-10-09): `rzig build`
+
+What M1 did by hand and with make (`proto/mkplan.sh`), rzig now does
+alone. New in `zigbuild/tools/rzig/` (2 577 lines with tests) and
+`zigbuild/rpkg/`:
+
+| file | what |
+|---|---|
+| `makefile.zig` | the part of GNU make R's build reads without running a recipe: `=` `:=` `::=` `+=` `?=`, `#` comments and `\#`, backslash continuations, `$(VAR)` `${VAR}` `$x` `$$`, substitution references `$(V:a=b)` and `$(V:%.a=%.b)`, the functions `subst patsubst strip findstring filter filter-out sort word wordlist words firstword lastword dir notdir suffix basename addsuffix addprefix join wildcard if or and value origin flavor`, `ifdef ifndef ifeq ifneq else endif`, `include -include sinclude`, `export`, `override`; automatic variables expand to nothing (Makeconf.win's `$($*-CPPFLAGS)`). Precedence as make's: command line over files over environment, `override` over the command line, `?=` only when unset. Two modes: `makeconf` skips rules and recipes (Makeconf, shlib.mk, the site and user Makevars); `makevars` accepts assignments only. `$(shell)`, `foreach`, `call`, `eval`, `define`, `!=` and a reference loop are refused with a reason |
+| `shellwords.zig` | the words a POSIX shell hands the compiler from one recipe line: `'…'`, `"…"`, backslashes; an unquoted `$ \` \| & ; < > ( ) * ? [`, a `#` or `~` at a word's start, is refused |
+| `pkgplan.zig` | the tiers (`classify`) and the plan: install.R's `.shlib_internal` order (the package's Makevars, Makeconf, Makevars.site, shlib.mk / winshlib.mk, the user Makevars) and its command-line overrides (`SHLIB`, `OBJECTS` unless the Makevars sets it, the C++ standard from `CXX_STD`/`USE_CXXnn`/`R_PKG_CXX_STD` with `CXX=$(CXXnn) $(CXXnnSTD)` and the `SHLIB_CXXnnLD` link, the default C++ link, `USE_FC_TO_LINK`, `SHLIB_LIBADD` with `$(FLIBS) $(FCLIBS_XTRA)` for Fortran, `CCnn`/`CnnFLAGS`, `P_FCFLAGS`, `WIN=64 TCLBIN=`, `DEBUG=T`, `LTO`/`LTO_FC`), then `$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS)` and its siblings, `$(SHLIB_LINK)` (winshlib's `$(SHLIB_LD) $(SHLIB_LDFLAGS) $(LDFLAGS) $(DLLFLAGS)` on Windows), `$(ALL_LIBS)`, word-split. Every compiler on a line that is used must be a file of `R_HOME/bin/toolchain` (else: needs make, as with `CC = ccache gcc` in `~/.R/Makevars`). Objects map to sources in `.SUFFIXES` order; an object without a source needs make. macOS appends `-Wl,-install_name,<pkg>.so`; Windows sets `def` (or `win_def` when `<pkg>-win.def` exists) and `libs/x64` |
+| `pkgbuild.zig` | `rzig build --pkg <dir> --out <dir> [--name] [--linkingto <dir>]… [--cxx-std NN] [--c-std NN] [--use-lto yes\|no] [--debug] [-j N] [--r-home] [--rpkg-dir] [--cache-dir] [--keep-root]`; `--plan-only` prints plan.zon, `--classify` the tier. Exit 0 built or nothing to build, **3 needs make** (why, on stderr), 2 usage, 1 failed. Writes `<out>/.rzig/plan.zon`; tier 2 also copies the three root files there as `build.zig`, `build_t1.zig`, `rpkg.zig` and writes `build.zig.zon` with `.pkg = .{ .path = "<relative src>" }`; runs `zig build --build-file … --cache-dir <cache>/zig-build --prefix <out> -Dplan=… [-jN]` with zig from find_zig; removes `.rzig` after success (`--keep-root`, `RZIG_KEEP_ROOT=1` keep it). Site and user Makevars found as install.R does (`R_MAKEVARS_SITE`, `etc<R_ARCH>/Makevars.site`; `R_MAKEVARS_USER`, `~/.R/Makevars.ucrt`/`.win64`/`.win` on Windows, `~/.R/Makevars-<R_PLATFORM>`, `~/.R/Makevars`) |
+| `def.zig` | `rzig def -o <pkg>.def <objects>`: winshlib.mk's `nm \| sed -n 's/^.* [BCDRT] / /p'` from the objects' COFF symbol tables (std.coff's records at the object's offsets; `Coff.init` reads images only): storage class EXTERNAL, defined in a CODE, INITIALIZED_DATA or UNINITIALIZED_DATA section that is not LNK_INFO/LNK_REMOVE/MEM_DISCARDABLE, or a common; not undefined, not weak, not the compiler's `.refptr.*` / `.weak.*` helpers (nm lists those as R and T, the make path's DLLs do not export them: cli's 187); de-duplicated. Test object `testdata/win-syms.{c,o}` (zig cc, x86_64-windows-gnu) holds every kind |
+| `main.zig` | `rzig build` and `rzig def` dispatch only when rzig is started as itself (never through a compiler's name, where `build` could be a source file) |
+| `zigbuild/rpkg/build_t1.zig`, `build_t2.zig`, `rpkg.zig` | the M1 roots, now shipped: `libs_dir` from the plan, the `def` Run step (`rzig def`) or the package's `-win.def` before the objects in the link, `rpkg.addLibrary` with `cxx_sources` and extra imports; installed to `R_HOME/share/zig/rpkg` by build.zig's `installRzig`, which also installs rzig as `rzig` / `rzig.exe`; `scripts/verify-tree.sh` checks both |
+
+`compiler.linux_target` and `darwin.triple` became `pub` (the tier-2
+target string). No change to R, to the compiler rules, or to any
+Makeconf.
+
+### Acceptance (linux-64, gamma, 2026-10-09, dist of main 7a3004d)
+
+The oracle is `proto/mkplan.sh` (make's own expansion) run with
+`LC_ALL=C`, so that `ls` lists sources in byte order as rzig does
+(R's `dir()` collates by locale; the order only moves objects on the
+link line). Compared field by field after parsing both ZON files
+(name, output, link driver, sources with language and object, cc, cxx,
+fc, f9x, link, libs, env):
+
+| package | `rzig build --plan-only` vs mkplan.sh | `rzig build` | exports vs make (`nm -D --defined-only`) | cold, 8 jobs | smoke |
+|---|---|---|---|---|---|
+| cli | identical, 26 sources | ok | identical, 185 | 8.1 s (runner compile included) | `rule()`, md5 = make |
+| digest | identical, 19 | ok | identical, 127 | 1.8 s | sha256 = make |
+| quadprog | identical, 5 | ok | identical, 6 | 0.7 s | `solve.QP` → 1 1 |
+| mgcv | identical, 17 | ok | identical, 318 | 3.9 s | dev.expl 0.70784, edf 13.8873 |
+| Rcpp | identical, 6 | ok | identical, 642 | 8.6 s | 23 `.Call` routines |
+
+Warm `rzig build` of cli: 0.14 s. Tier 2: `rzig build` of
+`proto/zighello` materialises the root, builds in 3.9 s (translate-c
+tool already in the global cache), 0.26 s warm, `hello(21)` → 42,
+`.rzig` removed. Negatives, all exit 3 with the reason on stderr:
+a `configure` script; a Makevars with `all: $(SHLIB) extra` and a
+recipe; `PKG_LIBS = $(shell pkg-config --libs zlib)`. A package without
+`src/` exits 0 and builds nothing. `rzig def` on the test object lists
+the five exported names. Unit tests: 93 in `zig build --build-file
+zigbuild/tools/rzig/build.zig test` (the planner's run on a modelled
+R_HOME for linux, Windows and macOS). The repo's build.zig compiles
+with the new install steps (its run needs the pixi env; `pixi run build`
+not repeated here).
+
+Observed: with `RZIG_TRACE=1`, zig build echoes every step whose rzig
+wrote to stderr under the heading `failed command:` although the step
+passed (build_runner.zig prints any stderr that way); exit code and
+outputs are right. Noted in main.zig's header.
+
+### Not in M2
+
+- R does not call `rzig build` yet: the install.R hook, the exit-3 fall
+  through, the spawn primitive (M3). Until then `rzig build` runs by
+  hand, as above.
+- `rzig build` itself has run on linux only; the roots ran on macOS and
+  Windows in M1 step 4, the planner's Windows and macOS paths are unit
+  tests on a modelled Makeconf (M5 runs the real `etc/x64/Makeconf`
+  and the `.def` link on kappa, the install name on omicron).
+- `rzig --version` (compiler report for install.R), `rzig cache prune`,
+  the M4 parity script that replaces mkplan.sh as the asserted oracle
+  (the ZON comparison above was a scratch script).
+
 ## Cleanup before merge
 
 The milestone-1 commit keeps every prototype file so the record is
@@ -369,19 +438,33 @@ redundant and keeps what M2 and M4 build on (decided 2026-10-09):
 | `proto/hosts/results/` | raw host logs and export lists; the step-4 tables above carry every number, and the cli lists are two identical copies |
 | `proto/hosts/plans-win/` | hand-derived Windows plans; `rzig build` generates them |
 | `proto/hosts/omicron.sh`, `kappa-step[123].bat`, `smoke-win.R`, `t2.R`, `root-t2.build.zig.zon` | host-specific drivers for the prototype; superseded by M4/M5 parity tests through `rzig build` |
-| `proto/mkplan.sh`, `proto/plan-cli.example.zon` | once the M2 evaluator reproduces them token for token and M4 asserts it |
+| `proto/mkplan.sh`, `proto/plan-cli.example.zon` | M2 reproduces them (acceptance above); removed once M4 asserts it in a script of the repo |
+| `proto/rpkg/` | superseded by `zigbuild/rpkg/` in M2 |
 
-Keep: `PLAN.md`, `proto/rpkg/` (moves to `zigbuild/rpkg/` in M2),
-`proto/zighello/` (M4 fixture), `proto/hosts/defs/*.def` (the Windows
-export oracle for the std.coff writer), `proto/smoke.R`.
+Keep: `PLAN.md`, `proto/zighello/` (M4 fixture), `proto/hosts/defs/*.def`
+(the Windows export oracle for `rzig def`), `proto/smoke.R`.
 
     git rm -r -q .github/devdocs/feat-zig-pkg-build/proto/hosts/{results,plans-win} \
       .github/devdocs/feat-zig-pkg-build/proto/hosts/{omicron.sh,kappa-step1.bat,kappa-step2.bat,kappa-step3.bat,smoke-win.R,t2.R,root-t2.build.zig.zon} \
-      .github/devdocs/feat-zig-pkg-build/proto/{mkplan.sh,plan-cli.example.zon}
+      .github/devdocs/feat-zig-pkg-build/proto/{mkplan.sh,plan-cli.example.zon} \
+      .github/devdocs/feat-zig-pkg-build/proto/rpkg
 
-Then drop the rerun section below, or rewrite it against `rzig build`.
+Then drop the prototype part of the rerun section below.
 
-## How to rerun the prototype
+## How to rerun
+
+M2, with a built dist (`pixi run build`) and the pixi env's zig and
+flang on PATH:
+
+    R=<dist>/R-4.6.1-slim-zig/lib/R
+    zig build --build-file zigbuild/tools/rzig/build.zig --prefix /tmp/rz   # or $R/bin/toolchain/rzig
+    R_HOME=$R /tmp/rz/bin/rzig build --pkg <unpacked pkg> --plan-only          # the plan
+    R_HOME=$R RZIG_TRACE=1 /tmp/rz/bin/rzig build --pkg <pkg> --out /tmp/out/<pkg> \
+        --rpkg-dir zigbuild/rpkg --cache-dir /tmp/zc -j8                        # -> /tmp/out/<pkg>/libs/<pkg>.so
+    LC_ALL=C bash proto/mkplan.sh $R <pkg>/src <pkg> plan-make.zon             # the oracle (needs make)
+    zig build --build-file zigbuild/tools/rzig/build.zig test                 # unit tests
+
+The M1 prototype:
 
     R=<dist>/R-4.6.1-slim-zig/lib/R          # pixi run build
     bash proto/mkplan.sh $R <pkg>/src <pkg> plan.zon   # needs make (prototype only)
