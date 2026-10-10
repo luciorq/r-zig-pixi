@@ -520,6 +520,72 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 [feature.pkg.target.linux-aarch64.tasks]
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/linux-aarch64/*.conda"
 
+# --- stress suite (stress/README.md) -----------------------------------------
+# The on-demand stress run compiles hard CRAN/Bioconductor packages against
+# these system libraries. The env also has the default feature (zig, flang,
+# make, pkg-config and their pins). "pipeline" sets R_ZIG_EXTRA_ENV, so the
+# dev tree compiles against this env as dev runs do against theirs.
+# Not in solve group "r": there these specs changed the R envs' lock entries
+# (a scratch solve moved libxml2 _0 to _1, through libxml2-devel, in default,
+# full, full-openblas, openblas, minimal and pkg). One env needs no group.
+# Each name is a sysdeps entry in stress/packages.tsv. stress.R warns when a
+# row's sysdep is missing here.
+[feature.stress.dependencies]
+cmake = "*"             # nloptr, s2 (linux), RcppParallel, Rhdf5lib, arrow:source
+libgdal-core = "*"      # sf, terra, gdalraster (gdal-config, gdal.pc)
+geos = "*"              # sf, terra, lwgeom
+proj = "*"              # sf, terra, lwgeom
+udunits2 = "*"          # units
+libprotobuf = "*"       # protolite (protoc, protobuf.pc; brings libabseil)
+libxml2-devel = "*"     # xml2, igraph (xml2-config, libxml-2.0.pc)
+openssl = "*"           # openssl, s2
+imagemagick = "*"       # magick (Magick++.pc)
+libgit2 = "*"           # gert
+freetype = "*"          # systemfonts, textshaping, ragg
+harfbuzz = "*"          # textshaping (the default feature holds it at 14.2.*)
+fribidi = "*"           # textshaping
+libpng = "*"            # ragg
+libtiff = "*"           # ragg
+libjpeg-turbo = "*"     # ragg
+libwebp-base = "*"      # ragg
+fontconfig = "*"        # systemfonts
+hdf5 = "*"              # hdf5r (h5cc)
+libnetcdf = "*"         # ncdf4 (nc-config)
+gsl = "*"               # gsl (gsl-config)
+mpfr = "*"              # Rmpfr
+gmp = "*"               # Rmpfr, gmp, igraph
+libpq = "*"             # RPostgres
+glpk = "*"              # igraph
+zstd = "*"              # qs2
+
+# nloptr has no configure.win: its Makevars.ucrt links -lnlopt. Not on unix,
+# where nloptr then builds its bundled NLopt with cmake.
+[feature.stress.target.win-64.dependencies]
+nlopt = "*"
+# RPostgres includes Rtools' boost headers (round 1's S1, decision 18).
+libboost-headers = "*"
+
+# RcppParallel:system-tbb. Not on win-64, where conda-forge's TBB is an
+# MSVC build that MinGW cannot link, and where it put -ltbb ahead of
+# RcppParallel's bundled TBB (round 1's R2, decision 18).
+[feature.stress.target.unix.dependencies]
+tbb-devel = "*"
+
+# conda-forge's libheif 1.23.4 to 1.23.6 for osx-arm64 links a Homebrew
+# path (/opt/homebrew/.../libsharpyuv), so magick cannot load (round 1's
+# U1, decision 18). Lift when a clean build is out.
+[feature.stress.target.osx-arm64.dependencies]
+libheif = "<1.23.4"
+
+# pixi run -e stress stress [target ...] [--conda[=universe]] [--jobs=N] ...
+# The dev tree's R runs stress/stress.R: `pixi run build` first. No
+# depends-on, which would build R inside this env.
+[feature.stress.tasks]
+stress = "dist/R-$R_VERSION-slim-zig/bin/Rscript stress/stress.R"
+
+[feature.stress.target.win-64.tasks]
+stress = "dist/R-$R_VERSION-slim-zig/Library/lib/R/bin/x64/Rscript.exe stress/stress.R"
+
 # The R environments are one solve group, "r": pixi solves them together,
 # per platform, so a package they share is the same version and build in
 # all of them, while each still installs only what its own dependencies
@@ -552,3 +618,5 @@ openblas = { features = ["openblas", "pipeline"], solve-group = "r" }
 full-openblas = { features = ["tcltk", "img-formats", "repl", "nls", "full-build", "openblas", "pipeline"], solve-group = "r" }
 minimal = { features = ["minimal", "pipeline"], no-default-feature = true, solve-group = "r" }
 wheel = { features = ["wheel"], no-default-feature = true }
+# the stress suite's system libraries; no solve group (see [feature.stress])
+stress = { features = ["stress", "pipeline"] }

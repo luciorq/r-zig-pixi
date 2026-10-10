@@ -158,9 +158,9 @@ directories has its own `LICENSES/` and `SOURCES`, as point 3 requires
 | compilers | `TC/zig/` | `zig`, `lib/` (upstream 0.16.0; B4) | `zig.exe`, `lib/` |
 | compilers | `TC/flang/` | `bin/flang`; `lib/clang/23/finclude/flang/<conda triple>/` (15 intrinsic modules, `omp_lib.mod`, `omp_lib_kinds.mod`, `omp_lib.h`); `lib/clang/23/lib/<rt dir>/libflang_rt.runtime.a`. On linux flang-rt-zig also ships `x86_64-unknown-linux-gnu` as a symlink to the conda-triple directory (seen with build 9 in the default env; build 10 not re-checked). It is not needed once zig-fc passes `-fintrinsic-modules-path`, and must not be installed as a copy | `bin/flang.exe`; the same tree, with both `x86_64-w64-mingw32` and `x86_64-w64-windows-gnu` module directories |
 | compilers | `TC/openmp/` | `include/{omp.h,ompx.h,omp-tools.h,ompt.h}` | `include/{omp.h,ompx.h}`, `lib/libomp.lib` |
-| build-tools (the brief's "minimal build tools") | `TC/usr/` | `usr/bin/make` (B23 a) | `usr/bin/`: B39's list (sh, make, coreutils, sed, grep, gawk, which, findutils) and pkg-config (B43), copied with their DLL closure from conda-forge packages: native builds first, `m2-*` packages where conda-forge has no native one (B11) |
+| build-tools (the brief's "minimal build tools") | `TC/usr/` | `usr/bin/make` (B23 a) | `usr/bin/`: B39's list (sh, make, coreutils, sed, grep, gawk, which, findutils) and pkg-config (B43; also as `pkgconf`, stress round 1), copied with their DLL closure from conda-forge packages: native builds first, `m2-*` packages where conda-forge has no native one (B11) |
 | build-tools | `TC/binutils/` | none | copies of conda-forge's MinGW binutils, as .exe: `nm, dlltool, as, strip, windres` and `objdump` (B24, B43); ar and ranlib are rzig's (B43), and each other tool moves to rzig once rzig can serve it (B24) |
-| extras | later | added when the stress suite shows a need | the same |
+| extras | later | added when the stress suite shows a need; the first, from round 1 (2026-10-08): cmake on every OS | the same |
 
 Fortran's OpenMP module (`omp_lib.mod`) comes from flang-rt-zig, in
 flang's resource directory, not from llvm-openmp (conda-meta of the
@@ -922,7 +922,8 @@ wheel is minimal, and Windows minimal drops Tcl/Tk (C1).
 ### What comes back with results (not open decisions)
 
 - B39's list and B43's gcc-nm, pkg-config and objdump: reassessed after
-  the stress suite (D15).
+  the stress suite (D15). Round 1 (2026-10-08) did it in part: see the
+  notes at B39 and B43.
 - B24: which of dlltool, windres, strip, nm and as move to rzig (phase
   3's check; the rest stay in `binutils/`).
 - B11: which conda-forge package provides each tool, and whether
@@ -1831,6 +1832,17 @@ Blocks: phase 2 (B35's text), phase 3 (archive names), phase 4
 conda-forge, so the shipped list is (a) plus pkg-config. The stress
 suite reassesses the list (D15 = a).
 
+**Stress round 1 (2026-10-08; feat-stress-suite's
+`stress/results/2026-10-08.md`).** The run cannot show that the list is
+enough. The win-64 stress env had all of it and more (diffutils, tar,
+gzip, unzip, zip, patch, texinfo, perl, a native make, pkg-config, MinGW
+binutils, cmake). "command not found" appeared only for windres, which
+CMake looks for. A test of the list itself needs a run with only B39's
+tools on PATH. The user's answer to round 1's decision 16 (2026-10-08):
+on Windows the pkg-config in `usr/bin/` also answers to `pkgconf`,
+because s2's `src/Makevars.win` calls it by that name. The list is
+otherwise unchanged.
+
 Context:
 - GNU make runs simple recipe lines without a shell, so every tool a
   recipe or a configure script calls must be an .exe on PATH.
@@ -1993,6 +2005,22 @@ ships):
 - After the stress suite (D15 = a) shows what is really needed and what
   zig cc and rzig already cover, gcc-nm, pkg-config and objdump are
   reassessed.
+
+**Stress round 1 (2026-10-08; feat-stress-suite's
+`stress/results/2026-10-08.md`), and the user's answer to round 1's
+decision 16 (the same day):**
+- pkg-config: needed when there is a libraries env, and it must be on
+  PATH. Packages call `pkg-config` from PATH, not Makeconf.win's line
+  (some expand `$(BINPREF)pkg-config` before Makeconf sets BINPREF).
+  It ships as planned, and on Windows it also answers to `pkgconf`
+  (B39's note).
+- objdump: no install used it. R CMD check's compiled-code check on
+  Windows does (`R CMD config OBJDUMP`). It stays in `binutils/`.
+- gcc-nm: no package used LTO and no log calls it. None ships: B43-2
+  holds.
+- windres: CMake looks for it on PATH or in `RC`, not through
+  Makeconf.win's `RESCOMP`. Branch fix-stress-round1 sets `RC` and
+  `RCFLAGS` in Rcmd_environ (round 1's decision 15).
 
 Context:
 - Makeconf.win names pkg-config (75), objdump (211) and the LTO gcc-ar,
@@ -2889,11 +2917,57 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   (.github/devdocs/feat-stress-suite/) shows a package needs a tool the
   minimal build tools lack. The suite starts now, in parallel (D15 = a);
   pkg-config on Windows is no longer a candidate, since it ships in
-  `usr/bin/` (B43).
+  `usr/bin/` (B43). The user's answer to stress round 1's decision 16
+  (2026-10-08): cmake joins the extras group on every OS. RcppParallel's
+  bundled TBB, Rhdf5lib (biocmake), nloptr (unix), s2 (linux; Windows'
+  bundled path) and arrow from source (linux and macOS) build with it.
+  Every run had the env's cmake, so the run shows the need, not what
+  happens without it.
 - **Reassess after the stress suite** (B39, B43): which of B39's tools
   are really needed, whether pkg-config and objdump are needed or
   already covered by zig cc and rzig, and whether a gcc-nm from
-  conda-forge is really needed (B43-2).
+  conda-forge is really needed (B43-2). Round 1 (2026-10-08) answered
+  pkg-config, objdump and gcc-nm (B43's note); B39's list still needs a
+  run with only its tools on PATH (B39's note).
+- **The C++ ABI boundary** (stress round 1's A1 and A2; the user's
+  answer to its decision 12, 2026-10-08: recorded now, designed after
+  the standalone work). Packages built by zig use its static libc++. On
+  linux conda-forge's C++ libraries use libstdc++: magick, sf, terra,
+  gdalraster and protolite fail to load against them (and V8 to link
+  its downloaded libstdc++ libv8). On Windows they are MSVC builds,
+  which no MinGW toolchain links; their C APIs work. macOS has no
+  mismatch (libc++ on both sides). The design is open, for example a
+  libstdc++ mode on linux for boundary packages, or MinGW builds of
+  those libraries on Windows.
+- **zig's MinGW headers lack the WinRT headers** (stress round 2's Z12;
+  the user's answer to its decision 2, 2026-10-09: recorded only). s2's
+  `configure.win` builds its bundled abseil whenever `pkg-config
+  absl_base` fails, as for a Windows user without a libraries env.
+  abseil's `time_zone_lookup.cc` then includes
+  `windows.globalization.h`: zig's `_mingw.h` defaults `_WIN32_WINNT` to
+  0xa00, so `sdkddkver.h` sets `NTDDI_VERSION` above `NTDDI_WIN10_NI`.
+  zig 0.16.0's `any-windows-any` (conda-forge's and upstream's, the
+  standalone's zig, B4) has none of mingw-w64's `windows.*.h` WinRT
+  headers. So s2, and sf and lwgeom behind it, do not build there. Two
+  candidates, untested beyond a one-file compile: ship the WinRT headers
+  abseil needs where rzig adds the tree's headers, or define
+  `NTDDI_VERSION` below `NTDDI_WIN10_NI` (which hides newer Windows APIs
+  from every package).
+- **CMake and Homebrew on macOS** (stress round 2's H2; the user's
+  answer to its decision 10, 2026-10-09: implemented on branch
+  fix-stress-round1, build 7). CMake's `Platform/Darwin.cmake` puts
+  Homebrew's prefix (`brew --prefix`, else `/opt/homebrew` on arm64)
+  before the others in `CMAKE_SYSTEM_PREFIX_PATH`, whatever PATH says.
+  Round 2's arrow linked `/opt/homebrew/lib/libsnappy.a`. Every macOS
+  tree ships `etc/r-zig.cmake`, which leaves out the prefixes
+  Darwin.cmake adds for a package manager (`/opt/homebrew`,
+  `/usr/local`, `/opt/local`, `/sw`), and `etc/Renviron` makes it
+  `CMAKE_TOOLCHAIN_FILE`'s default (unix R has no Rcmd_environ, where
+  S15 sets CMake's generator on Windows). So host libraries do not leak
+  into packages through CMake's search. The standalone layout keeps the
+  file and its setting. Not covered: a package's own `brew --prefix`
+  call (arrow's OpenSSL, with brew on PATH) and pkg-config's own search
+  path.
 - **The rest of the Windows binutils through rzig** (B24): ar and
   ranlib go through rzig now; dlltool, windres, strip, nm and as follow
   as rzig can serve them (phase 3's check, then each zig release).
