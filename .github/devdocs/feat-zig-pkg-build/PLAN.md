@@ -207,6 +207,8 @@ The prototype (`proto/` here, copied from the session's scratch):
 - `proto/hosts/`: the step-4 drivers (`omicron.sh`, `kappa-step[123].bat`),
   the hand-derived Windows plans (`plans-win/`), the `.def` files, the
   tier-2 root zon, and `results/` (host logs and Windows export lists).
+  Kept in the branch's history for the record; see "Cleanup before
+  merge".
 - `proto/zighello/`: the tier-2 hello-world package (DESCRIPTION,
   NAMESPACE with `useDynLib(zighello, .registration = TRUE, .fixes = "C_")`,
   `R/hello.R`, `src/build.zig`, `src/hello.zig`).
@@ -355,6 +357,29 @@ without make, with the step-4 export lists as the Windows oracle. M3 the R side 
 spawn, `uname`, shlib-clean, compiler version, `packages2.R`), M4
 parity in contract-test.sh and hermetic-check.sh, M5 hosts, stress
 suite through the zig path, docs.
+
+## Cleanup before merge
+
+The milestone-1 commit keeps every prototype file so the record is
+complete in history. The last commit of the PR removes what M2 makes
+redundant and keeps what M2 and M4 build on (decided 2026-10-09):
+
+| remove in the last commit | why |
+|---|---|
+| `proto/hosts/results/` | raw host logs and export lists; the step-4 tables above carry every number, and the cli lists are two identical copies |
+| `proto/hosts/plans-win/` | hand-derived Windows plans; `rzig build` generates them |
+| `proto/hosts/omicron.sh`, `kappa-step[123].bat`, `smoke-win.R`, `t2.R`, `root-t2.build.zig.zon` | host-specific drivers for the prototype; superseded by M4/M5 parity tests through `rzig build` |
+| `proto/mkplan.sh`, `proto/plan-cli.example.zon` | once the M2 evaluator reproduces them token for token and M4 asserts it |
+
+Keep: `PLAN.md`, `proto/rpkg/` (moves to `zigbuild/rpkg/` in M2),
+`proto/zighello/` (M4 fixture), `proto/hosts/defs/*.def` (the Windows
+export oracle for the std.coff writer), `proto/smoke.R`.
+
+    git rm -r -q .github/devdocs/feat-zig-pkg-build/proto/hosts/{results,plans-win} \
+      .github/devdocs/feat-zig-pkg-build/proto/hosts/{omicron.sh,kappa-step1.bat,kappa-step2.bat,kappa-step3.bat,smoke-win.R,t2.R,root-t2.build.zig.zon} \
+      .github/devdocs/feat-zig-pkg-build/proto/{mkplan.sh,plan-cli.example.zon}
+
+Then drop the rerun section below, or rewrite it against `rzig build`.
 
 ## How to rerun the prototype
 
