@@ -159,10 +159,11 @@ while [ "$i" -lt "${#bins[@]}" ]; do
     [ -e "$PREFIX/lib/$base" ] && continue
     cp -L "$dep" "$PREFIX/lib/$base"
     chmod u+w "$PREFIX/lib/$base"
-    # minimal (the wheel's tree): conda-forge's libraries ship with full
-    # DWARF (libstdc++.so.6: 24 MiB, about 2 without); R's own binaries
-    # are already built stripped for minimal (build.zig newCMod).
-    if [ "$VARIANT" = minimal ] && [ "$OS" = linux ]; then
+    # linux, every flavor: conda-forge's libraries ship with full DWARF
+    # (libstdc++.so.6: 24 MiB, about 2 without), and R's own binaries are
+    # built stripped (build.zig newCMod; the user's D1, "Strip Linux debug
+    # info"). --strip-debug keeps their symbol tables.
+    if [ "$OS" = linux ]; then
       strip --strip-debug "$PREFIX/lib/$base"
     fi
     bins+=("$PREFIX/lib/$base")

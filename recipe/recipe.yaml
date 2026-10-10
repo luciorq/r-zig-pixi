@@ -139,7 +139,14 @@ build:
   # with .exe, and etc/Rcmd_environ sets CMake's generator and windres.
   # libdeflate <1.26 in host, so r-zig-slim shares a conda env with
   # conda-forge's GDAL (S19).
-  number: 7
+  # 7 → 8 (2026-10-10): no build-machine leftovers (fix-no-build-leftovers
+  # PLAN.md). R's own linux binaries carry no debug info, in every
+  # variant, as macOS's already did (libR.so 11.8 → 3.5 MB). The base
+  # packages' help databases, help/paths.rds, doc/NEWS*.rds and code
+  # databases name no build path: build 7's named rattler's work dir and
+  # host prefix inside their compressed objects, which conda's prefix
+  # replacement cannot reach.
+  number: 8
 
 outputs:
   # One build (scripts/zig-build.sh), two packages split by

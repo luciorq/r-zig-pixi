@@ -94,12 +94,14 @@ not yet committed):
   (build.zig filePathFlags), so `__FILE__`, OpenMP's source locations and
   the DWARF name none of them (R's long-vector error now says
   `src/main/character.c:1806`); zig's own runtime libraries carry no
-  debug info (linkRoot); R's macOS binaries are stripped (their DWARF
-  stayed in zig's cache and the binaries named it); tools/misc/top.txt
-  is gone; fonts.conf ships without the env's directories
-  (installFontconfig). verify-tree.sh fails, on every OS, on any file of
-  R's own that names the checkout, zig's caches, the env or $HOME, and
-  lists the vendored conda libraries that name one, and build.zig's
+  debug info (linkRoot until 2026-10-10; since then R's linux binaries
+  are stripped too, PR iii); R's macOS binaries are stripped (their
+  DWARF stayed in zig's cache and the binaries named it);
+  tools/misc/top.txt is gone; fonts.conf ships without the env's
+  directories (installFontconfig). verify-tree.sh fails, on every OS, on
+  any file of R's own that names the checkout, zig's caches, the env or
+  $HOME (since 2026-10-10 also inside R's compressed files, What remains
+  9), and lists the vendored conda libraries that name one, and build.zig's
   verbatim copies of env files that name only $HOME's path
   (conda-forge's build path: macOS make's /Users/runner/..., under
   GitHub's macOS HOME). Tested on linux-64.
@@ -177,15 +179,35 @@ What remains, in order (proposed; ask the user before starting each):
    the env), and verify-tree.sh checks it on every OS. Tested on linux-64
    (slim with both zigs, minimal and the wheel, full, the conda package),
    osx-arm64 (slim, minimal, full), osx-64 and win-64 (and its conda
-   package).
+   package). D1 b done 2026-10-10 (PR iii, record
+   .github/devdocs/fix-no-build-leftovers/PLAN.md): R's linux binaries
+   carry no debug info in any variant, as macOS's, and linkRoot is gone.
+   linux slim: R's 16 binaries 20.7 → 8.3 MB, libR.so 11.8 → 3.5 MB,
+   R_HOME 65.0 → 52.4 MB; the exported symbols are the same. Tested on
+   linux-64 (slim with both zigs, minimal, full, the conda package);
+   osx-arm64's binaries came out byte-identical, as expected.
 8. Small, open (found in F4): on Windows, packages that link
    `-lsynchronization` (Rust-based ones) build with conda-forge's zig,
    which ships prebuilt MinGW import libraries, but not with upstream
    zig 0.16.0, which has none for it. Answered 2026-10-08 (D6 b): rzig
    provides the import library itself; no upstream report. Follow-up
    PR (ii).
-9. Open (found in 7): R's compressed lazy-load databases still name the
-   build machine, which no byte search sees. In a linux slim tree, 1,471
+9. Done 2026-10-10 (PR iii, record
+   .github/devdocs/fix-no-build-leftovers/PLAN.md): the bootstrap
+   installs the base packages' Rd objects and doc/NEWS*.rds in R's
+   source tree with relative names (src/library/base/man/abbreviate.Rd,
+   working directory "."), and a last bootstrap step writes the code
+   databases' entries that name R_HOME again with R_HOME-relative paths
+   (library/stats), copying every other entry byte for byte. A neutral
+   prefix turned out not to exist: R resolves R_HOME to its real path.
+   verify-tree.sh has the tree's R write each lazy-load database and
+   .rds file out uncompressed and runs the same search over them, on
+   every OS. linux slim: 2,975 objects in 43 files named the build
+   machine (12 code DBs, 14 help DBs, 14 help/paths.rds, 3
+   doc/NEWS*.rds), now 0, and 0 in minimal and full. Tested on
+   linux-64, osx-arm64 (slim) and win-64. The item as found: R's
+   compressed lazy-load databases still name the build machine, which
+   no byte search sees. In a linux slim tree, 1,471
    Rd objects in the base packages' help databases (every Rd file's
    srcref: its path in R's source tree and the checkout as working
    directory) and 42 objects in their code databases (the install
@@ -228,14 +250,17 @@ A2', the follow-up of 2026-10-07 (file the atexit report upstream?).
 - What remains 9, D3 b: fix it. Per the item: change how the bootstrap
   installs the base packages' Rd objects and run its R from a neutral
   prefix, with a check that reads the lazy-load databases.
-  PR (iii).
+  PR (iii). Done 2026-10-10 (fix-no-build-leftovers/PLAN.md), with
+  R_HOME made relative inside the code databases in place of the
+  neutral prefix, which R does not allow.
 - What remains 10, D4 a: rzig on Windows maps `-lgfortran` and
   `-lquadmath` to flang's runtime (FLIBS's `-lflang_rt.runtime`)
   instead of looking for a gfortran on PATH. PR (ii).
 - D1 b, Linux debug info (record "Build-machine paths in R's files"):
   R's own linux binaries are stripped in every variant, as macOS's are;
   linkRoot, which keeps R's DWARF on linux slim and full while dropping
-  that of zig's runtime libraries, goes. PR (iii).
+  that of zig's runtime libraries, goes. PR (iii). Done 2026-10-10
+  (fix-no-build-leftovers/PLAN.md).
 - D2 a, Windows R_SYSTEM_ABI (record "gfortran removed"): it stays
   `windows,gcc,gxx,flang,flang`. Nothing to change.
 - E1 (answered 2026-10-07): a testing rule, under "How to verify".
@@ -249,7 +274,9 @@ Follow-up PRs, proposed (the user can regroup them):
   overwrites the start of a regular file stdout is redirected to; it
   moves to a streaming writer), D4, D5, D6.
 - (iii) no build-machine leftovers: D1 (strip linux) and D3 (the
-  lazy-load databases' build paths).
+  lazy-load databases' build paths). Done 2026-10-10, branch
+  fix-no-build-leftovers (record
+  .github/devdocs/fix-no-build-leftovers/PLAN.md).
 - E2 (declare zstd in the recipe) and D7 (refresh CC_VER/FC_VER) ride
   with feat-standalone-toolchain's phase 4 build-number bump.
 - D15: the stress suite starts now, on its own branch feat-stress-suite.
@@ -1110,8 +1137,12 @@ workarounds into code.** In order:
       empty C file keeps the C module's DWARF and drops compiler_rt's.
       libR.so: 12.7 to 11.8 MiB. D1 b (the user, 2026-10-08: "Strip
       Linux debug info"): linux slim and full get stripped too, as
-      minimal and macOS are, so linkRoot's stripped root goes; follow-up
-      PR (iii).
+      minimal and macOS are, so linkRoot's stripped root goes. Done
+      2026-10-10 (fix-no-build-leftovers/PLAN.md): newCMod strips on
+      linux and macOS in every variant, and linkRoot and its empty C
+      file are gone. libR.so 11.3 → 3.3 MiB; R's binaries have no
+      .debug_* and no .symtab, and export the same symbols. OpenMP's
+      source locations now read `;unknown;unknown;0;0;;` on linux too.
     - macOS: the DWARF of R's code stays in the object files in zig's
       cache, and the binary names those files (N_OSO stabs: absolute
       paths that zig's Mach-O linker, `link/MachO/Object.zig`
@@ -1194,9 +1225,13 @@ workarounds into code.** In order:
     bin/x64 without a namesake in the env is marked "R's own, or an
     earlier run's". It prints the counts and, on failure, each offender
     with its first match. Compressed files (the lazy-load databases,
-    .rds) are not looked into: What remains 9 (D3 b, 2026-10-08: to be
-    fixed, with a check that reads them). On the old slim tree (a
-    copy of the main checkout's) it failed with the 19 files of R's own;
+    .rds) were not looked into at first: What remains 9 (D3 b,
+    2026-10-08: to be fixed, with a check that reads them). Since
+    2026-10-10 (fix-no-build-leftovers/PLAN.md) the tree's R writes each
+    one out uncompressed (scripts/uncompress-r-objects.R) and the same
+    search reads them; the tree's own place is one of the paths too.
+    On the old slim tree (a copy of the main checkout's), before that
+    change, it failed with the 19 files of R's own;
     on a copy of the new one with five planted defects (the checkout in
     etc/Renviron, the env's include dir appended to splines.so, the
     checkout written with backslashes in base's html index, $HOME in a
@@ -2686,7 +2721,8 @@ the same for its C++ test package.
   MinGW atexit export (drafted in the F4 record, not filed) and
   `-lsynchronization` with upstream zig on Windows (Status section,
   What remains 8); the build-path strings in the shipped tree, What
-  remains 7, are done (2026-10-05). Answered 2026-10-08: the atexit
+  remains 7, are done (2026-10-05), and so are those in its compressed
+  files, What remains 9 (2026-10-10). Answered 2026-10-08: the atexit
   report is not filed (A2'), and rzig provides the synchronization
   import library, with no report either (D6 b).
 - **Names** of the base and toolchain packages, on conda and PyPI.

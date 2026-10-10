@@ -139,8 +139,6 @@ const Ctx = struct {
     // module): no directory of the build machine in __FILE__, the debug
     // info or the OpenMP source locations (filePathFlags).
     path_flags: []const []const u8,
-    // An empty C file, the code of linkRoot's stripped root modules.
-    empty_c: std.Build.LazyPath,
     subst: std.StringHashMap([]const u8),
     // Makeconf's own values for the keys that name the build environment
     // (loadSubstFile, makeconfValue): substituted over `subst` into
@@ -507,7 +505,6 @@ pub fn build(b: *std.Build) !void {
         .devcairo = true,
         .flangrt_dir = try findFlangRt(b, io, conda, os),
         .path_flags = &.{},
-        .empty_c = b.addWriteFiles().add("empty.c", "/* linkRoot: no code of its own */\ntypedef int r_zig_link_root;\n"),
         .subst = std.StringHashMap([]const u8).init(arena),
         .mk_subst = std.StringHashMap([]const u8).init(arena),
         .geninc = undefined,
@@ -684,7 +681,7 @@ pub fn build(b: *std.Build) !void {
     linkOmp(&ctx, rbin_mod);
     ctx.relRPaths(rbin_mod, .exec);
     ctx.addSdkPaths(rbin_mod); // last: see addSdkPaths
-    const rbin = b.addExecutable(.{ .name = "R.bin", .root_module = linkRoot(&ctx, rbin_mod) });
+    const rbin = b.addExecutable(.{ .name = "R.bin", .root_module = rbin_mod });
     rbin.rdynamic = true; // MAIN_LDFLAGS = -Wl,--export-dynamic
     rbin.each_lib_rpath = false; // see addSharedLib
     rbin.zig_lib_dir = ctx.zig_lib_dir; // see addSharedLib
@@ -2409,21 +2406,21 @@ fn newCMod(ctx: *const Ctx) *std.Build.Module {
         .link_libc = true,
         .pic = true,
         .sanitize_c = .off,
-        // Debug info, where the binary carries it: linux (ELF embeds the
-        // DWARF) keeps it for slim and full, remapped by filePathFlags so
-        // it names no directory of the build machine; zig's own runtime
-        // libraries leave theirs out (linkRoot). minimal ships inside a
-        // wheel, where size is the point: without this, ReleaseFast still
-        // carries full DWARF (libR.so 12.6 MiB). macOS strips: its DWARF
-        // stays in the object files in zig's cache, and the binary only
-        // names them (N_OSO entries, absolute paths into the build
-        // machine's cache, which zig's Mach-O linker writes as they are).
-        // Windows as before (unset): the debug info goes to a .pdb beside
-        // each DLL in zig's cache, which nothing installs, and the DLL
-        // names only that file's name.
+        // No debug info in R's binaries on linux and macOS, in every
+        // variant (the user, 2026-10-08: "D1: Strip Linux debug info";
+        // fix-no-build-leftovers PLAN.md). R's own DWARF names no build
+        // path (filePathFlags), but zig builds its runtime libraries
+        // (compiler_rt, libc_nonshared, libc++) with the root module's
+        // strip, and their DWARF names zig's lib dir and global cache. On
+        // macOS the DWARF of R's code stays in the object files in zig's
+        // cache, and the binary names those files (N_OSO entries,
+        // absolute paths that zig's Mach-O linker writes as they are).
+        // Size: ReleaseFast carries full DWARF otherwise (linux libR.so
+        // 11.3 MiB, 3.3 MiB without). Windows as before (unset): the debug
+        // info goes to a .pdb beside each DLL in zig's cache, which
+        // nothing installs, and the DLL names only that file's name.
         .strip = switch (ctx.os) {
-            .linux => ctx.variant == .minimal,
-            .macos => true,
+            .linux, .macos => true,
             .windows => null,
         },
     });
@@ -2605,7 +2602,7 @@ fn addSharedLib(ctx: *const Ctx, name: []const u8, mod: *std.Build.Module) *std.
             \\
         ), .flags = &.{} });
     }
-    const lib = ctx.b.addLibrary(.{ .linkage = .dynamic, .name = name, .root_module = linkRoot(ctx, mod) });
+    const lib = ctx.b.addLibrary(.{ .linkage = .dynamic, .name = name, .root_module = mod });
     // conda-forge's zig: a lib dir it finds no shared libc++ beside
     // (staticLibcxxLibDir)
     lib.zig_lib_dir = ctx.zig_lib_dir;
@@ -2645,11 +2642,12 @@ fn macHeaderpad(ctx: *const Ctx, c: *std.Build.Step.Compile) void {
 /// R's own error messages print ("long vectors not supported yet:
 /// src/main/character.c:1806", where upstream's make build prints
 /// "character.c:1806"), the OpenMP runtime's source locations, and the
-/// debug info's file names and compilation directory (linux slim and
-/// full keep debug info, newCMod). clang's -ffile-prefix-map (both
-/// -fmacro-prefix-map and -fdebug-prefix-map) rewrites a path that starts
-/// with OLD; the compilation directory is "." (-ffile-compilation-dir,
-/// not clang's getcwd, which a symlinked checkout would not match):
+/// debug info's file names and compilation directory (Windows' .pdb;
+/// linux and macOS build R without debug info, newCMod). clang's
+/// -ffile-prefix-map (both -fmacro-prefix-map and -fdebug-prefix-map)
+/// rewrites a path that starts with OLD; the compilation directory is
+/// "." (-ffile-compilation-dir, not clang's getcwd, which a symlinked
+/// checkout would not match):
 ///   the checkout                    -> ""           (relative to ".")
 ///   R's source tree                 -> ""           (src/main/array.c)
 ///   the env (CONDA_PREFIX; the
@@ -2705,41 +2703,6 @@ fn filePathFlags(ctx: *const Ctx, io: std.Io) ![]const []const u8 {
     try flags.append(a, "-ffile-compilation-dir=.");
     for (maps.items) |m| try flags.append(a, b.fmt("-ffile-prefix-map={s}={s}", .{ m.old, m.new }));
     return flags.items;
-}
-
-/// The root module of one of R's links (addSharedLib, bin/exec/R). zig
-/// builds its own runtime libraries (compiler_rt, glibc's
-/// libc_nonshared, libc++, the MinGW CRT) with the root module's strip
-/// (Compilation.compilerRtStrip in zig 0.16), and their debug info names
-/// zig's lib dir and global cache, which -ffile-prefix-map does not
-/// reach (compiler_rt is Zig code). Where R's own code keeps its debug
-/// info (`mod.strip == false`: linux slim and full, newCMod), the root
-/// is a stripped module of its own whose only code is an empty C file
-/// (std.Build names to zig only a module with sources, and zig takes the
-/// first one it is given as the root), with `mod`, which holds R's code
-/// and every link setting, as its import. A module with no C source of
-/// its own (libRblas, libRlapack: Fortran objects, which carry no debug
-/// info) is simply stripped. Elsewhere `mod` is the root.
-fn linkRoot(ctx: *const Ctx, mod: *std.Build.Module) *std.Build.Module {
-    if (mod.strip != false) return mod;
-    const has_c = for (mod.link_objects.items) |o| switch (o) {
-        .c_source_file, .c_source_files => break true,
-        else => {},
-    } else false;
-    if (!has_c) {
-        mod.strip = true;
-        return mod;
-    }
-    const root = ctx.b.createModule(.{
-        .target = mod.resolved_target,
-        .optimize = mod.optimize,
-        .link_libc = true,
-        .pic = true,
-        .strip = true,
-    });
-    root.addCSourceFile(.{ .file = ctx.empty_c, .flags = &.{} });
-    root.addImport("r_code", mod);
-    return root;
 }
 
 const CGroupOpts = struct {
@@ -4037,6 +4000,13 @@ const Boot = struct {
         run.setEnvironmentVariable("LC_ALL", "C");
         run.setEnvironmentVariable("R_DEFAULT_PACKAGES", "NULL");
         run.setEnvironmentVariable("R_ENABLE_JIT", "0");
+        // base packages keep no source, whatever the caller's environment
+        // says (R_KEEP_PKG_SOURCE=yes would put each package's source, as
+        // R_HOME/library/<pkg>/R/<pkg>, in its code database)
+        run.setEnvironmentVariable("R_KEEP_PKG_SOURCE", "no");
+        // tcltk loads without starting Tk (unix; the rewrite step loads it
+        // in full): no display is opened, and none is warned about
+        run.setEnvironmentVariable("R_DONT_USE_TK", "1");
         if (self.ctx.buildLdPath()) |p| run.setEnvironmentVariable("R_LD_LIBRARY_PATH", p);
         run.has_side_effects = true;
         run.step.dependOn(self.last);
@@ -4277,12 +4247,33 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
         run.setEnvironmentVariable("R_DEFAULT_PACKAGES", "tools");
     }
 
-    // docs: parsed Rd DBs, package metadata, help indices
-    _ = boot.r("install parsed Rd", b.fmt(
-        \\options(warn=2)
-        \\for (p in strsplit("{s}", " ")[[1]])
-        \\    tools:::.install_package_Rd_objects(file.path("{s}", p), file.path("{s}", p))
-    , .{ joinSpace(b, &rspec.pkgs_base), srclib, lib }));
+    // docs: parsed Rd DBs, package metadata, help indices.
+    // The parsed Rd DBs take tools:::.install_package_Rd_objects' steps,
+    // run in R's source tree with names relative to it. That function
+    // names each Rd file by its absolute path (each Rd object's srcref
+    // and Rdfile, help/paths.rds), and each srcfile keeps R's working
+    // directory: the source tree and the checkout. Here an Rd object
+    // names src/library/base/man/abbreviate.Rd, as __FILE__ names
+    // src/main/character.c (filePathFlags), and its working directory is
+    // ".". R uses these names only for the file's name (help's messages,
+    // paths.rds' "first"). Its up-to-date test is left out: library/ is
+    // new on every build.
+    {
+        const run = boot.r("install parsed Rd", b.fmt(
+            \\options(warn=2)
+            \\for (p in strsplit("{s}", " ")[[1]]) {{
+            \\    man <- file.path("src/library", p, "man")
+            \\    db <- tools:::.build_Rd_db(dirname(man), tools:::list_files_with_type(man, "docs"))
+            \\    for (rd in db) assign("wd", ".", envir = attr(attr(rd, "srcref"), "srcfile"))
+            \\    help <- file.path("{s}", p, "help")
+            \\    dir.create(help, FALSE)
+            \\    saveRDS(structure(names(db), first = nchar(man) + 2L), file.path(help, "paths.rds"))
+            \\    names(db) <- sub("[.][Rr]d$", "", basename(names(db)))
+            \\    tools:::makeLazyLoadDB(db, file.path(help, p))
+            \\}}
+        , .{ joinSpace(b, &rspec.pkgs_base), lib }));
+        run.setCwd(.{ .cwd_relative = ctx.src_abs });
+    }
     {
         const run = boot.r("package metadata", b.fmt(
             "tools:::.vinstall_package_indices(\"{s}\", \"{s}\", \"{s}\")",
@@ -4298,19 +4289,89 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
         run.setEnvironmentVariable("R_DEFAULT_PACKAGES", "utils");
     }
 
-    // doc/NEWS artifacts (doc/Makefile docs target, sans pdflatex/help2man)
+    // doc/NEWS artifacts (doc/Makefile docs target, sans pdflatex/help2man),
+    // parsed as the Rd DBs are: in R's source tree, as doc/NEWS.Rd, with
+    // "." as the working directory.
     {
         const run = boot.r("doc NEWS", b.fmt(
             \\options(warn=1)
-            \\saveRDS(tools:::prepare_Rd(tools::parse_Rd("{s}/doc/NEWS.Rd", macros = "../share/Rd/macros/system.Rd"), stages = 'install', warningCalls = FALSE), 'NEWS.rds')
-            \\tools:::Rd2txt_NEWS_in_Rd("NEWS.rds", "NEWS")
-            \\tools:::Rd2HTML_NEWS_in_Rd("NEWS.rds", "html/NEWS.html")
-            \\saveRDS(tools:::prepare_Rd(tools::parse_Rd("{s}/doc/NEWS.2.Rd", macros = "../share/Rd/macros/system.Rd"), stages = 'install', warningCalls = FALSE), 'NEWS.2.rds')
-            \\saveRDS(tools:::prepare_Rd(tools::parse_Rd("{s}/doc/NEWS.3.Rd", macros = "../share/Rd/macros/system.Rd"), stages = 'install', warningCalls = FALSE), 'NEWS.3.rds')
-        , .{ ctx.src_abs, ctx.src_abs, ctx.src_abs }));
+            \\news <- function(f) {{
+            \\    rd <- tools::parse_Rd(file.path("doc", f))
+            \\    assign("wd", ".", envir = attr(attr(rd, "srcref"), "srcfile"))
+            \\    tools:::prepare_Rd(rd, stages = 'install', warningCalls = FALSE)
+            \\}}
+            \\doc <- "{s}/doc"
+            \\saveRDS(news("NEWS.Rd"), file.path(doc, "NEWS.rds"))
+            \\tools:::Rd2txt_NEWS_in_Rd(file.path(doc, "NEWS.rds"), file.path(doc, "NEWS"))
+            \\tools:::Rd2HTML_NEWS_in_Rd(file.path(doc, "NEWS.rds"), file.path(doc, "html/NEWS.html"))
+            \\saveRDS(news("NEWS.2.Rd"), file.path(doc, "NEWS.2.rds"))
+            \\saveRDS(news("NEWS.3.Rd"), file.path(doc, "NEWS.3.rds"))
+        , .{rhome}));
         run.setEnvironmentVariable("R_DEFAULT_PACKAGES", "");
-        run.setCwd(.{ .cwd_relative = b.fmt("{s}/doc", .{rhome}) });
+        run.setCwd(.{ .cwd_relative = ctx.src_abs });
     }
+
+    // R_HOME in the code databases, made relative to R_HOME. R records
+    // where the bootstrap ran it: base's .Library, .popath and
+    // .libPaths(), each namespace's path, methods' DLL path, and the frame
+    // of methods' start-up, which envRefClass's methods keep (libname,
+    // dbbase). R sets the first ones again when it starts and never reads
+    // the namespace paths back (nspackloader.R). No prefix R runs from is
+    // neutral, since R resolves R_HOME to its real path, and R's own
+    // set.install.dir covers only a namespace's path. So this step writes
+    // each entry that names R_HOME again, with library/stats for
+    // <R_HOME>/library/stats (a forced promise becomes its value), and
+    // copies every other entry byte for byte. The new files replace the
+    // old ones at the end: R reads its namespaces' code from them while
+    // it runs. (Reading tcltk's entries loads tcltk, which warns without
+    // a display.)
+    _ = boot.r("relative R_HOME in code DBs", b.fmt(
+        \\home <- unique(c("{s}", R.home(), normalizePath(R.home(), "/")))
+        \\rel <- function(x) {{
+        \\    if (typeof(x) == "promise") x <- eval(x)
+        \\    if (is.character(x)) {{
+        \\        for (h in home) {{
+        \\            i <- which(x == h | startsWith(x, paste0(h, "/")))
+        \\            x[i] <- ifelse(x[i] == h, ".", substring(x[i], nchar(h) + 2L))
+        \\        }}
+        \\    }} else if (is.list(x)) {{
+        \\        for (i in seq_along(x)) if (!is.null(x[[i]])) x[[i]] <- rel(x[[i]])
+        \\    }}
+        \\    for (a in setdiff(names(attributes(x)), "class")) attr(x, a) <- rel(attr(x, a))
+        \\    x
+        \\}}
+        \\named <- function(x) {{
+        \\    r <- serialize(x, NULL)
+        \\    any(vapply(home, function(h) length(grepRaw(h, r, fixed = TRUE)) > 0L, NA))
+        \\}}
+        \\ref <- function(n) structure(new.env(parent = emptyenv()), ref = n)
+        \\done <- character()
+        \\for (rdx in list.files("{s}", "[.]rdx$", recursive = TRUE, full.names = TRUE)) {{
+        \\    rdb <- sub("x$", "b", rdx)
+        \\    idx <- readRDS(rdx)
+        \\    keys <- c(idx$variables, idx$references)
+        \\    vals <- suppressWarnings(lapply(keys, lazyLoadDBfetch, rdb, idx$compressed, ref))
+        \\    hit <- vapply(vals, named, NA)
+        \\    if (!any(hit)) next
+        \\    old <- readBin(rdb, "raw", file.size(rdb))
+        \\    out <- paste0(rdb, ".new")
+        \\    close(file(out, "wb"))
+        \\    for (i in seq_along(keys)) keys[[i]] <- if (hit[i]) {{
+        \\        x <- rel(vals[[i]])
+        \\        if (named(x)) stop(rdx, ": ", names(keys)[i], " still names R_HOME")
+        \\        .Internal(lazyLoadDBinsertValue(x, out, FALSE, idx$compressed, function(e) attr(e, "ref")))
+        \\    }} else {{
+        \\        k <- keys[[i]]
+        \\        at <- file.size(out)
+        \\        con <- file(out, "ab"); writeBin(old[k[1L] + seq_len(k[2L])], con); close(con)
+        \\        c(as.integer(at), k[2L])
+        \\    }}
+        \\    nv <- length(idx$variables)
+        \\    saveRDS(list(variables = keys[seq_len(nv)], references = keys[nv + seq_along(idx$references)], compressed = idx$compressed), paste0(rdx, ".new"))
+        \\    done <- c(done, rdx, rdb)
+        \\}}
+        \\stopifnot(file.rename(paste0(done, ".new"), done))
+    , .{ rhome, lib }));
 
     // sanity: the built product answers from its own launchers. Windows has
     // no top-level {prefix}/bin/Rscript convenience copy (F6.0: no unix-style

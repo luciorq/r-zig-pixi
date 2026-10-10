@@ -10,18 +10,20 @@
 #
 # Usage: verify-tree.sh [TREE]   (default: zig-build.sh's prefix)
 #
-# Everything here reads files, headers and load commands, so the answer
-# does not depend on where the tree sits:
+# Everything here reads files, headers and load commands (the tree's own
+# Rscript reads its compressed files), so the answer does not depend on
+# where the tree sits:
 #   - the compilers Makeconf names are rzig (one binary, no scripts);
 #   - Makeconf names no build path and has no rpath; CPPFLAGS and LDFLAGS
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
 #   - Windows (every tree): CRAN's layout, Makeconf's R_ARCH is /x64 and
 #     R_HOME/bin has R.exe and Rscript.exe;
 #   - every OS (a tree that is not a conda env): no file of R's own names
-#     the build machine's checkout, zig's caches, the env or $HOME; the
-#     vendored conda libraries that name one are listed, and so are
-#     build.zig's verbatim copies of env files that name only $HOME's
-#     path (conda-forge's build path);
+#     the build machine's checkout, the tree's own place, zig's caches,
+#     the env or $HOME, R's lazy-load databases and .rds files read
+#     uncompressed; the vendored conda libraries that name one are
+#     listed, and so are build.zig's verbatim copies of env files that
+#     name only $HOME's path (conda-forge's build path);
 #   - where Makeconf offers OpenMP (a tree that is not a conda env, not
 #     minimal): omp.h and libomp where rzig and the loader find them
 #     (Windows: Library/include/omp.h, Library/lib/libomp.lib and
@@ -158,17 +160,20 @@ if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
 # No path of the build machine in any file of R's own (feat-no-host-paths
 # PLAN.md, Goal 1), in a tree that is not a conda env: the checkout (R's
 # source, the build dir and, as env.sh keeps them, zig's caches are in
-# it), zig's caches wherever they are, the env R was built in
+# it), the tree's own place (the install prefix, when it is not in the
+# checkout), zig's caches wherever they are, the env R was built in
 # (CONDA_PREFIX), and $HOME; each as it is set and resolved, matched with
 # either separator (doubled too), and on Windows also in its drive form
 # (C:/... or C:\..., beside MSYS' /c/...) and in any case. CI's paths
 # (/home/runner/work/..., D:\a\...) are just more of these. build.zig
 # keeps them out of R's files: -ffile-prefix-map for __FILE__ and the
 # debug info (filePathFlags), no tools/misc/top.txt, fontconfig's
-# configuration without the env's directories (installFontconfig). Files
-# are read as bytes, binaries' strings included; compressed ones (R's
-# lazy-load databases, .rds files) are not looked into. Not R's own, and
-# listed, not failed:
+# configuration without the env's directories (installFontconfig),
+# relative paths in the base packages' Rd objects and code databases
+# (build.zig's bootstrap). Files are read as bytes, binaries' strings
+# included; R's compressed ones (the lazy-load databases, .rds files) as
+# the objects they hold, which the tree's R writes out uncompressed. Not
+# R's own, and listed, not failed:
 #   - what vendor-libs.sh vendored from the env, recognised as it
 #     recognises it (vendored_files, verify-helpers.sh). conda's
 #     libraries carry their env's path compiled in (conda's prefix
@@ -193,7 +198,7 @@ if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
 if [ -z "$conda_tree" ]; then
   conda_dir="${CONDA_PREFIX:?run through pixi: the env R was built in is CONDA_PREFIX}"
   command -v cygpath > /dev/null 2>&1 && conda_dir="$(cygpath -u "$conda_dir")"
-  build_dirs=("$ROOT" "${PIXI_PROJECT_ROOT:-}" "${ZIG_GLOBAL_CACHE_DIR:-}" "${ZIG_LOCAL_CACHE_DIR:-}" "$conda_dir")
+  build_dirs=("$ROOT" "${PIXI_PROJECT_ROOT:-}" "$TREE" "${ZIG_GLOBAL_CACHE_DIR:-}" "${ZIG_LOCAL_CACHE_DIR:-}" "$conda_dir")
   # $HOME, when it names a directory of its own (/home/<user>,
   # /Users/<user>, /c/Users/<user>): "/" or "/root" would also match what
   # names no build machine.
@@ -205,7 +210,7 @@ if [ -z "$conda_tree" ]; then
   # Windows: MSYS' HOME need not be the user's profile directory.
   if [ "$OS" = windows ] && [ -n "${USERPROFILE:-}" ]; then home_dirs+=("$(cygpath -u "$USERPROFILE")"); fi
   # Each directory as it is set and resolved (Windows: also C:/..., and
-  # with long names).
+  # with long and short, 8.3, names).
   path_forms() {
     local d
     for d in "$@"; do
@@ -214,7 +219,7 @@ if [ -z "$conda_tree" ]; then
       if [ -d "$d" ]; then (cd "$d" && pwd -P); fi
       if [ "$OS" = windows ]; then
         cygpath -m "$d"
-        if [ -d "$d" ]; then cygpath -m -l "$d"; fi
+        if [ -d "$d" ]; then cygpath -m -l "$d"; cygpath -m -s "$d"; fi
       fi
     done
   }
@@ -262,6 +267,17 @@ if [ -z "$conda_tree" ]; then
   done < "$WORK/vendored.txt"
   n_all="$(find "$TREE" -type f | wc -l | tr -d ' ')"
   grep -rlaE "${icase[@]}" -e "$re" "$TREE" > "$WORK/named.txt" || true
+  # R's compressed files (the lazy-load databases, .rds files), as the
+  # objects they hold: the tree's R writes each one out uncompressed
+  # under $WORK/serialized (uncompress-r-objects.R), and the same search
+  # reads those. (Windows: R takes C:/... paths.)
+  r_path() { if [ "$OS" = windows ]; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
+  if [ "$OS" = windows ]; then rscript="$TREE/$rh/bin/x64/Rscript.exe"; else rscript="$TREE/$rh/bin/Rscript"; fi
+  ser="$WORK/serialized"
+  R_DONT_USE_TK=1 "$rscript" --vanilla "$(r_path "$(cd "$(dirname "$0")" && pwd)/uncompress-r-objects.R")" "$(r_path "$TREE/$rh")" "$(r_path "$ser")" ||
+    { echo "error: the tree's R could not read its lazy-load databases and .rds files" >&2; exit 1; }
+  n_ser="$(find "$ser" -type f | wc -l | tr -d ' ')"
+  grep -rlaE "${icase[@]}" -e "$re" "$ser" > "$WORK/named-serialized.txt" || true
   offenders=""; n_bad=0; vendored_named=""; copies_named=""; n_copies=0
   while IFS= read -r f; do
     rel="${f#"$TREE"/}"
@@ -287,12 +303,17 @@ if [ -z "$conda_tree" ]; then
   $rel$what: $(first_match "$f" "$re")"
     n_bad=$((n_bad + 1))
   done < "$WORK/named.txt"
+  while IFS= read -r f; do
+    offenders="$offenders
+  $rh/${f#"$ser"/} (its objects, uncompressed): $(first_match "$f" "$re")"
+    n_bad=$((n_bad + 1))
+  done < "$WORK/named-serialized.txt"
   if [ -n "$offenders" ]; then
-    echo "error: $n_bad files name the build machine (the checkout, zig's caches, the env or \$HOME), R's own unless marked, first match each:$offenders" >&2
+    echo "error: $n_bad files name the build machine (the checkout, the tree's own place, zig's caches, the env or \$HOME), R's own unless marked, first match each:$offenders" >&2
     exit 1
   fi
   n_vendored_named="$(echo $vendored_named | wc -w | tr -d ' ')"
-  echo "== build paths verified: no file of R's own names the checkout, zig's caches, the env or \$HOME ($((n_all - n_vendored)) files besides vendor-libs.sh's; $n_paths distinct paths, either separator)"
+  echo "== build paths verified: no file of R's own names the checkout, the tree's own place, zig's caches, the env or \$HOME ($((n_all - n_vendored)) files besides vendor-libs.sh's, $n_ser of them read uncompressed; $n_paths distinct paths, either separator)"
   echo "   $n_vendored files vendored from the env, $n_vendored_named of them naming one of those paths, compiled in by conda:${vendored_named:- none}"
   if [ "$n_copies" -gt 0 ]; then
     echo "   build.zig's verbatim copies of env files that name only \$HOME's path, conda-forge's build path: $n_copies$copies_named"
