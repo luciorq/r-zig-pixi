@@ -25,15 +25,25 @@
 #
 # zig to exec: $ZIG_BIN when it names an executable — the r-zig wheel
 # (scripts/make-wheel.py) points it at the PyPI `ziglang` package's own
-# binary — else zig on PATH (the conda/pixi env's; on win-64 conda-forge
-# only installs it as x86_64-w64-mingw32-zig), else `python3 -m ziglang`
+# binary — else the compilers group's zig, R_HOME/bin/toolchain/zig/zig,
+# else zig in the bin/ of the environment R is installed in (a conda env
+# used without activation; on win-64 conda-forge only installs it as
+# x86_64-w64-mingw32-zig), else zig on PATH, else `python3 -m ziglang`
 # (the wheel with ziglang installed outside R's own site-packages dir).
+# The environment is four levels above this script in R_HOME/bin/toolchain
+# (on Windows <prefix>/Library), as for OpenMP below. rzig:
+# zigbuild/tools/rzig/find_zig.zig, which also checks that python3 has
+# ziglang and otherwise names the compilers group.
+_env="${BASH_SOURCE[0]//\\//}"; _env="${_env%/*}/../../../.."
+ZIG=()
 if [ -n "${ZIG_BIN:-}" ] && [ -x "$ZIG_BIN" ]; then
   ZIG=("$ZIG_BIN")
-elif _zig="$(command -v zig || command -v x86_64-w64-mingw32-zig)"; then
-  ZIG=("$_zig")
 else
-  ZIG=(python3 -m ziglang)
+  for _c in "$_env/lib/R/bin/toolchain/zig/zig" "$_env/bin/zig" "$_env/bin/x86_64-w64-mingw32-zig" \
+    "$(command -v zig || command -v x86_64-w64-mingw32-zig)"; do
+    if [ -f "$_c" ] && [ -x "$_c" ]; then ZIG=("$_c"); break; fi
+  done
+  [ ${#ZIG[@]} -gt 0 ] || ZIG=(python3 -m ziglang)
 fi
 
 # libc++ is linked statically, everywhere (decided 2026-09-30). Upstream
@@ -216,23 +226,28 @@ done
 set -- "${_a[@]}"
 
 # Fortran runtime: Makeconf's FLIBS says -lflang_rt.runtime (feat-no-
-# host-paths F1.5). Link the static archive of the flang on PATH, the
-# compiler FC runs, wherever its LLVM keeps it (<resource dir>/lib/
-# <triple>/): never a shared runtime, which would need an rpath into the
-# environment at load time (conda-forge's linux-64 flang-rt ships one next
-# to the archive), and not tied to the LLVM major R was built with. Once:
-# R CMD SHLIB repeats $(FLIBS). No flang on PATH: nothing this link has
-# was compiled by it, so the flag goes (CRAN's usual `PKG_LIBS =
-# $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)` puts it on C and C++ links too). A
-# flang without the archive: dropped with a warning, so only a Fortran
-# package fails, at its load test. -lgfortran and -lquadmath, as a
-# Makevars written for gcc names them, are this runtime too, on every OS:
-# FC is flang, and gfortran's runtime defines nothing flang's code calls.
+# host-paths F1.5). Link the static archive of the flang FC runs (the
+# compilers group's R_HOME/bin/toolchain/flang/bin/flang, else the one in
+# the environment's bin/, else PATH's), wherever its LLVM keeps it
+# (<resource dir>/lib/<triple>/): never a shared runtime, which would need
+# an rpath into the environment at load time (conda-forge's linux-64
+# flang-rt ships one next to the archive), and not tied to the LLVM major
+# R was built with. Once: R CMD SHLIB repeats $(FLIBS). No flang: nothing
+# this link has was compiled by it, so the flag goes (CRAN's usual
+# `PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)` puts it on C and C++
+# links too). A flang without the archive: dropped with a warning, so
+# only a Fortran package fails, at its load test. -lgfortran and
+# -lquadmath, as a Makevars written for gcc names them, are this runtime
+# too, on every OS: FC is flang, and gfortran's runtime defines nothing
+# flang's code calls.
 # The first of the three becomes the archive. rzig: flang_rt.zig.
 case " $* " in
   *" -lflang_rt.runtime "*|*" -lgfortran "*|*" -lquadmath "*)
-    _frt=""
-    if _rd="$(flang -print-resource-dir 2>/dev/null)" && [ -n "$_rd" ]; then
+    _frt="" _fc=flang
+    for _c in "$_env/lib/R/bin/toolchain/flang/bin/flang" "$_env/bin/flang"; do
+      if [ -f "$_c" ] && [ -x "$_c" ]; then _fc=$_c; break; fi
+    done
+    if _rd="$("$_fc" -print-resource-dir 2>/dev/null)" && [ -n "$_rd" ]; then
       _rd="${_rd%$'\r'}"; _rd="${_rd//\\//}"
       for _c in "$_rd"/lib/*/libflang_rt.runtime.a; do
         if [ -f "$_c" ]; then _frt="$_c"; break; fi

@@ -27,6 +27,14 @@
 //! loads the package (glibc applies only the executable's own DT_RPATH to
 //! a dlopened library's dependencies). Windows has no rpath.
 //!
+//! The compilers group's OpenMP files (feat-standalone-toolchain B22, B40)
+//! count as one more environment, right after R's own: <rzig dir>/openmp,
+//! with include/omp.h (and on Windows lib/libomp.lib). Only when R's own
+//! environment has the libomp runtime those files are for
+//! (`toolchainOpenmp` below). In a conda env and the wheel there is no
+//! openmp/: conda's llvm-openmp puts omp.h into the environment itself
+//! (B41).
+//!
 //! CONDA_PREFIX is never read, nor PIXI_* or R_HOME, and the current
 //! directory names no environment: an activated environment R is not
 //! installed in must not change what a package compiles against.
@@ -76,11 +84,15 @@ pub fn extra(ctx: *const Ctx) !?Env {
     return .{ .dir = root, .conda = try isConda(ctx, root) };
 }
 
-/// R's own environment, then the extra one unless it is the same.
+/// R's own environment, the toolchain's OpenMP files, then the extra one
+/// unless it is R's own.
 pub fn list(ctx: *const Ctx) ![]const Env {
     var out: std.ArrayList(Env) = .empty;
     const o = try own(ctx);
-    if (o) |e| try out.append(ctx.arena, e);
+    if (o) |e| {
+        try out.append(ctx.arena, e);
+        if (try toolchainOpenmp(ctx, e)) |t| try out.append(ctx.arena, t);
+    }
     if (try extra(ctx)) |e| {
         const same = if (o) |oe| (if (ctx.os == .windows) std.ascii.eqlIgnoreCase(oe.dir, e.dir) else mem.eql(u8, oe.dir, e.dir)) else false;
         if (!same) try out.append(ctx.arena, e);
@@ -88,9 +100,36 @@ pub fn list(ctx: *const Ctx) ![]const Env {
     return out.items;
 }
 
+/// rzig's own directory, where the toolchain's groups are (R_HOME/bin/
+/// toolchain when it is installed): zig/, flang/, openmp/. null when the OS
+/// would not say where rzig is.
+pub fn toolchain(ctx: *const Ctx) ?[]const u8 {
+    const exe = ctx.self_exe orelse return null;
+    return exe[0 .. mem.findScalarLast(u8, exe, '/') orelse return null];
+}
+
+/// <rzig dir>/openmp, when that directory exists and R's own environment
+/// `base` has the libomp runtime (B40): <dir>/lib/libomp.so or .dylib, or
+/// on Windows R_HOME/bin/x64/libomp.dll, beside R.dll. The groups hold
+/// nothing per flavor, and minimal has no libomp: there a flagless omp.h
+/// probe finds no header, as its Makeconf's empty SHLIB_OPENMP_* says,
+/// instead of a header whose -lomp link would fail.
+fn toolchainOpenmp(ctx: *const Ctx, base: Env) !?Env {
+    const dir = try ctx.fmt("{s}/openmp", .{toolchain(ctx) orelse return null});
+    if (!ctx.isDir(dir)) return null;
+    const runtimes: []const []const u8 = switch (ctx.os) {
+        .windows => &.{"lib/R/bin/x64/libomp.dll"},
+        else => &.{ "lib/libomp.so", "lib/libomp.dylib" },
+    };
+    for (runtimes) |r| {
+        if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ base.dir, r }))) return .{ .dir = dir, .conda = false };
+    }
+    return null;
+}
+
 /// The environment whose llvm-openmp a -fopenmp link uses: the first with
-/// include/omp.h (a conda env with llvm-openmp, a standalone tree build.zig
-/// installed the headers into).
+/// include/omp.h (a conda env with llvm-openmp, the toolchain's openmp/, a
+/// standalone tree build.zig installed the headers into).
 pub fn openmp(ctx: *const Ctx, envs: []const Env) !?Env {
     for (envs) |e| {
         if (ctx.isFile(try ctx.fmt("{s}/include/omp.h", .{e.dir}))) return e;
@@ -227,4 +266,74 @@ test "OpenMP: the first environment with include/omp.h" {
     try testing.expectEqualStrings(f.path("env2"), (try openmp(&f.ctx, try list(&f.ctx))).?.dir);
     try f.touch("tree/include/omp.h");
     try testing.expectEqualStrings(f.path("tree"), (try openmp(&f.ctx, try list(&f.ctx))).?.dir);
+}
+
+test toolchain {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    try testing.expect(toolchain(&f.ctx) == null);
+    f.ctx.self_exe = "/t/lib/R/bin/toolchain/zig-cc";
+    try testing.expectEqualStrings("/t/lib/R/bin/toolchain", toolchain(&f.ctx).?);
+    f.ctx.self_exe = "C:/t/Library/lib/R/bin/toolchain/gcc.exe";
+    try testing.expectEqualStrings("C:/t/Library/lib/R/bin/toolchain", toolchain(&f.ctx).?);
+    f.ctx.self_exe = "/x/zig-out/bin/rzig";
+    try testing.expectEqualStrings("/x/zig-out/bin", toolchain(&f.ctx).?);
+    f.ctx.self_exe = "zig-cc";
+    try testing.expect(toolchain(&f.ctx) == null);
+}
+
+test "the toolchain's openmp/: after R's own environment, only with the base's libomp runtime (B40)" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    try decoy(&f);
+    try f.tmp.dir.createDirPath(testing.io, "env/conda-meta");
+    try f.touch("tree/lib/R/bin/toolchain/openmp/include/omp.h");
+    f.ctx.self_exe = f.path("tree/lib/R/bin/toolchain/zig-cc");
+    try f.env.put("R_ZIG_EXTRA_ENV", f.path("env"));
+    const tree: Env = .{ .dir = f.path("tree"), .conda = false };
+    const omp: Env = .{ .dir = f.path("tree/lib/R/bin/toolchain/openmp"), .conda = false };
+    const env: Env = .{ .dir = f.path("env"), .conda = true };
+    // minimal: no libomp in the base, so openmp/ does not count
+    try expectEnvs(&f, &.{ tree, env });
+    try testing.expect(try openmp(&f.ctx, try list(&f.ctx)) == null);
+    // linux's libomp.so, macOS's libomp.dylib
+    for ([_][]const u8{ "tree/lib/libomp.so", "tree/lib/libomp.dylib" }) |rt| {
+        try f.touch(rt);
+        try expectEnvs(&f, &.{ tree, omp, env });
+        try testing.expectEqualStrings(omp.dir, (try openmp(&f.ctx, try list(&f.ctx))).?.dir);
+        try f.tmp.dir.deleteFile(testing.io, rt);
+    }
+    // a libomp elsewhere (the extra environment's, a Windows DLL on unix) is not the base's
+    try f.touch("env/lib/libomp.so");
+    try f.touch("tree/lib/R/bin/x64/libomp.dll");
+    try expectEnvs(&f, &.{ tree, env });
+    // no openmp/ directory: nothing, libomp or not
+    try f.touch("tree/lib/libomp.so");
+    f.ctx.self_exe = f.path("tree2/lib/R/bin/toolchain/zig-cc");
+    try f.tmp.dir.createDirPath(testing.io, "tree2/lib/R/bin/toolchain");
+    try f.touch("tree2/lib/libomp.so");
+    try expectEnvs(&f, &.{ .{ .dir = f.path("tree2"), .conda = false }, env });
+    // a bare copy of rzig beside an openmp/: no base, so nothing
+    try f.touch("bare/openmp/include/omp.h");
+    f.ctx.self_exe = f.path("bare/zig-cc");
+    try expectEnvs(&f, &.{env});
+}
+
+test "Windows: the toolchain's openmp/ with libomp.dll beside R.dll" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    try decoy(&f);
+    try f.touch("env/Library/lib/R/bin/toolchain/openmp/include/omp.h");
+    try f.touch("env/Library/lib/R/bin/toolchain/openmp/lib/libomp.lib");
+    f.ctx.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
+    const lib: Env = .{ .dir = f.path("env/Library"), .conda = false };
+    try expectEnvs(&f, &.{lib});
+    // unix's runtime names do not count on Windows
+    try f.touch("env/Library/lib/libomp.so");
+    try expectEnvs(&f, &.{lib});
+    try f.touch("env/Library/lib/R/bin/x64/libomp.dll");
+    try expectEnvs(&f, &.{ lib, .{ .dir = f.path("env/Library/lib/R/bin/toolchain/openmp"), .conda = false } });
 }

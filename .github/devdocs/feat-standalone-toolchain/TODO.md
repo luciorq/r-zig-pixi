@@ -183,29 +183,52 @@ D5 (a), D8-D11 (a), D13 (a), E3 (a), E4 (a).
 Needs (answered): B26, B32, B34, B35, B38, B40, B43 (the two names); B37
 (the branch).
 
-- [ ] find_zig.zig: `ZIG_BIN`, `<rzig dir>/zig/zig` (`zig.exe`),
+Status (2026-10-09): implemented in the worktree feat-standalone-phase2,
+not committed; tested on linux-64, omicron and kappa; the review's code
+fixes and CI pending. PLAN.md, "Phase 2 record", has what changed and the
+choices made, and "Phase 2 tested" the results and the review.
+
+- [x] find_zig.zig: `ZIG_BIN`, `<rzig dir>/zig/zig` (`zig.exe`),
       `<env dir>/bin/zig` (Windows `x86_64-w64-mingw32-zig.exe`), PATH,
       `python3 -m ziglang`; B35's text and exit 127 when the python3
       fallback cannot start or has no ziglang
-- [ ] flang_rt.flang(): `<rzig dir>/flang/bin/flang`, `<env dir>/bin/flang`,
+- [x] flang_rt.flang(): `<rzig dir>/flang/bin/flang`, `<env dir>/bin/flang`,
       PATH; fortran.zig's no-flang text becomes B35's; its unit test and
-      wheel-test.sh:149-168 follow
-- [ ] OpenMP (B40 a): `<rzig dir>/openmp/include` on every compile
+      wheel-test.sh:149-168 follow (and verify-bundle.sh's check)
+- [x] OpenMP (B40 a): `<rzig dir>/openmp/include` on every compile
       (`-idirafter` on Windows), `-L <rzig dir>/openmp/lib` on Windows,
       only when the base has the libomp runtime; `-lomp` rule counts
       `openmp/`
-- [ ] Check mode (B26 a): the compile lookup (`fortran` also flang), the
+- [x] Check mode (B26 a): the compile lookup (`fortran` also flang), the
       build-tools check (make; Windows also sh), the zig and its
       version, the major.minor check (B32 a)
-- [ ] rzig's name map: `gcc-ar` (as zig-ar) and `gcc-ranlib` (as
+- [x] rzig's name map: `gcc-ar` (as zig-ar) and `gcc-ranlib` (as
       zig-ranlib) (B43)
-- [ ] build.zig passes R's version and the platform name to rzig
-- [ ] Unit tests: each lookup step, "zig/ wins over PATH", the env-bin
+- [x] build.zig passes R's version to rzig; the platform name comes from
+      rzig's target (recorded in PLAN.md)
+- [x] B35's text in one place (groups.zig), naming what exists today:
+      r-zig-toolchain for conda and pip, the tools themselves for the
+      standalone tree. Later phases edit only groups.zig for it (PLAN.md)
+- [x] Unit tests: each lookup step, "zig/ wins over PATH", the env-bin
       step, missing zig and flang, the openmp rule with and without
       libomp, the check mode's exit codes and texts, the two new names
-- [ ] `pixi run rzig-test` on linux-64, osx-arm64, osx-64, win-64
-- [ ] conda test-toolchain.R and wheel-test.sh unchanged in behaviour;
-      verify-bundle as today
+- [x] The shims mirror the zig and flang lookups; parity-test.sh: 15 new
+      cases (openmp/ as deliberate differences) and 11 check-mode checks
+- [x] `pixi run --locked rzig-test` on linux-64, conda-forge zig and
+      upstream zig (fetch-zig): 94 unit tests, parity 0 failed
+- [x] `pixi run rzig-test` on osx-arm64, osx-64 (omicron) and win-64
+      (kappa)
+- [x] conda test-toolchain.R and wheel-test.sh unchanged in behaviour
+      (wheel-test.sh's no-flang check is new); verify-bundle as today
+      (linux-64; verify-package also on omicron and kappa)
+- [x] Review fix: the shims' environment variable `_e` becomes `_env`
+      (the -march=armv* loop empties `_e`), plus two parity cases with
+      `-march=armv8-a+crc` and the toolchain's flang
+- [x] Review fix: Windows' build-tools check looks for make and ignores
+      MAKE (R runs make there), plus a unit-test line
+- [x] Review fix: parity-test.sh's "a zig that is not R's" check renamed,
+      and a check with a zig that says 0.99.0
+- [ ] CI; then the user commits (hand over the commands)
 
 ## Phase 3 — the standalone layout, today's contents
 
@@ -248,6 +271,12 @@ B38, B42, B43.
 - [ ] vendor-libs.sh: Windows libomp.dll trigger on R's OpenMP setting
 - [ ] Patches 0009 and 0010 call the check mode (compilers and build
       tools); 0009's fallback removed; 0010's `command -v` replaced
+- [ ] groups.zig (B35): unix's build-tools standalone line names
+      `R-<ver>-<plat>-build-tools.tar.gz`; decide where the preflight
+      shows a user's R_ZIG_TOOLCHAIN_HINT (rzig does not read it)
+- [ ] Check mode lines on Windows, before the preflight shows them: one
+      path separator (find_zig joins with `\`, rzig's own path has `/`);
+      a zig that cannot start says so, not "does not say its zig version"
 - [ ] package-standalone.sh: base archive + compilers + build-tools
       archives, `.sha256` each
 - [ ] hermetic-check.sh: the R tree is the base, nothing deleted
@@ -291,6 +320,8 @@ Needs (answered): B14, B28, B29, B35, B38, B39, B11, B41; D7, D12, E2.
 - [ ] CC_VER/FC_VER refreshed with this bump (D7)
 - [ ] Hint writers removed: `-Dtoolchain-hint`, zig-build.sh:57-66,
       make-wheel.py's renviron_hint
+- [ ] groups.zig (B35): the conda and pip lines name r-zig-compilers and
+      r-zig-build-tools
 - [ ] make-wheel.py: r-zig with rzig; r-zig-build-tools with
       `usr/bin/make`; r-zig-compilers and r-zig-toolchain without files;
       one tag set; the zig-cc check moves to the base wheel
@@ -311,6 +342,8 @@ only recorded); D6 (b).
       (LICENSE, dist-info licences) and `SOURCES` (wheel URL, sha256)
 - [ ] verify-tree: `zig/` third-party in the build-path scan;
       `zig/zig version` is 0.16.0
+- [ ] groups.zig (B35): the compilers standalone line names
+      `R-<ver>-<plat>-compilers.tar.gz` (.zip on Windows) for zig
 - [ ] rzig provides `-lsynchronization`'s import library when the zig it
       runs has none (D6 b; e.g. from MinGW's `.def` with zig's dlltool),
       unless feat-no-host-paths' rzig follow-up PR (ii) has landed it; no
@@ -349,6 +382,8 @@ Then:
       module-directory symlink); `flang/SOURCES` from conda-meta;
       verify-tree checks against `paths_data`
 - [ ] The carve script's cross-check, once
+- [ ] groups.zig (B35): the compilers standalone line names the archive
+      for flang too
 - [ ] `-lc++` and `link_libcpp` dropped where those runs passed
 - [ ] verify-bundle scenario 2, no flang on PATH, no flang.cfg: a
       derived-type module, USE_FC_TO_LINK, `use omp_lib` on two threads,
@@ -373,6 +408,8 @@ Needs (answered): B11, B25, B39, B43 (pkg-config).
 - [ ] conda's win-64 r-zig-build-tools depends on the same packages
       (replacing phase 4's interim list)
 - [ ] Rprofile.windows PATH line, if the tests need it
+- [ ] groups.zig (B35): Windows' build-tools standalone line names
+      `R-<ver>-win-64-build-tools.zip`
 - [ ] `R CMD config` without the build tools fails with one clear message
 - [ ] verify-bundle scenario 3 on Windows with PATH = bin\x64 + System32:
       the contract set, pak, data.table, glue and a pkg-config package

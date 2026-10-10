@@ -73,10 +73,12 @@ if [ "$OS" != windows ] && [ -n "${CONDA_PREFIX:-}" ]; then
 fi
 
 # The zig the scripts run (zig-build.sh, rzig's test.sh, verify-bundle's
-# compiles), found as rzig finds it (zigbuild/tools/rzig/find_zig.zig):
-# ZIG_BIN, else zig on PATH, the env's (conda-forge's). R builds with
-# conda-forge's zig and with upstream zig, the ziglang.org release, which
-# PyPI's ziglang is (feat-no-host-paths F4): with ZIG_BIN=<its path>
+# compiles): ZIG_BIN, else zig on PATH, the env's (conda-forge's). rzig
+# finds the same one in a dev tree (zigbuild/tools/rzig/find_zig.zig): it
+# looks in the toolchain's zig/ and the tree's bin/ before PATH, and a dev
+# tree has no zig in either (feat-standalone-toolchain B2, B34). R builds
+# with conda-forge's zig and with upstream zig, the ziglang.org release,
+# which PyPI's ziglang is (feat-no-host-paths F4): with ZIG_BIN=<its path>
 # (`pixi run fetch-zig` prints one) the pipeline tasks that run zig
 # (build, check, rzig-test, contract, verify-package) build, compile and
 # test with it. Not conda-package, whose rattler-build gives the recipe a
@@ -87,12 +89,13 @@ fi
 #
 # Always an absolute path, so that it names the same zig from every
 # directory: rzig resolves ZIG_BIN from its working directory, which R
-# CMD and verify-bundle's compiles change, and quietly takes PATH's zig,
-# the env's, when it finds nothing there. So a bare name in ZIG_BIN is
-# looked up on PATH, a relative path is taken from here (the project
-# root, where pixi runs tasks), a ZIG_BIN that does not run stops here,
-# and ZIG_BIN is exported as the result (C:/... on Windows, as fetch-zig
-# prints it), the file that builds R and keys its caches below.
+# CMD and verify-bundle's compiles change, and quietly looks further
+# (in a dev tree: PATH's zig, the env's) when it finds nothing there. So
+# a bare name in ZIG_BIN is looked up on PATH, a relative path is taken
+# from here (the project root, where pixi runs tasks), a ZIG_BIN that
+# does not run stops here, and ZIG_BIN is exported as the result (C:/...
+# on Windows, as fetch-zig prints it), the file that builds R and keys its
+# caches below.
 if [ -n "${ZIG_BIN:-}" ]; then
   case "$ZIG_BIN" in
     */*|*\\*) ZIG="$ZIG_BIN" ;;
