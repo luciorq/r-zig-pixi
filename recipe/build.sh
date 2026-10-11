@@ -29,10 +29,19 @@ chmod +x scripts/*.sh
 # is that, not a dev tree's dist/<flavor>/R-<ver>-zig. zig build installs
 # the final tree: relative rpaths, relocatable launchers, rzig as the
 # compilers in lib/R/bin/toolchain (feat-no-host-paths PLAN.md, F1 and
-# F3); nothing runs after it. What a standalone tree takes from the env
+# F3); nothing rewrites it after. What a standalone tree takes from the env
 # (build.zig's installEnvRuntime: the CA bundle, fontconfig's
 # configuration, Tcl/Tk; vendor-libs.sh: the shared libraries) is left
 # out here, since the prefix is the env: its own packages provide all of
 # it. On Windows, etc/Renviron.site points tcltk at the tk package's DLLs
 # instead (MY_TCLTK, installEnvRuntime).
 bash scripts/zig-build.sh
+# The toolchain build (zigbuild/toolchain/build.zig), into the env itself,
+# as the dev tree's groups are installed into dist/toolchain/R-<ver>-zig.
+# Here too conda's own packages provide the groups' files where they are
+# looked for (llvm-openmp's omp.h, make), so on unix it installs nothing.
+# On win-64 it installs R_HOME/bin/toolchain/binutils/: conda-forge's
+# MinGW binutils, which Makeconf.win names by path under R_HOME, with
+# their SOURCES and LICENSES/ (feat-standalone-toolchain B24, B41).
+# r-zig-toolchain owns them, with the rest of R_HOME/bin/toolchain.
+R_TOOLCHAIN_PREFIX="$PREFIX" bash scripts/zig-toolchain.sh

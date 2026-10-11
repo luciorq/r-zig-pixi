@@ -62,8 +62,9 @@ const Dir = struct {
 
 /// llvm-openmp's headers: omp.h, which makes rzig add -lomp to a -fopenmp
 /// link, and the ones beside it where the env has them (win-64's
-/// llvm-openmp ships only omp.h and ompx.h): build.zig's installOpenMP
-/// list, into openmp/include, where rzig looks (B22, B40).
+/// llvm-openmp ships only omp.h and ompx.h): the list the R trees carried
+/// in their include/ until phase 3, now in openmp/include, where rzig
+/// looks (B22, B40).
 fn ompHeaders(comptime include: []const u8) [4]Copy {
     return .{
         .{ .from = include ++ "omp.h", .to = "include/omp.h" },

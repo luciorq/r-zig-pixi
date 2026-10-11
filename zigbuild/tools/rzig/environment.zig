@@ -128,8 +128,9 @@ fn toolchainOpenmp(ctx: *const Ctx, base: Env) !?Env {
 }
 
 /// The environment whose llvm-openmp a -fopenmp link uses: the first with
-/// include/omp.h (a conda env with llvm-openmp, the toolchain's openmp/, a
-/// standalone tree build.zig installed the headers into).
+/// include/omp.h (R's conda env with llvm-openmp, the toolchain's openmp/,
+/// R_ZIG_EXTRA_ENV's). A standalone base has no omp.h of its own since
+/// phase 3: the compilers group's openmp/ holds it.
 pub fn openmp(ctx: *const Ctx, envs: []const Env) !?Env {
     for (envs) |e| {
         if (ctx.isFile(try ctx.fmt("{s}/include/omp.h", .{e.dir}))) return e;

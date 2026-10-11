@@ -19,12 +19,14 @@
 # installEnvRuntime: the CA bundle, fontconfig's configuration, Windows'
 # Tcl/Tk), and zig-build.sh runs vendor-libs.sh after every build to copy
 # the env's shared libraries into it. So the checks that run on the
-# installed tree before this (verify-tree, smoke, contract, check,
-# hermetic) saw exactly what is archived. vendor-libs.sh is not run again
-# here: one place does it, and the pixi task `package` depends on
-# `build`, which runs it. Likewise the toolchain tree is archived as
-# zig-toolchain.sh installed it (`package-toolchain` depends on
-# `toolchain`), which verify-toolchain.sh checks.
+# installed tree before this (verify-tree, smoke, check, hermetic) saw
+# exactly what is archived; contract compiles with a copy of it with the
+# toolchain groups added, the compile tree (compile-tree.sh, PHASE3 open
+# point B). vendor-libs.sh is not run again here: one place does it, and
+# the pixi task `package` depends on `build`, which runs it. Likewise the
+# toolchain tree is archived as zig-toolchain.sh installed it
+# (`package-toolchain` depends on `toolchain`), which verify-toolchain.sh
+# checks.
 . "$(dirname "$0")/env.sh"
 
 mode="${1:-base}"

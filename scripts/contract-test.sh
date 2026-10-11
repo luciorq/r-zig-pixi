@@ -142,6 +142,16 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
             sub(".exe$", "", basename(cc1)) %in% c("zig-cc", "gcc"),
             basename(dirname(fc1)) == "toolchain",
             sub(".exe$", "", basename(fc1)) == "zig-fc")
+  # Windows: NM names a file that exists (PHASE3 C11). Makeconf names it
+  # under R_HOME/bin/toolchain/binutils/, the build-tools group directory
+  # (feat-standalone-toolchain B24), which the compile tree has. A missing
+  # nm.exe fails no package above: winshlib.mk pipes $(NM) into sed for a
+  # DLL linked without a .def file, and the linker then exports everything.
+  if (.Platform$OS.type == "windows") {
+    nm <- trimws(cfg("NM"))
+    stopifnot(file.exists(nm))
+    cat("R CMD config NM:", nm, "exists: OK\n")
+  }
   cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
   cat("data.table grouped aggregation: OK\n")
   cat("minqa (Rcpp-dependent + package Fortran) bobyqa: OK\n")

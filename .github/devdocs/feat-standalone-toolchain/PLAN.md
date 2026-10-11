@@ -109,9 +109,11 @@ The base is R plus rzig, on every channel:
   `TC/gcc.exe`, `TC/g++.exe` and `TC/zig-fc.exe`, and from phase 3 also
   at `TC/zig-ar.exe`, `TC/zig-ranlib.exe`, `TC/gcc-ar.exe` and
   `TC/gcc-ranlib.exe` (B43: AR and RANLIB go through rzig as on unix,
-  and rzig answers to gcc-ar and gcc-ranlib). The extensionless `zig-cc`
-  and `zig-cxx` copies exist only for the preflight's file test
-  (build.zig:2420-2421) and go with B26 (a).
+  and rzig answers to gcc-ar and gcc-ranlib), and `TC/ar.exe` and
+  `TC/ranlib.exe`, which CMake looks for beside CC (phase 3's step 3
+  review). The extensionless `zig-cc` and `zig-cxx` copies exist only
+  for the preflight's file test (build.zig:2420-2421) and go with B26
+  (a).
 - rzig is one binary per platform, byte-identical across flavors (Phase
   0 measurements), copied once per name.
 - The external runtime (section 2) is also in the base.
@@ -1993,7 +1995,10 @@ ships):
   a package needs it.
 - objdump (211): conda-forge's MinGW objdump, copied into `TC/binutils/`
   with the other binutils (phase 3 checks that binutils_impl_win-64 has
-  it); the line names `$(R_HOME)/bin/toolchain/binutils/objdump.exe`.
+  it); the line names `$(R_HOME)/bin/toolchain/binutils/objdump`, with
+  no `.exe`: R CMD check takes `R CMD config OBJDUMP` only when its
+  value plus `.exe` is a file (sotools.R's read_symbols_from_dll; phase
+  3's step 3 review).
 - pkg-config (75): conda-forge's native win-64 pkg-config (0.29.2 in
   pixi.lock) in `TC/usr/bin/`, with B39's list (phase 7); B39's list
   gains it. The line names it bare, `pkg-config`, as Makeconf.win names
@@ -2469,7 +2474,8 @@ Steps:
     for rzig; ld.exe dropped.
 - The base: TC holds only rzig. On Windows installRzig adds
   `zig-ar.exe`, `zig-ranlib.exe`, `gcc-ar.exe` and `gcc-ranlib.exe`
-  (B43) and drops the extensionless `zig-cc` and `zig-cxx` (B26 a);
+  (B43), and `ar.exe` and `ranlib.exe` for CMake (step 3's review), and
+  drops the extensionless `zig-cc` and `zig-cxx` (B26 a);
   verify-tree.sh's rzig name list (76) follows.
 - rzig routing for the rest of `binutils/` (B24): for dlltool, windres,
   strip, nm and as, check whether rzig can serve each one (zig's dlltool,
@@ -2541,17 +2547,17 @@ Tests:
   routing check moved, on the packages that use it.
 - File lists: base ∪ groups = R tree ∪ toolchain tree, no overlap.
 
-**Status (2026-10-10): steps 1 and 2 of 6 implemented and tested on
-linux-64, not committed.** The worktree feat-standalone-phase3 (branch
-feat-standalone-phase3, from main 966d661) follows the reviewed
+**Status (2026-10-10): steps 1 to 3 of 6 implemented and tested on
+linux-64; steps 1 and 2 and P3-C committed, step 3 not.** The worktree
+feat-standalone-phase3 (branch feat-standalone-phase3, from main
+966d661, with main 888faa6 (PR #23) merged) follows the reviewed
 implementation plan (PHASE3-IMPLEMENTATION.md and CRITIQUE.md, in
 /data/gamma/luciorq/workspaces/temp/r-zig-pixi/phase3plan/critic/), with
 the user's answers to its open points: A (a), the toolchain build in its
 own zigbuild/toolchain/build.zig, run by `pixi run toolchain` through
-`zig build --build-file`; B (a), a compile tree (step 3). Steps 1 and 2
-touch none of PR #23's (fix-no-build-leftovers) regions; steps 3 to 6
-follow once it merges. Step 3 (the base and the three scenarios) is
-next.
+`zig build --build-file`; B (a), a compile tree for contract and stress.
+Step 4 (the preflight: patches 0009 and 0010, Windows' extensionless
+zig-cc and zig-cxx dropped) is next.
 
 #### Phase 3 record: step 1, paths (2026-10-10, linux-64)
 
@@ -2815,6 +2821,334 @@ verify-helpers.sh's `path_forms` takes #23's 8.3 short names, and
 verify-tree.sh uses the helpers' `path_forms` and `path_re` instead of
 its own copies.
 
+#### Phase 3 record: step 3, the base and the three scenarios (2026-10-10, linux-64)
+
+What changed (B19-B25, B30, B40, B43; open point B (a); C1, C2, C11,
+C12, C15, C19, C20, C25, C27, C28, C30, C32, C36):
+- build.zig, the base: minimal's `TC/make` and `installOpenMP` are gone,
+  so no R tree has `include/omp*.h`, `Library/include/omp*.h`,
+  `Library/lib/libomp.lib` or a make; libomp itself stays in the base
+  (B21). installWindowsCompilerContract no longer copies ar, ranlib, nm,
+  dlltool, strip, as, ld and windres into TC, and its `toolchain_dir`
+  went with the loop (C1). installRzig's Windows names are gcc.exe,
+  g++.exe, zig-fc.exe, zig-ar.exe, zig-ranlib.exe, gcc-ar.exe and
+  gcc-ranlib.exe (B43), ar.exe and ranlib.exe (the names CMake looks for
+  beside CC; the review below), plus zig-cc and zig-cxx until step 4.
+  Comments that named installOpenMP or the moved files follow (C15).
+- etc/Rcmd_environ (rcmdEnviron, Windows): after R's file and before the
+  CMake lines, with R's CRLF ends,
+  `R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin` and
+  `PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"` (B25);
+  `R_ZIG_RC` names `bin/toolchain/binutils/windres.exe`.
+- etc/Renviron (finalRenviron, unix, every flavor and the conda build):
+  minimal's `R_ZIG_MAKE` branch is gone, so `MAKE=${MAKE-'make'}` is R's
+  own everywhere (B25 a), and the file ends with
+  `PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}`.
+- zigbuild/config/win-x86_64-full/Makeconf.win (section 5 of the plan):
+  `PKG_CONFIG = pkg-config`; DLLTOOL (with its `--as`), both NM lines,
+  RESCOMP (with windres' `--preprocessor` arguments) and STRIP_* name
+  `$(R_HOME)/bin/toolchain/binutils/<tool>.exe`, OBJDUMP
+  `$(R_HOME)/bin/toolchain/binutils/objdump` with no `.exe`, which R
+  CMD check adds (sotools.R; the review below); AR and
+  RANLIB are `$(BINPREF)zig-ar.exe` and `$(BINPREF)zig-ranlib.exe`. The
+  LTO block and LLVMPREF are unchanged. One `## r-zig:` block says why
+  (B24, B43, B43-2, B43-3, C21).
+- vendor-libs.sh: Windows copies libomp.dll into `bin/x64` wherever
+  Makeconf offers OpenMP (`^SHLIB_OPENMP_CFLAGS = *-`), no longer keyed
+  on a libomp.lib in the tree: rzig counts `TC/openmp/` only where the
+  base has that DLL (B40).
+- rzig: groups.zig's standalone lines name the group archives (unix
+  build-tools `extract R-<ver>-<plat>-build-tools.tar.gz where you
+  extracted R, or put GNU make on PATH`; Windows build-tools names
+  binutils and its .zip; compilers adds `for OpenMP, extract
+  R-<ver>-<plat>-compilers.<ext> where you extracted R`, C19). check.zig:
+  on Windows the build-tools check also needs the six binutils at
+  `<rzig dir>/binutils/{nm,dlltool,as,windres,strip,objdump}.exe` (one
+  list; a missing one exits 127 with the build-tools text, success adds
+  `; binutils at <dir>`); the lines show paths with `/` only on Windows
+  (display only); a zig that cannot start or that a signal ends says
+  `did not run: <reason>`. Ctx.zig's `capture` keeps that reason
+  (`Output.not_run`). main.zig: the names `ar` and `ranlib` (as zig-ar
+  and zig-ranlib; the review below); environment.zig: doc comments only.
+  Unit tests 94 → 96 (C30), and parity-test.sh greps the new lines.
+- The compile tree (open point B (a)): scripts/compile-tree.sh makes
+  env.sh's `COMPILE_TREE`, `build/compile-tree/<flavor>/R-<ver>-zig`, a
+  fresh `cp -a` of the R tree plus every group directory of the
+  toolchain tree but zig/ and flang/ (C12; in phase 3 openmp/ and usr/
+  or binutils/). It stops when the R tree or a build-tools directory is
+  missing. Task `compile-tree`; `contract` and `stress` depend on it and
+  run its Rscript (zig-contract.sh). clean.sh removes it too (C36).
+  contract-test.sh: on Windows `R CMD config NM` names a file that exists
+  (C11).
+- verify-tree.sh: TC holds rzig's names and nothing else, no directory
+  (a conda tree on win-64 may have binutils/, B41); a leftover fails with
+  "remove the tree and build again" (C25). The names come from
+  verify-helpers.sh's `rzig_names`, shared with verify-bundle.sh. New
+  whole-line checks (CR dropped, C20): Windows Makeconf's lines of
+  section 5, the three LTO lines, no binutils tool through `$(BINPREF)`;
+  Rcmd_environ's `R_ZIG_TOOLS_PATH`, PATH and `R_ZIG_RC` lines; unix
+  Renviron's PATH line and `MAKE=${MAKE-'make'}`. OpenMP: no compile-time
+  file in the base; the runtime where Makeconf offers OpenMP, none where
+  it does not. glibc: one floor, 2.17, for every ELF (the 2.28 tier is
+  verify-toolchain.sh's).
+- verify-bundle.sh, rewritten around the three scenarios (section 8,
+  C2). Inputs: the base archive and both group archives with their
+  `.sha256`. Before extracting: the base's file list equals the R tree's,
+  it holds no compile-time OpenMP or environment file (Tcl/Tk's headers
+  stay, T1) and nothing in TC but rzig, each group archive holds only its
+  directories, and no file is in two archives (C6). Then:
+  - 1, the base: R and its capabilities, PATH starting with
+    `R_HOME/bin/toolchain/usr/bin` in R and under R CMD (Windows: the
+    entry after bin\x64, or R_CUSTOM_TOOLS_PATH; C27), rzig's check mode
+    exits 127 for both groups (texts from step 4), TLS, and
+    hermetic-check.sh on the extracted base.
+  - 2, + compilers: the check mode names `ZIG_BIN` and the env's flang;
+    the baseline CPU; unix's compiled-package block, now with omp.h from
+    `TC/openmp/include` (RZIG_PRINT_ARGV shows the `-I`) and, on
+    minimal, openmp/ unused and a flagless `#include <omp.h>` failing
+    (B40); Windows' dry runs with openmp/'s `-idirafter` and `-L`, and an
+    OpenMP DLL linked by gcc.exe alone.
+  - 3, + build-tools: unix, rzig's check mode under R CMD and
+    `Sys.which("make")` name the group's make, `make --version` says the
+    version SOURCES records, install.packages with Ncpus = 2 builds btA
+    and btLib (a static library through `$(AR)` and `$(RANLIB)`, rzig)
+    and, under strace on linux, the group's make is the only one that
+    ran. Windows: every tool path Makeconf names is a file but the LTO
+    gcc-nm, `R CMD config` AR, NM and OBJDUMP, R CMD check's
+    `tools:::read_symbols_from_dll` on R.dll with the group's objdump
+    (the review), nm.exe with PATH = System32, the check mode under
+    `R.exe CMD`, a tools.mk running each binutils tool through
+    Makeconf's rules (C10, C11), rzig's ar.exe and ranlib.exe beside
+    gcc.exe making a static library with PATH = System32 (CMake's
+    archiver; the review), the OpenMP
+    packages, btA, btLib and btRc (a `.rc` in OBJECTS), and the LTO
+    record (C9).
+- verify-helpers.sh: `tree_files` (a tree's files and links as an
+  archive of it lists them) and `rzig_names`.
+- make-wheel.py: `--toolchain-prefix` (default
+  `dist/toolchain/R-<ver>-zig`); the r-zig-toolchain wheel takes rzig ×5
+  from the R tree and `lib/R/bin/toolchain/usr/**` (make, SOURCES,
+  LICENSES/) from the toolchain tree, not openmp/ (B29); leak_scan covers
+  those files. wheel-test.sh checks `Sys.which("make")` ends in
+  `bin/toolchain/usr/bin/make` and MAKE is `make`, and that uninstalling
+  r-zig-toolchain leaves no file under R_HOME/bin/toolchain (C32).
+- recipe: build.sh runs `R_TOOLCHAIN_PREFIX="$PREFIX" bash
+  scripts/zig-toolchain.sh` after zig-build.sh (unix: nothing to
+  install; win-64: TC/binutils/ with SOURCES and LICENSES/, B41, which
+  r-zig-toolchain owns with the rest of TC). recipe.yaml: comments,
+  r-zig-slim's `about:` saying Windows slim has full's content (B42 a),
+  r-zig-toolchain's summary naming Windows' binutils; no bump (B14).
+  test-toolchain.R: AR and RANLIB are rzig's on every OS and a package
+  links a static library made with them; on Windows NM names
+  `binutils/nm.exe`, the six tools exist, SOURCES names
+  binutils_impl_win-64 with a sha256, LICENSES/ is not empty and
+  `nm --version` runs (C28); R CMD check's read_symbols_from_dll reads
+  R.dll with OBJDUMP, and ar.exe and ranlib.exe are beside CC (the
+  review).
+- Docs: pixi.toml's comments (contract, verify-tree, package,
+  verify-package, compile-tree, the wheel feature, stress), the
+  hermetic-check.sh header, zigbuild/toolchain/build.zig's header list
+  comment. Phase 9's "installOpenMP's comment" item is gone with the
+  function (C14).
+
+Choices and deviations, with their reasons:
+- Windows PATH line through a helper variable, not B25's
+  `${R_CUSTOM_TOOLS_PATH:-${R_HOME}/bin/toolchain/usr/bin}`: Renviron.c's
+  `subterm` expands a default only when it is a whole `${...}` term and
+  would leave that one as it is (C16). The helper comes first;
+  verify-tree.sh checks the lines, not their order, and verify-bundle's
+  run-time check (C27) would see an empty entry.
+- AR and RANLIB are `$(BINPREF)zig-ar.exe` and `$(BINPREF)zig-ranlib.exe`,
+  with `.exe` where B43 wrote `$(BINPREF)zig-ar`: CMake takes a tool from
+  `R CMD config` only when it names an existing file, as for CC (S15;
+  C16).
+- `binutils/` carries zstd.dll and vcruntime140.dll beside the six tools
+  (step 2's record), so they load with only the system beside them,
+  stricter than the phase's "the base's runtime" (C16). verify-bundle's
+  scenario 3 runs nm.exe with PATH = System32 to show it.
+- The compile tree is a copy under build/ (open point B (a)): the R tree
+  stays the base that ships, contract compiles as a user with all three
+  archives does, Windows gets the binutils Makeconf.win names, and
+  openmp/ makes contract run B40 on every leg (C12). Only a build-tools
+  directory is required; without openmp/ a slim contract would take
+  omp.h from R_ZIG_EXTRA_ENV.
+- Scenario 2's make (C17): unix compiles there use the env's make, which
+  stands in for "a make that is not the group's" (PLAN's Verification
+  says the host's /usr/bin make): the env's is on every machine this runs
+  on, where a host has none (CI's containers) or Apple's 3.81 (omicron).
+  Scenario 3 checks the group's.
+- `did not run` exits 1 and R_ZIG_NO_PREFLIGHT skips it, as the version
+  check it sits in; the preflight tests only for a non-zero status. An
+  rzig that cannot tell its own directory fails the Windows binutils
+  check naming `R_HOME/bin/toolchain/binutils/nm.exe`.
+- The `/`-only display follows Windows' rules (ctx.os), so its unit test
+  runs on every host.
+- verify-tree.sh checks more than the plan's bullets: the B40 converse
+  (minimal has no libomp runtime, which would make rzig count openmp/),
+  the compile-time OpenMP files on every tree that is not a conda env,
+  all three LTO lines, and no binutils tool through `$(BINPREF)` (the
+  template sets NM twice and make takes the last). Lines are compared
+  whole after `tr -d '\r'` (has_line, `grep -xF`), not with `\r?$`
+  patterns: no escaping of `$(...)`, and one grep's CR handling no
+  longer matters. The conda exception is binutils/ on win-64 only.
+- verify-bundle.sh: install.packages from a local `file:` repository,
+  not `repos = NULL`, since only a repository install reads Ncpus and
+  runs R's `make -k -j 2`; env -i runs get a fresh HOME, so no
+  ~/.R/Makevars or rzig cache of this machine reaches them; Windows'
+  builds run under env -i with Windows' own variables, and fomp/fompfc
+  get flang's directory (the env's Library/bin) last on PATH, since
+  flang.exe cannot be copied and phase 6 brings TC/flang; the make
+  version comes from usr/SOURCES; Makeconf.win's tool paths are read
+  from make's own expansion (plain and with LTO_OPT=-flto), not a text
+  scan; `R.exe CMD` gets gcc.exe as a `cygpath -w -s` path, which
+  rcmdfn.c puts into cmd.exe's line unquoted (C5); scenario 1's check
+  mode asserts exit 127 only, and the compilers' check is skipped with a
+  note where the host has a zig in /usr/bin or /bin.
+- etc/Renviron's PATH line is the file's last line, after the CMake, CA
+  and Tcl lines.
+- make-wheel.py stops when the R tree's TC holds anything but rzig (a
+  pre-phase-3 TC/make would ship beside usr/bin/make; C25); its message
+  says `pixi run -e minimal toolchain`. wheel-test's uninstall check
+  covers all of R_HOME/bin/toolchain (C32's superset).
+- test-toolchain.R checks AR and RANLIB on every OS, not only Windows,
+  and runs `nm --version` there (B41's copies in an activated env).
+- The integration pass: verify-tree.sh takes the names from
+  `rzig_names` (one list for step 4 to shorten), and the stale comments
+  above.
+
+Tests (linux-64, every task with `--locked`, TMPDIR on /data; dist/'s
+trees and archives removed first, C25; the code diff, records left out
+and compile-tree.sh included, had sha256 b11f6e54...ddbce0b; pixi.lock
+had sha256 fbb64b7b...a68bb96 before and after):
+- `rzig-test`: 96/96 unit tests; parity 79 identical / 59 / 34
+  deliberate / 0 failed, with conda-forge zig 0.16.0 and with upstream
+  zig 0.16.0 (ZIG_BIN from fetch-zig). `toolchain-test` passes with both.
+- default (slim), conda-forge zig: build, toolchain, verify-tree,
+  verify-toolchain, smoke, contract (in the compile tree, with openmp/
+  and usr/), hermetic, package-toolchain and verify-package pass. The
+  base archive has 1,937 files and links, the groups 6 and 3; scenario 3
+  shows GNU Make 4.4.1 at the extracted `TC/usr/bin/make`, the only make
+  strace saw run.
+- minimal: build, verify-tree (no libomp, no omp.h), contract (compile
+  tree) and verify-package (1,401 files; openmp/ there and unused) pass.
+- wheel: r_zig (1,402 files) and r_zig_toolchain (rzig ×5,
+  `usr/bin/make`, `usr/SOURCES`, `usr/LICENSES/make/COPYING`) from
+  `dist/minimal` and `dist/toolchain`; wheel-test passes (make at
+  `.../bin/toolchain/usr/bin/make`).
+- default (slim) again with upstream zig 0.16.0 (ZIG_BIN from
+  fetch-zig): build, toolchain, verify-tree, verify-toolchain, smoke,
+  contract, hermetic, package-toolchain and verify-package pass;
+  scenario 2's check mode names that zig.
+- After the integration's last edits (comments, and verify-tree.sh's
+  `rzig_names`): zig fmt and bash -n clean; verify-tree (slim with
+  upstream zig, minimal) passes again.
+
+Not tested in this step: Windows (Makeconf.win, Rcmd_environ, the
+binutils check, scenario 3's tools.mk, `.rc` and LTO runs, the PATH run
+check) and macOS, which need kappa and omicron; conda-package (C22's
+host records and path lengths are kappa's first conda run); CI, whose
+contract, stress and verify-package legs need step 5's toolchain job
+and artifact (contract and stress now depend on compile-tree, which
+needs a toolchain tree; verify-package reads the group archives in
+dist/). README (`pixi run toolchain` before contract, `pixi run -e
+minimal toolchain` before wheel) is step 5's.
+
+#### Phase 3 review: step 3 (2026-10-10)
+
+Three reviews of the uncommitted step 3 diff, one lens each:
+correctness (the scripts', rzig's and the tests' logic), Windows
+(Makeconf.win, Rcmd_environ and the binutils as R, make and CMake run
+them, read against R 4.6.1's sources) and the plan (the records,
+TODO.md and the docs against the code). A verifier confirmed each
+finding before the fix. Six findings, none failing linux-64:
+- Windows, OBJDUMP: R CMD check takes `R CMD config OBJDUMP` only when
+  its value plus `.exe` is a file (sotools.R's read_symbols_from_dll,
+  written for upstream's OBJDUMP, which has no `.exe`). Step 3's
+  `.../binutils/objdump.exe` made it look for `objdump.exe.exe`, fall
+  back to an objdump.exe on PATH, which neither a standalone tree nor a
+  conda env has, and skip every compiled-code check with "this requires
+  'objdump.exe' to be on the PATH". Fixed: Makeconf.win's OBJDUMP names
+  `$(R_HOME)/bin/toolchain/binutils/objdump`, and its comment says why;
+  R's system() (run.c's expandcmd) and sh find objdump.exe from it.
+  verify-tree.sh's line follows (the comment avoids a `$(BINPREF)`
+  tool name, which its BINPREF scan would count); scenario 3 tests R
+  CMD config's value plus `.exe` and runs `tools:::read_symbols_from_dll`
+  on R.dll under env -i, PATH = bin\x64, the env's usr/bin and System32,
+  where it must take the group's objdump; test-toolchain.R does the same
+  in the conda env.
+- Windows, CMake's archiver: CMakeFindBinUtils (read in cmake 4.4) looks
+  for `llvm-ar`/`ar` and `llvm-ranlib`/`ranlib` in the C compiler's
+  directory before PATH, and packages hand it R CMD config CC,
+  `TC/gcc.exe`. Step 3 took MinGW's ar.exe out of that directory, so a
+  CMake-built static library with no ar on PATH (a standalone user; a
+  conda env has only `x86_64-w64-mingw32-ar.exe`) would stop at
+  CMAKE_AR-NOTFOUND. Fixed with the review's option (b), closer to B43
+  than a CMake toolchain file: rzig is also `TC/ar.exe` and
+  `TC/ranlib.exe` on Windows, and its name map serves `ar` and `ranlib`
+  as zig-ar and zig-ranlib. CMake finds them with no environment
+  variable, also under a package's own toolchain file, and
+  `$(BINPREF)ar` works again. rzig_names, the unit test (its "ar and
+  ranlib are no names" line goes) and two parity cases follow; scenario
+  3 checks both are rzig and make a static library with PATH = System32
+  as CMake runs them (`qc`, then ranlib); test-toolchain.R checks they
+  are beside CC. A CMake run itself is kappa's (TODO.md: stress
+  RcppParallel with no ar on PATH).
+- parity-test.sh: the three new check-mode checks (a zig that does not
+  say its version, one that does not run, Windows' missing binutils)
+  piped into `grep -q` and then tested `${PIPESTATUS[0]}`, so only the
+  exit code counted. Fixed: those and the three older checks of that
+  form (no zig, another major.minor, a compile with no zig) write stderr
+  to a file, test the code and then grep the file, as the fortran and
+  build-tools checks do.
+- TODO.md had ticked Windows' Rcmd_environ box as "checked on linux-64
+  by verify-tree.sh's lines, run on Windows by kappa": verify-tree reads
+  those lines only on Windows, and nothing has run on kappa. Unticked,
+  with what kappa owes.
+- stress/README.md's local recipe lacked `pixi run toolchain` (the
+  stress task runs the compile tree's R now), and its `--conda` note
+  said any R starts the run. Fixed.
+- package-standalone.sh's header still said contract saw exactly the
+  archived tree; it now says contract compiles with the compile tree.
+
+Open, for the user (the implementers' questions, unchanged here): a zig
+that does not run exits 1, not 126; the compilers text names the
+compilers archive for OpenMP on minimal too, where B40 leaves openmp/
+unused; verify-tree.sh does not check the order of Rcmd_environ's lines
+(verify-bundle's PATH run check, C27, would see a wrong one);
+compile-tree.sh does not require openmp/ where the base has libomp.
+
+Ran again (linux-64, every task with `--locked`, TMPDIR on /data,
+conda-forge zig 0.16.0 unless named; dist/'s trees and archives removed
+first, C25):
+- `rzig-test`: 96/96 unit tests; parity 81 identical / 59 / 34
+  deliberate / 0 failed (79 before, plus the two `ar`/`ranlib` cases),
+  with conda-forge zig and with upstream zig (ZIG_BIN from fetch-zig).
+  rzig cross-builds for x86_64-windows-gnu and its unit tests compile
+  for it (not run: no Windows here).
+- slim: build, toolchain, verify-tree, verify-toolchain, smoke,
+  contract, hermetic, package-toolchain and verify-package pass (the
+  base 1,937 files and links, the groups 6 and 3; scenario 3: GNU Make
+  4.4.1, the only make strace saw run).
+- minimal: build, verify-tree, contract and verify-package pass (1,401
+  files; openmp/ there and unused).
+- conda-package (the task's rattler-build command with its output
+  under /data): r-zig-slim and r-zig-toolchain build 8 build and pass
+  their tests; build.sh's zig-toolchain.sh says "nothing to install",
+  and test-toolchain.R's static-library package (AR and RANLIB, rzig)
+  links and loads. The first conda-package run of step 3 (linux-64
+  only; C22 stays kappa's).
+- pixi.lock: sha256 fbb64b7b...a68bb96 before and after. The code diff
+  as left (records left out, compile-tree.sh included) has sha256
+  8a1a5170...3f1a8e1; it differs from what the runs used only in
+  Makeconf.win's comment, edited after them, which no linux run reads.
+
+Not run: the Windows-only fixes (Makeconf.win's OBJDUMP, rzig's ar.exe
+and ranlib.exe, the new checks in verify-bundle's Windows scenario 3
+and in test-toolchain.R's Windows block), read twice and checked
+against the template (verify-tree's Makeconf lines and BINPREF scan
+run on it); they join step 3's Windows list for kappa. wheel and
+wheel-test: no wheel file changed.
+
 #### Phase 3 review: steps 1 and 2 (2026-10-10)
 
 An adversarial review of the uncommitted diff against steps 1 and 2 and
@@ -3041,7 +3375,6 @@ Steps:
   since the last PR that bumped. conda-package on all five platforms.
 - feat-no-host-paths PLAN.md: "What remains" 3 points here; the T record
   and the OpenMP note (467-470) updated.
-- installOpenMP's comment (build.zig:2940-2946) updated to B22.
 - This PLAN: status and records with dates and test results.
 - An upstream-zig label run; a last round on linux-64, omicron (both),
   kappa and CI; hand the commit and PR commands to the user.
@@ -3156,7 +3489,9 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   dialog is unobserved.
 - **Packages that use `$(BINPREF)` for a binutils tool** in Makevars.win
   break once the binutils leave TC's top (B24). Not surveyed.
-  `$(BINPREF)gcc-ar` and `gcc-ranlib` keep working (rzig, B43).
+  `$(BINPREF)gcc-ar` and `gcc-ranlib` keep working (rzig, B43), and so
+  do `$(BINPREF)ar` and `ranlib` (rzig's ar.exe and ranlib.exe, for
+  CMake; phase 3's step 3 review).
 - **AR and RANLIB through rzig on Windows** (B43). zig's ar replaces
   GNU ar for every package's static library on Windows. It is what unix
   uses already, but on Windows it is untested with R packages; phase 3

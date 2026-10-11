@@ -263,15 +263,27 @@ B38, B42, B43.
       PLAN.md's "Phase 3 record: P3-C")
 - [ ] The base's TC holds only rzig; Windows adds `zig-ar.exe`,
       `zig-ranlib.exe`, `gcc-ar.exe`, `gcc-ranlib.exe` and drops `zig-cc`
-      and `zig-cxx`; verify-tree.sh's rzig names (76) follow
+      and `zig-cxx`; verify-tree.sh's rzig names (76) follow (step 3,
+      2026-10-10, uncommitted: TC holds only rzig, the four names added,
+      and `ar.exe` and `ranlib.exe` for CMake, which looks for them beside
+      CC (step 3's review); the names in verify-helpers.sh's
+      `rzig_names`; dropping `zig-cc` and `zig-cxx` is step 4's)
 - [ ] rzig routing check (B24): dlltool (zig dlltool, GNU long options
       and `--as`), windres (zig rc behind a windres-syntax front), strip
       (zig objcopy), nm and as (none in zig 0.16.0); move each one that
       passes, here or in a follow-up PR; record the result in PLAN.md
-- [ ] unix etc/Renviron: `PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}`,
+- [x] unix etc/Renviron: `PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}`,
       `MAKE=${MAKE-'make'}` for every flavor (minimal's `R_ZIG_MAKE` goes)
+      (step 3, 2026-10-10, uncommitted: the file's last line; tested on
+      linux-64, PLAN.md's "Phase 3 record: step 3")
 - [ ] Windows etc/Rcmd_environ:
       `PATH="${R_CUSTOM_TOOLS_PATH:-${R_HOME}/bin/toolchain/usr/bin};${PATH}/"`
+      (step 3, 2026-10-10, uncommitted: through the helper
+      `R_ZIG_TOOLS_PATH`, since Renviron.c expands only a whole `${...}`
+      default (C16); `R_ZIG_RC` names `binutils/windres.exe`; implemented,
+      not built or checked yet: verify-tree.sh's Rcmd_environ lines and
+      verify-bundle's PATH run check (C27) need kappa; PLAN.md's "Phase 3
+      record: step 3")
 - [ ] Makeconf.win: AR (103) `$(BINPREF)zig-ar`, RANLIB (213)
       `$(BINPREF)zig-ranlib`; LTO gcc-ar/gcc-ranlib (267, 269) unchanged
       (now rzig); NM (78, 204) → `binutils/nm.exe`; LTO gcc-nm (268)
@@ -279,41 +291,69 @@ B38, B42, B43.
       STRIP_* (251-252) → `binutils/` (or rzig for moved tools);
       PKG_CONFIG (75) bare `pkg-config` (found in `TC/usr/bin` on PATH,
       like sed; conda's is in `Library/bin`); BINPREF for gcc/g++ and
-      rzig's names
+      rzig's names (step 3, 2026-10-10, uncommitted: AR and RANLIB with
+      `.exe`, `$(BINPREF)zig-ar.exe`, as CC for CMake (C16); OBJDUMP
+      without `.exe`, which R CMD check adds (sotools.R; step 3's
+      review); RESCOMP with windres' `--preprocessor` arguments; no tool
+      moved to rzig yet; not built or checked on Windows yet; PLAN.md's
+      "Phase 3 record: step 3")
 - [ ] Windows slim documented (B42 a): README and the recipe's summaries
-      say Windows slim has full's content
-- [ ] vendor-libs.sh: Windows libomp.dll trigger on R's OpenMP setting
+      say Windows slim has full's content (step 3: the recipe's
+      r-zig-slim `about:`; README is step 5's)
+- [x] vendor-libs.sh: Windows libomp.dll trigger on R's OpenMP setting
+      (step 3, 2026-10-10, uncommitted: `^SHLIB_OPENMP_CFLAGS = *-` in
+      etc/x64/Makeconf; PLAN.md's "Phase 3 record: step 3")
 - [ ] Patches 0009 and 0010 call the check mode (compilers and build
       tools); 0009's fallback removed; 0010's `command -v` replaced
-- [ ] groups.zig (B35): unix's build-tools standalone line names
+- [x] groups.zig (B35): unix's build-tools standalone line names
       `R-<ver>-<plat>-build-tools.tar.gz`; decide where the preflight
-      shows a user's R_ZIG_TOOLCHAIN_HINT (rzig does not read it)
-- [ ] Check mode lines on Windows, before the preflight shows them: one
+      shows a user's R_ZIG_TOOLCHAIN_HINT (rzig does not read it) (step 3,
+      2026-10-10, uncommitted: Windows' line names its .zip (binutils) and
+      the compilers line the compilers archive for OpenMP (C19); the hint:
+      only in 0009's rzig-missing branch until phase 4, which prints a
+      user's own as a `hint:` line after rzig's text (PHASE3 C8); PLAN.md's "Phase 3 record: step 3")
+- [x] Check mode lines on Windows, before the preflight shows them: one
       path separator (find_zig joins with `\`, rzig's own path has `/`);
       a zig that cannot start says so, not "does not say its zig version"
+      (step 3, 2026-10-10, uncommitted: `/` only, display only; "did not
+      run: <reason>", exit 1; plus the Windows binutils in the build-tools
+      check; unit tests run on linux-64, not yet on kappa, PLAN.md's "Phase 3 record: step 3")
 - [x] package-standalone.sh: base archive + compilers + build-tools
       archives, `.sha256` each (step 2: `package-standalone.sh
       toolchain`, pixi task `package-toolchain`)
 - [ ] hermetic-check.sh: the R tree is the base, nothing deleted
-- [ ] verify-tree.sh: base TC = rzig only; toolchain tree records,
+- [x] verify-tree.sh: base TC = rzig only; toolchain tree records,
       closures (OS, own directory, base runtime), glibc 2.28 ceiling
       (the toolchain tree's part: verify-toolchain.sh, step 2; the base's
-      and the move of the 2.28 tier: step 3)
-- [ ] verify-bundle.sh: the three scenarios (scenario 2 takes zig from
+      and the move of the 2.28 tier: step 3, 2026-10-10, uncommitted,
+      with the Makeconf, Renviron and Rcmd_environ lines and OpenMP's
+      runtime; tested on linux-64, PLAN.md's "Phase 3 record: step 3")
+- [x] verify-bundle.sh: the three scenarios (scenario 2 takes zig from
       `ZIG_BIN=$ZIG` and flang from the env until phases 5 and 6; Windows
       scenario 3 takes sh/make from the env until phase 7); file-list
-      check
-- [ ] conda: build.sh runs the toolchain step into `$PREFIX` (Windows
-      binutils); packages unchanged until phase 4, no bump
-- [ ] make-wheel.py: make from the toolchain tree; wheel-test checks
-      `Sys.which("make")`
+      check (step 3, 2026-10-10, uncommitted: scenario 1 asserts the check
+      mode's exit codes, its texts from step 4; tested on linux-64 slim
+      and minimal, both zigs for slim; Windows and macOS untested,
+      PLAN.md's "Phase 3 record: step 3")
+- [x] conda: build.sh runs the toolchain step into `$PREFIX` (Windows
+      binutils); packages unchanged until phase 4, no bump (step 3,
+      2026-10-10, uncommitted; test-toolchain.R's static-library package
+      and Windows records check; conda-package passes on linux-64 (step
+      3's review), C22 and the Windows checks on kappa)
+- [x] make-wheel.py: make from the toolchain tree; wheel-test checks
+      `Sys.which("make")` (step 3, 2026-10-10, uncommitted:
+      `--toolchain-prefix`, only rzig taken from the R tree's TC; tested
+      on linux-64, PLAN.md's "Phase 3 record: step 3")
 - [ ] CI: `toolchain` job per subdir in build.yaml; the `build` job (all
       legs) `needs:` it; packaging legs download their groups, run the
       scenarios, upload base and group archives (short retention);
       upstream-zig.yaml gets its own toolchain job
 - [ ] kappa and windows-latest: a static-library package through
       `$(AR)`/`$(RANLIB)` (rzig), an `--use-LTO` build, and the packages
-      that use each tool the routing check moved
+      that use each tool the routing check moved; stress RcppParallel
+      with no ar on PATH (CMake finds rzig's `ar.exe` beside CC), and
+      `R CMD check` of a package with a DLL (its compiled-code check runs
+      `binutils/objdump.exe`, no "requires 'objdump.exe'" warning)
 - [ ] Tested: linux-64 (slim, minimal, wheel, conda-package), omicron
       (osx-arm64 slim and minimal, osx-64 slim), kappa, CI
 
@@ -459,7 +499,6 @@ Needs (answered): B14 (a), with B37 (a).
       the last bump; conda-package on all five platforms
 - [ ] feat-no-host-paths PLAN.md: What remains 3 points here; the T
       record and the OpenMP note (467-470) updated
-- [ ] installOpenMP's comment updated to B22
 - [ ] This PLAN.md: status and records with dates and test results
 - [ ] upstream-zig label run green
 - [ ] Last round: linux-64, omicron (osx-arm64, osx-64), kappa, CI all

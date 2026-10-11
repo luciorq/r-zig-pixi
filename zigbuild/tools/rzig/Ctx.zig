@@ -101,6 +101,11 @@ pub const Output = struct {
     /// What it printed, with the trailing newlines removed as `$(...)`
     /// does; "" when it could not run.
     stdout: []const u8,
+    /// Why it did not run to an exit of its own, for check.zig's "did not
+    /// run": the error that kept it from starting (InvalidExe for a file
+    /// that is no program), or the signal that ended it. null when it
+    /// exited, whatever its code.
+    not_run: ?[]const u8 = null,
 };
 
 /// `argv > /dev/null`: run a program, its stdin and stdout discarded, its
@@ -132,15 +137,16 @@ pub fn capture(ctx: *const Ctx, argv: []const []const u8) Output {
         .stdout = .pipe,
         .stderr = .ignore,
         .create_no_window = true,
-    }) catch return .{ .ok = false, .stdout = "" };
+    }) catch |err| return .{ .ok = false, .stdout = "", .not_run = @errorName(err) };
     defer child.kill(ctx.io);
     var buf: [4096]u8 = undefined;
     var r = child.stdout.?.readerStreaming(ctx.io, &buf);
-    const out = r.interface.allocRemaining(ctx.arena, .limited(1 << 20)) catch "";
-    const term = child.wait(ctx.io) catch return .{ .ok = false, .stdout = mem.trimEnd(u8, out, "\n") };
-    const ok = switch (term) {
-        .exited => |code| code == 0,
-        else => false,
+    const out = mem.trimEnd(u8, r.interface.allocRemaining(ctx.arena, .limited(1 << 20)) catch "", "\n");
+    const term = child.wait(ctx.io) catch |err| return .{ .ok = false, .stdout = out, .not_run = @errorName(err) };
+    return switch (term) {
+        .exited => |code| .{ .ok = code == 0, .stdout = out },
+        .signal => |sig| .{ .ok = false, .stdout = out, .not_run = ctx.fmt("killed by signal {d}", .{@intFromEnum(sig)}) catch "killed by a signal" },
+        .stopped => |sig| .{ .ok = false, .stdout = out, .not_run = ctx.fmt("stopped by signal {d}", .{@intFromEnum(sig)}) catch "stopped by a signal" },
+        .unknown => |status| .{ .ok = false, .stdout = out, .not_run = ctx.fmt("ended with status {d}", .{status}) catch "ended with an unknown status" },
     };
-    return .{ .ok = ok, .stdout = mem.trimEnd(u8, out, "\n") };
 }

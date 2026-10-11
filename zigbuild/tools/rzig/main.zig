@@ -9,13 +9,17 @@
 //!   zig-fc            flang    (macOS: the floor); a shared link of
 //!                              objects: zig cc as zig-cc, plus the
 //!                              static Fortran runtime (F3c, fortran.zig)
-//!   zig-ar, gcc-ar    zig ar   (macOS: seeds a missing archive)
+//!   zig-ar, gcc-ar,   zig ar   (macOS: seeds a missing archive)
+//!     ar
 //!   zig-ranlib,       zig ranlib
-//!     gcc-ranlib
+//!     gcc-ranlib, ranlib
 //!   rzig <name> ...   the same, naming the tool explicitly
 //!
 //! gcc-ar and gcc-ranlib are the names Makeconf.win's LTO lines use
-//! (feat-standalone-toolchain B43); phase 3 installs those Windows copies.
+//! (feat-standalone-toolchain B43); Windows has those copies from phase 3.
+//! ar and ranlib are the names CMake looks for beside the C compiler
+//! before PATH (CMakeFindBinUtils): Windows has ar.exe and ranlib.exe
+//! beside gcc.exe, R CMD config CC, where MinGW's were before phase 3.
 //!
 //! zig is found by find_zig.zig: ZIG_BIN, the compilers group's zig/ in
 //! rzig's own directory, the environment's bin, PATH, python3 -m ziglang.
@@ -26,9 +30,11 @@
 //!
 //! build.zig installs it under those names into R_HOME/bin/toolchain, the
 //! directory Makeconf names (Windows: gcc.exe and g++.exe, Makeconf.win's
-//! $(BINPREF)gcc and g++, and zig-fc.exe, its FC). On unix rzig replaces
-//! itself with the program it runs, zig or flang (execve); on Windows it
-//! runs it and exits with its exit code.
+//! $(BINPREF)gcc and g++, zig-fc.exe, its FC, zig-ar.exe and
+//! zig-ranlib.exe, its AR and RANLIB, gcc-ar.exe and gcc-ranlib.exe, and
+//! ar.exe and ranlib.exe for CMake).
+//! On unix rzig replaces itself with the program it runs, zig or flang
+//! (execve); on Windows it runs it and exits with its exit code.
 //!
 //! The compilers own the compile environment (F3b): zig-cc and zig-cxx
 //! add the include/ and lib/ (and, for a conda env on unix, an rpath into
@@ -88,7 +94,8 @@ const Tool = enum {
             .{ "zig-cxx", .cxx },       .{ "g++", .cxx },
             .{ "zig-fc", .fc },         .{ "zig-ar", .ar },
             .{ "zig-ranlib", .ranlib }, .{ "gcc-ar", .ar },
-            .{ "gcc-ranlib", .ranlib },
+            .{ "gcc-ranlib", .ranlib }, .{ "ar", .ar },
+            .{ "ranlib", .ranlib },
         });
         return map.get(name);
     }
@@ -106,7 +113,7 @@ const Tool = enum {
 };
 
 const usage =
-    \\usage: zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib|gcc|g++|gcc-ar|gcc-ranlib [args...]
+    \\usage: zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib|gcc|g++|gcc-ar|gcc-ranlib|ar|ranlib [args...]
     \\       <one of those names> --rzig-check[=fortran|build-tools]
     \\       rzig <one of those names> [args...]
     \\
@@ -349,15 +356,19 @@ test toolName {
     for ([_][]const u8{ "zig-cc", "gcc.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .cc);
     for ([_][]const u8{ "zig-cxx", "g++.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .cxx);
     for ([_][]const u8{ "zig-fc", "zig-fc.exe", "C:/env/Library/lib/R/bin/toolchain/zig-fc.EXE" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .fc);
-    try std.testing.expect(Tool.fromName(toolName("zig-ar")) == .ar);
-    try std.testing.expect(Tool.fromName(toolName("zig-ranlib")) == .ranlib);
+    // Makeconf.win's AR and RANLIB (B43): zig-ar.exe and zig-ranlib.exe
+    for ([_][]const u8{ "zig-ar", "zig-ar.exe", "C:/env/Library/lib/R/bin/toolchain/zig-ar.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .ar);
+    for ([_][]const u8{ "zig-ranlib", "zig-ranlib.exe", "C:/env/Library/lib/R/bin/toolchain/zig-ranlib.EXE" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .ranlib);
     // Makeconf.win's LTO names (B43): zig-ar and zig-ranlib, in messages too
     for ([_][]const u8{ "gcc-ar", "gcc-ar.exe", "C:/env/Library/lib/R/bin/toolchain/gcc-ar.EXE" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .ar);
     for ([_][]const u8{ "gcc-ranlib", "gcc-ranlib.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .ranlib);
     try std.testing.expectEqualStrings("zig-ar", Tool.fromName("gcc-ar").?.shimName());
     try std.testing.expectEqualStrings("zig-ranlib", Tool.fromName("gcc-ranlib").?.shimName());
-    // gcc-nm is not one (B43-2): conda-forge's, if a package needs it
-    for ([_][]const u8{ "gcc-nm", "gcc-nm.exe", "nm", "ar", "ranlib" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == null);
+    // ar.exe and ranlib.exe, what CMake finds beside gcc.exe: zig-ar and zig-ranlib too
+    for ([_][]const u8{ "ar.exe", "C:/env/Library/lib/R/bin/toolchain/ar.EXE" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .ar);
+    for ([_][]const u8{ "ranlib.exe", "C:/env/Library/lib/R/bin/toolchain/ranlib.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .ranlib);
+    // gcc-nm and nm are not (B43-2, B24): conda-forge's binutils/nm.exe
+    for ([_][]const u8{ "gcc-nm", "gcc-nm.exe", "nm", "nm.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == null);
     // no other Fortran name: FC is zig-fc, flang and gfortran stay themselves
     for ([_][]const u8{ "flang", "gfortran.exe", "zig-f77" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == null);
     // 8.3 short names name no tool; the long path does (R1, Windows only)

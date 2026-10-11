@@ -131,6 +131,70 @@ if (!windows) {
 
 }
 
+## A package that builds a static library with $(AR) and $(RANLIB) and
+## links it into its shared library, as packages with a bundled C library
+## do. Both are rzig (zig ar, zig ranlib) on every OS; on Windows since
+## feat-standalone-toolchain phase 3 (B43: zig-ar.exe and zig-ranlib.exe,
+## where MinGW's ar and ranlib were), and whether zig ar's archives link
+## there is B43's risk. The library's source is in a subdirectory, outside
+## the package's OBJECTS, so its symbol comes from the archive alone.
+for (v in c("AR", "RANLIB")) {
+    tool <- cfg(v)
+    stopifnot(basename(dirname(tool)) == "toolchain",
+              basename(tool) == paste0("zig-", tolower(v), if (windows) ".exe"))
+}
+pa <- mkpkg("rzigar", list(file = "f.c",
+    code = c("#include <Rinternals.h>", "int rzig_foo(void);",
+             "SEXP rzig_ar(void) { return ScalarInteger(rzig_foo()); }"),
+    R = 'f <- function() .Call("rzig_ar")'),
+    c("PKG_LIBS = foo/libfoo.a",
+      "$(SHLIB): foo/libfoo.a",
+      "foo/libfoo.a: foo/foo.o",
+      "\t$(AR) cr $@ foo/foo.o",
+      "\t$(RANLIB) $@"))
+dir.create(file.path(pa, "src", "foo"))
+writeLines("int rzig_foo(void) { return 42; }", file.path(pa, "src", "foo", "foo.c"))
+install.packages(pa, repos = NULL, type = "source", lib = lib)
+stopifnot(rzigar::f() == 42L)
+cat("toolchain: AR and RANLIB are rzig; a static library built with them links and loads: OK\n")
+
+if (windows) {
+    ## The binutils Makeconf.win names by path (NM, DLLTOOL, RESCOMP,
+    ## OBJDUMP, STRIP_*) are conda-forge's MinGW copies in
+    ## R_HOME/bin/toolchain/binutils/, which this package owns, with the
+    ## records of where they come from: SOURCES names their package and its
+    ## sha256, LICENSES/ holds its licences (feat-standalone-toolchain B24,
+    ## B41). nm runs, loading zstd.dll from this env's Library/bin.
+    nm <- cfg("NM")
+    stopifnot(basename(nm) == "nm.exe", basename(dirname(nm)) == "binutils",
+              basename(dirname(dirname(nm))) == "toolchain", file.exists(nm))
+    bu <- file.path(R.home(), "bin", "toolchain", "binutils")
+    stopifnot(file.exists(file.path(bu, paste0(c("nm", "dlltool", "as", "strip", "windres", "objdump"), ".exe"))))
+    src <- readLines(file.path(bu, "SOURCES"))
+    i <- match("package: binutils_impl_win-64", src)
+    stopifnot(!is.na(i))
+    blk <- src[i:length(src)]
+    blk <- blk[cumsum(blk == "") == 0L]
+    stopifnot(any(grepl("^sha256: [0-9a-f]{64}$", blk)),
+              length(list.files(file.path(bu, "LICENSES", "binutils_impl_win-64"), recursive = TRUE)) > 0L)
+    out <- system2(nm, "--version", stdout = TRUE)
+    stopifnot(grepl("GNU nm", out[1L], fixed = TRUE))
+    cat("toolchain: NM is", nm, "and binutils/ has its SOURCES (binutils_impl_win-64) and LICENSES: OK\n")
+    ## R CMD check's DLL check reads OBJDUMP as sotools.R's
+    ## read_symbols_from_dll does: R CMD config's value, kept only when it
+    ## plus ".exe" is a file (Makeconf.win names objdump without .exe).
+    od <- cfg("OBJDUMP")
+    stopifnot(basename(od) == "objdump", basename(dirname(od)) == "binutils",
+              file.exists(paste0(od, ".exe")),
+              length(tools:::read_symbols_from_dll(file.path(R.home("bin"), "R.dll"))) > 0L)
+    used <- get0("DLL_nm", envir = tools:::read_symbols_from_dll_state, inherits = FALSE)
+    stopifnot(!is.null(used), normalizePath(paste0(trimws(used), ".exe")) == normalizePath(paste0(od, ".exe")))
+    ## CMake looks for ar and ranlib beside the C compiler before PATH
+    ## (CMakeFindBinUtils): rzig's ar.exe and ranlib.exe beside gcc.exe.
+    stopifnot(file.exists(file.path(dirname(cfg("CC")), c("ar.exe", "ranlib.exe"))))
+    cat("toolchain: R CMD check reads R.dll's imports with OBJDUMP,", od, "; ar.exe and ranlib.exe beside CC: OK\n")
+}
+
 ## Fortran. Internal formatted I/O needs the runtime (_FortranAio*): a
 ## dropped -lflang_rt.runtime fails the package's load.
 fw <- list(file = "s.f",

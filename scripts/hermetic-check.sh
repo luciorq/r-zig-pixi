@@ -34,6 +34,8 @@
 # through the shipped trust rule; Windows: Tcl/Tk) and zig-build.sh's
 # vendor-libs.sh copies the env's shared libraries (Windows: conda's DLLs
 # into bin/x64) after every build; package-standalone.sh only archives it.
+# verify-bundle.sh runs it once more on the extracted base archive
+# (R_INSTALL_PREFIX; PHASE3 section 8, scenario 1).
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
 

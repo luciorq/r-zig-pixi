@@ -72,11 +72,28 @@ ifdef USE_LLVM
   endif
 endif
 CCBASE = $(if $(USE_LLVM),clang,gcc)
-PKG_CONFIG = $(BINPREF)pkg-config
-DLLTOOL = $(BINPREF)$(LLVMPREF)dlltool --as $(BINPREF)$(LLVMPREF)as $(DT_ARCH)
+## r-zig: these lines and AR, NM, OBJDUMP, RANLIB and STRIP_* below name
+## the tools r-zig ships, by file (feat-standalone-toolchain B24, B43).
+## The MinGW binutils are the build-tools group's conda-forge copies in
+## R_HOME/bin/toolchain/binutils/, each named by its path, not through
+## BINPREF, which is rzig's directory, or LLVMPREF (B24). OBJDUMP alone
+## has no .exe: R CMD check takes R CMD config OBJDUMP only when
+## OBJDUMP.exe is a file (sotools.R's read_symbols_from_dll, written for
+## upstream's OBJDUMP, which has none), and R's system() and sh run
+## objdump.exe from it. AR and RANLIB are rzig's zig-ar.exe and
+## zig-ranlib.exe, as on unix, .exe included as for CC (CMake); the LTO
+## block's gcc-ar and gcc-ranlib are rzig too, and its gcc-nm names a
+## file that does not ship (B43, B43-2). PKG_CONFIG is bare, found on
+## PATH as SED is (B43-3). RESCOMP hands windres rzig's gcc.exe as its
+## preprocessor, with the arguments windres gives its own default one,
+## since windres looks for gcc beside itself and then on PATH; that path
+## relies on R CMD's 8.3 R_HOME when R_HOME has a space, as
+## Rcmd_environ's RCFLAGS do (S15).
+PKG_CONFIG = pkg-config
+DLLTOOL = $(R_HOME)/bin/toolchain/binutils/dlltool.exe --as $(R_HOME)/bin/toolchain/binutils/as.exe $(DT_ARCH)
 DLLTOOLFLAGS = -k
-NM = $(BINPREF)$(LLVMPREF)nm
-RESCOMP = $(BINPREF)$(LLVMPREF)windres $(RC_ARCH)
+NM = $(R_HOME)/bin/toolchain/binutils/nm.exe
+RESCOMP = $(R_HOME)/bin/toolchain/binutils/windres.exe --preprocessor=$(BINPREF)gcc.exe --preprocessor-arg=-E --preprocessor-arg=-xc --preprocessor-arg=-DRC_INVOKED $(RC_ARCH)
 ## MAIN_LD needs to be set by the package
 LINKER = $(MAIN_LD)
 ## as a default
@@ -103,7 +120,7 @@ TCL_VERSION = 86t
 # was a reference to Rzlib.dll in R < 3.2.0
 ZLIB_LIBS = -lz
 
-AR = $(BINPREF)$(LLVMPREF)ar
+AR = $(BINPREF)zig-ar.exe
 BLAS_LIBS = -L"$(R_HOME)/$(IMPDIR)" -lRblas
 C_VISIBILITY = 
 ## r-zig: the compilers by their file names, .exe included: CMake takes
@@ -206,16 +223,16 @@ LTO_OPT =
 # MAIN_LINK = $(MAIN_LD) $(MAIN_LDFLAGS) $(LDFLAGS)
 # assume suitable mkdir on PATH (e.g. from Msys2)
 MKINSTALLDIRS = mkdir -p
-NM = $(BINPREF)nm
+NM = $(R_HOME)/bin/toolchain/binutils/nm.exe
 ## There is no ObjC support in the recommended toolchain,
 ## but if a toolchain had support, this it what it would be.
 OBJC = $(CC)
 OBJCFLAGS = -O2
 OBJC_LIBS = -lobjc
 OBJCXX =
-OBJDUMP = $(BINPREF)objdump
+OBJDUMP = $(R_HOME)/bin/toolchain/binutils/objdump
 R_ARCH = @R_ARCH@
-RANLIB = $(BINPREF)ranlib
+RANLIB = $(BINPREF)zig-ranlib.exe
 SAFE_FFLAGS = -O2
 SED = sed
 ## it seems some makes (but not ours) get upset if SHELL is set.
@@ -253,8 +270,8 @@ SHLIB_OPENMP_CXXFLAGS = @OPENMP@
 SHLIB_OPENMP_FCFLAGS = @OPENMP@
 SHLIB_OPENMP_FFLAGS = @OPENMP@
 SHLIB_PTHREAD_FLAGS = @PTHREAD@
-STRIP_SHARED_LIB = $(BINPREF)strip --strip-unneeded
-STRIP_STATIC_LIB = $(BINPREF)strip --strip-debug
+STRIP_SHARED_LIB = $(R_HOME)/bin/toolchain/binutils/strip.exe --strip-unneeded
+STRIP_STATIC_LIB = $(R_HOME)/bin/toolchain/binutils/strip.exe --strip-debug
 TCLTK_CPPFLAGS = -I "$(TCL_HOME)/include" -DWin32
 TCLTK_LIBS = -L"$(TCL_HOME)/bin" -ltcl$(TCL_VERSION) -ltk$(TCL_VERSION)
 

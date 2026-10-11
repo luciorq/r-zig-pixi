@@ -16,7 +16,9 @@ source:
   - path: ../scripts
     target_directory: scripts
   # build.zig/zigbuild/: scripts/zig-build.sh's own build system (recipe/
-  # build.sh drives it since Milestone 5's default-path swap). Without
+  # build.sh drives it since Milestone 5's default-path swap), and
+  # zigbuild/toolchain/, the toolchain build build.sh runs after it
+  # (scripts/zig-toolchain.sh; feat-standalone-toolchain B30). Without
   # these explicitly listed, a local `rattler-build build` still
   # "succeeds" — `zig build` walks UP parent directories looking for
   # build.zig when it's missing from the sandbox's own work dir, and
@@ -149,11 +151,13 @@ build:
   number: 8
 
 outputs:
-  # One build (scripts/zig-build.sh), two packages split by
-  # directory: the toolchain package owns R_HOME/bin/toolchain, which
-  # Makeconf points at, and the compiler run dependencies; everything else
-  # is R. Without the toolchain, installing a package that has compiled
-  # code stops with the preflight message (zigbuild/patches/) naming it.
+  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), two
+  # packages split by directory: the toolchain package owns
+  # R_HOME/bin/toolchain, which Makeconf points at (on win-64 with
+  # binutils/, the MinGW binutils Makeconf.win names, B41), and the
+  # compiler run dependencies; everything else is R. Without the
+  # toolchain, installing a package that has compiled code stops with the
+  # preflight message (zigbuild/patches/) naming it.
   - staging:
       name: r-zig-build
     requirements:
@@ -232,10 +236,13 @@ outputs:
         # libflang_rt.runtime.a on every platform, see build.zig's
         # linkFortranRt), must be in host too; pinned as in build
         - flang-rt-zig ==23.1.1 *_10
-        # build.zig copies the binutils tools (windres/ld/nm/dlltool/...) from
-        # $PREFIX/Library/bin into lib/R/bin/toolchain for the package-
-        # compilation contract, so they must be in *host* too (gfortran used
-        # to drag them in here; conda-package win-64 failed with "unable to
+        # The toolchain build (zigbuild/toolchain/build.zig, run by build.sh
+        # into this prefix) copies its nm, dlltool, as, strip, windres and
+        # objdump from $PREFIX/Library/bin into R_HOME/bin/toolchain/
+        # binutils/, where Makeconf.win names them, with SOURCES and
+        # LICENSES/ from its conda-meta record and package (feat-standalone-
+        # toolchain B24, B41), so it must be in *host* too (gfortran used
+        # to drag it in here; conda-package win-64 failed with "unable to
         # update file from ...x86_64-w64-mingw32-windres.exe: FileNotFound"
         # the moment it left).
         - if: win
@@ -433,6 +440,16 @@ outputs:
           recipe:
             - test-win.R
             - test-preflight.R
+    # Windows builds R with full's content, under the name slim on every
+    # channel (feat-standalone-toolchain B42 a); a Windows slim that is
+    # really slim is a later aim.
+    about:
+      summary: R built with the zig toolchain (headless slim profile; Windows slim has full's content)
+      description: |
+        R built from source with the zig toolchain, in the headless slim
+        profile: no X11, Tcl/Tk, JPEG, TIFF or NLS. Windows slim has full's
+        content (tcltk, jpeg, tiff, NLS): R's Windows build has no switches
+        to leave them out.
 
 
   - package:
@@ -511,7 +528,7 @@ outputs:
           recipe:
             - test-toolchain.R
     about:
-      summary: Compilers for r-zig-slim (zig, flang, make and R_HOME/bin/toolchain's compiler front)
+      summary: Compilers for r-zig-slim (zig, flang, make and R_HOME/bin/toolchain's compiler front; on Windows also MinGW binutils)
 
 about:
   homepage: https://www.r-project.org

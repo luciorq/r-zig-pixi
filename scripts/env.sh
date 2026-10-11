@@ -80,6 +80,13 @@ group_dirs() {
     *) echo "error: no toolchain group named '$1'" >&2; return 1 ;;
   esac
 }
+# The compile tree (PHASE3 open point B (a); scripts/compile-tree.sh): a
+# copy of the flavor's R tree with the toolchain tree's group directories,
+# but zig/ and flang/, in its R_HOME/bin/toolchain. contract and stress
+# compile packages with it, since the R tree is the base alone (B19) and
+# Windows' Makeconf names the build-tools group's binutils by their path
+# under R_HOME (B24). Under build/, not dist/: it never ships.
+COMPILE_TREE="$BUILD_DIR/compile-tree/$FLAVOR/$TOP"
 # The bash compiler shims, for configure-only.sh's capture (gen-subst.sh
 # turns this path into @ZR_TOOLCHAIN@). What gets installed is rzig
 # (zigbuild/tools/rzig/), which parity-test.sh holds to these.

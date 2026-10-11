@@ -10,12 +10,37 @@
 # An archive's members that are files or links, one per line, as stored
 # (R-<ver>-zig/...): not its directories, which every archive of a tree
 # repeats (zip stores them as members of their own). The lists of archives
-# extracted into one directory compare on these (PHASE3 C6).
+# extracted into one directory compare on these (PHASE3 C6), in
+# unpack-toolchain.sh and verify-bundle.sh.
 archive_files() {
   case "$1" in
     *.zip) unzip -Z1 "$1" ;;
     *) tar -tzf "$1" ;;
   esac | awk '!/\/$/'
+}
+
+# A tree's files and links as archive_files lists an archive made of it
+# from its parent (package-standalone.sh): its own name, then the path in
+# it (R-<ver>-zig/...), one per line, no directories. verify-bundle.sh
+# holds the base archive's list to the R tree's.
+tree_files() {
+  (cd "$1/.." && find "$(basename "$1")" ! -type d)
+}
+
+# The names rzig is installed under in R_HOME/bin/toolchain (build.zig's
+# installRzig) on this OS, one line: the names Makeconf runs it by, and
+# nothing else is there (feat-standalone-toolchain B19, B30). Windows:
+# gcc.exe and g++.exe (CC, CXX), zig-fc.exe (FC), zig-ar.exe and
+# zig-ranlib.exe (AR, RANLIB) and the LTO block's gcc-ar.exe and
+# gcc-ranlib.exe (B43), ar.exe and ranlib.exe (what CMake finds beside
+# CC), and the extensionless zig-cc and zig-cxx until the compile
+# preflight looks for gcc.exe (PHASE3 step 4).
+rzig_names() {
+  if [ "$OS" = windows ]; then
+    echo "gcc.exe g++.exe zig-fc.exe zig-ar.exe zig-ranlib.exe gcc-ar.exe gcc-ranlib.exe ar.exe ranlib.exe zig-cc zig-cxx"
+  else
+    echo "zig-cc zig-cxx zig-fc zig-ar zig-ranlib"
+  fi
 }
 
 # Extract archive $1 into directory $2. unzip -n: an archive extracted

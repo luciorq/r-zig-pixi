@@ -37,11 +37,15 @@ stringi's own ICU).
 
 ## Run it locally
 
-The tree (the dev tree that `pixi run build` makes, with the stress env's
-libraries):
+The tree: the compile tree, build/compile-tree/slim/R-<ver>-zig, with the
+stress env's libraries. The stress task makes it on every run (it depends
+on `compile-tree`) from the dev tree that `pixi run build` makes and the
+toolchain tree's openmp/ and usr/ (Windows: openmp/ and binutils/), so
+both must exist first:
 
 ```sh
 pixi run build
+pixi run toolchain                            # or unpack-toolchain
 pixi run -e stress stress g3                  # a group
 pixi run -e stress stress gsl units           # some packages
 pixi run -e stress stress --skip=heavy        # all rows but the longest
@@ -58,8 +62,8 @@ pixi run -e stress stress --conda=universe g3 # the packages published on prefix
 ```
 
 `--conda` makes the env in `<run dir>/conda` with pixi, then runs `stress.R`
-again with that env's R. The dev tree's R only starts it: any R works for
-that step.
+again with that env's R. The compile tree's R starts it, so `build` and
+`toolchain` must have run first here too.
 
 Useful options (`--help` lists them all):
 

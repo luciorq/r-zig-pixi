@@ -7,6 +7,9 @@
 #     R CMD INSTALL of a package with compiled code stops with the compile
 #     preflight naming r-zig-toolchain (phase T of feat-no-host-paths)
 #   - then r-zig-toolchain (which brings ziglang and GNU make):
+#   - make is the toolchain's R_HOME/bin/toolchain/usr/bin/make, which
+#     etc/Renviron puts first on PATH, and MAKE is plain `make`
+#     (feat-standalone-toolchain B23, B25)
 #   - zig-fc (FC) is shipped, and with no flang it stops with exit 127 and
 #     the compilers group's text, which says pip brings no Fortran, not the
 #     toolchain hint (the toolchain is installed by then), feat-no-host-paths
@@ -20,7 +23,7 @@
 #     and once more with ZIG_BIN pointing nowhere (python3 -m ziglang)
 #   - the compilers (rzig) ignore CONDA_PREFIX, and honour R_ZIG_EXTRA_ENV
 #     (an env's header, -L and rpath), feat-no-host-paths F3b
-#   - uninstalling r-zig-toolchain removes only R_HOME/bin/toolchain
+#   - uninstalling r-zig-toolchain removes only R_HOME/bin/toolchain's files
 # pip fetches ziglang (~100 MB) from PyPI, so this needs network; point
 # PIP_FIND_LINKS at a directory holding the ziglang wheel to avoid that.
 . "$(dirname "$0")/env.sh"
@@ -140,10 +143,15 @@ grep -F "r-zig toolchain is not installed" "$T/preflight.out" | grep -F "pip ins
 echo "== installing $(basename "$tc_wheel") (+ ziglang from PyPI)"
 pip_ install --quiet "$tc_wheel"
 pip_ list 2>/dev/null | grep -iE '^(r-zig|r-zig-toolchain|ziglang) '
+# GNU make is the build-tools group's usr/bin/make, found on PATH: R reads
+# etc/Renviron's PATH line, which puts R_HOME/bin/toolchain/usr/bin first
+# (ahead of a host make, such as Apple's 3.81 in /usr/bin), and MAKE stays
+# `make` (feat-standalone-toolchain B23, B25).
 run Rscript -e '
-  mk <- Sys.getenv("MAKE")
-  stopifnot(file.exists(mk), grepl("bin/toolchain/make$", mk))
-  cat("MAKE =", mk, "\n")
+  mk <- Sys.which("make")
+  stopifnot(nzchar(mk), file.exists(mk), grepl("bin/toolchain/usr/bin/make$", mk),
+            identical(Sys.getenv("MAKE"), "make"))
+  cat("make =", mk, "\n")
 '
 
 echo "== zig-fc: shipped, and with no flang it stops naming flang"
@@ -269,6 +277,10 @@ run "$r_home/bin/Rscript" -e "
 "
 echo "== uninstalling r-zig-toolchain leaves r-zig whole"
 pip_ uninstall --quiet -y r-zig-toolchain
+# No file of it is left under R_HOME/bin/toolchain, rzig's or usr/'s; pip
+# may leave the empty directories (C32).
+left="$(find "$r_home/bin/toolchain" ! -type d 2>/dev/null || true)"
+[ -z "$left" ] || { printf '%s\n' "$left" >&2; echo "error: files left under R_HOME/bin/toolchain after uninstalling r-zig-toolchain" >&2; exit 1; }
 run Rscript -e '
   stopifnot(!file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")))
   stopifnot(file.exists(file.path(R.home(), "etc", "Makeconf")))

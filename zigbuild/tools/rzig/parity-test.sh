@@ -86,7 +86,7 @@ chmod +x "$W/tools/uname" "$W/tools/xcrun"
 tree() {
   local tc=$W/$1/lib/R/bin/toolchain sh=$W/$1/lib/R/bin/bash n
   mkdir -p "$tc" "$sh"
-  for n in zig-cc zig-cxx zig-ar zig-ranlib gcc g++ gcc-ar gcc-ranlib; do cp "$RZIG" "$tc/$n"; done
+  for n in zig-cc zig-cxx zig-ar zig-ranlib gcc g++ gcc-ar gcc-ranlib ar ranlib; do cp "$RZIG" "$tc/$n"; done
   for n in zig-cc zig-cxx zig-ar zig-ranlib; do
     sed "s|/usr/bin/xcrun|$W/tools/xcrun|g" "$shims/$n" > "$sh/$n"
     chmod +x "$sh/$n"
@@ -196,7 +196,7 @@ why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not instal
 run_case() {
   local name=$1 os=$2 tool=$3; shift 3
   local shim=$tool uname_s side status ok=1 t=${CASE_TREE:-tree} obj_want=0 n a
-  case $tool in gcc) shim=zig-cc ;; g++) shim=zig-cxx ;; gcc-ar) shim=zig-ar ;; gcc-ranlib) shim=zig-ranlib ;; esac
+  case $tool in gcc) shim=zig-cc ;; g++) shim=zig-cxx ;; gcc-ar|ar) shim=zig-ar ;; gcc-ranlib|ranlib) shim=zig-ranlib ;; esac
   case $os in linux) uname_s=Linux ;; macos) uname_s=Darwin ;; windows) uname_s=MINGW64_NT-10.0-26100 ;; esac
   local -a env=(HOME="$W/home" LC_ALL=C)
   if declare -p CASE_ENV > /dev/null 2>&1; then env+=("${CASE_ENV[@]}"); else env+=(ZIG_BIN="$STUB"); fi
@@ -578,12 +578,17 @@ run_case "ar and ranlib passthrough" windows zig-ar rcs libw.a a.o
 # Makeconf.win's LTO names (B43): rzig as zig-ar and zig-ranlib
 run_case "gcc-ar: zig ar" windows gcc-ar rcs libw.a a.o
 run_case "gcc-ranlib: zig ranlib" windows gcc-ranlib libw.a
+# ar.exe and ranlib.exe beside gcc.exe, where CMake looks: rzig as zig-ar
+# and zig-ranlib, run as CMake runs them (qc, then ranlib)
+run_case "ar (CMake): zig ar" windows ar qc libw.a a.o
+run_case "ranlib (CMake): zig ranlib" windows ranlib libw.a
 CASE_RESET='rm -f libgnew.a'; CASE_STATE='od -c libgnew.a | head -2'
 run_case "gcc-ar on macOS: zig-ar's seed" macos gcc-ar rcs libgnew.a a.o
 
 # --- the check mode (check.zig): the real binary ----------------------------------
 # a group's tools found: one line on stdout, 0; one missing: its group's
-# text, 127; a zig whose major.minor is not R's (rzig's own): 1
+# text, 127; a zig whose major.minor is not R's (rzig's own), or that does
+# not run: 1
 tc=$W/tree/lib/R/bin/toolchain
 real_zig=$(command -v "${ZIG:-zig}" || :)
 if [ -n "$real_zig" ]; then
@@ -593,27 +598,51 @@ if [ -n "$real_zig" ]; then
     bash -c "mkdir -p '$W/realtc/lib/R/bin/toolchain/zig' && cp '$RZIG' '$W/realtc/lib/R/bin/toolchain/gcc' && ln -sf '$real_zig' '$W/realtc/lib/R/bin/toolchain/zig/zig' &&
       env -i '$W/realtc/lib/R/bin/toolchain/gcc' --rzig-check | grep -qF 'zig-cc: compilers ok: zig ' "
   check "--rzig-check=fortran: no flang, 127, the compilers group" \
-    bash -c "env -i ZIG_BIN='$real_zig' PATH='$W/nothing' '$tc/zig-cc' --rzig-check=fortran 2>&1 >/dev/null | grep -q '^Compiling needs the r-zig compilers for R '; [ \"\${PIPESTATUS[0]}\" = 127 ]"
+    bash -c "env -i ZIG_BIN='$real_zig' PATH='$W/nothing' '$tc/zig-cc' --rzig-check=fortran > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
+      grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err' &&
+      grep -q '^  standalone:  .*LLVM flang on PATH; for OpenMP, extract R-[^ ]*-compilers\.tar\.gz where you extracted R\$' '$W/check.err'"
   check "zig-fc --rzig-check checks flang too" \
     bash -c "cp '$RZIG' '$tc/zig-fc' && env -i ZIG_BIN='$real_zig' PATH='$W/flang' '$tc/zig-fc' --rzig-check | grep -qF '; flang at $W/flang/flang'"
 fi
 check "--rzig-check: no zig, 127, the compilers group" \
-  bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' --rzig-check 2>&1 | grep -q '^zig-cc: no zig (ZIG_BIN, '; [ \"\${PIPESTATUS[0]}\" = 127 ]"
+  bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' --rzig-check > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
+    grep -q '^zig-cc: no zig (ZIG_BIN, ' '$W/check.err'"
 check "--rzig-check: a zig that does not say its version, 1" \
-  bash -c "env -i ZIG_BIN='$STUB' '$tc/zig-cc' --rzig-check 2> /dev/null; [ \$? = 1 ]"
+  bash -c "env -i ZIG_BIN='$STUB' '$tc/zig-cc' --rzig-check > /dev/null 2> '$W/check.err'; [ \$? = 1 ] &&
+    grep -q ' does not say its zig version ' '$W/check.err'"
+: > "$W/notzig"; chmod +x "$W/notzig"   # an executable file that is no program
+check "--rzig-check: a zig that does not run, 1, and why" \
+  bash -c "env -i ZIG_BIN='$W/notzig' '$tc/zig-cc' --rzig-check > /dev/null 2> '$W/check.err'; [ \$? = 1 ] &&
+    grep -qF 'zig-cc: $W/notzig did not run: InvalidExe ' '$W/check.err'"
 prog "$W/zig-other/zig" '[ "$1" = version ] && echo 0.99.0'
 check "--rzig-check: a zig whose major.minor is not R's, 1" \
-  bash -c "env -i ZIG_BIN='$W/zig-other/zig' '$tc/zig-cc' --rzig-check 2>&1 > /dev/null | grep -q ' is zig 0.99.0, not R.s zig '; [ \"\${PIPESTATUS[0]}\" = 1 ]"
+  bash -c "env -i ZIG_BIN='$W/zig-other/zig' '$tc/zig-cc' --rzig-check > /dev/null 2> '$W/check.err'; [ \$? = 1 ] &&
+    grep -q ' is zig 0.99.0, not R.s zig ' '$W/check.err'"
 check "--rzig-check with R_ZIG_NO_PREFLIGHT: no version check, 0" \
   env -i ZIG_BIN="$STUB" R_ZIG_NO_PREFLIGHT=1 "$tc/zig-cc" --rzig-check
 check "--rzig-check=build-tools: make on PATH" \
   bash -c "env -i PATH='$(dirname "$(command -v make)")' '$tc/zig-cc' --rzig-check=build-tools | grep -q '^zig-cc: build-tools ok: make at '"
 check "--rzig-check=build-tools: no make, 127, the build-tools group" \
-  bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' --rzig-check=build-tools 2>&1 | grep -q '^Building packages needs the r-zig build tools for R '; [ \"\${PIPESTATUS[0]}\" = 127 ]"
+  bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' --rzig-check=build-tools > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
+    grep -q '^Building packages needs the r-zig build tools for R ' '$W/check.err' &&
+    grep -q '^  standalone:  extract R-[^ ]*-build-tools\.tar\.gz where you extracted R, or put GNU make on PATH\$' '$W/check.err'"
+# Windows' rules from here (RZIG_OS): make and sh on PATH, and the binutils
+# Makeconf.win names, in rzig's own directory's binutils/ (B24)
+tree winbt/Library
+wtc=$W/winbt/Library/lib/R/bin/toolchain
+win_env="env -i RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$(dirname "$(command -v make)"):$(dirname "$(command -v sh)")'"
+check "--rzig-check=build-tools on Windows: no binutils, 127, the build-tools group" \
+  bash -c "$win_env '$wtc/gcc' --rzig-check=build-tools > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
+    grep -qxF 'zig-cc: no $wtc/binutils/nm.exe' '$W/check.err'"
+mkdir -p "$wtc/binutils"
+for t in nm dlltool as windres strip objdump; do : > "$wtc/binutils/$t.exe"; done
+check "--rzig-check=build-tools on Windows: make, sh and the binutils" \
+  bash -c "$win_env '$wtc/gcc' --rzig-check=build-tools | grep -q '^zig-cc: build-tools ok: make at .*; sh at .*; binutils at $wtc/binutils\$'"
 check "--rzig-check=other: usage, 2" \
   bash -c "env -i '$tc/zig-cc' --rzig-check=other 2> /dev/null; [ \$? = 2 ]"
 check "a compile with no zig: 127, the compilers group" \
-  bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' -c a.c 2>&1 | grep -q '^Compiling needs the r-zig compilers for R '; [ \"\${PIPESTATUS[0]}\" = 127 ]"
+  bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' -c a.c > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
+    grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err'"
 
 echo "== $pass identical, $own identical but for rzig's own-environment -L or compiled object, $deliberate deliberate differences, $fail failed"
 [ "$fail" = 0 ]
