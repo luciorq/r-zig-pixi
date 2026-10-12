@@ -34,15 +34,18 @@ R_VERSION = "4.6.1"
 # resolves a task to the default environment when every environment
 # offering it gets it from the same feature. Every build environment
 # lists this feature in [environments] below.
-# Dev and test runs compile packages against the dev tree, which is the
-# tree that ships: its compilers (rzig) add the include/ and lib/ of the
-# environment R is installed in, which for the dev tree is dist/R-*-zig,
+# Dev and test runs compile packages with the dev tree, which is the tree
+# that ships, or (contract, stress) with the compile tree, its copy with
+# the toolchain groups added: their compilers (rzig) add the include/ and
+# lib/ of the environment R is installed in, which is the tree itself
+# (dist/<flavor>/R-<ver>-zig, build/compile-tree/<flavor>/R-<ver>-zig),
 # not this pixi env. R_ZIG_EXTRA_ENV names one more environment for rzig
-# to add after it (feat-no-host-paths F3b, zigbuild/tools/rzig/
-# environment.zig): the pixi env's headers and libraries, and an rpath
-# into them (it is a conda env), as R installed into a conda env has
-# them. rzig never reads CONDA_PREFIX itself; on Windows it appends
-# /Library. Checks of the shipped tree alone run under env -i.
+# to add after it (feat-no-host-paths F3b,
+# zigbuild/tools/rzig/environment.zig): the pixi env's headers and
+# libraries, and an rpath into them (it is a conda env), as R installed
+# into a conda env has them. rzig never reads CONDA_PREFIX itself; on
+# Windows it appends /Library. Checks of the shipped tree alone run under
+# env -i.
 [feature.pipeline.activation.env]
 R_ZIG_EXTRA_ENV = "$CONDA_PREFIX"
 
@@ -77,39 +80,83 @@ fetch-zig = "bash scripts/fetch-zig.sh"
 # (addCheckStepWindows, which lists what it leaves out and why). The
 # tree's own libraries and Tcl/Tk: build put them in it (F1.7).
 check = { cmd = "bash scripts/zig-build.sh check", depends-on = ["fetch"] }
-# smoke/contract/install/package/verify-package all resolve the zig
-# prefix themselves (mirroring zig-build.sh's own $FLAVOR-based prefix
-# derivation) so callers don't need to know it.
+# The tasks below find the flavor's tree, dist/<flavor>/R-<ver>-zig, in
+# scripts/env.sh (feat-standalone-toolchain B36), so callers need not
+# know it.
 smoke = "bash scripts/zig-smoke.sh"
-# contract: CRAN packages compiled with the installed tree through its
-# Makeconf (R CMD SHLIB/INSTALL: Rcpp, data.table, minqa + OpenMP), on
-# every OS (Windows: etc/x64/Makeconf and R.exe's CMD dispatcher).
-contract = "bash scripts/zig-contract.sh"
+# contract: CRAN packages compiled through Makeconf (R CMD SHLIB/INSTALL:
+# Rcpp, data.table, minqa + OpenMP), on every OS (Windows: etc/x64/Makeconf
+# and R.exe's CMD dispatcher), with the compile tree (compile-tree below):
+# the installed tree and the toolchain tree's openmp/ and build tools.
+contract = { cmd = "bash scripts/zig-contract.sh", depends-on = ["compile-tree"] }
 # `zig build` installs the final tree (feat-no-host-paths PLAN.md, F1);
 # kept as an alias of build for existing commands.
 install = { depends-on = ["build"] }
 # Static checks of that installed tree, run right after build (F1.6):
-# Makeconf, the compilers are rzig, no file of R's own naming the build
-# machine, the CA bundle, rpaths, the glibc and macOS floors, the C++
-# runtime, load commands, minimal's excluded libraries; Windows: Tcl/Tk
-# and the DLL closure. Takes an optional tree path (`pixi run
-# verify-tree -- <dir>`).
+# Makeconf, R_HOME/bin/toolchain holds rzig only (feat-standalone-toolchain
+# B19), the build tools' lines in Makeconf, Renviron and Rcmd_environ
+# (B24, B25, B43), OpenMP's runtime and no omp.h (B22, B40), no file of
+# R's own naming the build machine, the CA bundle, rpaths, the glibc and
+# macOS floors, the C++ runtime, load commands, minimal's excluded
+# libraries; Windows: Tcl/Tk and the DLL closure. Takes an optional tree
+# path (`pixi run verify-tree -- <dir>`).
 verify-tree = "bash scripts/verify-tree.sh"
-# The standalone archive (dist/R-<ver>-<flavor>-<platform>.tar.gz, Windows
-# .zip, plus its sha256): only archives the installed tree, which build
-# made complete on every OS (F1.7: zig build installs the env's runtime
-# data, vendor-libs.sh its shared libraries).
-package = { cmd = "bash scripts/zig-package.sh", depends-on = ["install"] }
-# The archive's own checks: extracted elsewhere, R and packages compiled
-# with it run with nothing from the build env (unix: env -i, TLS with the
-# shipped CA bundle; Windows: rzig's dry runs, and OpenMP C and Fortran
-# packages built with the tree alone, loaded with PATH = bin\x64 +
-# System32).
-verify-package = { cmd = "bash scripts/zig-verify-package.sh", depends-on = ["package"] }
+# The base archive (dist/R-<ver>-<flavor>-<platform>.tar.gz, Windows
+# .zip, plus its sha256; its top directory R-<ver>-zig/, B36): only
+# archives the installed tree, which build made complete on every OS
+# (F1.7: zig build installs the env's runtime data, vendor-libs.sh its
+# shared libraries). It is the base (B19): the toolchain groups are
+# package-toolchain's archives, below.
+package = { cmd = "bash scripts/package-standalone.sh", depends-on = ["install"] }
+# The archives' own checks, in three scenarios (PHASE3 section 8): the
+# base archive extracted elsewhere, then the compilers archive and then
+# the build-tools archive beside it; R and packages compiled with them run
+# with nothing from the build env (unix: env -i, TLS with the shipped CA
+# bundle; Windows: rzig's dry runs, the binutils Makeconf names, OpenMP C
+# and Fortran packages loaded with PATH = bin\x64 + System32), and the
+# install preflight (patch 0009) stops a compiled package with the text
+# of the group it misses, before configure (B26). It needs
+# the group archives dist/R-<ver>-<platform>-{compilers,build-tools}.<ext>
+# with their sha256 (package-toolchain, or in CI the toolchain job's) and
+# does not rebuild them, so CI tests the downloaded ones (B31).
+verify-package = { cmd = "bash scripts/verify-bundle.sh", depends-on = ["package"] }
+# The toolchain tree (feat-standalone-toolchain B30): the toolchain
+# groups' third-party files, each directory with SOURCES and LICENSES/,
+# copied unchanged from this env by their own zig build
+# (zigbuild/toolchain/build.zig) into dist/toolchain/R-<ver>-zig. Phase 3:
+# openmp/ (compilers); unix usr/bin/make, Windows binutils/ (build-tools).
+# Needs no R source; one tree per platform serves every flavor. LICENSES
+# come from pixi's package cache, where the env was installed from.
+toolchain = "bash scripts/zig-toolchain.sh"
+# That build's unit tests: the conda-meta reader and the SOURCES writer.
+# Its configure step runs first, as for `toolchain`, so it also needs the
+# env's conda-meta and the package cache (in CI: setup-pixi's cache: false).
+toolchain-test = "bash scripts/zig-toolchain.sh test"
+# Static checks of the toolchain tree: its layout, SOURCES and LICENSES,
+# each copy's sha256, build paths, the copies' closures and floors.
+verify-toolchain = "bash scripts/verify-toolchain.sh"
+# The group archives (B17), dist/R-<ver>-<platform>-compilers.tar.gz and
+# -build-tools.tar.gz (Windows .zip), plus their sha256: the toolchain
+# tree's group directories, under the base archive's top directory
+# R-<ver>-zig/ (B36). Only archives.
+package-toolchain = { cmd = "bash scripts/package-standalone.sh toolchain", depends-on = ["toolchain"] }
+# The toolchain tree again, from the group archives in dist/ (CI: the
+# toolchain job's artifact), after checking their sha256.
+unpack-toolchain = "bash scripts/unpack-toolchain.sh"
+# The compile tree, build/compile-tree/<flavor>/R-<ver>-zig (PHASE3 open
+# point B): a fresh copy of the installed tree with the toolchain tree's
+# group directories, but zig/ and flang/, in its R_HOME/bin/toolchain.
+# contract and stress compile packages with it: the installed tree is the
+# base alone (B19), and Windows' Makeconf names the build-tools group's
+# binutils under R_HOME (B24). Needs `build` and the toolchain tree
+# (`toolchain`, or `unpack-toolchain`).
+compile-tree = "bash scripts/compile-tree.sh"
 # Tier 0/1 with an empty environment and only the tree's own programs on
 # PATH (unix: <tree>/bin, strace on linux; Windows: bin\x64 plus
-# System32): start R, install without compiling. Runs on a copy of the
-# installed tree, the tree that ships, so it needs no `package` first.
+# System32): start R, install without compiling, and a compiled package
+# stops in the install preflight with rzig's compilers text (B26). Runs
+# on a copy of the installed tree, the tree that ships, so it needs no
+# `package` first.
 hermetic = "bash scripts/hermetic-check.sh"
 # rzig, the compilers in R_HOME/bin/toolchain (zigbuild/tools/rzig/): its
 # unit tests here, and on linux the parity test against the bash shims in
@@ -423,9 +470,11 @@ minimal-check = "bash scripts/check-minimal.sh"
 # Wheel assembly + test: only Python (stdlib zipfile/hashlib, venv, pip).
 # Not the build env: python's own closure (readline, tk, sqlite, ...)
 # has no business being visible to R's configure. The input is the
-# minimal build's installed, vendored tree (`pixi run -e minimal build`);
-# R_BUILD_VARIANT is set here too so env.sh derives the same
-# dist/R-<ver>-minimal-zig prefix.
+# minimal build's installed, vendored tree (`pixi run -e minimal build`),
+# dist/minimal/R-<ver>-zig, and make from the toolchain tree (`pixi run
+# -e minimal toolchain`), dist/toolchain/R-<ver>-zig; R_BUILD_VARIANT is
+# set here too, as env.sh's prefix and make-wheel.py's --prefix default
+# need it.
 [feature.wheel]
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
 
@@ -468,14 +517,21 @@ python = ">=3.9"
 # (never hit the bug there; just a slightly simpler directory name).
 # -c: rattler-build does not read the workspace channels; `universe` is
 # where flang-zig/flang-rt-zig (osx-arm64 Fortran) come from.
-# rm: rattler-build restores the staging output (the R build) from
+# rm: every build starts from an empty dist/conda, as CI's does. Two
+# leftovers made a local rebuild silently test or ship old bits:
+# rattler-build restores the staging output (the R build) from
 # dist/conda/build_cache under a key that does not hash the recipe's
-# `path:` sources (scripts/, zigbuild/, build.zig), so a local rebuild
-# after editing them silently reused the old build (2026-09-30).
+# `path:` sources (scripts/, zigbuild/, build.zig), so a rebuild after
+# editing them reused the old build (2026-09-30); and it indexes
+# dist/conda as it starts and lists a package only under a file name
+# the index lacks, so a rebuild with the same build string kept the old
+# package's sha256, and r-zig-toolchain's test (and any env made from
+# dist/conda) installed the old r-zig-slim from the rattler cache
+# (kappa, 2026-10-11). The cost: every build downloads R's sources.
 # --error-*: two outputs packaging the same file, or a staging file no
 # output takes, fail the build instead of warning (no 0.76.1 build of
 # ours has warned).
-conda-package = "rm -rf dist/conda/build_cache && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id --error-overlapping-files --error-unused-staging-files -c conda-forge -c https://prefix.dev/universe"
+conda-package = "rm -rf dist/conda && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id --error-overlapping-files --error-unused-staging-files -c conda-forge -c https://prefix.dev/universe"
 
 # Channel administration: list/delete published package files. Neither
 # rattler-build nor pixi has CLI support for either operation (upload-
@@ -578,13 +634,16 @@ tbb-devel = "*"
 libheif = "<1.23.4"
 
 # pixi run -e stress stress [target ...] [--conda[=universe]] [--jobs=N] ...
-# The dev tree's R runs stress/stress.R: `pixi run build` first. No
-# depends-on, which would build R inside this env.
+# The compile tree's R runs stress/stress.R (compile-tree: the dev tree
+# with the toolchain tree's openmp/ and build tools, PHASE3 open point B):
+# `pixi run build` and `pixi run toolchain` (or unpack-toolchain) first.
+# It depends on compile-tree, which only copies; a depends-on build would
+# build R inside this env.
 [feature.stress.tasks]
-stress = "dist/R-$R_VERSION-slim-zig/bin/Rscript stress/stress.R"
+stress = { cmd = "build/compile-tree/slim/R-$R_VERSION-zig/bin/Rscript stress/stress.R", depends-on = ["compile-tree"] }
 
 [feature.stress.target.win-64.tasks]
-stress = "dist/R-$R_VERSION-slim-zig/Library/lib/R/bin/x64/Rscript.exe stress/stress.R"
+stress = { cmd = "build/compile-tree/slim/R-$R_VERSION-zig/Library/lib/R/bin/x64/Rscript.exe stress/stress.R", depends-on = ["compile-tree"] }
 
 # The R environments are one solve group, "r": pixi solves them together,
 # per platform, so a package they share is the same version and build in

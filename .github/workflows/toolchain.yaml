@@ -1,0 +1,91 @@
+name: toolchain
+
+# The toolchain groups of one platform (feat-standalone-toolchain B30,
+# B31): built, archived and checked once per platform, then downloaded
+# by every build leg of that platform (build-r.yaml), so the legs test
+# the archives this job made. Called by build.yaml (the env's zig,
+# conda-forge's), by upstream-zig.yaml (upstream zig, PHASE3 C35) and by
+# stress.yaml (C3), each from a toolchain job of its own that its legs
+# need. The toolchain tree, dist/toolchain/R-<ver>-zig, holds the
+# groups' third-party files copied unchanged from the env, each directory
+# with SOURCES and LICENSES/ (zigbuild/toolchain/build.zig): in phase 3
+# openmp/ (compilers), unix usr/bin/make and Windows binutils/
+# (build-tools). It needs no R source, so this job builds no R. No
+# concurrency group here, as build-r.yaml: the callers keep their own.
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: The runner (runs-on)
+        type: string
+        required: true
+      zig:
+        description: "conda: the env's zig; upstream: PyPI's ziglang, the ziglang.org release (pixi run fetch-zig)"
+        type: string
+        default: conda
+
+jobs:
+  # Named after what it builds (the caller names its job after the
+  # runner, so a leg reads "<os> / toolchain"), plus the zig when it is
+  # not the env's.
+  toolchain:
+    name: ${{ inputs.zig == 'upstream' && 'toolchain (upstream zig)' || 'toolchain' }}
+    runs-on: ${{ inputs.os }}
+    # Mostly the env's install, which no cache shortens here (below).
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.11.0
+        with:
+          pixi-version: v0.81.0  # as build-r.yaml, which says why
+          # One env, default: every R env of a platform gives the same
+          # toolchain tree (one solve group, pixi.toml's [environments]).
+          environments: default
+          # No cache: the toolchain build copies each package's licences
+          # and reads its recipe from pixi's package cache (info/licenses,
+          # info/recipe). An env restored from setup-pixi's cache was not
+          # installed from packages on this runner, so that cache is
+          # empty and the build stops (PHASE3 C33).
+          cache: false
+      # Upstream zig (C35): the toolchain build and its unit tests run
+      # with it, as build-r.yaml's upstream legs build R with it, so the
+      # toolchain build is tested with both zigs. Its archives are the
+      # upstream legs' own (the artifact's name ends in -upstream).
+      - name: Upstream zig (ZIG_BIN)
+        if: inputs.zig == 'upstream'
+        shell: bash
+        run: |
+          zig="$(pixi run fetch-zig)"
+          echo "ZIG_BIN=$zig" >> "$GITHUB_ENV"
+      # The toolchain build's unit tests: the conda-meta reader and the
+      # SOURCES writer (zigbuild/toolchain/conda.zig, C31).
+      - name: Toolchain build tests
+        run: pixi run toolchain-test
+      # package-toolchain depends on toolchain: it installs the toolchain
+      # tree, then archives its two groups (B17),
+      # dist/R-<ver>-<platform>-compilers.tar.gz and -build-tools.tar.gz
+      # (Windows .zip), each with its .sha256 and the top directory
+      # R-<ver>-zig/ (B36).
+      - name: Build + archive the toolchain tree (compilers, build-tools)
+        run: pixi run package-toolchain
+      # After the archives, not before: package-toolchain installs the
+      # tree again, so only this order checks the tree that was archived
+      # (C34). Layout, SOURCES and LICENSES/, each copy's sha256, build
+      # paths, the copies' closures and floors (verify-toolchain.sh).
+      - name: Verify the toolchain tree (records, copies, closures)
+        run: pixi run verify-toolchain
+      # The two group archives and their .sha256, under the name
+      # build-r.yaml and stress.yaml download on the same platform. They
+      # are CI's, not a release (B12), but the legs of the same run
+      # download them, and GitHub lets failed jobs be re-run for 30 days
+      # without re-running this job when it passed: kept those 30 days,
+      # still short of a release.
+      - name: Upload the group archives
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolchain-${{ runner.os }}-${{ runner.arch }}${{ inputs.zig == 'upstream' && '-upstream' || '' }}
+          path: |
+            dist/R-*-compilers.*
+            dist/R-*-build-tools.*
+          retention-days: 30
+          if-no-files-found: error

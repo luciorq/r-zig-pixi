@@ -77,6 +77,46 @@ pub fn exeSuffix(ctx: *Ctx, args: Args) !Args {
     return out;
 }
 
+/// An image link's -flto and -flto=<x> (Makeconf.win's LTO_OPT, what R
+/// CMD INSTALL --use-LTO sets), dropped. With it zig 0.16 (conda-forge's
+/// and upstream's) builds its MinGW runtime for LTO as well, and every
+/// x86_64-windows-gnu link of objects compiled with -flto stops at
+/// symbols that runtime then lacks: "lld-link: error: undefined symbol:
+/// wmemchr ... frexpf", from zig cc alone (phase 3's LTO record on
+/// kappa, 2026-10-11; -flto=thin too). Without it zig hands those objects
+/// (LLVM bitcode) to lld all the same, and lld optimizes them together:
+/// the package's code still gets LTO, and zig's runtime is linked as it
+/// is, as GCC's LTO leaves MinGW's runtime alone. Compiles keep -flto; a
+/// command that compiles and links at once compiles without it.
+pub fn noLtoLink(ctx: *Ctx, args: Args) !Args {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (args) |x| {
+        if (mem.eql(u8, x, "-flto") or mem.startsWith(u8, x, "-flto=")) continue;
+        try out.append(ctx.arena, x);
+    }
+    return out.items;
+}
+
+/// zig writes an import library for every DLL it links (and for a
+/// program that exports symbols), beside it, named after the link's
+/// first input: rzig's CFG stub comes first (cfguard.zig), so every
+/// package link left src/guard_dispatch.lib, which R CMD build packs and
+/// R CMD check warns about ("These are unlikely file names for src
+/// files"; kappa, 2026-10-11). GNU ld writes none unless asked, and zig
+/// cc has no flag for none. So an image link that names none
+/// (--out-implib, -implib) names <output>.rzig.lib, which main.zig's run
+/// deletes when zig is done (ctx.discard): no link leaves one, and the
+/// next link of the same output replaces one a killed link left. Through
+/// -Xlinker, as a comma in the output's path would split a -Wl, flag.
+pub fn implib(ctx: *Ctx, args: Args) !Args {
+    if (cmdline.anyContains(args, "-implib")) return &.{};
+    const i = cmdline.outputIndex(args) orelse return &.{};
+    if (i + 1 >= args.len) return &.{};
+    const lib = try ctx.fmt("{s}.rzig.lib", .{args[i + 1]});
+    try ctx.discard.append(ctx.arena, lib);
+    return ctx.arena.dupe([]const u8, &.{ "-Xlinker", try ctx.fmt("--out-implib={s}", .{lib}) });
+}
+
 /// MinGW gcc writes `-c a.c` without `-o` to a.o; zig writes a.obj, its
 /// COFF default. Packages compile that way and then name the .o (stress
 /// round 1, Z7: QuickJSR runs `$(R_CC) ... -c libquickjs.c`, then `ar -rs
@@ -159,6 +199,39 @@ test "-lsynchronization: the API set's name, which both zigs have an import libr
     // only that name, as a one-argument -l
     const others: Args = &.{ "-lsynchronizationx", "-lsynch", "-l", "synchronization", "-Wl,-lsynchronization" };
     try expectArgs(others, try libs(&f.ctx, others));
+}
+
+test "noLtoLink: -flto and -flto=<x> off a link; the rest kept" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    try expectArgs(
+        &.{ "-shared", "-O2", "-o", "pkg.dll", "f.o", "-fno-lto" },
+        try noLtoLink(&f.ctx, &.{ "-shared", "-flto", "-O2", "-o", "pkg.dll", "f.o", "-flto=thin", "-fno-lto", "-flto=auto" }),
+    );
+}
+
+test "implib: <output>.rzig.lib through -Xlinker, to delete; none over the caller's own" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    // winshlib.mk's link, and a program in a directory with a comma
+    try expectArgs(&.{ "-Xlinker", "--out-implib=pkg.dll.rzig.lib" }, try implib(c, &.{ "-shared", "-s", "-o", "pkg.dll", "tmp.def", "a.o" }));
+    try expectArgs(&.{ "-Xlinker", "--out-implib=C:/a,b/px.exe.rzig.lib" }, try implib(c, &.{ "px.o", "-o", "C:/a,b/px.exe" }));
+    // main.zig's run deletes them after the link
+    try expectArgs(&.{ "pkg.dll.rzig.lib", "C:/a,b/px.exe.rzig.lib" }, c.discard.items);
+    // the caller names one (CMake's -Wl,--out-implib,lib<name>.dll.a),
+    // or there is no output to name it after: none, nothing to delete
+    c.discard = .empty;
+    for ([_]Args{
+        &.{ "-shared", "-o", "libfoo.dll", "a.o", "-Wl,--out-implib,libfoo.dll.a" },
+        &.{ "-shared", "-o", "foo.dll", "a.o", "-Xlinker", "--out-implib", "-Xlinker", "foo.lib" },
+        &.{ "-shared", "-o", "foo.dll", "a.o", "-Wl,-implib,foo.lib" },
+        &.{ "-shared", "-Xlinker", "-o", "a.o" },
+        &.{ "-shared", "a.o", "-o" },
+    }) |args| try expectArgs(&.{}, try implib(c, args));
+    try testing.expectEqual(0, c.discard.items.len);
 }
 
 test "objSuffix: gcc's .o for -c without -o" {

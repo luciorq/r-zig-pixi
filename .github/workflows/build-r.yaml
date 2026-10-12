@@ -4,8 +4,11 @@ name: build-r leg
 # host-paths F1.7), on the tree `zig build` installs, which is the tree
 # that ships. Called by build.yaml's matrix (the env's zig, conda-forge's)
 # and by upstream-zig.yaml (upstream zig, F4), so both run exactly these
-# steps. No concurrency group here: a called workflow shares its caller's
-# `github` context, and the callers keep their own.
+# steps. Each caller's toolchain job (toolchain.yaml) has built this
+# platform's toolchain groups first, with the same zig, and the leg
+# downloads them (feat-standalone-toolchain B31). No concurrency group
+# here: a called workflow shares its caller's `github` context, and the
+# callers keep their own.
 on:
   workflow_call:
     inputs:
@@ -45,11 +48,27 @@ jobs:
           # format 7 needs pixi 0.68 or newer). Unset, setup-pixi installs
           # the newest pixi on every run, and its cache key hashes the pixi
           # binary, so each pixi release would also drop every cached env.
-          # build.yaml and gen-config.yaml pin the same version.
+          # The other workflows pin the same version.
           pixi-version: v0.81.0
           # minimal also needs the python-only `wheel` env for its last steps
           environments: ${{ inputs.env == 'minimal' && 'minimal wheel' || inputs.env }}
           cache: true
+      # This platform's toolchain groups, as the caller's toolchain job
+      # archived them (toolchain.yaml; with upstream zig, its -upstream
+      # artifact), into dist/, where package-toolchain leaves them, and
+      # from there the toolchain tree, dist/toolchain/R-<ver>-zig
+      # (unpack-toolchain checks each .sha256). contract compiles in the
+      # compile tree, which needs that tree; verify-package extracts the
+      # archives themselves beside the base; the wheel takes make from the
+      # tree. When that toolchain leg failed, its platform's legs stop
+      # here (build.yaml's !cancelled(), PHASE3 C4).
+      - name: Download the toolchain groups (the toolchain job's archives)
+        uses: actions/download-artifact@v8
+        with:
+          name: toolchain-${{ runner.os }}-${{ runner.arch }}${{ inputs.zig == 'upstream' && '-upstream' || '' }}
+          path: dist
+      - name: Unpack the toolchain tree
+        run: pixi run -e ${{ inputs.env }} unpack-toolchain
       # Upstream zig (feat-no-host-paths F4): PyPI's ziglang 0.16.0, the
       # ziglang.org release, sha256-pinned (scripts/fetch-zig.sh). ZIG_BIN
       # makes every step below build, compile and test with it instead of
@@ -90,6 +109,10 @@ jobs:
         run: pixi run -e ${{ inputs.env }} verify-tree
       - name: Smoke test
         run: pixi run -e ${{ inputs.env }} smoke
+      # In the compile tree (compile-tree.sh): a copy of the installed
+      # tree, the base, with the toolchain tree's group directories added,
+      # as a user who extracted all three archives has it. Every leg runs
+      # it, full and openblas too, which CI does not package (B31 a).
       - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
         run: pixi run -e ${{ inputs.env }} contract
       - name: Regression suite (Examples/Specific/Reg)
@@ -103,18 +126,36 @@ jobs:
         if: inputs.env == 'default' || inputs.env == 'minimal'
         run: pixi run -e ${{ inputs.env }} hermetic
       # Standalone archive: package-standalone.sh only archives this job's
-      # installed tree (cheap). Only the default (slim; Windows' one
-      # variant) and minimal variants are packaged in CI for now —
-      # full/openblas relocation is exercised manually, not automated yet.
-      # minimal's tree is the wheel's input, so it can't be skipped.
-      # verify-package checks the archive itself: extracted elsewhere, R
-      # and packages compiled with it run with nothing from the build env
-      # (unix: env -i, TLS with the shipped CA bundle; Windows: rzig's dry
-      # runs, and OpenMP C and Fortran packages built with the tree alone)
-      # (scripts/verify-bundle.sh).
-      - name: Package + verify the standalone archive (relocated)
+      # installed tree (cheap), the base (feat-standalone-toolchain B19).
+      # Only the default (slim; Windows' one variant) and minimal variants
+      # are packaged in CI for now — full/openblas relocation is exercised
+      # manually, not automated yet (B31 a). minimal's tree is the wheel's
+      # input, so it can't be skipped. verify-package checks the archives
+      # themselves, the base and this platform's two group archives as
+      # downloaded above (it does not rebuild them), extracted elsewhere
+      # one after the other, in three scenarios: the base alone, then with
+      # the compilers group, then with the build-tools group. R and
+      # packages compiled with them run with nothing from the build env
+      # (unix: env -i, TLS with the shipped CA bundle; Windows: what must
+      # load from the tree alone runs with only bin\x64 and System32 on
+      # PATH) (scripts/verify-bundle.sh, PHASE3 section 8).
+      - name: Package + verify the standalone archives (base, compilers, build-tools)
         if: inputs.env == 'default' || inputs.env == 'minimal'
         run: pixi run -e ${{ inputs.env }} verify-package
+      # The base archive verify-package checked and its .sha256, kept a
+      # short while (B12: CI's artifacts; a release job comes later). The
+      # group archives in dist/ are the toolchain job's artifact already.
+      - name: Upload the standalone base archive
+        if: inputs.env == 'default' || inputs.env == 'minimal'
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-${{ inputs.env }}-${{ inputs.os }}${{ inputs.zig == 'upstream' && '-upstream' || '' }}
+          path: |
+            dist/R-*
+            !dist/R-*-compilers.*
+            !dist/R-*-build-tools.*
+          retention-days: 7
+          if-no-files-found: error
       # The r-zig wheel: the minimal tree verify-package just packaged,
       # zipped with the r_zig Python package, then pip-installed into a
       # fresh venv (ziglang from PyPI) and used with the pixi env scrubbed

@@ -34,11 +34,11 @@ case "$(uname -m)" in
   *) ARCH="$(uname -m)" ;;
 esac
 case "$OS" in
-  linux) PLAT="linux-$ARCH" ;;
-  macos) PLAT="osx-$ARCH" ;;
+  linux) cfg_plat="linux-$ARCH" ;;
+  macos) cfg_plat="osx-$ARCH" ;;
   *) echo "error: unsupported OS '$OS' for subst.txt generation" >&2; exit 1 ;;
 esac
-OUT_DIR="$ROOT/zigbuild/config/$PLAT-$VARIANT"
+OUT_DIR="$ROOT/zigbuild/config/$cfg_plat-$VARIANT"
 mkdir -p "$OUT_DIR"
 
 # 1. Extract S["VAR"]="value" entries, joining continuation lines. A

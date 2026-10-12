@@ -1,42 +1,70 @@
-R CMD INSTALL: compile preflight (the toolchain is a separate package)
+R CMD INSTALL: compile preflight (rzig's check mode names what is missing)
 
 A package needs the toolchain when it has compiled code (src/) or a
-configure script. Without bin/toolchain/zig-cc (the toolchain package
-fills that directory, Makeconf points at it, and a package manager can
-leave it behind empty) and without the compiler Makeconf's CC names (an
-unstaged build tree names the repo's toolchain/zig-cc directly), stop
-with one message naming the package to install, from
-R_ZIG_TOOLCHAIN_HINT (each distribution sets it in etc/Renviron),
-instead of failing deep in configure or make. A user Makevars (their own
-compiler) or R_ZIG_NO_PREFLIGHT skips the check. Inserted before the
-configure step; binary packages never reach it. feat-no-host-paths
-PLAN.md, phase T.
+configure script R runs: configure, or on Windows configure.ucrt or
+configure.win (there R does not run a plain configure, it only warns).
+rzig, R_HOME/bin/toolchain/zig-cc (gcc.exe on Windows), finds each
+toolchain group's tools as a compile does, on every channel: its check
+mode (--rzig-check, --rzig-check=fortran when src/'s top level has
+Fortran sources, then --rzig-check=build-tools) exits non-zero after a
+line saying what is missing and the group's text, which names how to
+install it. Run it before the configure step and stop with that text,
+instead of failing deep in configure or make. With no rzig at all (R
+without its toolchain package), stop with one message naming the
+package to install, from R_ZIG_TOOLCHAIN_HINT (the conda and wheel
+builds set it). A user Makevars (their own compiler) or
+R_ZIG_NO_PREFLIGHT skips the check; binary packages never reach it.
+Only src/'s top level is looked at for Fortran sources, as R's default
+OBJECTS rule compiles them (install.R's srcs <- dir(pattern = ...)): a
+package whose Makevars builds Fortran from a subdirectory passes the
+preflight and stops later, at zig-fc, with the same no-flang line and
+the compilers' text. Not recursive, so that a vendored Fortran file
+that is never built does not ask for flang (the pip channel has none).
+feat-no-host-paths PLAN.md, phase T; feat-standalone-toolchain PLAN.md,
+B26 and B35.
 
 --- a/src/library/tools/R/install.R
 +++ b/src/library/tools/R/install.R
-@@ -1273,6 +1273,25 @@
+@@ -1273,6 +1273,42 @@
              }
  	}
  
-+        ## r-zig: compile preflight (the toolchain is a separate package)
++        ## r-zig: compile preflight (feat-standalone-toolchain B26): rzig's
++        ## check mode names a missing toolchain group, and how to install
++        ## it, before configure runs. For src/, or for the configure
++        ## script R runs below (Windows: configure.ucrt or configure.win;
++        ## a plain configure only gets a warning there)
 +        if (((install_libs && dir.exists("src") &&
 +              length(dir("src", all.files = TRUE)) > 2L) ||
-+             (use_configure && (file.exists("configure") ||
-+                                (WINDOWS && (file.exists("configure.win") ||
-+                                             file.exists("configure.ucrt")))))) &&
-+            !file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")) &&
-+            ## the compiler Makeconf names, when it is a plain path (an
-+            ## unstaged build tree names the repo's toolchain/zig-cc)
-+            !tryCatch({
-+                cc <- grep("^CC *=", readLines(file.path(R.home("etc"), "Makeconf")), value = TRUE)
-+                cc <- strsplit(sub("^CC *= *", "", cc[1L]), " ", fixed = TRUE)[[1L]][1L]
-+                file.exists(gsub("$(R_HOME)", R.home(), cc, fixed = TRUE))
-+            }, error = function(e) FALSE) &&
-+            !length(makevars_user()) && !nzchar(Sys.getenv("R_ZIG_NO_PREFLIGHT")))
-+            pkgerrmsg(paste0("this package has compiled code, and the r-zig toolchain is not installed: ",
-+                             Sys.getenv("R_ZIG_TOOLCHAIN_HINT",
-+                                        "install the r-zig toolchain package for this R")),
-+                      pkg_name)
++             (use_configure && (if (WINDOWS) file.exists("configure.win") ||
++                                             file.exists("configure.ucrt")
++                                else file.exists("configure")))) &&
++            !length(makevars_user()) && !nzchar(Sys.getenv("R_ZIG_NO_PREFLIGHT"))) {
++            ## (R.home("bin") is bin/x64 on Windows)
++            rzig <- file.path(R.home(), "bin", "toolchain",
++                              if (WINDOWS) "gcc.exe" else "zig-cc")
++            ## no rzig: R without its toolchain package, which the
++            ## distribution's R_ZIG_TOOLCHAIN_HINT names
++            if (!file.exists(rzig))
++                pkgerrmsg(paste0("this package has compiled code, and the r-zig toolchain is not installed: ",
++                                 Sys.getenv("R_ZIG_TOOLCHAIN_HINT",
++                                            "install the r-zig toolchain package for this R")),
++                          pkg_name)
++            ## the compilers (with flang when src/'s top level has Fortran
++            ## sources, as R's default OBJECTS rule compiles; Fortran a
++            ## Makevars builds from a subdirectory stops at zig-fc, with the
++            ## same text), then the build tools. A check that fails says on
++            ## stderr what is missing and how to install its group, shown as
++            ## it comes, and exits non-zero (127: not through intern = TRUE,
++            ## which makes that an error of R's own); a passing one's line,
++            ## on stdout, is not shown.
++            fortran <- length(dir("src", pattern = "[.]([fF]|[fF]9[05])$")) > 0L
++            for (chk in c(if (fortran) "--rzig-check=fortran" else "--rzig-check",
++                          "--rzig-check=build-tools"))
++                if (suppressWarnings(system2(rzig, chk, stdout = FALSE)) != 0L)
++                    pkgerrmsg("this package has compiled code, and the r-zig toolchain is incomplete (see above)",
++                              pkg_name)
++        }
          if (use_configure) {
              if (WINDOWS) {
                  if (file.exists(f <- "./configure.ucrt") ||

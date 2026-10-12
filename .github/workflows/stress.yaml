@@ -5,13 +5,14 @@ name: stress
 # OS x distribution. A diagnostic, never a gate: manual dispatch only, no
 # push or pull_request trigger, and a failing package does not fail the
 # job (stress.R exits 0 unless --strict). The job fails when the harness
-# itself breaks: the R build, the conda packages, an env that cannot be
-# made (stress.R exits 2 and still writes its report).
+# itself breaks: the R build, the toolchain groups, the conda packages,
+# an env that cannot be made (stress.R exits 2 and still writes its
+# report).
 on:
   workflow_dispatch:
     inputs:
       oses:
-        description: 'JSON list of runners: ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest'
+        description: 'JSON list of runners, one per OS/arch (the toolchain artifact is named by runner.os and runner.arch): ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest'
         type: string
         default: '["ubuntu-latest"]'
       packages:
@@ -46,10 +47,31 @@ permissions:
   contents: read
 
 jobs:
-  stress:
-    name: ${{ matrix.os }} / ${{ matrix.dist }}
+  # The toolchain groups for each runner (toolchain.yaml, with the zig
+  # input's zig), as build.yaml's toolchain job: the stress task runs the
+  # compile tree's R, the dev tree with the groups added (compile-tree.sh),
+  # so each leg unpacks its runner's archives first (PHASE3 C3). A job of
+  # its own, not `pixi run toolchain` in the leg: the leg's env comes from
+  # setup-pixi's cache, where the toolchain build finds no licences (C33).
+  toolchain:
+    name: ${{ matrix.os }}
     # build.yaml's kill switch
     if: vars.ENABLE_HOSTED_JOBS == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.oses) }}
+    uses: ./.github/workflows/toolchain.yaml
+    with:
+      os: ${{ matrix.os }}
+      zig: ${{ inputs.zig }}
+
+  stress:
+    name: ${{ matrix.os }} / ${{ matrix.dist }}
+    needs: toolchain
+    # build.yaml's kill switch; !cancelled(), as build.yaml's: one
+    # runner's failed toolchain leg fails only that runner's legs (C4).
+    if: vars.ENABLE_HOSTED_JOBS == 'true' && !cancelled()
     runs-on: ${{ matrix.os }}
     # Hosted jobs stop at 360 minutes. Each package has its own timeout
     # (packages.tsv), so a hang costs one row, not the job.
@@ -68,6 +90,16 @@ jobs:
           pixi-version: v0.81.0  # as build-r.yaml, which says why
           environments: ${{ matrix.dist == 'conda' && inputs.channel == 'local' && 'default stress pkg' || 'default stress' }}
           cache: true
+      # This runner's toolchain groups, as the toolchain job archived
+      # them, into dist/ and from there the toolchain tree (as
+      # build-r.yaml's legs): the stress task's compile tree needs it.
+      - name: Download the toolchain groups (the toolchain job's archives)
+        uses: actions/download-artifact@v8
+        with:
+          name: toolchain-${{ runner.os }}-${{ runner.arch }}${{ inputs.zig == 'upstream' && '-upstream' || '' }}
+          path: dist
+      - name: Unpack the toolchain tree
+        run: pixi run unpack-toolchain
       - name: Upstream zig (ZIG_BIN)
         if: inputs.zig == 'upstream'
         shell: bash

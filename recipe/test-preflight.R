@@ -1,7 +1,10 @@
 ## r-zig-slim alone (no r-zig-toolchain): an R-only package installs from
 ## source, and one with compiled code stops with the preflight message
 ## that names the toolchain package (feat-no-host-paths PLAN.md, phase T).
-stopifnot(!file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")))
+## No rzig until phase 4 puts it in the base: not under CC's name, which
+## the preflight runs (gcc.exe on Windows; feat-standalone-toolchain B26).
+stopifnot(!file.exists(file.path(R.home(), "bin", "toolchain",
+                                 if (.Platform$OS.type == "windows") "gcc.exe" else "zig-cc")))
 ## A user Makevars switches the preflight off: a dev shell's
 ## R_MAKEVARS_USER must not leak in, nor its R_ZIG_EXTRA_ENV (pixi.toml),
 ## the compilers' extra environment.

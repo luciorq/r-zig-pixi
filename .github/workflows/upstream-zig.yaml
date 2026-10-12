@@ -30,12 +30,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  # The toolchain groups built with upstream zig (toolchain.yaml; PHASE3
+  # C35), one leg per runner of build below, as build.yaml's toolchain
+  # job: these legs download its archives (the artifact's name ends in
+  # -upstream), so the toolchain build and the archives the scenarios
+  # test are upstream zig's too. build's condition.
+  toolchain:
     name: ${{ matrix.os }}
-    # ENABLE_HOSTED_JOBS: build.yaml's kill switch. A pull request runs the
-    # legs only with the label, and a `labeled` event only for this label.
     if: >-
       vars.ENABLE_HOSTED_JOBS == 'true' &&
+      (github.event_name != 'pull_request' ||
+       (contains(github.event.pull_request.labels.*.name, 'upstream-zig') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'upstream-zig')))
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    uses: ./.github/workflows/toolchain.yaml
+    with:
+      os: ${{ matrix.os }}
+      zig: upstream
+
+  build:
+    name: ${{ matrix.os }}
+    needs: toolchain
+    # ENABLE_HOSTED_JOBS: build.yaml's kill switch. A pull request runs the
+    # legs only with the label, and a `labeled` event only for this label.
+    # !cancelled(), as build.yaml's: one runner's failed toolchain leg
+    # fails only that runner's leg (PHASE3 C4).
+    if: >-
+      vars.ENABLE_HOSTED_JOBS == 'true' && !cancelled() &&
       (github.event_name != 'pull_request' ||
        (contains(github.event.pull_request.labels.*.name, 'upstream-zig') &&
         (github.event.action != 'labeled' || github.event.label.name == 'upstream-zig')))

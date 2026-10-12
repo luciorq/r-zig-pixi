@@ -116,6 +116,16 @@ Counts: a pull request run without `full-ci` is 6 legs plus packaging,
 plus 5 conda-package jobs when packaging says yes. A push to main is 11
 jobs. A full run is 20 jobs (packaging is skipped).
 
+From feat-standalone-toolchain's phase 3 (2026-10-11): every run with
+build legs also runs the toolchain job (toolchain.yaml), one leg per
+platform, 5 jobs, with the build job's condition. build and build-full
+need it, so every leg waits for all five, and a failed one fails only
+its own platform's legs (`!cancelled()`). A pull request run without
+`full-ci` is then 6 legs, 5 toolchain jobs and packaging (plus 5
+conda-package jobs when packaging says yes), a push to main 16 jobs, a
+full run 25. The toolchain job's time (an uncached env install) is not
+measured yet; it adds to every leg's wall time.
+
 Wall time, from the green run 37806314996: the core's slowest legs are
 macos-15-intel / default (23 to 29 min) and windows-latest / default
 (24 to 29 min), and conda-package / win-64 takes about 25 min. A core

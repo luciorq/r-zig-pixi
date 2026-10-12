@@ -1,10 +1,10 @@
 //! The toolchain's groups and the text that names a missing one
 //! (feat-standalone-toolchain B35, B38). Two groups: compilers (zig,
-//! flang, the OpenMP files) and build-tools (make; on Windows also sh and
-//! the other tools R's makefiles run). rzig prints a group's text when a
-//! compile finds no zig, when zig-fc finds no flang, and from its check
-//! mode (check.zig), which the install preflight and R CMD config are to
-//! call (phase 3).
+//! flang, the OpenMP files) and build-tools (make; on Windows also sh, the
+//! binutils and the other tools R's makefiles run). rzig prints a group's
+//! text when a compile finds no zig, when zig-fc finds no flang, and from
+//! its check mode (check.zig), which the install preflight and R CMD
+//! config call (patches 0009 and 0010, B26 a) and show.
 //!
 //! One text per group, the same on every channel. It is built from R's
 //! version (build.zig passes it, a build option) and the platform rzig is
@@ -17,16 +17,22 @@
 //! - conda and pip: today's r-zig-toolchain, one package with every group.
 //!   Phase 4 names the per-group packages (r-zig-compilers,
 //!   r-zig-build-tools).
-//! - standalone: the groups have no archive yet, so the text names the
-//!   tools themselves. Phase 3 names R-<ver>-<plat>-build-tools.tar.gz
-//!   (unix make; Windows' usr/bin comes in phase 7, its .zip then), and
-//!   phases 5 and 6 R-<ver>-<plat>-compilers.tar.gz (zig, then flang).
+//! - standalone: from phase 3 each group has an archive,
+//!   R-<ver>-<plat>-<group>.tar.gz (.zip on Windows, B17), extracted where
+//!   R was. The text names it for what it holds and the tools themselves
+//!   for the rest. build-tools holds unix make, and on Windows the binutils
+//!   (B24); phase 7 adds Windows' usr/bin, until then sh and make on PATH.
+//!   compilers holds the OpenMP files (C19); phases 5 and 6 add zig and
+//!   flang, until then on PATH (zig also in ZIG_BIN).
 //!
 //! rzig does not read R_ZIG_TOOLCHAIN_HINT. Until phase 4 the conda and
-//! wheel builds still write it for the preflight (patch 0009) and R CMD
-//! config (patch 0010), and the wheel's value ("pip install
-//! r-zig-toolchain") is wrong for a missing flang. After phase 4 it is
-//! only a user's override.
+//! wheel builds still write it, naming their toolchain package, and the
+//! preflight (patch 0009) and R CMD config (patch 0010) show it only where
+//! R has no rzig, so that package is missing (PHASE3 C8). Where rzig is
+//! there, the package is installed and the hint would name the wrong
+//! remedy (the wheel's "pip install r-zig-toolchain" for a missing flang).
+//! Phase 4 removes the writers and that branch; a user's own value is then
+//! shown as a hint after rzig's text.
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
@@ -96,15 +102,17 @@ pub fn text(a: mem.Allocator, g: Group, p: Platform) ![]const u8 {
         .compilers => "  pip:         pip install r-zig-toolchain (no Fortran)\n",
         .build_tools => "  pip:         pip install r-zig-toolchain\n",
     };
+    // the group's archive (B17), which the standalone line names
+    const archive = try std.fmt.allocPrint(a, "R-{s}-{s}-{s}.{s}", .{ p.r, p.name, g.name(), if (p.windows) "zip" else "tar.gz" });
     const head = switch (g) {
         .compilers => try std.fmt.allocPrint(a, "Compiling needs the r-zig compilers for R {s} on {s}: zig {s}, and flang for Fortran.\n" ++
-            "  standalone:  zig {s} on PATH or in ZIG_BIN, LLVM flang on PATH\n", .{ p.r, p.name, p.zig, p.zig }),
+            "  standalone:  zig {s} on PATH or in ZIG_BIN, LLVM flang on PATH; for OpenMP, extract {s} where you extracted R\n", .{ p.r, p.name, p.zig, p.zig, archive }),
         .build_tools => if (p.windows)
-            try std.fmt.allocPrint(a, "Building packages needs the r-zig build tools for R {s} on {s}: sh, make and the tools R's makefiles run.\n" ++
-                "  standalone:  sh and make on PATH (for example Rtools45's usr/bin)\n", .{ p.r, p.name })
+            try std.fmt.allocPrint(a, "Building packages needs the r-zig build tools for R {s} on {s}: sh, make, binutils and the tools R's makefiles run.\n" ++
+                "  standalone:  extract {s} where you extracted R (binutils), and put sh and make on PATH (for example Rtools45's usr/bin)\n", .{ p.r, p.name, archive })
         else
             try std.fmt.allocPrint(a, "Building packages needs the r-zig build tools for R {s} on {s}: make.\n" ++
-                "  standalone:  GNU make on PATH\n", .{ p.r, p.name }),
+                "  standalone:  extract {s} where you extracted R, or put GNU make on PATH\n", .{ p.r, p.name, archive }),
     };
     return mem.concat(a, u8, &.{ head, conda, pip });
 }
@@ -117,7 +125,8 @@ pub fn report(ctx: *const Ctx, what: []const u8, g: Group) !void {
     ctx.warn("{s}\n{s}", .{ what, t[0 .. t.len - 1] });
 }
 
-/// What a compile says when it finds no zig (find_zig.zig).
+/// What a compile says when it finds no zig (find_zig.zig). This and
+/// no_flang, after `zig-cc: `, are what verify-bundle.sh asserts.
 pub const no_zig = "no zig (ZIG_BIN, R_HOME/bin/toolchain/zig, the environment's bin, PATH, python3 -m ziglang)";
 /// What zig-fc says when it finds no flang (flang_rt.flang).
 pub const no_flang = "no flang (R_HOME/bin/toolchain/flang/bin, the environment's bin, PATH)";
@@ -144,31 +153,42 @@ test "one text per group, the same on every channel" {
     defer arena.deinit();
     const a = arena.allocator();
     const linux: Platform = .{ .r = "4.6.1", .name = "linux-64", .windows = false, .zig = "0.16" };
+    const mac: Platform = .{ .r = "4.6.1", .name = "osx-arm64", .windows = false, .zig = "0.16" };
     const win: Platform = .{ .r = "4.6.1", .name = "win-64", .windows = true, .zig = "0.16" };
+    // other scripts grep these: verify-bundle.sh and hermetic-check.sh the
+    // first lines' beginnings, wheel-test.sh "LLVM flang on PATH" and the
+    // pip line, parity-test.sh the first lines and unix's standalone lines
     try testing.expectEqualStrings(
         \\Compiling needs the r-zig compilers for R 4.6.1 on linux-64: zig 0.16, and flang for Fortran.
-        \\  standalone:  zig 0.16 on PATH or in ZIG_BIN, LLVM flang on PATH
+        \\  standalone:  zig 0.16 on PATH or in ZIG_BIN, LLVM flang on PATH; for OpenMP, extract R-4.6.1-linux-64-compilers.tar.gz where you extracted R
         \\  conda, pixi: pixi add r-zig-toolchain (or conda install r-zig-toolchain)
         \\  pip:         pip install r-zig-toolchain (no Fortran)
         \\
     , try text(a, .compilers, linux));
     try testing.expectEqualStrings(
         \\Compiling needs the r-zig compilers for R 4.6.1 on win-64: zig 0.16, and flang for Fortran.
-        \\  standalone:  zig 0.16 on PATH or in ZIG_BIN, LLVM flang on PATH
+        \\  standalone:  zig 0.16 on PATH or in ZIG_BIN, LLVM flang on PATH; for OpenMP, extract R-4.6.1-win-64-compilers.zip where you extracted R
         \\  conda, pixi: pixi add r-zig-toolchain (or conda install r-zig-toolchain)
         \\  pip:         no wheels for Windows
         \\
     , try text(a, .compilers, win));
     try testing.expectEqualStrings(
         \\Building packages needs the r-zig build tools for R 4.6.1 on linux-64: make.
-        \\  standalone:  GNU make on PATH
+        \\  standalone:  extract R-4.6.1-linux-64-build-tools.tar.gz where you extracted R, or put GNU make on PATH
         \\  conda, pixi: pixi add r-zig-toolchain (or conda install r-zig-toolchain)
         \\  pip:         pip install r-zig-toolchain
         \\
     , try text(a, .build_tools, linux));
     try testing.expectEqualStrings(
-        \\Building packages needs the r-zig build tools for R 4.6.1 on win-64: sh, make and the tools R's makefiles run.
-        \\  standalone:  sh and make on PATH (for example Rtools45's usr/bin)
+        \\Building packages needs the r-zig build tools for R 4.6.1 on osx-arm64: make.
+        \\  standalone:  extract R-4.6.1-osx-arm64-build-tools.tar.gz where you extracted R, or put GNU make on PATH
+        \\  conda, pixi: pixi add r-zig-toolchain (or conda install r-zig-toolchain)
+        \\  pip:         pip install r-zig-toolchain
+        \\
+    , try text(a, .build_tools, mac));
+    try testing.expectEqualStrings(
+        \\Building packages needs the r-zig build tools for R 4.6.1 on win-64: sh, make, binutils and the tools R's makefiles run.
+        \\  standalone:  extract R-4.6.1-win-64-build-tools.zip where you extracted R (binutils), and put sh and make on PATH (for example Rtools45's usr/bin)
         \\  conda, pixi: pixi add r-zig-toolchain (or conda install r-zig-toolchain)
         \\  pip:         no wheels for Windows
         \\

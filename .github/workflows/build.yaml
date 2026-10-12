@@ -8,14 +8,17 @@ name: build-r
 #   nothing else: all 15 legs (full, openblas and minimal too).
 # conda-package (5 jobs) runs on every push to main, which publishes, in
 # the full tier, and on a pull request that changes what it builds from.
-# Docs-only changes never touch the build: they start nothing. On a pull
-# request the paths are matched against its whole diff, so once it
-# changes code, a docs-only push to it runs the core tier too. Note the
-# consequence for branch protection: a docs-only PR reports no build-r
-# checks at all, so don't mark them "required" or such PRs can't merge
-# (main requires none). No `[skip ci]` needed, and it skips more than its
-# own commit: in the newest commit of a push it skips the whole push,
-# which is how #15's merge of main went untested.
+# Both tiers' legs wait for the toolchain job (5 jobs, one per
+# platform), whose group archives they unpack and test
+# (feat-standalone-toolchain B31). Docs-only changes never touch the
+# build: they start nothing. On a pull request the paths are matched
+# against its whole diff, so once it changes code, a docs-only push to
+# it runs the core tier too. Note the consequence for branch protection:
+# a docs-only PR reports no build-r checks at all, so don't mark them
+# "required" or such PRs can't merge (main requires none). No `[skip ci]`
+# needed, and it skips more than its own commit: in the newest commit of
+# a push it skips the whole push, which is how #15's merge of main went
+# untested.
 on:
   push:
     branches: [main]
@@ -55,6 +58,29 @@ concurrency:
 # Every job starts from a bare runner: the only bootstrap is pixi itself.
 # All compilers, shells, and libraries come from conda-forge via pixi.
 jobs:
+  # The toolchain groups, once per platform (feat-standalone-toolchain
+  # B30, B31): toolchain.yaml builds the toolchain tree, archives its two
+  # groups (compilers, build-tools), checks the tree and uploads the
+  # archives as toolchain-<runner.os>-<runner.arch>. Every leg of build
+  # and build-full on that platform downloads them: contract compiles in
+  # the compile tree (the installed tree plus the groups), and the
+  # packaging legs test the base archive with them (verify-package's
+  # three scenarios). One leg per platform the build legs run on,
+  # conda-package's five runners; build's condition, which every event
+  # that runs a leg of build or build-full meets.
+  toolchain:
+    name: ${{ matrix.os }}
+    if: >-
+      vars.ENABLE_HOSTED_JOBS == 'true' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["${{ inputs.linux_runner || 'ubuntu-latest' }}", ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
+    uses: ./.github/workflows/toolchain.yaml
+    with:
+      os: ${{ matrix.os }}
+
   # Only build path: `zig build` alone (no autoconf, no make, no
   # gnuwin32) — see .github/devdocs/feat-zig-build/. The autoconf/gnuwin32
   # legacy jobs that used to sit alongside this one were retired in
@@ -69,15 +95,20 @@ jobs:
   # the full tier's other 9.
   build:
     name: ${{ matrix.os }}
+    needs: toolchain
     # Gated behind ENABLE_HOSTED_JOBS (repo Settings > Actions > Variables)
     # — an emergency kill switch more than a cost control now: the repo
     # is public, so hosted standard runners are free with no minute caps
     # (the gate's original reason, a private-repo minute budget, is gone).
     # Toggle with `gh variable set ENABLE_HOSTED_JOBS --body false`.
     # Every job has it. A `labeled` event runs these legs only for
-    # `full-ci` (its full tier includes them).
+    # `full-ci` (its full tier includes them). !cancelled(), because a
+    # job whose need failed is skipped unless its condition has a status
+    # function: one platform's failed toolchain leg would skip every leg
+    # of all five. With it, only that platform's legs fail, at their
+    # download of its archives (PHASE3 C4).
     if: >-
-      vars.ENABLE_HOSTED_JOBS == 'true' &&
+      vars.ENABLE_HOSTED_JOBS == 'true' && !cancelled() &&
       (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     # The arch axis arrived with the repo going public (2026-09-03):
     # GitHub-hosted arm64-linux (ubuntu-24.04-arm) and Intel-macOS
@@ -127,11 +158,13 @@ jobs:
   # unix ones, openblas (external optimized BLAS/LAPACK, linux only for
   # now, both archs), and minimal on the three build doesn't run. Only on
   # a pull request labelled `full-ci` (its `labeled` event, then every
-  # push while the label stays) and on a manual dispatch.
+  # push while the label stays) and on a manual dispatch. It needs the
+  # toolchain job as build does, with !cancelled() for the same reason.
   build-full:
     name: ${{ matrix.os }}
+    needs: toolchain
     if: >-
-      vars.ENABLE_HOSTED_JOBS == 'true' &&
+      vars.ENABLE_HOSTED_JOBS == 'true' && !cancelled() &&
       (github.event_name == 'workflow_dispatch' ||
        (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
         (github.event.action != 'labeled' || github.event.label.name == 'full-ci')))

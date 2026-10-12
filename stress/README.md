@@ -37,11 +37,15 @@ stringi's own ICU).
 
 ## Run it locally
 
-The tree (the dev tree that `pixi run build` makes, with the stress env's
-libraries):
+The tree: the compile tree, build/compile-tree/slim/R-<ver>-zig, with the
+stress env's libraries. The stress task makes it on every run (it depends
+on `compile-tree`) from the dev tree that `pixi run build` makes and the
+toolchain tree's openmp/ and usr/ (Windows: openmp/ and binutils/), so
+both must exist first:
 
 ```sh
 pixi run build
+pixi run toolchain                            # or unpack-toolchain
 pixi run -e stress stress g3                  # a group
 pixi run -e stress stress gsl units           # some packages
 pixi run -e stress stress --skip=heavy        # all rows but the longest
@@ -58,8 +62,8 @@ pixi run -e stress stress --conda=universe g3 # the packages published on prefix
 ```
 
 `--conda` makes the env in `<run dir>/conda` with pixi, then runs `stress.R`
-again with that env's R. The dev tree's R only starts it: any R works for
-that step.
+again with that env's R. The compile tree's R starts it, so `build` and
+`toolchain` must have run first here too.
 
 Useful options (`--help` lists them all):
 
@@ -207,7 +211,7 @@ The classes, and who acts on them:
 | network | `cannot open URL`, HTTP 4xx/5xx, `curl: (n)`; also a package missing from the repositories | rerun |
 | resource | out of memory, no space left | fewer jobs, a bigger runner |
 | abi | an undefined symbol with `St3__1`, `__cxx11` or an MSVC name: libc++ code against a libstdc++ (or MSVC) library | a design decision for the user |
-| toolchain | rzig's own messages (`zig-cc: cannot run ...`), `LLVM ERROR`, an unknown option, a missing compiler-rt helper | fix in rzig, after the user agrees |
+| toolchain | rzig's own messages (`zig-cc: cannot run ...`), `LLVM ERROR`, an unknown option, a missing compiler-rt helper; also the install preflight's stop (patch 0009: `r-zig toolchain is incomplete`, whose row shows rzig's `zig-cc: ` line naming what is missing, or `is not installed`) | fix in rzig, after the user agrees; for the preflight's stop, add what it names |
 | crash | R died from a signal or a Windows exception (exit status 128 or more, or below 0), or printed `*** caught segfault ***` | read the log; after an unload on linux, Z9 until rzig's fix |
 | upstream | a packaging bug in a conda-forge library or in the channels: a Homebrew path in a conda library (`Library not loaded: /opt/homebrew/...`), CMake's `debug`/`optimized` keywords from a `.pc` file, an import library that lists what its DLL does not export (`The specified procedure could not be found`), a solver conflict when `--conda` makes its env (round 1's U1 to U4) | work around it in the env (a pin, a fixed file) and record it |
 | sysdep | `configure: error`, a missing header, `-l` or pkg-config module, `command not found` | add it to the stress feature (or the extras for tools) |
