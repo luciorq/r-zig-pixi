@@ -9,16 +9,22 @@
 #   - installs two R-only source packages, one at a time and with
 #     Ncpus = 2 (no make on PATH), builds a binary package with
 #     --build, installs that binary and removes everything again,
+#   - the install preflight (patch 0009): a package with C code stops
+#     in it with rzig's text for the compilers group, since the tree is
+#     the base alone (rzig, no zig and no build tools;
+#     feat-standalone-toolchain B26, B35); unix: R CMD config CC fails
+#     with rzig's text for the build tools (patch 0010),
 #   - installs R6 from CRAN when it is reachable (download, TLS, R's
 #     internal untar),
 #   - Windows: loads tcltk, whose Tcl/Tk must then come from the tree's
 #     own R_HOME/Tcl,
 #   - requires R to have removed its session temp directories.
 # On linux, where strace can trace, every program started must be
-# /bin/sh or one of R's own launchers: an undeclared tool fails the job
-# even when R swallows the error (Sys.which() returning "", a temp
-# directory left behind). strace comes from the env (pixi.toml); in CI a
-# missing or blocked strace fails the check (cannot_check).
+# /bin/sh, one of R's own launchers or rzig (the preflight's check mode):
+# an undeclared tool fails the job even when R swallows the error
+# (Sys.which() returning "", a temp directory left behind). strace comes
+# from the env (pixi.toml); in CI a missing or blocked strace fails the
+# check (cannot_check).
 #
 # Windows: R starts programs without a shell (CreateProcess), so there is
 # no /bin/sh to allow. The environment keeps only what Windows itself
@@ -48,8 +54,7 @@ command -v cygpath > /dev/null 2>&1 && TREE="$(cygpath -u "$TREE")"
 rh="$RH"
 test -d "$TREE/$rh" || { echo "error: no R tree at $TREE; run 'pixi run build' first" >&2; exit 1; }
 # Resolved, so that cp -a below copies the directory and not a symlink
-# to it (which would put R back in its original place and let the
-# toolchain removal hit the real tree).
+# to it (which would put R back in its original place).
 TREE="$(cd "$TREE" && pwd -P)"
 # Windows: with PATH reduced to bin\x64 and System32 below, R.dll's conda
 # DLLs must sit in bin/x64, where vendor-libs.sh copies them after every
@@ -68,8 +73,10 @@ fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-# A copy: the scenario removes the toolchain below, and R must not rely
-# on the place it was built in.
+# A copy: R must not rely on the place it was built in. It is the base
+# as it ships, R_HOME/bin/toolchain holding rzig alone (B19, B30):
+# nothing is removed from it (B26: the preflight asks rzig what is
+# missing).
 cp -a "$TREE" "$WORK/"
 T="$WORK/$(basename "$TREE")"
 if [ "$OS" = windows ]; then
@@ -88,10 +95,6 @@ else
 fi
 test -x "${R_START[0]}" || { echo "error: ${R_START[0]} missing from the copied tree" >&2; exit 1; }
 mkdir -p "$WORK/lib" "$WORK/tmp" "$WORK/pk"
-# Tiers 0/1 are the base package: no toolchain (phase T). Remove the
-# directory the toolchain package provides, so the scenario is exactly
-# what a base-only install has, and so the compile preflight fires.
-if [ "$OS" = windows ]; then rm -rf "$T/Library/lib/R/bin/toolchain"; else rm -rf "$T/lib/R/bin/toolchain"; fi
 
 for p in hermeticA hermeticB hermeticSrc; do
   mkdir -p "$WORK/pk/$p/R"
@@ -101,10 +104,15 @@ for p in hermeticA hermeticB hermeticSrc; do
 done
 mkdir -p "$WORK/pk/hermeticSrc/src"
 echo 'int hermetic_one(void) { return 1; }' > "$WORK/pk/hermeticSrc/src/one.c"
+# No configure script with a marker (configure_marker,
+# verify-helpers.sh): with the base alone the install's R CMD config
+# (patch 0010) fails before a configure would run, wherever the
+# preflight sits, so the marker could not tell. verify-bundle.sh's
+# scenario 3 tells the order (B26, C26).
 
 cat > "$WORK/check.R" <<'RCODE'
 stopifnot(!is.null(utils::osVersion), nzchar(utils::osVersion))
-stopifnot(!nzchar(Sys.which("make")))   # the scenario is "no toolchain"
+stopifnot(!nzchar(Sys.which("make")))   # the scenario is the base alone: no build tools
 windows <- .Platform$OS.type == "windows"
 lib <- normalizePath("lib")
 .libPaths(c(lib, .libPaths()))
@@ -138,21 +146,28 @@ stopifnot(hermeticA::hi() == "hi", hermeticB::hi() == "hi")
 remove.packages(c("hermeticA", "hermeticB"), lib = lib)
 left <- list.files(lib)
 if (length(left)) stop("left in the library after removal: ", paste(left, collapse = ", "))
-## Negative test (phase T): compiled code without the toolchain stops with
-## the preflight message, and R CMD config says make is missing.
+## Negative test (phase T; feat-standalone-toolchain B26, B35): compiled
+## code with the base alone stops in the preflight with rzig's text for
+## the compilers group (no zig: nothing names one here), and R CMD config
+## with its text for the build tools (no make).
 out <- suppressWarnings(system2(file.path(R.home("bin"), "R"),
                                 c("CMD", "INSTALL", "-l", shQuote(lib), "pk/hermeticSrc"),
                                 stdout = TRUE, stderr = TRUE))
-if (!any(grepl("r-zig toolchain is not installed", out, fixed = TRUE)) ||
+if (is.null(attr(out, "status")) ||
+    !any(startsWith(out, "Compiling needs the r-zig compilers for R ")) ||
     dir.exists(file.path(lib, "hermeticSrc")))
-    stop("no compile preflight:\n", paste(out, collapse = "\n"))
-cat("preflight: compiled package refused without the toolchain\n")
+    stop("no compile preflight with rzig's compilers text:\n", paste(out, collapse = "\n"))
+cat("preflight: compiled package stopped:", grep("^Compiling needs", out, value = TRUE), "\n")
 if (!windows) {
-    cfg <- suppressWarnings(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "CC"),
-                                    stdout = TRUE, stderr = TRUE))
-    if (is.null(attr(cfg, "status")) || !any(grepl("needs make", cfg, fixed = TRUE)))
-        stop("R CMD config without make:\n", paste(cfg, collapse = "\n"))
-    cat("R CMD config: fails cleanly without make\n")
+    ## its exit status is rzig's, 127, which system2(stdout = TRUE) would
+    ## turn into an R error: into a file instead
+    log <- file.path(tempdir(), "config.log")
+    st <- suppressWarnings(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "CC"),
+                                   stdout = log, stderr = log))
+    cfg <- readLines(log)
+    if (st == 0L || !any(startsWith(cfg, "Building packages needs the r-zig build tools for R ")))
+        stop("R CMD config without make: exit ", st, ", not rzig's build-tools text:\n", paste(cfg, collapse = "\n"))
+    cat("R CMD config: exit", st, "with rzig's build-tools text:", grep("^Building packages", cfg, value = TRUE), "\n")
 }
 if (online) {
     install.packages("R6", repos = repo, lib = lib, type = "source")
@@ -198,6 +213,9 @@ if [ -n "$strace_bin" ]; then
   while IFS= read -r prog; do
     case "$prog" in
       /bin/sh|"$T/bin/R"|"$T/bin/Rscript"|"$T/bin/../lib/R/bin/R"|"$T/lib/R/bin/R"|"$T/lib/R/bin/Rscript"|"$T/lib/R/bin/exec/R") ;;
+      # rzig's check mode, which the preflight and R CMD config run as
+      # R_HOME/bin/toolchain/zig-cc (bin/R resolves R_HOME, cd -P)
+      "$T/lib/R/bin/toolchain/zig-cc") ;;
       "$(command -v env)"|/usr/bin/env|/bin/env) ;;   # the harness's own env -i
       *) bad="$bad $prog" ;;
     esac

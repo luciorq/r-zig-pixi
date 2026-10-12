@@ -211,7 +211,7 @@ The classes, and who acts on them:
 | network | `cannot open URL`, HTTP 4xx/5xx, `curl: (n)`; also a package missing from the repositories | rerun |
 | resource | out of memory, no space left | fewer jobs, a bigger runner |
 | abi | an undefined symbol with `St3__1`, `__cxx11` or an MSVC name: libc++ code against a libstdc++ (or MSVC) library | a design decision for the user |
-| toolchain | rzig's own messages (`zig-cc: cannot run ...`), `LLVM ERROR`, an unknown option, a missing compiler-rt helper | fix in rzig, after the user agrees |
+| toolchain | rzig's own messages (`zig-cc: cannot run ...`), `LLVM ERROR`, an unknown option, a missing compiler-rt helper; also the install preflight's stop (patch 0009: `r-zig toolchain is incomplete`, whose row shows rzig's `zig-cc: ` line naming what is missing, or `is not installed`) | fix in rzig, after the user agrees; for the preflight's stop, add what it names |
 | crash | R died from a signal or a Windows exception (exit status 128 or more, or below 0), or printed `*** caught segfault ***` | read the log; after an unload on linux, Z9 until rzig's fix |
 | upstream | a packaging bug in a conda-forge library or in the channels: a Homebrew path in a conda library (`Library not loaded: /opt/homebrew/...`), CMake's `debug`/`optimized` keywords from a `.pc` file, an import library that lists what its DLL does not export (`The specified procedure could not be found`), a solver conflict when `--conda` makes its env (round 1's U1 to U4) | work around it in the env (a pin, a fixed file) and record it |
 | sysdep | `configure: error`, a missing header, `-l` or pkg-config module, `command not found` | add it to the stress feature (or the extras for tools) |

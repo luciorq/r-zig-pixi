@@ -308,11 +308,13 @@ pub fn build(b: *std.Build) !void {
 
     var variant = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal (unix only)") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
-    // What the compile preflight (scripts/zig-build.sh's install.R patch)
-    // tells someone without the toolchain package to install: written into
-    // etc/Renviron (Windows: etc/Renviron.site). zig-build.sh passes the
-    // conda one for the conda build; the wheel sets its own; empty means R's
-    // generic message.
+    // What the compile preflight and R CMD config (patches 0009, 0010) tell
+    // someone whose R has no rzig, its toolchain package missing, to
+    // install: written into etc/Renviron (Windows: etc/Renviron.site).
+    // Where rzig is there, its check mode's text names what is missing
+    // instead (feat-standalone-toolchain B26, B35; PHASE3 C8). zig-build.sh
+    // passes the conda one for the conda build; the wheel sets its own;
+    // empty means R's generic message.
     const toolchain_hint = b.option([]const u8, "toolchain-hint", "R_ZIG_TOOLCHAIN_HINT default written into etc/Renviron") orelse "";
 
     const native = b.resolveTargetQuery(.{});
@@ -2550,8 +2552,9 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 /// the name it was started as. They are the only files directly in that
 /// directory: the toolchain groups' files sit in its subdirectories
 /// (feat-standalone-toolchain B19, B30). The r-zig-toolchain packages own
-/// this directory; the compile preflight (zigbuild/patches/, install.R)
-/// looks for its zig-cc on every OS.
+/// this directory; the compile preflight (patch 0009, install.R) and R CMD
+/// config (patch 0010) run its check mode by the name of CC, zig-cc on
+/// unix and gcc.exe on Windows (B26 a).
 ///   unix:    zig-cc, zig-cxx (CC/CXX/OBJC/OBJCXX), zig-fc (FC), zig-ar,
 ///            zig-ranlib
 ///   Windows: gcc.exe, g++.exe (Makeconf.win's $(BINPREF)gcc.exe and
@@ -2566,14 +2569,16 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 ///            compiler's directory before PATH, and packages hand it R
 ///            CMD config CC, gcc.exe here; without them a CMake-built
 ///            static library has no archiver, CMAKE_AR-NOTFOUND, where
-///            MinGW's ar.exe was before phase 3), and zig-cc, zig-cxx for
-///            the preflight. A real PE executable is what R's Windows
-///            system() can run: it resolves a bare command name by
-///            appending ".exe" only, never through PATHEXT (found on
-///            kappa: `system("gcc --version")` reached an unrelated
-///            gcc.exe on PATH). The binutils Makeconf.win names
-///            (NM, DLLTOOL, RESCOMP, OBJDUMP, STRIP_*) are the build-tools
-///            group's, in bin/toolchain/binutils/ (B24).
+///            MinGW's ar.exe was before phase 3). No extensionless zig-cc
+///            or zig-cxx (B26 a): the preflight looked for zig-cc on every
+///            OS until it ran the check mode, which gcc.exe takes. A real
+///            PE executable is what R's Windows system() can run: it
+///            resolves a bare command name by appending ".exe" only, never
+///            through PATHEXT (found on kappa: `system("gcc --version")`
+///            reached an unrelated gcc.exe on PATH). The binutils
+///            Makeconf.win names (NM, DLLTOOL, RESCOMP, OBJDUMP, STRIP_*)
+///            are the build-tools group's, in bin/toolchain/binutils/
+///            (B24).
 /// Before rzig these were bash scripts (toolchain/), and on Windows a C
 /// forwarder that ran them through the env's bash; rzig needs neither
 /// bash nor CONDA_PREFIX to compile.
@@ -2581,7 +2586,7 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
     const b = ctx.b;
     const step = b.step("install-rzig", "Install rzig into R_HOME/bin/toolchain");
     const names: []const []const u8 = switch (ctx.os) {
-        .windows => &.{ "gcc.exe", "g++.exe", "zig-fc.exe", "zig-ar.exe", "zig-ranlib.exe", "gcc-ar.exe", "gcc-ranlib.exe", "ar.exe", "ranlib.exe", "zig-cc", "zig-cxx" },
+        .windows => &.{ "gcc.exe", "g++.exe", "zig-fc.exe", "zig-ar.exe", "zig-ranlib.exe", "gcc-ar.exe", "gcc-ranlib.exe", "ar.exe", "ranlib.exe" },
         else => &.{ "zig-cc", "zig-cxx", "zig-fc", "zig-ar", "zig-ranlib" },
     };
     for (names) |n| {

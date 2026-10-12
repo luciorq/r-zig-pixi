@@ -113,7 +113,9 @@ package = { cmd = "bash scripts/package-standalone.sh", depends-on = ["install"]
 # the build-tools archive beside it; R and packages compiled with them run
 # with nothing from the build env (unix: env -i, TLS with the shipped CA
 # bundle; Windows: rzig's dry runs, the binutils Makeconf names, OpenMP C
-# and Fortran packages loaded with PATH = bin\x64 + System32). It needs
+# and Fortran packages loaded with PATH = bin\x64 + System32), and the
+# install preflight (patch 0009) stops a compiled package with the text
+# of the group it misses, before configure (B26). It needs
 # the group archives dist/R-<ver>-<platform>-{compilers,build-tools}.<ext>
 # with their sha256 (package-toolchain, or in CI the toolchain job's) and
 # does not rebuild them, so CI tests the downloaded ones (B31).
@@ -151,8 +153,10 @@ unpack-toolchain = "bash scripts/unpack-toolchain.sh"
 compile-tree = "bash scripts/compile-tree.sh"
 # Tier 0/1 with an empty environment and only the tree's own programs on
 # PATH (unix: <tree>/bin, strace on linux; Windows: bin\x64 plus
-# System32): start R, install without compiling. Runs on a copy of the
-# installed tree, the tree that ships, so it needs no `package` first.
+# System32): start R, install without compiling, and a compiled package
+# stops in the install preflight with rzig's compilers text (B26). Runs
+# on a copy of the installed tree, the tree that ships, so it needs no
+# `package` first.
 hermetic = "bash scripts/hermetic-check.sh"
 # rzig, the compilers in R_HOME/bin/toolchain (zigbuild/tools/rzig/): its
 # unit tests here, and on linux the parity test against the bash shims in
@@ -513,14 +517,21 @@ python = ">=3.9"
 # (never hit the bug there; just a slightly simpler directory name).
 # -c: rattler-build does not read the workspace channels; `universe` is
 # where flang-zig/flang-rt-zig (osx-arm64 Fortran) come from.
-# rm: rattler-build restores the staging output (the R build) from
+# rm: every build starts from an empty dist/conda, as CI's does. Two
+# leftovers made a local rebuild silently test or ship old bits:
+# rattler-build restores the staging output (the R build) from
 # dist/conda/build_cache under a key that does not hash the recipe's
-# `path:` sources (scripts/, zigbuild/, build.zig), so a local rebuild
-# after editing them silently reused the old build (2026-09-30).
+# `path:` sources (scripts/, zigbuild/, build.zig), so a rebuild after
+# editing them reused the old build (2026-09-30); and it indexes
+# dist/conda as it starts and lists a package only under a file name
+# the index lacks, so a rebuild with the same build string kept the old
+# package's sha256, and r-zig-toolchain's test (and any env made from
+# dist/conda) installed the old r-zig-slim from the rattler cache
+# (kappa, 2026-10-11). The cost: every build downloads R's sources.
 # --error-*: two outputs packaging the same file, or a staging file no
 # output takes, fail the build instead of warning (no 0.76.1 build of
 # ours has warned).
-conda-package = "rm -rf dist/conda/build_cache && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id --error-overlapping-files --error-unused-staging-files -c conda-forge -c https://prefix.dev/universe"
+conda-package = "rm -rf dist/conda && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id --error-overlapping-files --error-unused-staging-files -c conda-forge -c https://prefix.dev/universe"
 
 # Channel administration: list/delete published package files. Neither
 # rattler-build nor pixi has CLI support for either operation (upload-

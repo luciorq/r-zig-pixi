@@ -37,7 +37,10 @@
 #     when the rule says (a linux link with -shared as a word, no
 #     -nostartfiles or -nostdlib; a Windows command with -o as a word; no
 #     compile-only flag), and reported as "ok+". The zig stand-ins write
-#     the object rzig asks them to compile;
+#     the object rzig asks them to compile. A Windows link also names its
+#     import library under the stub's rule (windows.implib: the lines
+#     `-Xlinker` and `--out-implib=<output>.rzig.lib`), checked and taken
+#     out the same way;
 #   - what a case's CASE_DELIBERATE sed script does to the bash side, with
 #     CASE_WHY: F3b's other differences (rzig never reads CONDA_PREFIX; the
 #     tree's headers on every call, -idirafter on Windows), the message
@@ -182,6 +185,12 @@ prog "$W/gf/gfortran" "echo '$W/gcclib/libgfortran.dll.a'"
 
 pass=0 own=0 deliberate=0 fail=0
 obj_re='/r-zig/(dso-fini-[0-9a-f]*/dso_fini|cfguard-[0-9a-f]*/guard_dispatch)\.o$'
+# a Windows link's import library (windows.implib): the lines -Xlinker and
+# --out-implib=<output>.rzig.lib; drop_implib takes both out
+implib_re='^--out-implib=.*\.rzig\.lib$'
+drop_implib() {
+  awk '{ l[NR] = $0 } END { for (i = 1; i <= NR; i++) { if (l[i] == "-Xlinker" && i < NR && l[i + 1] ~ /^--out-implib=.*\.rzig\.lib$/) { i++; continue }; print l[i] } }'
+}
 why_tree="rzig names the tree it is installed in as such, not as the shim's <its dir>/../../../.."
 why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not installed in adds nothing"
 
@@ -195,7 +204,7 @@ why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not instal
 #   CASE_DELIBERATE  sed script for the bash side's output, and CASE_WHY
 run_case() {
   local name=$1 os=$2 tool=$3; shift 3
-  local shim=$tool uname_s side status ok=1 t=${CASE_TREE:-tree} obj_want=0 n a
+  local shim=$tool uname_s side status ok=1 t=${CASE_TREE:-tree} obj_want=0 implib_want=0 n a
   case $tool in gcc) shim=zig-cc ;; g++) shim=zig-cxx ;; gcc-ar|ar) shim=zig-ar ;; gcc-ranlib|ranlib) shim=zig-ranlib ;; esac
   case $os in linux) uname_s=Linux ;; macos) uname_s=Darwin ;; windows) uname_s=MINGW64_NT-10.0-26100 ;; esac
   local -a env=(HOME="$W/home" LC_ALL=C)
@@ -213,6 +222,7 @@ run_case() {
   if [ "$obj_want" = 1 ]; then
     for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) obj_want=0 ;; esac; done
   fi
+  [ "$os" = windows ] && implib_want=$obj_want
   local -a sides=(bash dry)
   [ "$os" = linux ] && sides+=(real)
   for side in "${sides[@]}"; do
@@ -233,15 +243,18 @@ run_case() {
   done
   # always: the shim's unnormalized "<its dir>/../../../.." is rzig's tree
   sed -e "s|$W/$t/lib/R/bin/bash/\.\./\.\./\.\./\.\.|$W/$t|g" ${CASE_DELIBERATE:+-e "$CASE_DELIBERATE"} "$W/out.bash" > "$W/want"
-  # always: rzig's -L into its own environment (F3b) and the object it
-  # compiles (dso_fini.zig, cfguard.zig), taken out of its side
+  # always: rzig's -L into its own environment (F3b), the object it
+  # compiles (dso_fini.zig, cfguard.zig) and a Windows link's import
+  # library (windows.implib), taken out of its side
   local own_l="-L$W/$t/lib" own_added=0
   for side in "${sides[@]:1}"; do
     grep -qxF -- "$own_l" "$W/out.$side" && own_added=1
     n=$(grep -cE -- "$obj_re" "$W/out.$side" || :)
     [ "$n" = 0 ] || own_added=1
     [ "$n" = "$obj_want" ] || { ok=0; echo "    $side: $n objects rzig compiled, want $obj_want" >> "$W/report"; }
-    grep -vxF -- "$own_l" "$W/out.$side" | { grep -vE -- "$obj_re" || :; } > "$W/cmp.$side"
+    n=$(grep -cE -- "$implib_re" "$W/out.$side" || :)
+    [ "$n" = "$implib_want" ] || { ok=0; echo "    $side: $n import libraries named, want $implib_want" >> "$W/report"; }
+    grep -vxF -- "$own_l" "$W/out.$side" | { grep -vE -- "$obj_re" || :; } | drop_implib > "$W/cmp.$side"
     cmp -s "$W/want" "$W/cmp.$side" || { ok=0; diff -u "$W/want" "$W/cmp.$side" | sed 's/^/    /' >> "$W/report" || :; }
   done
   if [ "$ok" = 1 ] && ! cmp -s "$W/out.bash" "$W/cmp.dry"; then
@@ -644,5 +657,5 @@ check "a compile with no zig: 127, the compilers group" \
   bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' -c a.c > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
     grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err'"
 
-echo "== $pass identical, $own identical but for rzig's own-environment -L or compiled object, $deliberate deliberate differences, $fail failed"
+echo "== $pass identical, $own identical but for rzig's own-environment -L, compiled object or import library, $deliberate deliberate differences, $fail failed"
 [ "$fail" = 0 ]

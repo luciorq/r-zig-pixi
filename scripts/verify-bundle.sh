@@ -22,21 +22,26 @@
 #   1. The base alone: R runs from the new place (unix: env -i) with the
 #      flavor's capabilities, the vendored libraries loading from there;
 #      R puts the build-tools group's usr/bin first on PATH (B25, C27);
-#      rzig's check mode exits 127 for each group; hermetic-check.sh's
-#      tier 0/1 on the extracted tree; TLS trust with the shipped CA
+#      rzig's check mode exits 127 for each group with what is missing
+#      and the group's text (B26, B35); hermetic-check.sh's tier 0/1 on
+#      the extracted tree, where the install preflight stops a compiled
+#      package with the compilers' text; TLS trust with the shipped CA
 #      bundle and nothing from the build env (unix).
-#   2. + compilers: rzig's check mode finds zig and flang; the C compiler
-#      compiles for the arch's baseline CPU, not this machine's, also when
-#      told -mtune=native (LLVM IR's target-cpu); packages compiled with
-#      the tree build and load. unix, under env -i: C++, Fortran,
-#      USE_FC_TO_LINK, $(FLIBS) without flang, zig-fc with no flang,
-#      OpenMP (C, and Fortran with `use omp_lib`) with the group's openmp/
-#      where the base has libomp and openmp/ left alone on minimal (B40),
-#      decoy CONDA_PREFIX runs. Windows, where make is a build tool:
-#      rzig's dry runs (-L from where the tree now is, the group's
-#      openmp/, CONDA_PREFIX ignored), and an OpenMP DLL compiled and
-#      linked by gcc.exe alone, loaded with only bin\x64 and System32 on
-#      PATH.
+#   2. + compilers: rzig's check mode finds zig and flang; unix, the
+#      preflight's other branches (zig from ZIG_BIN, no make, no flang):
+#      a C package stops with the build tools' text, a Fortran one with
+#      no flang and the compilers' text, neither installing (C26); the
+#      C compiler compiles for the arch's baseline CPU, not this
+#      machine's, also when told -mtune=native (LLVM IR's
+#      target-cpu); packages compiled with the tree build and load. unix,
+#      under env -i: C++, Fortran, USE_FC_TO_LINK, $(FLIBS) without
+#      flang, zig-fc with no flang, OpenMP (C, and Fortran with `use
+#      omp_lib`) with the group's openmp/ where the base has libomp and
+#      openmp/ left alone on minimal (B40), decoy CONDA_PREFIX runs.
+#      Windows, where make is a build tool: rzig's dry runs (-L from
+#      where the tree now is, the group's openmp/, CONDA_PREFIX ignored),
+#      and an OpenMP DLL compiled and linked by gcc.exe alone, loaded
+#      with only bin\x64 and System32 on PATH.
 #   3. + build-tools: R runs the group's tools. unix: make is
 #      R_HOME/bin/toolchain/usr/bin/make (rzig's check mode, Sys.which,
 #      and on linux the make strace saw run), and install.packages with
@@ -48,13 +53,15 @@
 #      CC are rzig, and the OpenMP C and Fortran packages, the
 #      static-library package and a package with a .rc file build and
 #      load with only bin\x64 and System32 on PATH; LTO is recorded, not
-#      checked (B43-2, C9).
+#      checked (B43-2, C9). Every OS, with no ZIG_BIN (no zig: phase 5):
+#      a package with a configure script stops in the preflight with the
+#      compilers' text, and with R_ZIG_NO_PREFLIGHT=1 gets past it, runs
+#      its configure and fails in the compile (C26).
 # What phase 3 leaves to later phases (PLAN.md): the compilers group has
 # no zig (phase 5) and no flang (phase 6), so scenario 2 takes zig from
 # ZIG_BIN=$ZIG and flang from the env; Windows' build-tools group has no
 # usr/bin (phase 7), so scenario 3 takes sh and make from the env's
-# Library/usr/bin. rzig's texts for a missing group are asserted from
-# step 4, when the install preflight shows them.
+# Library/usr/bin.
 # The static checks of the trees (Makeconf, the compilers are rzig, the CA
 # bundle, rpaths, the glibc ceiling, the C++ runtime of R's binaries, the
 # macOS floor and load commands, minimal's excluded libraries, Windows'
@@ -62,8 +69,8 @@
 # headers and load commands, which moving a tree does not change:
 # verify-tree.sh and verify-toolchain.sh run them where the trees are
 # built. Shared helpers: verify-helpers.sh (archive_files, tree_files,
-# rzig_names, extract_archive, rpaths_of, needed_of, cxx_deps,
-# minos_over_floor, cannot_check).
+# rzig_names, configure_marker, extract_archive, rpaths_of, needed_of,
+# cxx_deps, minos_over_floor, cannot_check).
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
 
@@ -241,6 +248,18 @@ mkpkg() {
   printf 'int %s_val(void) { return %s; }\n' "$2" "$3" > "$d/src/$v"
 }
 
+# rzig's texts for a missing group, as it prints them (its name, zig-cc
+# for gcc.exe too, then what is missing; then the group's first line:
+# zigbuild/tools/rzig/check.zig and groups.zig, B35). starts_line <file>
+# <text>: a line of the file starts with the text (CRs dropped).
+no_zig_line="zig-cc: no zig (ZIG_BIN, R_HOME/bin/toolchain/zig, the environment's bin, PATH, python3 -m ziglang)"
+no_flang_line="zig-cc: no flang (R_HOME/bin/toolchain/flang/bin, the environment's bin, PATH)"
+no_make_line="zig-cc: no make on PATH"
+compilers_head="Compiling needs the r-zig compilers for R $R_VERSION on $PLAT: "
+build_tools_head="Building packages needs the r-zig build tools for R $R_VERSION on $PLAT: "
+preflight_stop="ERROR: this package has compiled code, and the r-zig toolchain is incomplete (see above)"
+starts_line() { tr -d '\r' < "$1" | awk -v p="$2" 'index($0, p) == 1 { f = 1 } END { exit !f }'; }
+
 # --- Scenario 1: the base alone ---------------------------------------------
 extract "$base" "$lists/base"
 echo "== scenario 1: the base alone"
@@ -364,14 +383,14 @@ else
   echo "== PATH in R and under R CMD starts with R_HOME/bin/toolchain/usr/bin"
 fi
 
-# rzig's check mode with no group (B26, B35): exit 127 for the compilers
-# (no ZIG_BIN, no zig/ in the toolchain, none in the tree's bin or on
-# PATH) and for the build tools (no make on PATH: unix the tree's bin,
-# Windows bin\x64 and System32), as a compile that finds no zig. The texts
-# it prints then are asserted from step 4 (PHASE3), when the preflight
-# shows them. A zig of the host's own in /usr/bin or /bin, or a python3
-# there with ziglang, is one rzig rightly finds: the compilers' check is
-# then skipped with a note.
+# rzig's check mode with no group (B26, B35), the texts the install
+# preflight and R CMD config show: exit 127 for the compilers (no
+# ZIG_BIN, no zig/ in the toolchain, none in the tree's bin or on PATH)
+# and for the build tools (no make on PATH: unix the tree's bin, Windows
+# bin\x64 and System32), as a compile that finds no zig, after a line
+# saying what is missing and the group's text. A zig of the host's own in
+# /usr/bin or /bin, or a python3 there with ziglang, is one rzig rightly
+# finds: the compilers' check is then skipped with a note.
 if [ "$OS" = windows ]; then
   zig_path="$R_BINDIR:$sys32"; make_path="$R_BINDIR:$sys32"
 else
@@ -388,21 +407,26 @@ if [ "$OS" != windows ]; then
 fi
 checked=""
 for chk in --rzig-check --rzig-check=build-tools; do
-  if [ "$chk" = --rzig-check ]; then p="$zig_path"; else p="$make_path"; fi
+  if [ "$chk" = --rzig-check ]; then
+    p="$zig_path"; what="$no_zig_line"; group_head="$compilers_head"
+  else
+    p="$make_path"; what="$no_make_line"; group_head="$build_tools_head"
+  fi
   if [ "$chk" = --rzig-check ] && [ -n "$host_zig" ]; then
     echo "   note: ${cc##*/} $chk skipped: this host's $host_zig is on PATH=$p"
     continue
   fi
   rc=0
   env -i "${base_env[@]}" PATH="$p" "$cc" "$chk" > "$VERIFY_DIR/check.log" 2>&1 || rc=$?
-  if [ "$rc" != 127 ]; then
+  if [ "$rc" != 127 ] || ! starts_line "$VERIFY_DIR/check.log" "$what" ||
+     ! starts_line "$VERIFY_DIR/check.log" "$group_head"; then
     cat "$VERIFY_DIR/check.log" >&2
-    echo "error: ${cc##*/} $chk with the base alone (PATH=$p): exit $rc, not 127" >&2
+    echo "error: ${cc##*/} $chk with the base alone (PATH=$p): exit $rc, not 127 with '$what' and '$group_head...'" >&2
     exit 1
   fi
   checked="$checked $chk"
 done
-[ -z "$checked" ] || echo "== check mode with the base alone: ${cc##*/}$checked exit 127"
+[ -z "$checked" ] || echo "== check mode with the base alone: ${cc##*/}$checked exit 127, each with what is missing and its group's text"
 
 # TLS trust (unix): the bundle must verify HTTPS without the build env's
 # trust anchors. conda-forge's libcurl/OpenSSL carry $CONDA/ssl compiled
@@ -460,10 +484,11 @@ fi
 
 # hermetic-check.sh's tier 0/1 on the extracted base (R_INSTALL_PREFIX
 # makes it env.sh's prefix): R-only packages one at a time and with
-# Ncpus = 2, a binary package, unix R CMD config CC, Windows tcltk from
-# R_HOME/Tcl, no temp leftovers, linux under strace. It works on a copy,
-# and removes that copy's R_HOME/bin/toolchain until the preflight calls
-# rzig's check mode (PHASE3 step 4).
+# Ncpus = 2, a binary package, the install preflight stopping a compiled
+# package with rzig's compilers text, unix R CMD config CC with the
+# build tools' text, Windows tcltk from R_HOME/Tcl, no temp leftovers,
+# linux under strace. It works on a copy of the base as extracted, rzig
+# included (B26).
 R_INSTALL_PREFIX="$BUNDLE_DIR" bash "$(dirname "$0")/hermetic-check.sh"
 
 # --- Scenario 2: base + compilers -------------------------------------------
@@ -497,6 +522,40 @@ if [ -n "$ZIG" ]; then
     checked="$checked, flang from PATH"
   fi
   echo "== check mode with the compilers: exit 0, $checked"
+fi
+
+# The install preflight's other branches (B26, C26), unix: zig from
+# ZIG_BIN=$ZIG, PATH the tree's bin alone, so no make (the build-tools
+# group is not extracted yet) and no flang. A package with C code passes
+# the compilers' check and stops at the build tools' with their text; one
+# with a Fortran source, src/a.f, stops at the compilers' with no flang
+# and their text. Neither installs. No configure script with a marker
+# (configure_marker): without the build tools the install's R CMD config
+# (patch 0010) fails before a configure would run, wherever the
+# preflight sits, so the marker could not tell; scenario 3 tells the
+# order. (Windows: scenario 3 runs the preflight with no zig.)
+if [ "$OS" != windows ] && [ -n "$ZIG" ]; then
+  pf="$VERIFY_DIR/preflight"
+  mkpkg "$pf/pk" pfC 1
+  mkpkg "$pf/pk" pfF 2
+  printf '      subroutine pff\n      end\n' > "$pf/pk/pfF/src/a.f"
+  mkdir -p "$pf/lib"
+  # preflight_stops <package> <what is missing> <the group's first line>
+  preflight_stops() {
+    local rc=0
+    (cd "$pf" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$BUNDLE_DIR/bin" \
+      "$R_BIN" CMD INSTALL -l lib "pk/$1") > "$pf/$1.log" 2>&1 || rc=$?
+    if [ "$rc" = 0 ] || [ -e "$pf/lib/$1" ] ||
+       ! starts_line "$pf/$1.log" "$2" || ! starts_line "$pf/$1.log" "$3" ||
+       ! starts_line "$pf/$1.log" "$preflight_stop"; then
+      cat "$pf/$1.log" >&2
+      echo "error: the install preflight did not stop $1 with '$2' and '$3...' (exit $rc)" >&2
+      exit 1
+    fi
+  }
+  preflight_stops pfC "$no_make_line" "$build_tools_head"
+  preflight_stops pfF "$no_flang_line" "$compilers_head"
+  echo "== the install preflight with zig and no build tools: a C package stops with no make and the build tools' text, a Fortran one with no flang and the compilers' text"
 fi
 
 # The CPU packages are compiled for, every OS: the baseline of this
@@ -1232,9 +1291,15 @@ RCODE
     if [ -f "$ow/fompfc/shlib.log" ] && ! grep -Eq 'toolchain/zig-fc(\.exe)? -shared .*-o fompfc\.dll' "$ow/fompfc/shlib.log"; then
       cat "$ow/fompfc/shlib.log" >&2; echo "error: the USE_FC_TO_LINK link of fompfc did not run zig-fc" >&2; exit 1
     fi
+    # No import library beside a DLL: zig writes one for each, which rzig
+    # names and deletes after the link (windows.implib), as GNU ld writes
+    # none. In a package's src/ R CMD build would pack it and R CMD check
+    # warn (guard_dispatch.lib, kappa's round 1).
+    left="$(cd "$ow" && ls -- */*.lib 2> /dev/null || :)"
+    [ -z "$left" ] || { echo "error: the links left import libraries beside the DLLs: $left" >&2; exit 1; }
     (cd "$ow" && env -i "${base_env[@]}" PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla load.R) ||
       { echo "error: the OpenMP packages ($pkgs) did not load with PATH = bin\\x64 + System32" >&2; exit 1; }
-    echo "== compiled packages verified: OpenMP with the groups (probe $pkgs: omp.h, libomp.lib from openmp/; libomp.dll from bin\\x64 at load)"
+    echo "== compiled packages verified: OpenMP with the groups (probe $pkgs: omp.h, libomp.lib from openmp/; libomp.dll from bin\\x64 at load; no import library left beside a DLL)"
   fi
 
   if [ -n "$ZIG" ]; then
@@ -1293,5 +1358,47 @@ RCODE
   else
     echo "== package builds skipped (no zig: ZIG_BIN unset, none on PATH)"
   fi
+fi
+
+# The install preflight and R_ZIG_NO_PREFLIGHT (B26, C26), every OS: with
+# both groups and no zig (ZIG_BIN unset; the compilers group has none
+# until phase 5), a package with C code and a configure script stops in
+# the preflight with the compilers' text, its configure not run; with
+# R_ZIG_NO_PREFLIGHT=1 it gets past the preflight, its configure runs and
+# leaves its marker, and the compile then fails with rzig's no-zig line.
+# Here, not with the base alone: the install runs R CMD config before
+# configure (for CC and the other variables), and R CMD config needs the
+# build tools (patch 0010; on Windows the binutils too). PATH: unix
+# /usr/bin:/bin, the group's make first (etc/Renviron); Windows as for the
+# builds above. A zig of the host's own (scenario 1) would let the compile
+# through: then this is skipped with a note.
+if [ -n "$host_zig" ]; then
+  echo "   note: the preflight and R_ZIG_NO_PREFLIGHT not checked: this host's $host_zig is on PATH"
+else
+  np="$VERIFY_DIR/nopre"
+  mkpkg "$np/pk" nopre 5
+  configure_marker "$np/pk/nopre"
+  mkdir -p "$np/lib"
+  if [ "$OS" = windows ]; then np_r="$R_EXE"; np_path="$bt_path"; else np_r="$R_BIN"; np_path=/usr/bin:/bin; fi
+  for skip in "" 1; do
+    rc=0
+    (cd "$np" && env -i "${base_env[@]}" ${skip:+R_ZIG_NO_PREFLIGHT=1} PATH="$np_path" \
+      "$np_r" CMD INSTALL -l lib pk/nopre) > "$np/install$skip.log" 2>&1 || rc=$?
+    ran=""; [ ! -e "$np/pk/nopre/configure-ran" ] || ran=1
+    if [ -z "$skip" ]; then
+      if [ "$rc" = 0 ] || [ -n "$ran" ] || ! starts_line "$np/install.log" "$no_zig_line" ||
+         ! starts_line "$np/install.log" "$compilers_head" || ! starts_line "$np/install.log" "$preflight_stop"; then
+        cat "$np/install.log" >&2
+        echo "error: with no zig, the install preflight did not stop nopre before its configure with the compilers' text (exit $rc)" >&2
+        exit 1
+      fi
+    elif [ "$rc" = 0 ] || [ -z "$ran" ] || [ -e "$np/lib/nopre" ] ||
+         starts_line "$np/install1.log" "$preflight_stop" || ! starts_line "$np/install1.log" "$no_zig_line"; then
+      cat "$np/install1.log" >&2
+      echo "error: with R_ZIG_NO_PREFLIGHT=1 and no zig, nopre's install did not get past the preflight, run its configure and fail in the compile with '$no_zig_line' (exit $rc)" >&2
+      exit 1
+    fi
+  done
+  echo "== the install preflight with no zig: a package stops before its configure with the compilers' text; with R_ZIG_NO_PREFLIGHT=1 its configure runs and the compile fails with no zig"
 fi
 echo "== standalone archives verified ($OS/$FLAVOR): the base alone, + compilers, + build-tools"

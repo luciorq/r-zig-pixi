@@ -324,6 +324,8 @@ fn run(ctx: *Ctx, argv: []const []const u8, env: ?*const std.process.Environ.Map
         // line is quoted by std (Microsoft's argv rules), so arguments
         // with embedded quotes, -DX='"a.h"', arrive intact (F7.7).
         var child = std.process.spawn(ctx.io, .{ .argv = argv, .environ_map = env }) catch |err| return cannotRun(ctx, argv[0], err);
+        // what it wrote that nobody keeps (windows.implib), once it is done
+        defer for (ctx.discard.items) |p| Io.Dir.cwd().deleteFile(ctx.io, p) catch {};
         const term = child.wait(ctx.io) catch |err| {
             ctx.warn("waiting for {s}: {t}", .{ argv[0], err });
             return 1;

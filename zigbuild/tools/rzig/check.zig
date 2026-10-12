@@ -1,9 +1,13 @@
 //! rzig's check mode (feat-standalone-toolchain B26 a, B32 a): whether a
 //! toolchain group's tools are there, before anything is compiled. The
-//! install preflight (patch 0009) and R CMD config (patch 0010) are to call
-//! it (phase 3), so the text that names a missing group comes from one
-//! place on every channel: rzig. Any of rzig's names takes it, as its only
-//! argument (zig-cc, or gcc.exe on Windows):
+//! install preflight (patch 0009: the compilers, or fortran when src/'s
+//! top level has Fortran sources, the ones R's default OBJECTS rule
+//! compiles, then the build tools; Fortran a Makevars builds from a
+//! subdirectory stops later, at zig-fc, with the same text) and R CMD
+//! config (patch 0010: the build tools) call it by CC's name, so the
+//! text that names a missing group comes from one place on every
+//! channel: rzig. Any of rzig's names takes it, as its only argument
+//! (zig-cc, or gcc.exe on Windows):
 //!
 //!   --rzig-check              the compile lookup: zig (zig-fc: also flang)
 //!   --rzig-check=fortran      zig and flang

@@ -4,7 +4,7 @@
 //! binutils and the other tools R's makefiles run). rzig prints a group's
 //! text when a compile finds no zig, when zig-fc finds no flang, and from
 //! its check mode (check.zig), which the install preflight and R CMD
-//! config are to call (phase 3).
+//! config call (patches 0009 and 0010, B26 a) and show.
 //!
 //! One text per group, the same on every channel. It is built from R's
 //! version (build.zig passes it, a build option) and the platform rzig is
@@ -26,10 +26,13 @@
 //!   flang, until then on PATH (zig also in ZIG_BIN).
 //!
 //! rzig does not read R_ZIG_TOOLCHAIN_HINT. Until phase 4 the conda and
-//! wheel builds still write it for the preflight (patch 0009) and R CMD
-//! config (patch 0010), and the wheel's value ("pip install
-//! r-zig-toolchain") is wrong for a missing flang. After phase 4 it is
-//! only a user's override.
+//! wheel builds still write it, naming their toolchain package, and the
+//! preflight (patch 0009) and R CMD config (patch 0010) show it only where
+//! R has no rzig, so that package is missing (PHASE3 C8). Where rzig is
+//! there, the package is installed and the hint would name the wrong
+//! remedy (the wheel's "pip install r-zig-toolchain" for a missing flang).
+//! Phase 4 removes the writers and that branch; a user's own value is then
+//! shown as a hint after rzig's text.
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
@@ -122,7 +125,8 @@ pub fn report(ctx: *const Ctx, what: []const u8, g: Group) !void {
     ctx.warn("{s}\n{s}", .{ what, t[0 .. t.len - 1] });
 }
 
-/// What a compile says when it finds no zig (find_zig.zig).
+/// What a compile says when it finds no zig (find_zig.zig). This and
+/// no_flang, after `zig-cc: `, are what verify-bundle.sh asserts.
 pub const no_zig = "no zig (ZIG_BIN, R_HOME/bin/toolchain/zig, the environment's bin, PATH, python3 -m ziglang)";
 /// What zig-fc says when it finds no flang (flang_rt.flang).
 pub const no_flang = "no flang (R_HOME/bin/toolchain/flang/bin, the environment's bin, PATH)";
@@ -151,9 +155,9 @@ test "one text per group, the same on every channel" {
     const linux: Platform = .{ .r = "4.6.1", .name = "linux-64", .windows = false, .zig = "0.16" };
     const mac: Platform = .{ .r = "4.6.1", .name = "osx-arm64", .windows = false, .zig = "0.16" };
     const win: Platform = .{ .r = "4.6.1", .name = "win-64", .windows = true, .zig = "0.16" };
-    // other scripts grep these: verify-bundle.sh the compilers' first line,
-    // wheel-test.sh "LLVM flang on PATH" and the pip line, parity-test.sh
-    // the first lines and unix's standalone lines
+    // other scripts grep these: verify-bundle.sh and hermetic-check.sh the
+    // first lines' beginnings, wheel-test.sh "LLVM flang on PATH" and the
+    // pip line, parity-test.sh the first lines and unix's standalone lines
     try testing.expectEqualStrings(
         \\Compiling needs the r-zig compilers for R 4.6.1 on linux-64: zig 0.16, and flang for Fortran.
         \\  standalone:  zig 0.16 on PATH or in ZIG_BIN, LLVM flang on PATH; for OpenMP, extract R-4.6.1-linux-64-compilers.tar.gz where you extracted R

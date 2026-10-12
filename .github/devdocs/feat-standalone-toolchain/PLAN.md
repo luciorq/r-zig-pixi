@@ -1165,7 +1165,10 @@ Blocks: phase 3 (format), phase 6 (revisit). Replaces: old 11.
 ### B14. conda build number (old 12)
 
 **Answer (2026-10-08): (a)**, with B37 (a). D7 (CC_VER/FC_VER) and E2
-(zstd declared) ride with phase 4's bump.
+(zstd declared) ride with phase 4's bump. Phase 4's number (2026-10-11,
+PHASE3 C14): the number after the one published when phase 4 merges
+(build 8 is on universe; so 9 unless another PR bumps first). The
+context below counts from 2026-10-08's build 4.
 
 Context:
 - recipe.yaml:120 is `number: 4`; #14 makes it 5; the re-lock keeps 4.
@@ -1180,11 +1183,14 @@ Context:
 - D7 (CC_VER/FC_VER) rides with the first bump.
 
 Options:
-- **(a)** Phase 4's PR bumps (5 → 6), and each later PR that changes a
-  conda package's files or dependencies bumps again. Phases 2 and 3 take
-  no bump; their changes publish with phase 4's. Goes with B37 (a).
-- **(b)** One bump, 5 → 6, at the end (phase 9). Goes with B37 (b) or
-  (c), where phases 2-9 merge together.
+- **(a)** Phase 4's PR bumps (to the number after the one published
+  when phase 4 merges: build 8 is on universe, so 9 unless another PR
+  bumps first), and each later PR that changes a conda package's files
+  or dependencies bumps again. Phases 2 and 3 take no bump; their
+  changes publish with phase 4's. Goes with B37 (a).
+- **(b)** One bump, to the number after the one published then, at the
+  end (phase 9). Goes with B37 (b) or (c), where phases 2-9 merge
+  together.
 
 Recommendation: as B37, so **(a)**. The channel gets the new boundary
 when it is complete on conda, and each later change when it merges (G4).
@@ -2532,10 +2538,18 @@ Steps:
   provide: the Windows binutils); r-zig-toolchain still owns all of TC.
 - make-wheel.py (wheels unchanged until phase 4): make comes from the
   toolchain tree; wheel-test checks `Sys.which("make")` instead of MAKE.
-- CI (B31, B12): a `toolchain` job per subdir in build.yaml; the `build`
-  job (all its legs) `needs:` it, and the packaging legs download their
-  subdir's groups, run the scenarios and upload base and group archives
-  with a short retention; upstream-zig.yaml gets its own toolchain job.
+- CI (B31 a, B12; PHASE3 section 3): a `toolchain` job
+  (toolchain.yaml, called from build.yaml, upstream-zig.yaml and
+  stress.yaml, C3) builds, archives and checks the groups once per
+  platform and uploads the two group archives as
+  `toolchain-<runner.os>-<runner.arch>` (`-upstream` for upstream zig),
+  kept 30 days, as long as failed legs can be re-run (still short of a
+  release, B12). Every leg needs it (with `!cancelled()`, C4), full and
+  openblas included, downloads its platform's archives and runs
+  `unpack-toolchain`, since contract and stress compile in the compile
+  tree. The packaging legs (default, minimal) run verify-package's three
+  scenarios on those archives and upload only the base, as
+  `standalone-<env>-<os>` (`-upstream`), kept 7 days.
 
 Tests:
 - linux-64 (slim, minimal, wheel, conda-package), omicron (osx-arm64
@@ -2547,17 +2561,24 @@ Tests:
   routing check moved, on the packages that use it.
 - File lists: base ∪ groups = R tree ∪ toolchain tree, no overlap.
 
-**Status (2026-10-10): steps 1 to 3 of 6 implemented and tested on
-linux-64; steps 1 and 2 and P3-C committed, step 3 not.** The worktree
-feat-standalone-phase3 (branch feat-standalone-phase3, from main
-966d661, with main 888faa6 (PR #23) merged) follows the reviewed
-implementation plan (PHASE3-IMPLEMENTATION.md and CRITIQUE.md, in
+**Status (2026-10-11): steps 1 to 6 done. Steps 1 to 3 and P3-C are
+committed (a40fadb); steps 4 to 6 are not. Tested on linux-64 (both
+zigs), omicron (osx-arm64; osx-64 under Rosetta) and kappa (win-64); CI
+has not run.** The worktree feat-standalone-phase3 (branch
+feat-standalone-phase3, from main 966d661, with main 888faa6 (PR #23)
+merged) follows the reviewed implementation plan
+(PHASE3-IMPLEMENTATION.md and CRITIQUE.md, in
 /data/gamma/luciorq/workspaces/temp/r-zig-pixi/phase3plan/critic/), with
 the user's answers to its open points: A (a), the toolchain build in its
 own zigbuild/toolchain/build.zig, run by `pixi run toolchain` through
-`zig build --build-file`; B (a), a compile tree for contract and stress.
-Step 4 (the preflight: patches 0009 and 0010, Windows' extensionless
-zig-cc and zig-cxx dropped) is next.
+`zig build --build-file`; B (a), a compile tree for contract and stress;
+P3-C (a); and to step 3's review (2026-10-11; step 4's record). B24's
+routing check moved no tool; dlltool (with as) and windres can move in
+follow-up PRs (step 6's record). Next: the user commits steps 4 to 6;
+before merging, universe must hold build 8 for all five subdirs (C13);
+then CI on the PR (the core tier with conda-package, the `full-ci`
+label, the `upstream-zig` label, one stress dispatch; PHASE3 section
+10).
 
 #### Phase 3 record: step 1, paths (2026-10-10, linux-64)
 
@@ -2971,7 +2992,8 @@ Choices and deviations, with their reasons:
   archives does, Windows gets the binutils Makeconf.win names, and
   openmp/ makes contract run B40 on every leg (C12). Only a build-tools
   directory is required; without openmp/ a slim contract would take
-  omp.h from R_ZIG_EXTRA_ENV.
+  omp.h from R_ZIG_EXTRA_ENV. (Superseded in step 4: openmp/ is required
+  too where the base has the libomp runtime, the user's answer (4).)
 - Scenario 2's make (C17): unix compiles there use the env's make, which
   stands in for "a make that is not the group's" (PLAN's Verification
   says the host's /usr/bin make): the env's is on every machine this runs
@@ -3116,6 +3138,7 @@ compilers archive for OpenMP on minimal too, where B40 leaves openmp/
 unused; verify-tree.sh does not check the order of Rcmd_environ's lines
 (verify-bundle's PATH run check, C27, would see a wrong one);
 compile-tree.sh does not require openmp/ where the base has libomp.
+(Answered 2026-10-11: step 4's record.)
 
 Ran again (linux-64, every task with `--locked`, TMPDIR on /data,
 conda-forge zig 0.16.0 unless named; dist/'s trees and archives removed
@@ -3148,6 +3171,540 @@ and in test-toolchain.R's Windows block), read twice and checked
 against the template (verify-tree's Makeconf lines and BINPREF scan
 run on it); they join step 3's Windows list for kappa. wheel and
 wheel-test: no wheel file changed.
+
+#### Phase 3 record: step 4, the preflight (2026-10-11)
+
+What changed (B26 a, B35; C8, C26, C29):
+- Patch 0009 (install.R, before the configure step). For a package with
+  `src/`, or with a configure script R runs (unix `configure`; Windows
+  `configure.win` or `configure.ucrt`), and with no user Makevars and no
+  R_ZIG_NO_PREFLIGHT, it runs rzig's check mode by CC's name,
+  `R_HOME/bin/toolchain/zig-cc` (gcc.exe on Windows): `--rzig-check`,
+  or `--rzig-check=fortran` when `src/`'s top level has `.f`, `.f90`
+  or `.f95` files (either case of the f), then
+  `--rzig-check=build-tools`. A failing check prints what is missing and
+  the group's text on stderr, as it comes, and the install stops with
+  "ERROR: this package has compiled code, and the r-zig toolchain is
+  incomplete (see above)". The
+  Makeconf-CC fallback is gone. Without rzig (r-zig-slim or the r_zig
+  wheel without their toolchain package, until phase 4) the old branch
+  and message stay, with R_ZIG_TOOLCHAIN_HINT (C8).
+- Patch 0010 (src/scripts/config, also Windows' bin/config.sh): with
+  rzig, `"${rzig}" --rzig-check=build-tools > /dev/null || exit`, so R
+  CMD config ends with rzig's status after its text; without rzig, the
+  old `command -v make` test and message.
+- build.zig: installRzig's Windows names lose the extensionless zig-cc
+  and zig-cxx (B26 a): gcc.exe, g++.exe, zig-fc.exe, zig-ar.exe,
+  zig-ranlib.exe, gcc-ar.exe, gcc-ranlib.exe, ar.exe and ranlib.exe.
+  verify-helpers.sh's `rzig_names` follows. The `-Dtoolchain-hint`
+  comment says the hint shows only where rzig is missing.
+- rzig: doc comments only (check.zig, groups.zig): the patches call the
+  check mode, and Fortran is looked for at `src/`'s top level.
+- hermetic-check.sh: nothing is deleted from the copied tree; its TC
+  holds rzig, as the base ships. A package with C code must stop with a
+  non-zero exit and a line starting "Compiling needs the r-zig compilers
+  for R ", and not install. On unix `R CMD config CC` must exit non-zero
+  with a line starting "Building packages needs the r-zig build tools
+  for R ". linux's strace allowlist adds `$T/lib/R/bin/toolchain/zig-cc`.
+- verify-bundle.sh asserts rzig's texts as check.zig and groups.zig
+  print them: "zig-cc: no zig (ZIG_BIN, R_HOME/bin/toolchain/zig, the
+  environment's bin, PATH, python3 -m ziglang)", "zig-cc: no flang
+  (R_HOME/bin/toolchain/flang/bin, the environment's bin, PATH)",
+  "zig-cc: no make on PATH", and each group's first line up to "for R
+  <ver> on <plat>: " (`starts_line`: a line starts with the text, CRs
+  dropped).
+  - Scenario 1: the check mode exits 127 with those lines.
+  - Scenario 2 (unix; ZIG_BIN=$ZIG, PATH the extracted tree's bin): a C
+    package stops with no make and the build tools' text, a `src/a.f`
+    package with no flang and the compilers' text; neither installs, and
+    both print the preflight's ERROR line (C26).
+  - Scenario 3 (every OS, no ZIG_BIN): a package with C code and a
+    configure script stops with the compilers' text, its configure not
+    run; with R_ZIG_NO_PREFLIGHT=1 its configure runs (verify-helpers.sh's
+    `configure_marker`: configure and configure.win write
+    `configure-ran` with the shell builtin `:`) and the compile fails
+    with the no-zig line (C26). Skipped with a note where the host has a
+    zig of its own.
+- compile-tree.sh, the user's answer (4) below: it stops, naming the
+  file and "run 'pixi run toolchain' (or 'pixi run unpack-toolchain')",
+  when the R tree has the libomp runtime (`lib/libomp.so`,
+  `lib/libomp.dylib` or `<RH>/bin/x64/libomp.dll`) and the toolchain
+  tree has no `openmp/`. A slim contract can no longer take omp.h from
+  R_ZIG_EXTRA_ENV.
+- recipe: test-toolchain.R's line 3 checks the platform's rzig name
+  (gcc.exe on Windows, else zig-cc), with `windows` and `tc` defined once
+  at the top; test-preflight.R's line 4 checks that the same name is
+  absent (C29).
+- stress/stress.R: the toolchain class also matches "r-zig toolchain is
+  (incomplete|not installed)", and for the "incomplete (see above)" stop
+  the reported line is the last `zig-cc: ` line above it, which names
+  what is missing. stress/README.md's class table says so.
+- pixi.toml: the `hermetic` and `verify-package` comments mention the
+  preflight.
+
+The user's answers to step 3's review (2026-10-11): (1) a zig that
+cannot start keeps exit 1 in the check mode; (2) one compilers text for
+every flavor; (3) Rcmd_environ's line order is left to verify-bundle's
+PATH run check (C27); (4) compile-tree.sh requires the toolchain tree's
+openmp/ where the base has the libomp runtime; (5) rzig stays ar.exe and
+ranlib.exe beside gcc.exe on Windows, for CMake. Only (4) changed code.
+
+Choices and deviations, with their reasons:
+- 0009 runs `system2(rzig, chk, stdout = FALSE)` and tests its status,
+  not PHASE3 section 7's `system2(..., stdout = TRUE, stderr = TRUE)`
+  followed by message(): on unix R's system(intern = TRUE) turns exit
+  127 into the R error "error in running command" (src/unix/sys-unix.c,
+  cmdError), so that message branch never ran (reproduced: R CMD INSTALL
+  died with that error). rzig's text now goes straight to R CMD
+  INSTALL's stderr, and its ok line is discarded.
+- The preflight counts only the configure script R runs. PHASE3's
+  condition also counted a plain `configure` on Windows, where R only
+  warns about it, so an R-only package shipping a unix configure alone
+  would have stopped on the Windows base (the review below).
+- Fortran is looked for at `src/`'s top level only, as R's default
+  OBJECTS rule compiles (install.R's `srcs <- dir(pattern = ...)`). A
+  Makevars that builds Fortran from a subdirectory passes the preflight
+  and stops later, at zig-fc, with the same no-flang line and text. Not
+  recursive, so that a vendored Fortran file that is never built does
+  not ask for flang, which the pip channel lacks. 0009's header and
+  comment and check.zig say so (the review).
+- R CMD config's exit status is rzig's, 127, as PHASE3 section 7 has it
+  (step 4's open question; (a), as recommended, kept with the user's
+  "follow recommendations"): R's callers that use system(intern = TRUE)
+  end with R's "error in running command", after rzig's text on stderr.
+- No configure marker in hermetic-check.sh's hermeticSrc or in scenario
+  2's packages, against PHASE3's hermetic bullet: without the build
+  tools the install's R CMD config (0010) fails before a configure would
+  run, wherever the preflight sits, so the marker proved nothing (the
+  review). Scenario 3 is the one place where R CMD config passes, so the
+  order is told there, and C26's R_ZIG_NO_PREFLIGHT test moved there from
+  scenario 1: install.R runs R CMD config (CC and the rest) before
+  configure, and with the base alone that stops first.
+- `configure_marker` is one helper, writing both configure and
+  configure.win on every OS, not a unix configure plus a Windows
+  configure.win.
+- hermetic-check.sh captures R CMD config through a file
+  (`system2(stdout = log, stderr = log)`): its 127 through `stdout =
+  TRUE` would be an R error.
+- verify-bundle compares the exact `zig-cc: ...` lines and each group's
+  first line up to "on <plat>: ", not its zig version part;
+  hermetic-check uses PHASE3's shorter prefixes.
+- The hint (C8): until phase 4 it shows only in the rzig-missing branch,
+  as today, which answers TODO's "decide where the preflight shows a
+  user's R_ZIG_TOOLCHAIN_HINT". Since hermetic keeps TC, no linux test
+  reaches 0010's rzig-missing branch any more (step 3's hermetic
+  deleted TC to reach it); test-preflight.R still runs 0009's in the
+  conda build, and 0010's lines pass when run alone. The branch is not
+  published (B14: no bump in phase 3) and phase 4 removes it.
+
+Tests: step 6's record.
+
+#### Phase 3 record: step 5, CI (2026-10-11)
+
+What changed (B31 a, B12, B42; C3, C4, C33, C34, C35, C36):
+- .github/workflows/toolchain.yaml (new, workflow_call; inputs `os`, and
+  `zig`: conda, the default, or upstream): checkout; setup-pixi v0.11.0
+  with pixi v0.81.0, the default env and `cache: false` (C33: the
+  toolchain build reads info/licenses and info/recipe from pixi's
+  package cache, which is empty when the env comes from setup-pixi's
+  cache); for upstream, ZIG_BIN from fetch-zig (C35); `toolchain-test`,
+  `package-toolchain`, then `verify-toolchain`, so the tree checked is
+  the one archived (C34); the group archives and their `.sha256`
+  uploaded as `toolchain-<runner.os>-<runner.arch>`, `-upstream` added
+  for upstream zig, kept 30 days, `if-no-files-found: error`. The job is
+  named "toolchain" or "toolchain (upstream zig)", with a 30-minute
+  timeout.
+- build.yaml: a `toolchain` job, one leg per platform (conda-package's
+  five runners, `linux_runner` included), with the build job's
+  condition. `build` and `build-full` need it, with `!cancelled() &&`
+  after the ENABLE_HOSTED_JOBS test, where conda-package has it: a
+  failed toolchain leg fails only its own platform's legs, at their
+  download (C4). conda-package is unchanged.
+- build-r.yaml: right after setup-pixi every leg downloads
+  `toolchain-<os>-<arch>[-upstream]` into dist/ (download-artifact@v8)
+  and runs `unpack-toolchain`: contract (every leg, full and openblas
+  too) compiles in the compile tree, verify-package extracts the
+  archives, the wheel takes make from the tree. The packaging legs
+  (default, minimal) run verify-package's three scenarios on the
+  downloaded group archives, then upload the base archive and its
+  `.sha256` as `standalone-<env>-<os>[-upstream]` (dist/R-* without the
+  group archives), kept 7 days (B12).
+- upstream-zig.yaml: its own `toolchain` job (toolchain.yaml with `zig:
+  upstream` on its three runners, build's condition); `build` needs it,
+  with `!cancelled()`.
+- stress.yaml (C3): a `toolchain` job per runner of `inputs.oses`, with
+  `inputs.zig`; the stress job needs it (with `!cancelled()`), downloads
+  its artifact into dist/ and runs `unpack-toolchain` before `stress`.
+  The `oses` description asks for one runner per OS and arch, which name
+  the artifact.
+- README.md: a "Standalone archives" section: the base per flavor (R
+  alone, only rzig in R_HOME/bin/toolchain; Windows slim has full's
+  content, B42), the compilers group (OpenMP's files for now; zig from
+  ZIG_BIN or PATH, which PyPI's ziglang covers, flang from PATH), the
+  build-tools group (unix make; Windows binutils, sh and make still from
+  PATH), one top directory `R-<ver>-zig/` with SOURCES and LICENSES/ in
+  each group directory, extracting into one directory with one flavor
+  per directory, `pixi run package` and `package-toolchain`, CI's
+  retention and no release yet. The conda install section gains the
+  Windows slim line and "the MinGW binutils"; "Run R from source" runs
+  `pixi run toolchain` before contract and describes the dev, toolchain
+  and compile trees; the upstream-zig task list gains `toolchain` and
+  `toolchain-test` (C36); the wheel section runs `pixi run -e minimal
+  package-toolchain` first; the CI section names the toolchain job, both
+  artifacts (base 7 days, groups 30) and the per-platform failure.
+
+Choices and deviations, with their reasons:
+- download-artifact@v8: it came out with upload-artifact v7.0.0
+  (2026-02-26), so it is the major that pairs with @v7; it fails on a
+  digest mismatch by default.
+- The group archives are kept 30 days, not PHASE3's 7: every leg of a
+  run downloads them, and GitHub lets failed jobs be re-run for 30 days
+  without re-running a toolchain job that passed, so after 7 days such a
+  re-run would fail at its download (the review). Still CI's, not a
+  release (B12). The base archives stay at 7 days.
+- No `overwrite: true` on the uploads (step 5's open question; as
+  recommended, and as the wheel and stress uploads): a re-run of a leg
+  that already uploaded may get 409 Conflict; add it if a live run shows
+  that. For the same reason two stress runners of one OS and arch would
+  collide on the artifact's name, hence the `oses` description (the
+  review).
+- `!cancelled()` sits after the ENABLE_HOSTED_JOBS test rather than in
+  front of the condition (the same logic), and stress.yaml's stress job
+  has it too, as C4 does for build.yaml.
+- The toolchain job's 30-minute timeout is a guess: PHASE3 names none,
+  and an uncached Windows env install is unmeasured.
+- The README's wheel section runs `package-toolchain`, not PHASE3's bare
+  `toolchain`: verify-package before the wheel needs the group archives.
+  The bare command is in the prose.
+- Job counts (chore-ci-tiers' table): every build.yaml run with build
+  legs also runs the toolchain job's 5 legs, and every leg waits for all
+  five (a matrix need). A pull request without `full-ci` is 6 legs, 5
+  toolchain jobs and packaging (plus 5 conda-package jobs when packaging
+  says yes), a push to main 16 jobs, a full run 25.
+  chore-ci-tiers/PLAN.md has a dated note.
+
+Checked here: actionlint 1.7.12 on the six workflows; every task the
+workflows and README name exists in pixi.toml under the env they use.
+Not run: no push or dispatch was allowed, so toolchain.yaml, the
+artifact round trip, the timeout, verify-toolchain on GitHub's macOS and
+Windows runners and C4 (which rests on GitHub's documented `needs` and
+status-function rules) wait for the PR's first run.
+
+#### Phase 3 record: step 6, tests on every OS and B24 (2026-10-11)
+
+Code changed by this step's tests (kappa's findings, fixed on linux-64,
+then run again on kappa):
+- rzig, LTO on Windows (B43-2's record). With `MAKEFLAGS='LTO_OPT=-flto'`
+  every install failed on kappa: ltodef, ltonodef, and ltoplain, which
+  has no static library and no `.def`. The cause is zig 0.16.0's own,
+  with both zigs: an x86_64-windows-gnu link with -flto (or -flto=thin)
+  on its line builds zig's MinGW runtime for LTO, and lld-link stops at
+  symbols that runtime then lacks (wmemchr, mempcpy, frexpf, modfl, ...).
+  `zig cc -target x86_64-windows-gnu -flto` reproduces it from linux.
+  Bitcode objects linked without -flto link, and lld still optimizes
+  them together (in the linked DLL, g() is inlined into h()). So
+  windows.zig's `noLtoLink` drops -flto and -flto=<x> from Windows image
+  links (compiler.zig's argv, after exeSuffix; zig-fc's shared links go
+  through it); compiles keep -flto. The tester left this to the user:
+  (a) record only, or (b) drop -flto at links. (b) is applied, as
+  recommended; going back to (a) removes the noLtoLink call, the
+  function and its tests.
+- rzig, import libraries on Windows. Every package link left
+  `src/guard_dispatch.lib`: zig writes an import library beside the
+  output of every DLL link (and of a program that exports symbols),
+  named after the link's first input, which is rzig's CFG stub since
+  stress round 2's Z11. After an in-place install R CMD build packs it
+  and R CMD check warns "These are unlikely file names for src files".
+  zig cc has no flag against it (both zigs reject -fno-emit-implib,
+  -Wl,/noimplib, -Wl,-noimplib and --no-out-implib). `windows.implib`
+  names `<output>.rzig.lib` through `-Xlinker --out-implib=<path>` (a
+  comma in the path cannot split it) for image links that name no import
+  library themselves (no `-implib` in any argument) and records it in
+  Ctx's new `discard` list; main.zig's Windows run() deletes the list
+  once zig exits. A caller's own, such as CMake's
+  `-Wl,--out-implib,lib<name>.dll.a`, is kept. Not the tester's
+  cache-directory trial, which left a file per link, created
+  directories and would break on a comma in %LOCALAPPDATA%. Unit tests:
+  7 updated, 2 new (98); parity-test.sh drops the new flag where the CFG
+  stub's rule puts it. verify-bundle's Windows OpenMP block fails when a
+  `*.lib` is left beside a DLL.
+- pixi.toml's conda-package task runs `rm -rf dist/conda && rattler-build
+  build ...`, where it removed only `dist/conda/build_cache`.
+  rattler-build 0.76.1 indexes the output directory as the build starts
+  and lists a package only under a file name the index lacks, so a local
+  rebuild with the same build string kept the old sha256 in
+  repodata.json, and r-zig-toolchain's test, and any env made from
+  dist/conda, installed the previous r-zig-slim from the rattler cache
+  (kappa's round 2; the old command reproduces it on linux-64). The
+  whole directory rather than the tester's three globs: no reliance on
+  how the task shell treats a glob that matches nothing, every leftover
+  gone, as CI's empty start. The cost: R's sources are downloaded on
+  every build. README's conda section says each run empties dist/conda.
+
+Ran (every task with `--locked`; pixi.lock sha256 fbb64b7b...a68bb96 at
+the start and the end on every host, the osx-64 copy's own re-solved
+lock aside; no git writes):
+- linux-64, three times: on steps 4 and 5's diff, after the review's
+  fixes, and after kappa's.
+  - Static: bash -n, zig fmt --check, shellcheck -S warning (no finding
+    on the changed scripts), actionlint 1.7.12 (six workflows).
+  - `rzig-test`: 96/96, then 98/98 unit tests; parity 81 identical / 59
+    / 34 deliberate / 0 failed; with conda-forge zig 0.16.0 and with
+    upstream zig 0.16.0 (ZIG_BIN from fetch-zig). `toolchain-test` with
+    both.
+  - slim, both zigs: build (R re-extracted for the new patches; dist/'s
+    trees removed first, C25), toolchain, verify-tree, verify-toolchain,
+    smoke, contract, check, hermetic, package-toolchain, verify-package.
+    hermetic prints "preflight: compiled package stopped: Compiling needs
+    the r-zig compilers for R 4.6.1 on linux-64: ..."; R CMD config exits
+    127 with the build tools' text; strace saw only /bin/sh, R's
+    launchers and TC/zig-cc. verify-package: the base 1,937 files and
+    links, the groups 6 and 3, the three scenarios with their preflight
+    checks, GNU Make 4.4.1 the only make that ran in scenario 3.
+  - minimal: build, verify-tree, contract, verify-package (1,401
+    files). wheel and wheel-test: with r-zig alone the rzig-missing
+    branch names `pip install r-zig-toolchain`; with r-zig-toolchain the
+    check mode passes with ZIG_BIN from ziglang, unset, and
+    `/nonexistent` (python3 -m ziglang).
+  - conda-package: r-zig-slim-4.6.1-hb0f4dca_8 and
+    r-zig-toolchain-4.6.1-hc48ad4c_8, both tests (test-preflight.R takes
+    the rzig-missing branch with the conda hint; test-toolchain.R
+    compiles through the check mode). The new task from no dist/ and as
+    a rebuild over a stale index (the old command left it stale: slim
+    7330fbd1 listed, f866bb23 on disk); a fresh pixi project on
+    dist/conda locks the rebuilt sha256s.
+  - File lists: each base archive equals its R tree; the group
+    archives' union equals the toolchain tree (9 files). `pixi run -e
+    minimal package-toolchain` gives a tree identical to the default
+    env's.
+  - compile-tree.sh with a toolchain tree without openmp/: slim stops
+    and leaves the old compile tree alone; minimal passes.
+  - stress.R's classifier, on synthetic logs and real preflight logs:
+    "toolchain", with the `zig-cc:` line that names what is missing; a
+    missing header stays "sysdep".
+  - After kappa's rzig fixes: rzig-test with both zigs; slim with
+    conda-forge zig from build to verify-package; slim with upstream zig
+    build, verify-tree, smoke, contract, hermetic, verify-package;
+    minimal build, verify-tree, contract, verify-package. The installed
+    rzig's dry-run argv (RZIG_OS=windows, LTO), run with a real zig and
+    `-target x86_64-windows-gnu`, links an LTO DLL that uses frexp, with
+    both zigs.
+- omicron (macOS 26.4.1, pixi 0.81.0), once, on the diff after the
+  review's fixes (`git diff` sha256 88eb3ccd...ad49dc), before kappa's:
+  - osx-arm64, conda-forge zig: rzig-test (96/96), toolchain-test,
+    build, toolchain, verify-tree, verify-toolchain, smoke, contract,
+    hermetic, package-toolchain, verify-package (the base 1,931 files
+    and links, the groups 6 and 3); minimal build, verify-tree, contract,
+    verify-package (1,399); wheel (r_zig-4.6.1-py3-none-macosx_13_0_arm64,
+    1,400 files; r_zig_toolchain 11 files) and wheel-test. With upstream
+    zig: rzig-test, toolchain-test, build, toolchain, verify-tree,
+    verify-toolchain, contract, hermetic, package-toolchain,
+    verify-package.
+  - osx-64 under Rosetta (a copy re-solved for osx-64, its package sets
+    equal to the lock's): rzig-test, toolchain-test, build, toolchain,
+    verify-tree, verify-toolchain, smoke, contract, package-toolchain,
+    verify-package (baseline target-cpu core2).
+  - Scenario 3 runs GNU Make 4.4.1 at the extracted TC/usr/bin/make,
+    never Apple's 3.81 (C24). make has minos 11.0 / sdk 11.0 on both
+    arches, loads only /usr/lib/libSystem.B.dylib, has LC_RPATH
+    `@loader_path/../lib/`; ad-hoc signed on arm64 (the copy keeps it),
+    unsigned on x86_64 (verify-toolchain's log prints only "minos <=
+    13.0"). The preflight's texts as on linux. compile-tree.sh's openmp/
+    rule: slim stops naming lib/libomp.dylib, minimal passes.
+  - No Falcon event and no retry. Not run there: conda-package and C22
+    (not on its list); upstream zig on osx-64 (an unsigned x86_64 zig
+    under Rosetta, which Falcon may kill; no CI leg runs it either, as
+    upstream-zig.yaml has macos-latest only). Not run again after
+    kappa's fixes, whose rzig code acts on Windows links only and whose
+    task change is conda-package's.
+- kappa (win-64, Windows 11, pixi 0.81.0, rattler-build 0.76.1),
+  conda-forge zig unless named, three rounds: 1 on 88eb3ccd...ad49dc, 2
+  with kappa's rzig fixes (4d24652b...), 3 with the conda-package task
+  (1d23cdcb..., this diff before these records):
+  - Every round: rzig-test (71/96, then 73/98; 25 skipped on Windows),
+    toolchain-test, build, toolchain, verify-tree, verify-toolchain,
+    smoke, contract (compile tree with openmp/ and binutils/), hermetic,
+    package-toolchain, verify-package; rzig-test and toolchain-test with
+    upstream zig; conda-package (r-zig-slim-4.6.1-h9490d1a_8,
+    r-zig-toolchain-4.6.1-hbceaa80_8, both tests). All pass.
+  - verify-tree: TC holds exactly the nine rzig names; libomp.dll in
+    bin/x64, no omp.h or libomp.lib in the base; no VEX/EVEX instruction
+    in R's binaries; the DLL closure, 78 PE files. verify-toolchain: 22
+    files, 11 copies matching SOURCES, 4 packages each with LICENSES/, 8
+    PE files whose imports sit beside them or are the system's. The six
+    binutils import KERNEL32, API sets and zstd.dll, which imports
+    VCRUNTIME140.dll (C23).
+  - verify-package: the base zip 61 MB, 2,943 files; the groups 5 and 17
+    files, disjoint. Scenario 1: PATH's entry after bin\x64 is
+    TC/usr/bin (or R_CUSTOM_TOOLS_PATH, C27); both check modes exit 127
+    with their texts; hermetic's preflight. Scenario 2: the check modes
+    find zig and flang; baseline target-cpu x86-64; an OpenMP DLL linked
+    by gcc.exe alone. Scenario 3: every tool Makeconf names is a file
+    (the LTO gcc-nm aside); R CMD config AR, NM and OBJDUMP;
+    read_symbols_from_dll reads R.dll through binutils/objdump (626
+    symbols); nm.exe runs with PATH = System32 (GNU nm 2.46.1); tools.mk
+    runs $(NM), $(DLLTOOL) --as, $(AR), $(RANLIB), $(STRIP_STATIC_LIB),
+    $(RESCOMP) and $(OBJDUMP); rzig's ar.exe and ranlib.exe make a static
+    library with PATH = System32; the OpenMP probe, omp, lomp, fomp and
+    fompfc; btA, btLib and btRc (`.rsrc` present); the preflight and
+    R_ZIG_NO_PREFLIGHT pair; from round 2, no import library beside a
+    DLL.
+  - The LTO record (B43-2, C9; recorded, not checked). Round 1:
+    "ltodef (ltodef-win.def, a static library): install exit 1, gcc-ar
+    and gcc-ranlib ran" and "ltonodef (no .def, a static library):
+    install exit 1, gcc-ar and gcc-ranlib ran, the missing gcc-nm named
+    in its log". Rounds 2 and 3, with noLtoLink: "install exit 0, gcc-ar
+    and gcc-ranlib ran; loads, f() = 42" for both. With both zigs,
+    ltodef, ltonodef and ltoplain install and load with and without the
+    flag, the compiles keep -flto, and gcc.exe links with -flto and
+    -flto=thin.
+  - C22: every conda-meta record in rattler-build's build_env (73),
+    h_env (75) and both test envs (65 and 98) has
+    extracted_package_dir and paths_data, on every conda run (one in
+    round 1, four in round 2, two in round 3). The longest path under
+    TC/binutils/LICENSES is 156 characters in the test env, 141 in h_env
+    and 79 within the package: far under 260. The host solve took
+    llvm-openmp 23.1.3; the lock's dev env has 23.1.2.
+  - A fresh pixi project on dist/conda, conda-forge and universe, with
+    the local build-8 packages: a C package and a static-library package
+    (zig-ar.exe cr, zig-ranlib.exe) install and load. R CMD config AR is
+    toolchain/zig-ar.exe, NM binutils/nm.exe, OBJDUMP binutils/objdump,
+    all there; under R CMD, PATH has no ar, ranlib, windres, objdump, nm
+    or gcc. RcppParallel 6.2.1 from CRAN: CMake 4.4.4 takes CMAKE_AR and
+    CMAKE_RANLIB from rzig's toolchain/ar.exe and ranlib.exe and
+    CMAKE_RC_COMPILER binutils/windres.exe (preprocessor gcc.exe); TBB's
+    three DLLs carry `.rsrc`; it installs and loads (S15's case after the
+    move). R CMD check --no-manual of a package with a DLL: Status OK,
+    "checking compiled code ... OK", no objdump warning. The devtools
+    flow (R CMD INSTALL in place, R CMD build, R CMD check): Status OK
+    from round 2; on round 1's rzig the same script left
+    guard_dispatch.lib and got "Status: 1 WARNING".
+  - Round 3, the conda-package task: run over round 2's leftover
+    dist/conda (18,473 items, paths up to 267 characters) and over a
+    build killed in the middle of R's build (65,401 items). Each time
+    the rm took seconds, repodata.json matched the new files, and the
+    tests and a fresh env used them. The killed build left an orphaned
+    flang.exe; an rm over a file such a process holds was not tried.
+  - Seen, not acted on: zig writes `<output>.pdb` beside each Windows
+    image linked without -s (R's links pass -s, so none lands in a
+    package's src/); rattler-build's Windows test env prints "Setting
+    LC_* failed" lines, and zstd.dll gives overlinking warnings for the
+    binutils, as before.
+- B24's routing check (kappa, both zigs 0.16.0: conda-forge's
+  `Library\bin\x86_64-w64-mingw32-zig.exe` and upstream's from
+  fetch-zig; the reference was the env's MinGW binutils 2.46.1, the
+  copies in TC/binutils/; R-side links used the slim tree's gcc.exe).
+  A record, not a gate: nothing moved in phase 3. Every result holds for
+  both zigs.
+  - dlltool passes; it can move to rzig in a follow-up PR. `zig
+    dlltool` (llvm-dlltool) takes GNU's long options, though its help
+    lists only short ones: `-m i386:x86-64 -k --dllname foo.dll
+    --input-def foo.def --output-lib libfoo.dll.a` makes a 1,432 B
+    short-import library (GNU's: 2,980 B); `--as <as.exe>` and `-S
+    as.exe` are accepted and ignored; Makeconf.win's exact command (`--as
+    as.exe -k --dllname ... --input-def ... --output-lib ...`, no `-m`)
+    works, taking x86-64 from the host. Programs linked against each
+    library by zig cc and by `gcc.exe -L. -lfoo` printed the right
+    values, as with GNU's (a function through the thunk, a DATA export
+    through `__imp_`). Not supported: the `--opt=value` forms
+    (`--input-def=foo.def` fails with "cannot open file =foo.def";
+    `--dllname=foo.dll` exits 0 and names the DLL `=foo.dll`) and
+    `--output-exp` (usage, exit 1); `-A` is ignored with a warning. The
+    route: an rzig name `dlltool.exe` that runs `zig dlltool -m
+    i386:x86-64` with the caller's arguments, splitting `--dllname=`,
+    `--input-def=`, `--output-lib=`, `--as=` and `--machine=` into two
+    words (about 40 lines in main.zig beside ranlib's entry, plus unit
+    tests). Makeconf.win's DLLTOOL becomes `$(BINPREF)dlltool.exe
+    $(DT_ARCH)` without its `--as`. That `--as` is as.exe's only user
+    (Makeconf.win names no AS), so as.exe leaves `binutils/` with
+    dlltool.exe: 3,741,696 B of GPL-3 binaries (1,530,880 + 2,210,816).
+    check.zig's binutils list, the toolchain build's copies and
+    verify-tree follow.
+  - windres: zig rc works; a windres-syntax front in rzig is viable but
+    larger, and goes in its own follow-up PR after dlltool's. On a `.rc`
+    with windows.h, a VERSIONINFO and a STRINGTABLE, `zig rc
+    /:auto-includes gnu /fo r.res r.rc` makes a `.res` zig's linker takes
+    directly (the program reads its string and version); `/fo r.res.o`
+    makes a COFF object (sections `.rsrc$01` and `.rsrc$02`; GNU's has
+    one `.rsrc`) that zig cc and gcc.exe link the same way; zig cc also
+    takes the `.rc` itself. RcppParallel's tbb.rc built with zig rc and
+    with GNU windres in R's RESCOMP form, and both objects linked into a
+    DLL. zig rc rejects windres' syntax: `-i r.rc -o x.res.o` ("invalid
+    option: -o"; its `-i` is an include directory), `--preprocessor=`,
+    `--preprocessor-arg=` and `-O coff`. conda-forge's zig ships
+    `x86_64-w64-mingw32-zig-windres.exe`, a 121-line C wrapper from its
+    feedstock that maps `-o` to `/fo` and `-i` to the input and nothing
+    else: it fails on R's RESCOMP (`--preprocessor`) and CMake's `-O
+    coff`, and upstream's zig has none, so it is not a route. A front in
+    rzig maps `-i`/`--input`, `-o`/`--output` or the positional pair to
+    the input and `/fo`; `-O`, `-J` and `-F` (and their long forms) to
+    `/:output-format`, `/:input-format` and `/:target`; `-I -D -U -c -l`
+    to `/i /d /u /c /l`; drops `--preprocessor` and `--preprocessor-arg`
+    (resinator preprocesses itself and defines RC_INVOKED and _WIN32);
+    ignores `-v`, `--use-temp-file` and `-r`; always passes
+    `/:auto-includes gnu` (the default, `any`, prefers MSVC's headers
+    where Visual Studio is installed). About 150-200 lines of Zig and
+    80-100 of unit tests. Makeconf.win's RESCOMP becomes
+    `$(BINPREF)windres.exe $(RC_ARCH)`, Rcmd_environ's RC names it and
+    R_ZIG_RCFLAGS goes. Caveats: resinator follows rc.exe's syntax, not
+    GNU windres', and only these two files were tried; the first zig rc
+    in a zig cache builds resinator (under a minute on kappa, 3.6 MB).
+    windres.exe (1,613,824 B) stays until that PR.
+  - strip is not routable. `zig objcopy` with `--strip-all`,
+    `--strip-debug` or `-S` on a PE DLL or EXE fails ("invalid elf file:
+    InvalidElfMagic"): zig's objcopy reads ELF only. zig's PE images
+    carry no debug sections and no symbol table (debug info goes to the
+    .pdb): GNU `strip --strip-unneeded` left a `-g` DLL as it was
+    (777,216 B), and `zig cc -s` (526,336 B) builds zig's runtime pieces
+    differently rather than stripping the image. R on Windows never runs
+    STRIP_* itself (`R CMD INSTALL --strip` reads R_STRIP_SHARED_LIB,
+    unset there), so strip.exe stays for packages' own makefiles.
+  - nm and as: zig 0.16.0 has neither (`zig nm`, `zig as`, `zig strip`
+    and `zig windres` say "unknown command"). nm stays: winshlib.mk runs
+    `$(NM)` on every DLL link without a `.def`, `zig objdump` cannot
+    stand in ("unrecognized file: foo.dll", no `-p`), and an nm in rzig
+    reading COFF symbol tables would be new code, not routing (G2). as
+    goes with dlltool.
+  - After both follow-up PRs, `binutils/` holds nm, strip and objdump
+    (and windres until its front lands). TODO's B24 box stays open until
+    the dlltool/as PR.
+  - Aside: `zig rc /h` (help only) rewinds a redirected stdout to offset
+    0 and overwrites what the log held, with both zigs; compiles and
+    errors append normally. It does not touch R.
+  - Logs and probe scripts:
+    /data/gamma/luciorq/workspaces/temp/r-zig-pixi/phase3-step4/b24/.
+
+The review of steps 4 and 5 (2026-10-11; correctness, Windows, CI and
+the plan, a verifier confirming each finding; 8 confirmed, 3 refuted):
+- Fixed (in steps 4 and 5's records): the Windows preflight counted a
+  plain configure (major); the top-level-only Fortran search was not
+  documented; the group archives' 7 days against 30 days of re-runs;
+  two stress runners of one OS and arch would collide on the artifact's
+  name; stress.R classed the preflight's stop as "package" and hid what
+  was missing; the configure marker in hermetic and scenario 2 passed
+  whatever the preflight did; PLAN.md's Verification recipe ran
+  verify-package without making the group archives (it now runs
+  PHASE3 section 4's chain).
+- Fixed here: the phase's CI step and TODO.md's CI box described
+  another upload and download layout (both rewritten).
+- Refuted: "0010's rzig-missing branch is untested" (true, but the
+  branch is never published, B14, and phase 4 removes it; its lines
+  pass when run alone); "test-preflight.R cannot catch a missing conda
+  hint" (unchanged lines, the hint is delivered today, B35 removes the
+  mechanism); "the base layout still names Windows' zig-cc and zig-cxx"
+  (it says they "go with B26 (a)", which step 4 did).
+
+Closes the risk "the binutils need the base's zstd.dll on PATH":
+`binutils/` carries zstd.dll and vcruntime140.dll beside the tools (step
+2), and nm.exe runs with PATH = System32 on kappa.
+
+Not tested anywhere yet, CI's after the PR's first run: toolchain.yaml
+and the artifact round trip, the 30-minute timeout, C4's
+`!cancelled()`, stress.yaml's toolchain jobs; on windows-latest the
+static-library and LTO packages and verify-package; conda-package on
+macOS (omicron's list did not have it); upstream zig on osx-64 (no host
+or leg). Before merging: C13's check that universe holds build 8 for all
+five subdirs (`pixi run -e pkg conda-channel-list`).
 
 #### Phase 3 review: steps 1 and 2 (2026-10-10)
 
@@ -3202,10 +3759,12 @@ Steps:
 - recipe.yaml (B28): r-zig-slim excludes only the group directories
   (`lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**` and
   `Library/...`); r-zig-compilers, r-zig-build-tools and the
-  r-zig-toolchain metapackage; the build number per B14 (a: 5 → 6 in
-  this PR).
+  r-zig-toolchain metapackage; the build number per B14 (a: the number
+  after the one published when phase 4 merges; build 8 is on universe,
+  so 9 unless another PR bumps first; C14).
   - win-64 r-zig-build-tools holds B41's binutils copies (nm, dlltool,
-    as, strip, windres, objdump, less any tool phase 3 moved to rzig)
+    as, strip, windres, objdump, less any tool rzig took over: none in
+    phase 3; B24's follow-up PRs can take dlltool and as, then windres)
     and depends on conda-forge packages for B39's list and pkg-config
     (B11). Until phase 7 has chosen the packages it keeps today's m2
     list (recipe.yaml:410-442) plus pkg-config; phase 7 switches both
@@ -3230,7 +3789,8 @@ Steps:
 Tests:
 - conda-package on linux-64, omicron (both), kappa and CI, both
   packages' tests and a fresh-env consume test.
-- An upgrade in an existing env (pixi, conda, mamba) from `_5` to the new
+- An upgrade in an existing env (pixi, conda, mamba) from the build on
+  the channel (`_8` on 2026-10-11; C14) to the new
   build: rzig moves from r-zig-toolchain to r-zig-slim without a clobber
   error.
 - wheel-test on linux-64 and CI's four unix minimal legs.
@@ -3434,13 +3994,15 @@ alone, with r-zig-compilers, with r-zig-build-tools).
 By hand on each machine (after phase 3; names per B17, B36 and B38):
 
 ```sh
-pixi run rzig-test
+pixi run rzig-test && pixi run toolchain-test
 pixi run build && pixi run toolchain && pixi run verify-tree && \
-  pixi run smoke && pixi run contract && pixi run hermetic && \
-  pixi run verify-package
+  pixi run verify-toolchain && pixi run smoke && pixi run contract && \
+  pixi run hermetic && pixi run package-toolchain && pixi run verify-package
+# minimal reuses the default env's group archives: their names do not
+# depend on the flavor
 pixi run -e minimal build && pixi run -e minimal verify-tree && \
-  pixi run -e minimal verify-package
-pixi run -e wheel wheel && pixi run -e wheel wheel-test   # unix
+  pixi run -e minimal contract && pixi run -e minimal verify-package   # unix
+pixi run -e wheel wheel && pixi run -e wheel wheel-test                # unix
 pixi run -e pkg conda-package
 # upstream zig (F4), then the same tasks:
 export ZIG_BIN="$(pixi run fetch-zig)"   # PowerShell: $env:ZIG_BIN = pixi run fetch-zig
@@ -3460,7 +4022,8 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   One flavor per extraction directory; the archive names say which.
 - **minimal and the shared `openmp/`.** Without B40's rule, a minimal R
   with the compilers group could include omp.h and fail at link.
-- **rzig moving between conda packages.** An upgrade from `_5` must
+- **rzig moving between conda packages.** An upgrade from the build on
+  the channel (`_8` on 2026-10-11) must
   unlink r-zig-toolchain's rzig before linking r-zig-slim's; untested
   with pixi, conda and mamba. rattler-build's `--error-overlapping-files`
   (>= 0.76; D12 = a, warnings as errors) catches overlap between
@@ -3494,10 +4057,10 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   CMake; phase 3's step 3 review).
 - **AR and RANLIB through rzig on Windows** (B43). zig's ar replaces
   GNU ar for every package's static library on Windows. It is what unix
-  uses already, but on Windows it is untested with R packages; phase 3
-  tests a static-library package and an LTO build on kappa and CI.
-- **The binutils need the base's zstd.dll on PATH.** Every `R CMD` puts
-  `bin\x64` first, but a binutils tool run outside R does not find it.
+  uses already, but on Windows it was untested with R packages. Phase 3
+  passed on kappa (static-library packages, tools.mk, RcppParallel's
+  CMake, LTO builds; step 6's record); windows-latest runs them on the
+  PR's first CI run.
 - **GPL obligations.** Unmet today for make and the binutils, and
   coming for the Windows userland and pkg-config (GPL-2.0-or-later); the
   per-directory records (point 3) fix the texts, the sources mirror
@@ -3529,6 +4092,9 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
 - Does `R CMD INSTALL --use-LTO` work on Windows with zig? No gcc-nm
   ships (B43-2), and neither GNU nm nor gcc-nm reads zig's LLVM bitcode
   objects; the stress suite shows whether any package needs it.
+  (2026-10-11, kappa: it does since rzig drops -flto at Windows links,
+  which zig 0.16.0 cannot link; without a `.def` the missing gcc-nm
+  leaves auto-export to lld. Phase 3's step 6 record.)
 - pip upgrade and uv tests for the wheels.
 - Where is the release published, and how does the message name it?
 - Is passing `-fintrinsic-modules-path` twice harmless, and where does
@@ -3541,7 +4107,9 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
 - Which make wins on PATH in a win-64 conda env today: m2-make or
   conda-forge's make (r-zig-toolchain `_4` depends on both)?
 - Does zig's dlltool accept the GNU long options and the `--as`
-  Makeconf.win passes (B24's routing check, phase 3)?
+  Makeconf.win passes (B24's routing check, phase 3)? (2026-10-11,
+  kappa: yes, in their two-word forms, and `--as` is ignored; the
+  `--opt=value` forms are not; phase 3's step 6 record.)
 - Do CRAN packages' Makevars.win use `$(BINPREF)` for a binutils tool?
 - Does flang-rt-zig 10's win-64 archive still need no `-lc++` (phase 6
   checks it)?

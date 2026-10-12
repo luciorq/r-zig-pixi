@@ -228,12 +228,19 @@ choices made, and "Phase 2 tested" the results and the review.
       MAKE (R runs make there), plus a unit-test line
 - [x] Review fix: parity-test.sh's "a zig that is not R's" check renamed,
       and a check with a zig that says 0.99.0
-- [ ] CI; then the user commits (hand over the commands)
+- [x] CI; then the user commits (hand over the commands) (merged as
+      #22, 966d661)
 
 ## Phase 3 — the standalone layout, today's contents
 
 Needs (answered): B7, B12, B13, B17, B23, B24, B25, B26, B30, B31, B36,
 B38, B42, B43.
+
+Status (2026-10-11): steps 1 to 6 done; steps 1 to 3 and P3-C committed
+(a40fadb), steps 4 to 6 not. Tested on linux-64 (both zigs), omicron
+(osx-arm64, osx-64 under Rosetta) and kappa (win-64); CI has not run.
+PLAN.md's "Phase 3 record" sections have what changed, the choices and
+the results; B24's routing check moved no tool (follow-up PRs).
 
 - [x] env.sh: platform name once; prefixes `dist/<flavor>/R-<ver>-zig`
       and `dist/toolchain/R-<ver>-zig` (replacing env.sh:29's PREFIX);
@@ -261,30 +268,37 @@ B38, B42, B43.
       package with no source stops the build; verify-toolchain.sh
       checks the lines (2026-10-10, uncommitted; tested on linux-64,
       PLAN.md's "Phase 3 record: P3-C")
-- [ ] The base's TC holds only rzig; Windows adds `zig-ar.exe`,
+- [x] The base's TC holds only rzig; Windows adds `zig-ar.exe`,
       `zig-ranlib.exe`, `gcc-ar.exe`, `gcc-ranlib.exe` and drops `zig-cc`
       and `zig-cxx`; verify-tree.sh's rzig names (76) follow (step 3,
-      2026-10-10, uncommitted: TC holds only rzig, the four names added,
-      and `ar.exe` and `ranlib.exe` for CMake, which looks for them beside
-      CC (step 3's review); the names in verify-helpers.sh's
-      `rzig_names`; dropping `zig-cc` and `zig-cxx` is step 4's)
+      2026-10-10: TC holds only rzig, the four names added, and `ar.exe`
+      and `ranlib.exe` for CMake, which looks for them beside CC (step
+      3's review); the names in verify-helpers.sh's `rzig_names`; step 4,
+      2026-10-11, uncommitted: `zig-cc` and `zig-cxx` dropped; kappa's
+      verify-tree finds exactly the nine names, PLAN.md's "Phase 3
+      record: step 4" and "step 6")
 - [ ] rzig routing check (B24): dlltool (zig dlltool, GNU long options
       and `--as`), windres (zig rc behind a windres-syntax front), strip
       (zig objcopy), nm and as (none in zig 0.16.0); move each one that
       passes, here or in a follow-up PR; record the result in PLAN.md
+      (checked on kappa 2026-10-11 with both zigs, recorded in PLAN.md's
+      "Phase 3 record: step 6": dlltool passes and takes as with it,
+      windres works behind a front still to write, strip, nm and as are
+      not routable; nothing moved in phase 3. Open until the dlltool/as
+      follow-up PR; windres' front is the PR after it)
 - [x] unix etc/Renviron: `PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}`,
       `MAKE=${MAKE-'make'}` for every flavor (minimal's `R_ZIG_MAKE` goes)
       (step 3, 2026-10-10, uncommitted: the file's last line; tested on
       linux-64, PLAN.md's "Phase 3 record: step 3")
-- [ ] Windows etc/Rcmd_environ:
+- [x] Windows etc/Rcmd_environ:
       `PATH="${R_CUSTOM_TOOLS_PATH:-${R_HOME}/bin/toolchain/usr/bin};${PATH}/"`
       (step 3, 2026-10-10, uncommitted: through the helper
       `R_ZIG_TOOLS_PATH`, since Renviron.c expands only a whole `${...}`
-      default (C16); `R_ZIG_RC` names `binutils/windres.exe`; implemented,
-      not built or checked yet: verify-tree.sh's Rcmd_environ lines and
-      verify-bundle's PATH run check (C27) need kappa; PLAN.md's "Phase 3
-      record: step 3")
-- [ ] Makeconf.win: AR (103) `$(BINPREF)zig-ar`, RANLIB (213)
+      default (C16); `R_ZIG_RC` names `binutils/windres.exe`; PLAN.md's
+      "Phase 3 record: step 3"; kappa, 2026-10-11: verify-tree.sh's
+      Rcmd_environ lines and verify-bundle's PATH run check (C27) pass,
+      "Phase 3 record: step 6")
+- [x] Makeconf.win: AR (103) `$(BINPREF)zig-ar`, RANLIB (213)
       `$(BINPREF)zig-ranlib`; LTO gcc-ar/gcc-ranlib (267, 269) unchanged
       (now rzig); NM (78, 204) → `binutils/nm.exe`; LTO gcc-nm (268)
       unchanged (B43-2); DLLTOOL (76), RESCOMP (79), OBJDUMP (211),
@@ -294,17 +308,28 @@ B38, B42, B43.
       rzig's names (step 3, 2026-10-10, uncommitted: AR and RANLIB with
       `.exe`, `$(BINPREF)zig-ar.exe`, as CC for CMake (C16); OBJDUMP
       without `.exe`, which R CMD check adds (sotools.R; step 3's
-      review); RESCOMP with windres' `--preprocessor` arguments; no tool
-      moved to rzig yet; not built or checked on Windows yet; PLAN.md's
-      "Phase 3 record: step 3")
-- [ ] Windows slim documented (B42 a): README and the recipe's summaries
+      review); RESCOMP with windres' `--preprocessor` arguments; PLAN.md's
+      "Phase 3 record: step 3"; kappa, 2026-10-11: verify-tree's lines,
+      scenario 3's tools.mk, R CMD config AR/NM/OBJDUMP, R CMD check's
+      objdump and RcppParallel's CMake pass; no tool moved to rzig (B24's
+      follow-up PRs), "Phase 3 record: step 6")
+- [x] Windows slim documented (B42 a): README and the recipe's summaries
       say Windows slim has full's content (step 3: the recipe's
-      r-zig-slim `about:`; README is step 5's)
+      r-zig-slim `about:`; step 5, 2026-10-11, uncommitted: README's
+      "Standalone archives" and conda install sections)
 - [x] vendor-libs.sh: Windows libomp.dll trigger on R's OpenMP setting
       (step 3, 2026-10-10, uncommitted: `^SHLIB_OPENMP_CFLAGS = *-` in
       etc/x64/Makeconf; PLAN.md's "Phase 3 record: step 3")
-- [ ] Patches 0009 and 0010 call the check mode (compilers and build
-      tools); 0009's fallback removed; 0010's `command -v` replaced
+- [x] Patches 0009 and 0010 call the check mode (compilers and build
+      tools); 0009's fallback removed; 0010's `command -v` replaced (step
+      4, 2026-10-11, uncommitted: 0009 runs `--rzig-check`, or
+      `--rzig-check=fortran` for Fortran at src/'s top level, then
+      `--rzig-check=build-tools`, through `system2(stdout = FALSE)`, and
+      counts only the configure script R runs (Windows: configure.win,
+      configure.ucrt); 0010 ends with rzig's status, 127; both keep the
+      rzig-missing branch with R_ZIG_TOOLCHAIN_HINT until phase 4 (C8);
+      tested on linux-64, omicron and kappa, PLAN.md's "Phase 3 record:
+      step 4")
 - [x] groups.zig (B35): unix's build-tools standalone line names
       `R-<ver>-<plat>-build-tools.tar.gz`; decide where the preflight
       shows a user's R_ZIG_TOOLCHAIN_HINT (rzig does not read it) (step 3,
@@ -317,11 +342,17 @@ B38, B42, B43.
       a zig that cannot start says so, not "does not say its zig version"
       (step 3, 2026-10-10, uncommitted: `/` only, display only; "did not
       run: <reason>", exit 1; plus the Windows binutils in the build-tools
-      check; unit tests run on linux-64, not yet on kappa, PLAN.md's "Phase 3 record: step 3")
+      check; unit tests run on linux-64, and on kappa in step 6, PLAN.md's
+      "Phase 3 record: step 3")
 - [x] package-standalone.sh: base archive + compilers + build-tools
       archives, `.sha256` each (step 2: `package-standalone.sh
       toolchain`, pixi task `package-toolchain`)
-- [ ] hermetic-check.sh: the R tree is the base, nothing deleted
+- [x] hermetic-check.sh: the R tree is the base, nothing deleted (step
+      4, 2026-10-11, uncommitted: a compiled package stops with rzig's
+      compilers text, unix R CMD config CC with the build tools' text;
+      strace allows TC/zig-cc; no configure marker, which could not tell
+      (C26 moved to verify-bundle's scenario 3); tested on linux-64,
+      omicron and kappa, PLAN.md's "Phase 3 record: step 4")
 - [x] verify-tree.sh: base TC = rzig only; toolchain tree records,
       closures (OS, own directory, base runtime), glibc 2.28 ceiling
       (the toolchain tree's part: verify-toolchain.sh, step 2; the base's
@@ -331,31 +362,73 @@ B38, B42, B43.
 - [x] verify-bundle.sh: the three scenarios (scenario 2 takes zig from
       `ZIG_BIN=$ZIG` and flang from the env until phases 5 and 6; Windows
       scenario 3 takes sh/make from the env until phase 7); file-list
-      check (step 3, 2026-10-10, uncommitted: scenario 1 asserts the check
-      mode's exit codes, its texts from step 4; tested on linux-64 slim
-      and minimal, both zigs for slim; Windows and macOS untested,
-      PLAN.md's "Phase 3 record: step 3")
+      check (step 3, 2026-10-10: scenario 1 asserts the check mode's exit
+      codes; tested on linux-64 slim and minimal, both zigs for slim,
+      PLAN.md's "Phase 3 record: step 3"; step 4, 2026-10-11,
+      uncommitted: rzig's texts, the preflight's branches in scenario 2
+      and the R_ZIG_NO_PREFLIGHT pair in scenario 3 (C26); Windows' "no
+      import library left" check; omicron and kappa pass, "Phase 3
+      record: step 6")
 - [x] conda: build.sh runs the toolchain step into `$PREFIX` (Windows
       binutils); packages unchanged until phase 4, no bump (step 3,
       2026-10-10, uncommitted; test-toolchain.R's static-library package
       and Windows records check; conda-package passes on linux-64 (step
-      3's review), C22 and the Windows checks on kappa)
+      3's review); C22 and the Windows checks pass on kappa (step 6, which
+      also empties dist/conda before each local build))
 - [x] make-wheel.py: make from the toolchain tree; wheel-test checks
       `Sys.which("make")` (step 3, 2026-10-10, uncommitted:
       `--toolchain-prefix`, only rzig taken from the R tree's TC; tested
       on linux-64, PLAN.md's "Phase 3 record: step 3")
-- [ ] CI: `toolchain` job per subdir in build.yaml; the `build` job (all
-      legs) `needs:` it; packaging legs download their groups, run the
-      scenarios, upload base and group archives (short retention);
-      upstream-zig.yaml gets its own toolchain job
+- [ ] CI (B31 a, B12; PHASE3 section 3): toolchain.yaml, called from
+      build.yaml, upstream-zig.yaml and stress.yaml (C3), builds,
+      archives and checks the groups once per platform and uploads them
+      as `toolchain-<runner.os>-<runner.arch>` (`-upstream` for upstream
+      zig), kept 30 days (as long as failed legs can be re-run; still
+      short of a release, B12); every leg needs it (`!cancelled()`, C4),
+      full and openblas included, downloads its archives and runs
+      `unpack-toolchain` (contract and stress use the compile tree); the
+      packaging legs (default, minimal) run verify-package's three
+      scenarios and upload only the base, as
+      `standalone-<env>-<os>[-upstream]`, kept 7 days (step 5,
+      2026-10-11, uncommitted; actionlint clean, PLAN.md's "Phase 3
+      record: step 5"; open until a live CI run: no push or dispatch yet)
 - [ ] kappa and windows-latest: a static-library package through
       `$(AR)`/`$(RANLIB)` (rzig), an `--use-LTO` build, and the packages
       that use each tool the routing check moved; stress RcppParallel
       with no ar on PATH (CMake finds rzig's `ar.exe` beside CC), and
       `R CMD check` of a package with a DLL (its compiled-code check runs
-      `binutils/objdump.exe`, no "requires 'objdump.exe'" warning)
+      `binutils/objdump.exe`, no "requires 'objdump.exe'" warning) (kappa,
+      2026-10-11: all pass, the LTO builds once rzig drops -flto at
+      Windows links, which zig 0.16.0 cannot link; no tool moved, so no
+      moved tool's packages; PLAN.md's "Phase 3 record: step 6".
+      windows-latest waits for CI)
+- [x] compile-tree.sh requires the toolchain tree's `openmp/` where the
+      base has the libomp runtime (the user's answer (4) to step 3's
+      review, 2026-10-11; step 4, uncommitted; checked on linux-64,
+      omicron and kappa)
+- [x] stress.R classes the install preflight's stop as toolchain and
+      reports rzig's `zig-cc:` line naming what is missing (step 4's
+      review, uncommitted)
+- [x] rzig's Windows links (kappa's findings, step 6, uncommitted): -flto
+      dropped at image links (zig 0.16.0 cannot link LTO for
+      x86_64-windows-gnu; the tester's option (b)); zig's import library
+      named `<output>.rzig.lib` and deleted after the link, so no
+      `guard_dispatch.lib` is left in src/; 98 unit tests; kappa's rounds
+      2 and 3 pass
+- [x] conda-package empties dist/conda before building (rattler-build
+      kept a stale index on a rebuild with the same build string; step 6,
+      uncommitted; linux-64 and kappa's round 3)
+- [x] PLAN.md: the records of steps 4 to 6 with B24's result, the
+      build-number texts (C14), Risks and the Verification recipe
 - [ ] Tested: linux-64 (slim, minimal, wheel, conda-package), omicron
-      (osx-arm64 slim and minimal, osx-64 slim), kappa, CI
+      (osx-arm64 slim and minimal, osx-64 slim), kappa, CI (all but CI
+      pass, 2026-10-11, PLAN.md's "Phase 3 record: step 6"; omicron ran
+      no conda-package, which CI's macOS jobs run)
+- [ ] Before merging: universe holds build 8 for all five subdirs (C13,
+      `pixi run -e pkg conda-channel-list`)
+- [ ] The user commits steps 4 to 6 (hand over the commands); then the
+      PR's CI: the core tier with conda-package, the `full-ci` label, the
+      `upstream-zig` label, one stress dispatch (PHASE3 section 10)
 
 ## Phase 4 — conda and PyPI on the same boundary
 
@@ -368,7 +441,9 @@ Needs (answered): B14, B28, B29, B35, B38, B39, B11, B41; D7, D12, E2.
 - [ ] recipe.yaml: r-zig-slim excludes only
       `lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**` (and
       `Library/...`); r-zig-compilers, r-zig-build-tools, r-zig-toolchain
-      metapackage; build number 5 → 6 here (B14 a)
+      metapackage; build number: the one after the number published
+      when phase 4 merges (build 8 is on universe, so 9 unless another
+      PR bumps first; B14 a, C14)
 - [ ] win-64 r-zig-build-tools: B41's binutils copies (nm, dlltool, as,
       strip, windres, objdump, less any tool moved to rzig); run
       dependencies on conda-forge packages for B39's list and pkg-config
@@ -386,7 +461,8 @@ Needs (answered): B14, B28, B29, B35, B38, B39, B11, B41; D7, D12, E2.
       r-zig-compilers
 - [ ] wheel-test.sh: the three scenarios with pip; uninstalling the
       groups leaves R whole
-- [ ] Upgrade test from `_5` (pixi, conda, mamba): no clobber error
+- [ ] Upgrade test from the build on the channel (`_8` on 2026-10-11;
+      pixi, conda, mamba): no clobber error
 - [ ] Tested: conda-package on linux-64, omicron (both), kappa, CI;
       wheel-test on linux-64 and CI
 

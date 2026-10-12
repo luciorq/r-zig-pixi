@@ -32,15 +32,31 @@ tree_files() {
 # nothing else is there (feat-standalone-toolchain B19, B30). Windows:
 # gcc.exe and g++.exe (CC, CXX), zig-fc.exe (FC), zig-ar.exe and
 # zig-ranlib.exe (AR, RANLIB) and the LTO block's gcc-ar.exe and
-# gcc-ranlib.exe (B43), ar.exe and ranlib.exe (what CMake finds beside
-# CC), and the extensionless zig-cc and zig-cxx until the compile
-# preflight looks for gcc.exe (PHASE3 step 4).
+# gcc-ranlib.exe (B43), and ar.exe and ranlib.exe (what CMake finds
+# beside CC); no extensionless zig-cc or zig-cxx, since the compile
+# preflight and R CMD config run gcc.exe's check mode (B26 a).
 rzig_names() {
   if [ "$OS" = windows ]; then
-    echo "gcc.exe g++.exe zig-fc.exe zig-ar.exe zig-ranlib.exe gcc-ar.exe gcc-ranlib.exe ar.exe ranlib.exe zig-cc zig-cxx"
+    echo "gcc.exe g++.exe zig-fc.exe zig-ar.exe zig-ranlib.exe gcc-ar.exe gcc-ranlib.exe ar.exe ranlib.exe"
   else
     echo "zig-cc zig-cxx zig-fc zig-ar zig-ranlib"
   fi
+}
+
+# A configure script in package directory $1 (unix configure, Windows
+# configure.win) that leaves the file configure-ran there with a shell
+# builtin, so that it starts no program: scenario 3 (verify-bundle.sh)
+# tells from it whether the install preflight (patch 0009) stopped a
+# package before its configure ran (B26, C26). That is the one place
+# where R CMD config passes, so configure could run: without the build
+# tools R CMD config (patch 0010) fails first, wherever the preflight
+# sits.
+configure_marker() {
+  local f
+  for f in configure configure.win; do
+    printf '#!/bin/sh\n: > configure-ran\n' > "$1/$f"
+    chmod +x "$1/$f"
+  done
 }
 
 # Extract archive $1 into directory $2. unzip -n: an archive extracted

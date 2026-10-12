@@ -1,6 +1,11 @@
 ## r-zig-toolchain: a package with C and C++ code compiles, installs and
-## loads (feat-no-host-paths PLAN.md, phase T).
-stopifnot(file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")))
+## loads (feat-no-host-paths PLAN.md, phase T). rzig is there under CC's
+## name, which the install preflight runs (gcc.exe on Windows,
+## feat-standalone-toolchain B26), in R_HOME/bin/toolchain (R.home("bin")
+## is bin/x64 on Windows).
+windows <- .Platform$OS.type == "windows"
+tc <- file.path(R.home(), "bin", "toolchain", if (windows) "gcc.exe" else "zig-cc")
+stopifnot(file.exists(tc))
 ## The shipped tree alone: a dev shell's personal Makevars
 ## (R_MAKEVARS_USER) and its extra environment for the compilers
 ## (R_ZIG_EXTRA_ENV, pixi.toml) must not leak into this test.
@@ -41,7 +46,6 @@ cat("toolchain: C and C++ package compiled and loaded: OK\n")
 ## bare runtime rzig resolves, and no flags of the environment: CPPFLAGS
 ## and LDFLAGS are empty, the compilers add them.
 .libPaths(c(lib, .libPaths()))
-windows <- .Platform$OS.type == "windows"
 cfg <- function(v) trimws(paste(tools::Rcmd(c("config", "--no-user-files", v), stdout = TRUE), collapse = " "))
 stopifnot(grepl("-lflang_rt.runtime", cfg("FLIBS"), fixed = TRUE),
           identical(cfg("CPPFLAGS"), ""), identical(cfg("LDFLAGS"), ""))
@@ -64,8 +68,6 @@ with_env <- function(vars, expr) {
     do.call(Sys.setenv, as.list(vars))
     expr
 }
-## R_HOME/bin/toolchain: R.home("bin") is bin/x64 on Windows.
-tc <- file.path(R.home(), "bin", "toolchain", if (windows) "gcc.exe" else "zig-cc")
 argv <- with_env(c(RZIG_PRINT_ARGV = "1", CONDA_PREFIX = decoy),
                  system2(tc, c("-shared", "-o", "x.so", "x.o", "-lz"), stdout = TRUE))
 cat(argv, sep = "\n")

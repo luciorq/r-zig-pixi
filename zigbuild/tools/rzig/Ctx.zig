@@ -45,6 +45,11 @@ xcrun: []const u8 = "/usr/bin/xcrun",
 zig: ?[]const []const u8 = null,
 /// Unit tests collect `warn`'s messages here instead of stderr.
 warnings: ?*std.ArrayList(u8) = null,
+/// Files the command writes that nobody keeps (a Windows link's import
+/// library, windows.implib): main.zig's run deletes them when the command
+/// is done. Windows only, where rzig waits for the command; on unix it
+/// becomes the command (execve), and only a dry run adds to this there.
+discard: std.ArrayList([]const u8) = .empty,
 
 /// `${NAME:-}`: the shims treat unset and empty alike.
 pub fn getenv(ctx: *const Ctx, name: []const u8) ?[]const u8 {
