@@ -999,7 +999,14 @@ quadprog in 11 s.
 | omicron (osx-arm64, macOS 26.4.1, conda-forge zig) | `toolchain`, `build`, `compile-tree`, `rzig-test`, `pkg-parity`, `package-toolchain`, `verify-package` | pass. pkg-parity: cli 13 s / make 10 s (27 rzig lines identical, the `ZIG_LIB_DIR=` prefix stripped: the first macOS run, channels-C3), digest 17/7 (20), quadprog 9/3 (6), Rcpp, minqa 10/7 (19); zighello 29 s cold, URL refused; cli twice: 257 global entries unchanged; quadprog on the base 12 s. verify-package: pfC through rzig build, the shapes, btA = rzig build and btLib = make. Run twice, the second after the def.zig change: pass both times |
 | kappa (win-64, Windows 11 22621, conda-forge zig) | `toolchain`, `build`, `compile-tree`, `pkg-parity`, `package-toolchain`, `verify-package`, `conda-package` | pass. pkg-parity (its first runs on Windows) found three things, fixed and rerun: `rzig def` dropped the `.refptr.*` names make exports (def.zig, above); `argv_of` cut `--out-implib=<path>` to the bare file name on the zig path (the option name is kept now); the no-make env lacked zig's cache home (`LOCALAPPDATA`, `ZIG_GLOBAL_CACHE_DIR`) and took zig from `command -v zig`, which finds nothing on win-64 (env.sh's `$ZIG` now). Then: cli 31 s / make 18 s (195 exports, 27 rzig lines identical), digest 18/6 (129, 20), quadprog 15/4 (2, 6), Rcpp 29/9 (744, 7); cli twice: 1718 global entries unchanged; zighello 16 s warm (70 s cold); quadprog on the base 14 s with flang + System32, zig through ZIG_BIN. verify-package: scenario 3's btA = rzig build, btLib and btRc = make; ltotier1 goes to make with "MAKEFLAGS sets LTO_OPT"; the OpenMP DLLs; run twice (before and after def.zig), pass both times. conda-package: both packages build, test-toolchain.R's builder assertions pass |
 
-Not run here: CI (after the push), the stress dispatch (M6: after the
+CI on PR #25 (run 38302765293, after the merge commit 47e8436):
+windows-latest / default failed in `rzig tests`: testutil.zig's
+`touchExe` used `Permissions.fromMode`, which a Windows host's
+`std.Io.File.Permissions` lacks; main's tests never referenced it on
+Windows, this branch's pkgplan tests do, and the branch had never run
+on Windows CI (kappa's chains ran everything but rzig-test). Fixed with
+a comptime switch (a plain file there, as touchProgram makes); rzig-test
+on kappa: 94 passed, 25 skipped. Not run here: the stress dispatch (M6: after the
 push, `trace = true`, `builder = auto`, packages g3 g4, the five
 runners; its table and the phase 7 / B24 re-scope come in a follow-up
 commit on the same PR).
