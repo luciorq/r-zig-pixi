@@ -1,42 +1,86 @@
-R CMD INSTALL: compile preflight (the toolchain is a separate package)
+R CMD INSTALL: compile preflight (rzig's check mode names what is missing)
 
 A package needs the toolchain when it has compiled code (src/) or a
-configure script. Without bin/toolchain/zig-cc (the toolchain package
-fills that directory, Makeconf points at it, and a package manager can
-leave it behind empty) and without the compiler Makeconf's CC names (an
-unstaged build tree names the repo's toolchain/zig-cc directly), stop
-with one message naming the package to install, from
-R_ZIG_TOOLCHAIN_HINT (each distribution sets it in etc/Renviron),
-instead of failing deep in configure or make. A user Makevars (their own
-compiler) or R_ZIG_NO_PREFLIGHT skips the check. Inserted before the
-configure step; binary packages never reach it. feat-no-host-paths
-PLAN.md, phase T.
+configure script R runs: configure, or on Windows configure.ucrt or
+configure.win (there R does not run a plain configure, it only warns).
+rzig, R_HOME/bin/toolchain/zig-cc (gcc.exe on Windows), finds each
+toolchain group's tools as a compile does, on every channel: its check
+mode `--rzig-check=package` (check.zig) decides for the package in the
+working directory, as `rzig build` (patch 0013, feat-zig-pkg-build)
+decides in run_shlib, through one function (pkgbuild.decide: the
+files, then the Makevars and Makeconf), whether it builds through zig
+build alone (tiers 0-2) or needs make (tier 3), and checks the groups
+that build needs: the compilers, flang when Fortran is compiled (the
+plan's sources for tiers 1 and 2; src/'s top level, either case of the
+f, for a package make builds, as R's default OBJECTS rule compiles
+them: Fortran a Makevars builds from a subdirectory stops later, at
+zig-fc, with the same text), and the build tools when the package needs
+make or R runs a configure script (R_ZIG_CONFIGURE=1), whatever its
+tier. A check that fails exits non-zero after a line saying what is
+missing, with rzig's own reason when make is needed ("<pkg> needs make:
+src/Makevars has a rule or target line: '...'; no make on PATH"), and
+the group's text, which names how to install it. Run it before the
+configure step and stop with that text, instead of failing deep in
+configure or make. With no rzig at all (R without its toolchain
+package), stop with one message naming the package to install, from
+R_ZIG_TOOLCHAIN_HINT (the conda and wheel builds set it). The C
+standard (use_C, the hook's --c-std) goes through R_ZIG_C_STD;
+R_ZIG_PKG_BUILDER=make makes the check ask for the build tools. A user
+Makevars (their own compiler) or R_ZIG_NO_PREFLIGHT skips the check;
+binary packages never reach it. Two inputs differ from the hook's, and
+are recorded: CLINK_CPPFLAGS is set only after the preflight, and the
+user-Makevars skip stays.
+feat-no-host-paths PLAN.md, phase T; feat-standalone-toolchain PLAN.md,
+B26 and B35; feat-zig-pkg-build PLAN.md, consolidation M1.
 
 --- a/src/library/tools/R/install.R
 +++ b/src/library/tools/R/install.R
-@@ -1273,6 +1273,25 @@
+@@ -1273,6 +1273,48 @@
              }
  	}
  
-+        ## r-zig: compile preflight (the toolchain is a separate package)
++        ## r-zig: compile preflight (feat-standalone-toolchain B26;
++        ## feat-zig-pkg-build PLAN.md, the consolidation with phase 3).
++        ## Before configure runs, rzig's check mode decides, as its `rzig
++        ## build` decides in run_shlib (patch 0013), whether this package
++        ## builds through zig build alone or needs make, and names a
++        ## missing toolchain group and how to install it: the compilers
++        ## (flang when Fortran is compiled), and the build tools when the
++        ## package needs make or for the configure script R runs below
++        ## (Windows: configure.ucrt or configure.win; a plain configure
++        ## only gets a warning there). For src/, or for that configure script
++        configure_runs <- use_configure &&
++            (if (WINDOWS) file.exists("configure.win") || file.exists("configure.ucrt")
++             else file.exists("configure"))
 +        if (((install_libs && dir.exists("src") &&
-+              length(dir("src", all.files = TRUE)) > 2L) ||
-+             (use_configure && (file.exists("configure") ||
-+                                (WINDOWS && (file.exists("configure.win") ||
-+                                             file.exists("configure.ucrt")))))) &&
-+            !file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")) &&
-+            ## the compiler Makeconf names, when it is a plain path (an
-+            ## unstaged build tree names the repo's toolchain/zig-cc)
-+            !tryCatch({
-+                cc <- grep("^CC *=", readLines(file.path(R.home("etc"), "Makeconf")), value = TRUE)
-+                cc <- strsplit(sub("^CC *= *", "", cc[1L]), " ", fixed = TRUE)[[1L]][1L]
-+                file.exists(gsub("$(R_HOME)", R.home(), cc, fixed = TRUE))
-+            }, error = function(e) FALSE) &&
-+            !length(makevars_user()) && !nzchar(Sys.getenv("R_ZIG_NO_PREFLIGHT")))
-+            pkgerrmsg(paste0("this package has compiled code, and the r-zig toolchain is not installed: ",
-+                             Sys.getenv("R_ZIG_TOOLCHAIN_HINT",
-+                                        "install the r-zig toolchain package for this R")),
-+                      pkg_name)
++              length(dir("src", all.files = TRUE)) > 2L) || configure_runs) &&
++            !length(makevars_user()) && !nzchar(Sys.getenv("R_ZIG_NO_PREFLIGHT"))) {
++            ## (R.home("bin") is bin/x64 on Windows)
++            rzig <- file.path(R.home(), "bin", "toolchain",
++                              if (WINDOWS) "gcc.exe" else "zig-cc")
++            ## no rzig: R without its toolchain package, which the
++            ## distribution's R_ZIG_TOOLCHAIN_HINT names
++            if (!file.exists(rzig))
++                pkgerrmsg(paste0("this package has compiled code, and the r-zig toolchain is not installed: ",
++                                 Sys.getenv("R_ZIG_TOOLCHAIN_HINT",
++                                            "install the r-zig toolchain package for this R")),
++                          pkg_name)
++            ## What rzig build will see, through the environment (system2's
++            ## env = is not supported on Windows): the C standard, and
++            ## whether R runs a configure script. A check that fails says on
++            ## stderr what is missing (rzig's own reason when make is needed)
++            ## and how to install its group, shown as it comes, and exits
++            ## non-zero (127: not through intern = TRUE, which makes that an
++            ## error of R's own); a passing one's line, on stdout, is not
++            ## shown.
++            Sys.setenv(R_ZIG_CONFIGURE = if (configure_runs) "1" else "0",
++                       R_ZIG_C_STD = if (is.na(use_C)) "" else as.character(use_C))
++            status <- suppressWarnings(system2(rzig, "--rzig-check=package", stdout = FALSE))
++            Sys.unsetenv(c("R_ZIG_CONFIGURE", "R_ZIG_C_STD"))
++            if (status != 0L)
++                pkgerrmsg("this package has compiled code, and the r-zig toolchain is incomplete (see above)",
++                          pkg_name)
++        }
          if (use_configure) {
              if (WINDOWS) {
                  if (file.exists(f <- "./configure.ucrt") ||

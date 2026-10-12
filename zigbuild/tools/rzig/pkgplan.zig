@@ -168,6 +168,11 @@ pub const Planner = struct {
         var with = std.EnumSet(Lang).initEmpty();
         for (srcs) |s| if (langOf(s)) |l| with.insert(l);
 
+        // a variable set in MAKEFLAGS (`make LTO_OPT=-flto`, or MAKEFLAGS=
+        // 'CFLAGS=-O0' in the environment) changes make's build and not
+        // this plan: make it (install.packages' `k -j2 --jobserver-auth=`
+        // are options, not assignments)
+        if (ctx.getenv("MAKEFLAGS")) |mf| if (makeflagsAssignment(mf)) |v| return p.needsMake("MAKEFLAGS sets {s}", .{v});
         var e = makefile.Evaluator.init(a, ctx.io, src_dir);
         try e.importEnvironment(ctx.env);
         try e.setEnvironment("R_HOME", opts.r_home);
@@ -412,6 +417,44 @@ pub const Planner = struct {
 
 /// zig's target for a package's own zig code (tier 2): what rzig compiles
 /// C for, with `-mcpu=baseline` added by the root.
+/// The name of the first variable MAKEFLAGS assigns, or null: a word
+/// after GNU make's ` -- ` (where it puts command-line assignments), or
+/// a NAME=value word anywhere (make takes those as assignments too).
+/// Options (`k`, `-j2`, `--jobserver-auth=fifo:...`) are not assignments.
+pub fn makeflagsAssignment(makeflags: []const u8) ?[]const u8 {
+    var after_dashes = false;
+    var it = mem.tokenizeAny(u8, makeflags, " \t");
+    while (it.next()) |w| {
+        if (!after_dashes and mem.eql(u8, w, "--")) {
+            after_dashes = true;
+            continue;
+        }
+        const eq = mem.indexOfScalar(u8, w, '=') orelse {
+            if (after_dashes) return w;
+            continue;
+        };
+        const name = w[0..eq];
+        if (after_dashes) return name;
+        if (name.len == 0 or !(std.ascii.isAlphabetic(name[0]) or name[0] == '_')) continue;
+        var ident = true;
+        for (name) |ch| if (!(std.ascii.isAlphanumeric(ch) or ch == '_')) {
+            ident = false;
+        };
+        if (ident) return name;
+    }
+    return null;
+}
+
+test makeflagsAssignment {
+    try testing.expect(makeflagsAssignment("") == null);
+    try testing.expect(makeflagsAssignment("k -j2 --jobserver-auth=fifo:/tmp/x") == null);
+    try testing.expect(makeflagsAssignment(" -j4 -k") == null);
+    try testing.expectEqualStrings("LTO_OPT", makeflagsAssignment("k -j2 --jobserver-auth=fifo:/tmp/x -- LTO_OPT=-flto").?);
+    try testing.expectEqualStrings("LTO_OPT", makeflagsAssignment("LTO_OPT=-flto").?);
+    try testing.expectEqualStrings("CFLAGS", makeflagsAssignment("-j2 CFLAGS=-O0\\ -g").?);
+    try testing.expectEqualStrings("X", makeflagsAssignment("-- X=1 Y=2").?);
+}
+
 pub fn packageTarget(ctx: *const Ctx) []const u8 {
     return switch (ctx.os) {
         .linux => compiler.linux_target,
@@ -727,6 +770,18 @@ test "tiers: R only, zig, configure, Makefile, Objective-C, rules, shell, foreig
         try testing.expectError(error.NeedsMake, p.plan(.{ .r_home = r, .pkg_dir = f.path(dir), .name = dir, .linkingto = &.{} }, class));
         try testing.expect(mem.startsWith(u8, p.reason, b.reason));
     }
+    // MAKEFLAGS: make's options plan; an assignment needs make
+    try f.touch("mf/src/a.c");
+    const mfc = try p.classify(f.path("mf"), f.path("mf/src"));
+    try f.env.put("MAKEFLAGS", "k -j2 --jobserver-auth=fifo:/tmp/x");
+    _ = try p.plan(.{ .r_home = r, .pkg_dir = f.path("mf"), .name = "mf", .linkingto = &.{} }, mfc);
+    try f.env.put("MAKEFLAGS", "k -j2 --jobserver-auth=fifo:/tmp/x -- LTO_OPT=-flto");
+    try testing.expectError(error.NeedsMake, p.plan(.{ .r_home = r, .pkg_dir = f.path("mf"), .name = "mf", .linkingto = &.{} }, mfc));
+    try testing.expectEqualStrings("MAKEFLAGS sets LTO_OPT", p.reason);
+    try f.env.put("MAKEFLAGS", "CFLAGS=-O0");
+    try testing.expectError(error.NeedsMake, p.plan(.{ .r_home = r, .pkg_dir = f.path("mf"), .name = "mf", .linkingto = &.{} }, mfc));
+    try testing.expectEqualStrings("MAKEFLAGS sets CFLAGS", p.reason);
+    _ = f.env.swapRemove("MAKEFLAGS");
     // the package's Makevars cannot change CC (Makeconf comes after it);
     // the user's ~/.R/Makevars, read last, can, and then make must build
     try f.write("u/src/Makevars", "CC = gcc\n", .default_file);

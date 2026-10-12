@@ -19,7 +19,11 @@
 //!   rzig build --pkg <dir> --classify      the tier to stdout
 //!
 //! Exit 0 built (or nothing to build), 3 needs make (why, on stderr),
-//! 2 usage, 1 failed. R_HOME from the environment, as under R.
+//! 2 usage, 1 failed, 127 no zig (the compilers group's text). R_HOME
+//! from the environment, as under R. `--classify` prints the decided
+//! tier (r_only, makevars, zig, make: make also when the Makevars sends
+//! the package there); `--plan-only` the plan. The install preflight
+//! (check.zig's --rzig-check=package) decides through `decide` below.
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
@@ -27,7 +31,7 @@ const Io = std.Io;
 const Ctx = @import("Ctx.zig");
 const pkgplan = @import("pkgplan.zig");
 const find_zig = @import("find_zig.zig");
-const cache = @import("cache.zig");
+const groups = @import("groups.zig");
 
 pub const exit_needs_make: u8 = 3;
 
@@ -105,7 +109,7 @@ fn parseArgs(ctx: *Ctx, argv: []const []const u8) !?Args {
 }
 
 /// `path` absolute with `/` separators, as rzig keeps every path.
-fn canonical(ctx: *Ctx, path: []const u8) ![]const u8 {
+pub fn canonical(ctx: *Ctx, path: []const u8) ![]const u8 {
     const real = Io.Dir.cwd().realPathFileAlloc(ctx.io, path, ctx.arena) catch |err| {
         ctx.warn("build: {s}: {t}", .{ path, err });
         return error.BadPath;
@@ -119,7 +123,7 @@ fn slashes(ctx: *Ctx, p: []const u8) ![]const u8 {
 }
 
 /// DESCRIPTION's `Package:` field.
-fn packageName(ctx: *Ctx, pkg_dir: []const u8) ?[]const u8 {
+pub fn packageName(ctx: *Ctx, pkg_dir: []const u8) ?[]const u8 {
     const text = Io.Dir.cwd().readFileAlloc(ctx.io, ctx.fmt("{s}/DESCRIPTION", .{pkg_dir}) catch return null, ctx.arena, .limited(1 << 20)) catch return null;
     var it = mem.splitScalar(u8, text, '\n');
     while (it.next()) |line| {
@@ -156,6 +160,71 @@ fn makevarsUser(ctx: *Ctx, r_arch: []const u8) !?[]const u8 {
     return null;
 }
 
+/// What `rzig build` decides for one package: its tier, why it needs make
+/// (tier 3), and for tiers 1 and 2 the plan. The install preflight's
+/// `--rzig-check=package` (check.zig, patch 0009) decides through this
+/// same function, with the inputs install.R's hook (patch 0013) passes,
+/// so the preflight's tier and the hook's tier come from one code path:
+/// classify (the files), then plan (the Makevars and Makeconf, where the
+/// rules, conditionals, $(shell) and foreign compilers are found).
+pub const Decision = struct {
+    tier: pkgplan.Tier,
+    /// For `.make`: what sends the package there, as classify or plan
+    /// word it ("a configure script", "src/Makefile", "src/Makevars has a
+    /// rule or target line: '...'", "MAKEFLAGS sets NAME", ...).
+    reason: []const u8 = "",
+    class: pkgplan.Classification,
+    /// Tiers 1 and 2.
+    plan: ?pkgplan.Plan = null,
+};
+
+pub const Inputs = struct {
+    /// Absolute, `/` separators (canonical).
+    r_home: []const u8,
+    pkg_dir: []const u8,
+    src_dir: []const u8,
+    name: []const u8,
+    linkingto: ?[]const []const u8 = null,
+    cxx_std: ?[]const u8 = null,
+    c_std: ?[]const u8 = null,
+    use_lto: ?bool = null,
+    debug: bool = false,
+    /// rzig's own path, for `rzig def` in the plan.
+    rzig: []const u8,
+};
+
+pub fn decide(ctx: *Ctx, in: Inputs) error{OutOfMemory}!Decision {
+    const r_arch = ctx.getenv("R_ARCH") orelse if (ctx.os == .windows) "/x64" else "";
+    var planner: pkgplan.Planner = .{ .ctx = ctx };
+    const class = planner.classify(in.pkg_dir, in.src_dir) catch |err| switch (err) {
+        error.NeedsMake => return .{ .tier = .make, .reason = planner.reason, .class = .{ .tier = .make, .reason = planner.reason } },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    switch (class.tier) {
+        .r_only => return .{ .tier = .r_only, .class = class },
+        .make => return .{ .tier = .make, .reason = class.reason, .class = class },
+        .makevars, .zig => {},
+    }
+    const plan = planner.plan(.{
+        .r_home = in.r_home,
+        .pkg_dir = in.pkg_dir,
+        .src_dir = in.src_dir,
+        .name = in.name,
+        .linkingto = in.linkingto,
+        .cxx_std = in.cxx_std,
+        .c_std = in.c_std,
+        .use_lto = in.use_lto,
+        .debug = in.debug,
+        .makevars_site = try makevarsSite(ctx, in.r_home, r_arch),
+        .makevars_user = try makevarsUser(ctx, r_arch),
+        .rzig = in.rzig,
+    }, class) catch |err| switch (err) {
+        error.NeedsMake => return .{ .tier = .make, .reason = planner.reason, .class = class },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    return .{ .tier = class.tier, .class = class, .plan = plan };
+}
+
 pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     ctx.name = "rzig build";
     const args = (try parseArgs(ctx, argv)) orelse return 2;
@@ -174,28 +243,7 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         ctx.warn("no --name and no Package: field in {s}/DESCRIPTION", .{pkg_dir});
         return 2;
     };
-    const r_arch = ctx.getenv("R_ARCH") orelse if (ctx.os == .windows) "/x64" else "";
-
-    var planner: pkgplan.Planner = .{ .ctx = ctx };
-    const class = planner.classify(pkg_dir, src_dir) catch |err| switch (err) {
-        error.NeedsMake => return needsMake(ctx, name, planner.reason),
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    if (args.classify) {
-        try stdoutPrint(ctx, "{t}\n", .{class.tier});
-        return 0;
-    }
-    switch (class.tier) {
-        .r_only => {
-            if (isSet(ctx, "RZIG_TRACE")) ctx.warn("{s}: no src/, nothing to compile", .{name});
-            return 0;
-        },
-        .make => return needsMake(ctx, name, class.reason),
-        .makevars, .zig => {},
-    }
-
-    const rzig_path = ctx.self_exe orelse "rzig";
-    var plan = planner.plan(.{
+    const d = try decide(ctx, .{
         .r_home = r_home,
         .pkg_dir = pkg_dir,
         .src_dir = src_dir,
@@ -205,13 +253,24 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         .c_std = args.c_std,
         .use_lto = args.use_lto,
         .debug = args.debug,
-        .makevars_site = try makevarsSite(ctx, r_home, r_arch),
-        .makevars_user = try makevarsUser(ctx, r_arch),
-        .rzig = rzig_path,
-    }, class) catch |err| switch (err) {
-        error.NeedsMake => return needsMake(ctx, name, planner.reason),
-        error.OutOfMemory => return error.OutOfMemory,
-    };
+        .rzig = ctx.self_exe orelse "rzig",
+    });
+    // the decided tier: make also when the Makevars sends the package
+    // there (the preflight decides the same way)
+    if (args.classify) {
+        try stdoutPrint(ctx, "{t}\n", .{d.tier});
+        return 0;
+    }
+    const class = d.class;
+    switch (d.tier) {
+        .r_only => {
+            if (isSet(ctx, "RZIG_TRACE")) ctx.warn("{s}: no src/, nothing to compile", .{name});
+            return 0;
+        },
+        .make => return needsMake(ctx, name, d.reason),
+        .makevars, .zig => {},
+    }
+    var plan = d.plan.?;
 
     if (args.flat) plan.libs_dir = "";
     if (args.plan_only) {
@@ -259,6 +318,17 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
                     return 1;
                 };
             }
+            // tier 2 builds offline: a dependency the package's own manifest
+            // fetches by URL is refused (exit 1, not 3: make would compile
+            // src/ and ignore build.zig), and zig build runs with --system,
+            // which disables fetching for the whole graph
+            const zon_path = try ctx.fmt("{s}/build.zig.zon", .{src_dir});
+            if (Io.Dir.cwd().readFileAlloc(ctx.io, zon_path, ctx.arena, .limited(1 << 20)) catch null) |zon_text| {
+                if (urlDependency(zon_text)) |dep| {
+                    ctx.warn("src/build.zig.zon: dependency {s} is a URL; tier 2 builds offline, vendor it as a .path dependency", .{dep});
+                    return 1;
+                }
+            }
             const rel = try slashes(ctx, try std.fs.path.relative(ctx.arena, root, ctx.env, root, src_dir));
             if (rel.len == 0 or std.fs.path.isAbsolute(rel)) {
                 ctx.warn("cannot name {s} relative to {s}", .{ src_dir, root });
@@ -289,19 +359,33 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         return 1;
     }
 
-    const cache_dir = args.cache_dir orelse try ctx.fmt("{s}/zig-build", .{try cache.root(ctx)});
-    const zig = find_zig.find(ctx) catch |err| {
-        ctx.warn("no zig to build with: {t}", .{err});
+    // the zig build cache: in the build root, gone with it, so that an
+    // install leaves nothing behind (the Run steps' keys hash the whole
+    // environment, R_SESSION_TMPDIR included, so entries are never reused
+    // across installs: a shared cache only grew). zig's global cache (std,
+    // compiler_rt, keyed by target) is the shared part. ZIG_LOCAL_CACHE_DIR
+    // names another place when set (stress.R points it at its run
+    // directory); --cache-dir wins over both.
+    const cache_dir = args.cache_dir orelse ctx.getenv("ZIG_LOCAL_CACHE_DIR") orelse try ctx.fmt("{s}/zig-cache", .{root});
+    const no_packages = try ctx.fmt("{s}/no-packages", .{root});
+    if (class.tier == .zig) Io.Dir.cwd().createDirPath(ctx.io, no_packages) catch |err| {
+        ctx.warn("cannot create {s}: {t}", .{ no_packages, err });
         return 1;
     };
-    try reportCompilers(ctx, &plan, class.tier, zig);
+    // no zig: 127 and the compilers group's text, as a compile says (main.zig)
+    const zig = (try find_zig.find(ctx)) orelse {
+        try groups.report(ctx, groups.no_zig, .compilers);
+        return 127;
+    };
+    try reportCompilers(ctx, &plan, class.tier, zig.argv);
     // zig build makes an (empty) .zig-cache in a path dependency's directory,
     // the package's src/ here; leave src/ as it was found
     const dep_cache = try ctx.fmt("{s}/.zig-cache", .{src_dir});
     const dep_cache_existed = class.tier == .zig and ctx.exists(dep_cache);
     var cmd: std.ArrayList([]const u8) = .empty;
-    try cmd.appendSlice(ctx.arena, zig);
+    try cmd.appendSlice(ctx.arena, zig.argv);
     try cmd.appendSlice(ctx.arena, &.{ "build", "--build-file", build_file, "--cache-dir", cache_dir, "--prefix", out, try ctx.fmt("-Dplan={s}", .{plan_path}) });
+    if (class.tier == .zig) try cmd.appendSlice(ctx.arena, &.{ "--system", no_packages });
     if (args.jobs) |j| try cmd.append(ctx.arena, try ctx.fmt("-j{s}", .{j}));
     if (isSet(ctx, "RZIG_TRACE")) {
         ctx.warn("tier {s}, root {s}", .{ switch (class.tier) {
@@ -354,6 +438,100 @@ fn reportCompilers(ctx: *Ctx, plan: *const pkgplan.Plan, tier: pkgplan.Tier, zig
         const v = ctx.capture(try mem.concat(ctx.arena, []const u8, &.{ zig, &.{"version"} }));
         if (v.ok) try stdoutPrint(ctx, "using zig: '{s}'\n", .{v.stdout});
     }
+}
+
+/// The name of the first dependency in a build.zig.zon `text` that has a
+/// `.url` field, or null. A scan of the manifest, not a parse: the
+/// `.dependencies = .{ ... }` block, its entries one brace level down
+/// (`.name = .{ ... }`), and a `.url` field in an entry; strings and
+/// comments are skipped.
+pub fn urlDependency(text: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    var depth: usize = 0;
+    var deps_depth: ?usize = null; // the brace depth inside .dependencies
+    var entry: ?[]const u8 = null; // the entry (depth deps_depth + 1) being scanned
+    var pending: ?[]const u8 = null; // a field name seen, before its `=` and `.{`
+    while (i < text.len) {
+        const c = text[i];
+        if (c == '/' and i + 1 < text.len and text[i + 1] == '/') {
+            i = mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len;
+            continue;
+        }
+        if (c == '"') {
+            i += 1;
+            while (i < text.len and text[i] != '"') : (i += 1) if (text[i] == '\\') {
+                i += 1;
+            };
+            i += 1;
+            continue;
+        }
+        if (c == '{') {
+            depth += 1;
+            if (pending) |name| {
+                if (deps_depth == null and mem.eql(u8, name, "dependencies")) deps_depth = depth;
+                if (deps_depth != null and depth == deps_depth.? + 1) entry = name;
+                pending = null;
+            }
+            i += 1;
+            continue;
+        }
+        if (c == '}') {
+            if (deps_depth) |dd| {
+                if (depth == dd + 1) entry = null;
+                if (depth == dd) deps_depth = null;
+            }
+            if (depth > 0) depth -= 1;
+            i += 1;
+            continue;
+        }
+        if (c == '.' and i + 1 < text.len) {
+            // .name, .@"name"
+            const start = i + 1;
+            var end = start;
+            if (text[start] == '@' and start + 1 < text.len and text[start + 1] == '"') {
+                end = (mem.indexOfScalarPos(u8, text, start + 2, '"') orelse text.len) + 1;
+            } else {
+                while (end < text.len and (std.ascii.isAlphanumeric(text[end]) or text[end] == '_')) : (end += 1) {}
+            }
+            if (end > start) {
+                var name = text[start..end];
+                if (name.len > 3 and name[0] == '@') name = name[2 .. name.len - 1];
+                if (deps_depth != null and entry != null and depth == deps_depth.? + 1 and mem.eql(u8, name, "url")) return entry;
+                // a field name is followed by `=`; an enum literal or a
+                // nested `.{` is not
+                var j = end;
+                while (j < text.len and (text[j] == ' ' or text[j] == '\t' or text[j] == '\n' or text[j] == '\r')) : (j += 1) {}
+                pending = if (j < text.len and text[j] == '=') name else null;
+            }
+            i = if (end > start) end else i + 1;
+            continue;
+        }
+        i += 1;
+    }
+    return null;
+}
+
+test urlDependency {
+    const t = std.testing;
+    try t.expect(urlDependency("") == null);
+    try t.expect(urlDependency(".{ .name = .x, .version = \"0.0.0\", .paths = .{\"\"} }") == null);
+    try t.expect(urlDependency(
+        \\.{ .name = .x, .version = "0.0.0",
+        \\  .dependencies = .{ .a = .{ .path = "../a" }, .@"b-c" = .{ .path = "vendor/b" } },
+        \\  .paths = .{""} }
+    ) == null);
+    try t.expectEqualStrings("b", urlDependency(
+        \\.{ .name = .x,
+        \\  .dependencies = .{
+        \\    .a = .{ .path = "../a" },
+        \\    // .url = "in a comment" does not count
+        \\    .b = .{ .url = "https://example.invalid/b.tar.gz", .hash = "..." },
+        \\  }, .paths = .{""} }
+    ).?);
+    try t.expectEqualStrings("quoted-name", urlDependency(".{ .dependencies = .{ .@\"quoted-name\" = .{ .url = \"x\" } } }").?);
+    // a string holding ".url" or braces, and a .url outside .dependencies
+    try t.expect(urlDependency(".{ .dependencies = .{ .a = .{ .path = \"{.url}\" } }, .url = \"x\" }") == null);
+    try t.expect(urlDependency(".{ .url = \"x\", .dependencies = .{ .a = .{ .path = \"p\", .lazy = true } } }") == null);
 }
 
 fn needsMake(ctx: *Ctx, name: []const u8, reason: []const u8) u8 {

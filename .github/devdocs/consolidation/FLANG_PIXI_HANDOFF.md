@@ -494,3 +494,57 @@ verify-package/conda-package). Pins are exact builds — `build-number =
 run deps included), not ranges (see §9 correction). On win-64 flang-rt-zig
 10's archive carries 5,436 `-exclude-symbols` for its 5,442 globals and no
 DLL exports a runtime symbol, .def or not.
+
+## 11. The zig 0.17 release: lld-zig 6 / flang-zig 7 / flang-rt-zig 11 on universe (2026-10-11); your 0.16 set stays retained
+
+**On universe since 2026-10-11:** the second aligned release — **lld-zig
+`_6`, flang-zig `_7`, flang-rt-zig `_11`** on linux-64, linux-aarch64,
+osx-arm64, osx-64, win-64 and win-arm64 — built with conda-forge
+`zig_impl_*` 0.17.0 (LLVM 22 inside zig; flang is still LLVM 23.1.1).
+flang-pixi's `test.yml` run 38144463412 is green on all six native runners.
+**Your 0.16 set (lld 5 / flang 6 / flang-rt 10) is retained**: the channel
+now holds both releases (36 files); `prune-universe.py` reports "retained
+18 / delete 0" and will keep doing so until you say no published
+r-zig-toolchain pins them (`retain` in flang-pixi's
+`scripts/build-alignment.json`).
+
+**Your pins keep you on 0.16.** `*_5` / `*_6` / `*_10` (recipe) and
+`build-number = "==N"` (pixi.toml) are exact, so nothing moves until you
+choose to; moving to the 0.17 set needs the build.zig port first
+(`install_prefix` and `pathFromRoot` are gone, the cached configurer must
+be poisoned or told its inputs; flang-pixi docs/17 §4). When you do, pin
+`lld-zig ==23.1.1 *_6`, `flang-zig ==23.1.1 *_7`, `flang-rt-zig ==23.1.1
+*_11`; flang-zig 7 itself pins `lld-zig *_6`, so the lld pin on your side
+is optional from this release on.
+
+**What changed inside the packages vs 5/6/10:** zig 0.17's bundled clang
+22 / libc++ 22 / mingw-w64 15 (still static, still libc-only at load time
+by the allowlist tripwire; glibc ceiling still 2.17, macOS floor 11.0);
+explicit `-mcpu=baseline` in every build (same code as before); the
+win-arm64 packages no longer ship `libcompat_arm64.a` or the wcstold shim
+and `flang.cfg` there has no `-lcompat_arm64` — zig 0.17 resolves
+`__C_specific_handler` from the UCRT api set and ships `wcstold`
+(verified before removal, then win-arm64 rebuilt without them). Build
+strings on the cross subdirs are unchanged from the 0.16 release
+(`zig_279c4b1_6` etc.) because the hash inputs did not change: pin by
+build NUMBER, as you do.
+
+**atexit auto-export (your §10 report): still required on 0.17.** The
+repro still fails cross-compiled with conda-forge 0.17 and with upstream
+0.17.0; natively the conda-forge win-64 zig hides it through its CRT
+patches, which survived into 0.17. Keep the `-exclude-symbols:atexit`
+object.
+
+**Compiler source, and why:** conda-forge zig for this wave (user decision
+2026-10-10) — a `variants.yaml` bump with every workaround still in place,
+so a failure would have been attributable to zig 0.17 alone; the build
+scripts now keep everything either source needs (ZIG_LIB_DIR mirror,
+explicit targets, macOS zig-form triple, explicit `-mcpu=baseline`). The
+upstream-zig switch is the release after: lld 7 / flang 8 / flang-rt 12.
+Measured on 0.17.0: upstream and conda-forge zig emit identical machine
+code; they differ in the NEEDED list (upstream `libc` only) and the
+producer string, and conda-forge's feedstock patches (shared-libc++
+preference, the Windows CRT/atexit chain, the wrapper flag drops) all
+survived into 0.17.0 unchanged. A native `zig_impl_win-arm64` 0.17.0 now
+exists on the main label (flang-pixi still cross-builds win-arm64 from
+win-64 in this release).

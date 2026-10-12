@@ -7,19 +7,29 @@
 #     R CMD INSTALL of a package with compiled code stops with the compile
 #     preflight naming r-zig-toolchain (phase T of feat-no-host-paths)
 #   - then r-zig-toolchain (which brings ziglang and GNU make):
+#   - make is the toolchain's R_HOME/bin/toolchain/usr/bin/make, which
+#     etc/Renviron puts first on PATH, and MAKE is plain `make`
+#     (feat-standalone-toolchain B23, B25)
 #   - zig-fc (FC) is shipped, and with no flang it stops with exit 127 and
-#     a message naming flang's remedy, not the toolchain hint (the toolchain
-#     is installed by then), feat-no-host-paths F3c
+#     the compilers group's text, which says pip brings no Fortran, not the
+#     toolchain hint (the toolchain is installed by then), feat-no-host-paths
+#     F3c and feat-standalone-toolchain B35
 #   - R CMD INSTALL of a small package with C and C++ sources that calls
 #     BLAS through CRAN's usual `$(BLAS_LIBS) $(FLIBS)` — compiled by the
-#     PyPI ziglang package and built by the bundled GNU make, three times:
-#     through the console script (ZIG_BIN from `import ziglang`) and
-#     through the bundled bin/R directly with ZIG_BIN unset (the path an
-#     embedder such as rpy2 takes: Renviron.site finds ziglang next door),
-#     and once more with ZIG_BIN pointing nowhere (python3 -m ziglang)
+#     PyPI ziglang package, three times: through the console script
+#     (ZIG_BIN from `import ziglang`; RZIG_TRACE=1, and the log must say
+#     `rzig build: tier 1`: R CMD INSTALL builds this shape through
+#     `rzig build`, feat-zig-pkg-build's patch 0013, here for the first
+#     time under PyPI's ziglang), through the bundled bin/R directly with
+#     ZIG_BIN unset (the path an embedder such as rpy2 takes:
+#     Renviron.site finds ziglang next door) and R_ZIG_PKG_BUILDER=make,
+#     so the bundled GNU make builds it once, and once more with ZIG_BIN
+#     pointing nowhere (python3 -m ziglang); then a package whose Makevars
+#     has a rule (a static library through $(AR)), which needs make, built
+#     by the bundled make
 #   - the compilers (rzig) ignore CONDA_PREFIX, and honour R_ZIG_EXTRA_ENV
 #     (an env's header, -L and rpath), feat-no-host-paths F3b
-#   - uninstalling r-zig-toolchain removes only R_HOME/bin/toolchain
+#   - uninstalling r-zig-toolchain removes only R_HOME/bin/toolchain's files
 # pip fetches ziglang (~100 MB) from PyPI, so this needs network; point
 # PIP_FIND_LINKS at a directory holding the ziglang wheel to avoid that.
 . "$(dirname "$0")/env.sh"
@@ -139,19 +149,27 @@ grep -F "r-zig toolchain is not installed" "$T/preflight.out" | grep -F "pip ins
 echo "== installing $(basename "$tc_wheel") (+ ziglang from PyPI)"
 pip_ install --quiet "$tc_wheel"
 pip_ list 2>/dev/null | grep -iE '^(r-zig|r-zig-toolchain|ziglang) '
+# GNU make is the build-tools group's usr/bin/make, found on PATH: R reads
+# etc/Renviron's PATH line, which puts R_HOME/bin/toolchain/usr/bin first
+# (ahead of a host make, such as Apple's 3.81 in /usr/bin), and MAKE stays
+# `make` (feat-standalone-toolchain B23, B25).
 run Rscript -e '
-  mk <- Sys.getenv("MAKE")
-  stopifnot(file.exists(mk), grepl("bin/toolchain/make$", mk))
-  cat("MAKE =", mk, "\n")
+  mk <- Sys.which("make")
+  stopifnot(nzchar(mk), file.exists(mk), grepl("bin/toolchain/usr/bin/make$", mk),
+            identical(Sys.getenv("MAKE"), "make"))
+  cat("make =", mk, "\n")
 '
 
 echo "== zig-fc: shipped, and with no flang it stops naming flang"
 # FC is the toolchain's zig-fc (feat-no-host-paths F3c), shipped like
 # zig-cc. Neither wheel brings a Fortran compiler, so here a Fortran
-# compile stops at once: exit 127, with a message naming LLVM flang as the
-# remedy. Not R_ZIG_TOOLCHAIN_HINT (etc/Renviron, which R CMD applies):
-# its "pip install r-zig-toolchain" is already done once zig-fc exists.
-# C packages build as before.
+# compile stops at once: exit 127, with rzig's text for the compilers group
+# (feat-standalone-toolchain B35, the same on every channel): its pip line
+# says the wheels bring no Fortran, its standalone line names LLVM flang on
+# PATH. Not R_ZIG_TOOLCHAIN_HINT (etc/Renviron, which R CMD applies; rzig
+# does not read it): its "pip install r-zig-toolchain (same Python
+# environment as r-zig)" is already done once zig-fc exists. C packages
+# build as before.
 tc="$r_home/bin/toolchain"
 cmp -s "$tc/zig-fc" "$tc/zig-cc" || { echo "error: $tc/zig-fc is missing or not the same rzig as zig-cc" >&2; exit 1; }
 if [ -x /usr/bin/flang ] || [ -x /bin/flang ]; then
@@ -160,15 +178,18 @@ else
   printf '      end\n' > "$T/nofc.f"
   rc=0
   (cd "$T" && run "$r_home/bin/R" CMD toolchain/zig-fc -c nofc.f -o nofc.o) > "$T/nofc.log" 2>&1 || rc=$?
-  if [ "$rc" != 127 ] || ! grep '^zig-fc: no flang on PATH' "$T/nofc.log" | grep -qF "install LLVM flang" ||
-    grep -qF "pip install r-zig-toolchain" "$T/nofc.log"; then
-    cat "$T/nofc.log" >&2; echo "error: zig-fc with no flang: exit $rc, or no message naming LLVM flang (or one still naming the installed toolchain)" >&2; exit 1
+  if [ "$rc" != 127 ] || ! grep -q '^zig-fc: no flang (' "$T/nofc.log" ||
+    ! grep -qF "LLVM flang on PATH" "$T/nofc.log" || ! grep -qF "pip install r-zig-toolchain (no Fortran)" "$T/nofc.log" ||
+    grep -qF "same Python environment as r-zig" "$T/nofc.log"; then
+    cat "$T/nofc.log" >&2; echo "error: zig-fc with no flang: exit $rc, or not the compilers group's text (LLVM flang on PATH; pip: no Fortran), or the toolchain hint" >&2; exit 1
   fi
   echo "ok: exit 127: $(cat "$T/nofc.log")"
 fi
 
-echo "== R CMD INSTALL via the console script (ZIG_BIN from import ziglang)"
-run R CMD INSTALL --preclean -l "$T/lib1" "$P"
+echo "== R CMD INSTALL via the console script (ZIG_BIN from import ziglang): rzig build"
+run RZIG_TRACE=1 R CMD INSTALL --preclean -l "$T/lib1" "$P" > "$T/install1.log" 2>&1 || { cat "$T/install1.log" >&2; exit 1; }
+grep -q 'rzig build: tier 1' "$T/install1.log" || { cat "$T/install1.log" >&2; echo "error: the console-script install did not build through rzig build (no 'rzig build: tier 1' in its log)" >&2; exit 1; }
+echo "ok: rzig build: tier 1 ($(grep -c '^zig-c[^:]*: ' "$T/install1.log") rzig command lines under PyPI ziglang)"
 run Rscript -e "
   library(rzigwheeltest, lib.loc = '$T/lib1')
   stopifnot(dot(1:3, 4:6) == 32, cxx_sum(1:10) == 55)
@@ -245,8 +266,11 @@ else
   echo "note: no pixi env with zlib.h next to this checkout; R_ZIG_EXTRA_ENV not exercised"
 fi
 
-echo "== R CMD INSTALL via bundled bin/R, ZIG_BIN unset (Renviron.site -> sibling ziglang)"
-run "$r_home/bin/R" CMD INSTALL --preclean -l "$T/lib2" "$P"
+echo "== R CMD INSTALL via bundled bin/R, ZIG_BIN unset (Renviron.site -> sibling ziglang), through the bundled make (R_ZIG_PKG_BUILDER=make)"
+run R_ZIG_PKG_BUILDER=make RZIG_TRACE=1 "$r_home/bin/R" CMD INSTALL --preclean -l "$T/lib2" "$P" > "$T/install2.log" 2>&1 || { cat "$T/install2.log" >&2; exit 1; }
+if grep -q 'rzig build:' "$T/install2.log"; then cat "$T/install2.log" >&2; echo "error: R_ZIG_PKG_BUILDER=make still ran rzig build" >&2; exit 1; fi
+grep -q '^make' "$T/install2.log" || grep -q 'usr/bin/make\|^gcc\|toolchain/zig-cc' "$T/install2.log" || { cat "$T/install2.log" >&2; echo "error: no make or compiler lines in the make-path install's log" >&2; exit 1; }
+echo "ok: the make path built it"
 run "$r_home/bin/Rscript" -e "
   stopifnot(nzchar(Sys.getenv('ZIG_BIN')), file.exists(Sys.getenv('ZIG_BIN')))
   cat('ZIG_BIN =', normalizePath(Sys.getenv('ZIG_BIN')), '\n')
@@ -262,8 +286,25 @@ run "$r_home/bin/Rscript" -e "
   stopifnot(dot(1:3, 4:6) == 32, cxx_sum(1:10) == 55)
   cat('compiled package OK (python3 -m ziglang fallback)\n')
 "
+echo "== a package that needs make (a Makevars rule: a static library through \$(AR)), built by the bundled make"
+A="$T/src/rzigwheelar"
+mkdir -p "$A/R" "$A/src/foo" "$T/lib6"
+printf 'Package: rzigwheelar\nVersion: 0.1\nTitle: Test\nDescription: Test package.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' > "$A/DESCRIPTION"
+printf 'useDynLib(rzigwheelar)\nexport(f)\n' > "$A/NAMESPACE"
+echo 'f <- function() .Call("rzigwheelar_f")' > "$A/R/f.R"
+printf '#include <Rinternals.h>\nint rzigwheelar_foo(void);\nSEXP rzigwheelar_f(void) { return ScalarInteger(rzigwheelar_foo()); }\n' > "$A/src/f.c"
+echo 'int rzigwheelar_foo(void) { return 42; }' > "$A/src/foo/foo.c"
+printf 'PKG_LIBS = foo/libfoo.a\n$(SHLIB): foo/libfoo.a\nfoo/libfoo.a: foo/foo.o\n\t$(AR) cr $@ foo/foo.o\n\t$(RANLIB) $@\n' > "$A/src/Makevars"
+run RZIG_TRACE=1 R CMD INSTALL -l "$T/lib6" "$A" > "$T/install6.log" 2>&1 || { cat "$T/install6.log" >&2; exit 1; }
+grep -q 'rzig build: rzigwheelar needs make: src/Makevars has a rule or target line' "$T/install6.log" || { cat "$T/install6.log" >&2; echo "error: the Makevars-rule package did not go to make with rzig build's reason" >&2; exit 1; }
+run Rscript -e "library(rzigwheelar, lib.loc = '$T/lib6'); stopifnot(f() == 42L); cat('needs-make package built by the wheel\'s make OK\n')"
+
 echo "== uninstalling r-zig-toolchain leaves r-zig whole"
 pip_ uninstall --quiet -y r-zig-toolchain
+# No file of it is left under R_HOME/bin/toolchain, rzig's or usr/'s; pip
+# may leave the empty directories (C32).
+left="$(find "$r_home/bin/toolchain" ! -type d 2>/dev/null || true)"
+[ -z "$left" ] || { printf '%s\n' "$left" >&2; echo "error: files left under R_HOME/bin/toolchain after uninstalling r-zig-toolchain" >&2; exit 1; }
 run Rscript -e '
   stopifnot(!file.exists(file.path(R.home(), "bin", "toolchain", "zig-cc")))
   stopifnot(file.exists(file.path(R.home(), "etc", "Makeconf")))

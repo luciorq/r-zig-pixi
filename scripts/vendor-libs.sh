@@ -73,10 +73,13 @@ while IFS= read -r f; do
 done < <(vendored_files "$PREFIX" "$CONDA")
 [ "$n_old" = 0 ] || echo "== removed $n_old libraries an earlier run vendored"
 
-# Windows: every PE file in the tree (R's own, the toolchain's, and the
-# Tcl DLLs build.zig installs into R_HOME/Tcl/bin: tcl86t.dll needs
-# zlib1.dll) and, where packages get OpenMP, libomp.dll (below), then a
-# fixed-point walk over the DLLs copied by this run.
+# Windows: every PE file in the tree (R's own, rzig's in bin/toolchain,
+# and the Tcl DLLs build.zig installs into R_HOME/Tcl/bin: tcl86t.dll
+# needs zlib1.dll) and, where packages get OpenMP, libomp.dll (below),
+# then a fixed-point walk over the DLLs copied by this run. The
+# build-tools group's binutils are not in the R tree
+# (feat-standalone-toolchain B30): its binutils/ carries the DLLs they
+# load (verify-toolchain.sh).
 # The Tcl DLLs stay only in Tcl/bin, CRAN's layout: a copy in bin/x64
 # wins the search order but then looks for init.tcl relative to itself
 # and fails. (needed_of: verify-helpers.sh, the imports verify-tree.sh
@@ -89,11 +92,14 @@ if [ "$OS" = windows ]; then
   n=0
   i=0
   # libomp.dll, for packages: R itself has no OpenMP on Windows, so no PE
-  # file in the tree imports it, but a package linked against the
-  # libomp.lib build.zig installs (installOpenMP, wherever Makeconf
-  # offers packages OpenMP) does, and the loader finds it here. The walk
-  # takes its own imports, as it does every copy's.
-  if [ -f "$PREFIX/Library/lib/libomp.lib" ] && [ ! -f "$BIN/libomp.dll" ]; then
+  # file in the tree imports it, but a package built with Makeconf's
+  # SHLIB_OPENMP_*FLAGS does (rzig links it against the compilers group's
+  # TC/openmp/lib/libomp.lib), and the loader finds it here. So it comes
+  # wherever Makeconf offers packages OpenMP (build.zig writes -fopenmp
+  # there), with or without the group beside the tree: rzig counts
+  # TC/openmp/ only when the base has this file (feat-standalone-toolchain
+  # B40). The walk takes its own imports, as it does every copy's.
+  if grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$R_HOME_DIR/etc/x64/Makeconf" && [ ! -f "$BIN/libomp.dll" ]; then
     cp "$CLIB/libomp.dll" "$BIN/libomp.dll"
     pes+=("$BIN/libomp.dll")
     n=$((n + 1))
@@ -116,8 +122,11 @@ fi
 mkdir -p "$PREFIX/lib"
 
 # Every binary under <prefix>/lib: R_HOME (ELF or Mach-O magic, not name
-# patterns: the tools in bin/toolchain count too, e.g. minimal's make),
-# then a fixed-point walk over the libraries copied by this run.
+# patterns: rzig in bin/toolchain counts too), then a fixed-point walk
+# over the libraries copied by this run. The toolchain groups' tools
+# (make) are not in the R tree (feat-standalone-toolchain B30) and need
+# only the system's libraries (verify-toolchain.sh); the runtime R's own
+# binaries need stays here, in the base (B21).
 case "$OS" in
   linux) magic=$'\x7fELF' ;;
   macos) magic=$'\xcf\xfa\xed\xfe' ;;
@@ -159,10 +168,11 @@ while [ "$i" -lt "${#bins[@]}" ]; do
     [ -e "$PREFIX/lib/$base" ] && continue
     cp -L "$dep" "$PREFIX/lib/$base"
     chmod u+w "$PREFIX/lib/$base"
-    # minimal (the wheel's tree): conda-forge's libraries ship with full
-    # DWARF (libstdc++.so.6: 24 MiB, about 2 without); R's own binaries
-    # are already built stripped for minimal (build.zig newCMod).
-    if [ "$VARIANT" = minimal ] && [ "$OS" = linux ]; then
+    # linux, every flavor: conda-forge's libraries ship with full DWARF
+    # (libstdc++.so.6: 24 MiB, about 2 without), and R's own binaries are
+    # built stripped (build.zig newCMod; the user's D1, "Strip Linux debug
+    # info"). --strip-debug keeps their symbol tables.
+    if [ "$OS" = linux ]; then
       strip --strip-debug "$PREFIX/lib/$base"
     fi
     bins+=("$PREFIX/lib/$base")

@@ -1,12 +1,12 @@
 //! The Fortran runtime. Makeconf's FLIBS says -lflang_rt.runtime
 //! (feat-no-host-paths F1.5), and zig-fc's shared links add it
-//! (fortran.zig); link the static archive of the flang on PATH, the
+//! (fortran.zig); link the static archive of the flang `flang` finds, the
 //! compiler zig-fc runs, wherever its LLVM keeps it (<resource
 //! dir>/lib/<triple>/): never a shared runtime, which would need an rpath
 //! into the environment at load time (flang-rt-zig >= 9 ships none, but
 //! conda-forge's flang-rt and older flang-rt-zig builds have one next to
 //! the archive), and not tied to the LLVM major R was built with. Once:
-//! R CMD SHLIB repeats $(FLIBS). No flang on PATH:
+//! R CMD SHLIB repeats $(FLIBS). No flang:
 //! nothing this link has was compiled by it, so the flag goes (CRAN's
 //! usual `PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)` puts it on C and
 //! C++ links too). A flang without the archive: dropped with a warning, so
@@ -37,6 +37,7 @@ const Io = std.Io;
 const Ctx = @import("Ctx.zig");
 const cmdline = @import("cmdline.zig");
 const find_zig = @import("find_zig.zig");
+const environment = @import("environment.zig");
 const Args = cmdline.Args;
 
 pub const flag = "-lflang_rt.runtime";
@@ -72,9 +73,19 @@ fn isFlag(x: []const u8) bool {
     return false;
 }
 
-/// The flang on PATH (`command -v flang`): what zig-fc runs, and whose
-/// runtime every link resolved here uses.
+/// The flang zig-fc runs, and whose runtime every link resolved here uses,
+/// so the compiler and its runtime stay paired (feat-standalone-toolchain
+/// B2 a, B34 a), the first that is there: the compilers group's,
+/// <rzig dir>/flang/bin/flang (flang.exe); the one in the bin/ of the
+/// environment R is installed in (a conda env used without activation);
+/// PATH's.
 pub fn flang(ctx: *Ctx) !?[]const u8 {
+    if (environment.toolchain(ctx)) |tc| {
+        if (try find_zig.inDir(ctx, try ctx.fmt("{s}/flang/bin", .{tc}), "flang")) |p| return p;
+    }
+    if (try environment.own(ctx)) |e| {
+        if (try find_zig.inDir(ctx, try ctx.fmt("{s}/bin", .{e.dir}), "flang")) |p| return p;
+    }
     return find_zig.onPath(ctx, "flang");
 }
 
@@ -135,6 +146,49 @@ test "no flang on PATH: every -lflang_rt.runtime dropped; flang never asked with
     try expectArgs(&.{ "-lflang_rt", "x.o" }, try resolve(&f.ctx, &.{ "-lflang_rt", "x.o" }));
     // gfortran's runtime and libquadmath are this runtime: dropped too
     try expectArgs(&.{ "a.o", "-lm" }, try resolve(&f.ctx, &.{ "a.o", "-lgfortran", "-lm", "-lquadmath" }));
+}
+
+test "flang: the toolchain's flang/bin, then the environment's bin, then PATH" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    try f.tmp.dir.createDirPath(testing.io, "tree/lib/R/bin/toolchain");
+    c.self_exe = f.path("tree/lib/R/bin/toolchain/zig-fc");
+    try testing.expect(try flang(c) == null);
+    const on_path = try f.touchProgram("p/flang");
+    try f.env.put("PATH", f.path("p"));
+    try testing.expectEqualStrings(on_path, (try flang(c)).?);
+    const in_bin = try f.touchProgram("tree/bin/flang");
+    try testing.expectEqualStrings(in_bin, (try flang(c)).?);
+    // the compilers group's flang/bin/flang (not flang/flang)
+    _ = try f.touchProgram("tree/lib/R/bin/toolchain/flang/flang");
+    try testing.expectEqualStrings(in_bin, (try flang(c)).?);
+    const in_tc = try f.touchProgram("tree/lib/R/bin/toolchain/flang/bin/flang");
+    try testing.expectEqualStrings(in_tc, (try flang(c)).?);
+    // R_ZIG_EXTRA_ENV's bin is not looked in; a bare copy: its own flang/bin
+    _ = try f.touchProgram("extra/bin/flang");
+    try f.env.put("R_ZIG_EXTRA_ENV", f.path("extra"));
+    c.self_exe = f.path("bare/zig-fc");
+    try testing.expectEqualStrings(on_path, (try flang(c)).?);
+    const bare = try f.touchProgram("bare/flang/bin/flang");
+    try testing.expectEqualStrings(bare, (try flang(c)).?);
+}
+
+test "the runtime of the flang the lookup chose" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-ins for flang
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    try f.tmp.dir.createDirPath(testing.io, "tree/lib/R/bin/toolchain");
+    f.ctx.self_exe = f.path("tree/lib/R/bin/toolchain/zig-fc");
+    for ([_][]const u8{ "tc", "path" }) |w| {
+        try f.touch(f.fmt("{s}/lib/clang/23/lib/x86_64-unknown-linux-gnu/libflang_rt.runtime.a", .{w}));
+    }
+    try f.write("p/flang", f.fmt("#!/bin/sh\necho '{s}'\n", .{f.path("path/lib/clang/23")}), .fromMode(0o755));
+    try f.write("tree/lib/R/bin/toolchain/flang/bin/flang", f.fmt("#!/bin/sh\necho '{s}'\n", .{f.path("tc/lib/clang/23")}), .fromMode(0o755));
+    try f.env.put("PATH", f.path("p"));
+    try expectArgs(&.{ "a.o", f.path("tc/lib/clang/23/lib/x86_64-unknown-linux-gnu/libflang_rt.runtime.a") }, try resolve(&f.ctx, &.{ "a.o", "-lflang_rt.runtime" }));
 }
 
 test "flang's resource dir: the archive once, in place of the first flag" {

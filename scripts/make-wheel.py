@@ -2,23 +2,29 @@
 """Assemble the r-zig wheels from the minimal variant's standalone tree.
 
 Input is the tree `pixi run -e minimal build` leaves in
-dist/R-<ver>-minimal-zig, the same tree the standalone archive packs
+dist/minimal/R-<ver>-zig, the same tree the standalone archive packs
 (feat-no-host-paths F1.7): installed by zig build (location-independent
-launchers, $ORIGIN/@loader_path rpaths, rzig + GNU make in
-lib/R/bin/toolchain, a Makeconf that names no build path, the env's CA
-bundle named in etc/Renviron) with the conda libraries it needs vendored
-into lib/ by zig-build.sh (vendor-libs.sh).
+launchers, $ORIGIN/@loader_path rpaths, rzig in lib/R/bin/toolchain, a
+Makeconf that names no build path, the env's CA bundle named in
+etc/Renviron) with the conda libraries it needs vendored into lib/ by
+zig-build.sh (vendor-libs.sh). GNU make is not in it: it is the
+build-tools group's, in the toolchain tree `pixi run -e minimal
+toolchain` leaves in dist/toolchain/R-<ver>-zig, as
+lib/R/bin/toolchain/usr/bin/make with its SOURCES and LICENSES/
+(feat-standalone-toolchain B23, B30), where etc/Renviron's PATH line
+finds it (B25).
 That tree already runs from anywhere, so the wheel is that tree under
 `r_zig/R/` plus the small `r_zig` Python package (python/r_zig/) and the
 console scripts `R`/`Rscript`. Two wheels come out of it (phase T of
 feat-no-host-paths, the toolchain as its own package): `r-zig` is R and
 installs packages that need no compiling; `r-zig-toolchain` holds
-R_HOME/bin/toolchain (rzig, the compilers, and GNU make: the directory Makeconf
-names) and requires PyPI `ziglang` as the compiler and exactly this
-`r-zig`. Both install into the same `r_zig/` directory without sharing a
-file, so each one's RECORD owns only its own. No build backend: a wheel is
-a zip with a .dist-info directory (PEP 427), written here with the stdlib
-only.
+R_HOME/bin/toolchain (rzig, the compilers Makeconf names, and the
+toolchain tree's usr/: GNU make) and requires PyPI `ziglang` as the
+compiler and exactly this `r-zig`. Not the toolchain tree's openmp/: the
+wheel's R offers no OpenMP (feat-standalone-toolchain B29). Both install
+into the same `r_zig/` directory without sharing a file, so each one's
+RECORD owns only its own. No build backend: a wheel is a zip with a
+.dist-info directory (PEP 427), written here with the stdlib only.
 
 The platform tag is computed from the binaries, not assumed: on Linux the
 highest GLIBC_x.y symbol version any ELF file references (manylinux_x_y;
@@ -27,7 +33,8 @@ highest LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX minimum any Mach-O file
 declares. Python-independent (`py3-none`): nothing here links libpython.
 
 Usage (from the `wheel` pixi env, which sets R_VERSION/R_BUILD_VARIANT):
-    pixi run -e wheel wheel [--prefix DIR] [--out-dir DIR] [--build-tag N]
+    pixi run -e wheel wheel [--prefix DIR] [--toolchain-prefix DIR]
+                            [--out-dir DIR] [--build-tag N]
 """
 
 from __future__ import annotations
@@ -49,7 +56,10 @@ import zipfile
 DIST_NAME = "r-zig"
 IMPORT_NAME = "r_zig"
 TOOLCHAIN_DIST = "r-zig-toolchain"
-TOOLCHAIN_PREFIX = "lib/R/bin/toolchain/"  # inside the tree; the toolchain wheel's files
+TOOLCHAIN_PREFIX = "lib/R/bin/toolchain/"  # inside both trees; the toolchain wheel's files
+# What the toolchain wheel takes from the toolchain tree: the build-tools
+# group's usr/ (GNU make, its SOURCES and LICENSES/).
+TOOLCHAIN_USR = TOOLCHAIN_PREFIX + "usr/"
 TOOLCHAIN_HINT = "pip install r-zig-toolchain (same Python environment as r-zig)"
 # The runtime compiler. Keep in step with pixi.toml's `zig = "0.16.*"`:
 # zig is pinned by exact version across this project family (consolidation
@@ -206,7 +216,10 @@ def leak_scan(files: list[tuple[str, bytes]], needles: list[bytes]) -> None:
     and R CMD INSTALL actually interpret: a build path there breaks the
     wheel on any other machine. Anything else (strings in binaries, such
     as the vendored conda libraries' compiled-in env paths) is reported,
-    not fatal; verify-tree.sh checks R's own files byte for byte.
+    not fatal; verify-tree.sh checks R's own files byte for byte. The
+    toolchain tree's files are scanned too: its SOURCES and LICENSES/ are
+    text under lib/R/bin/, so a build path there is fatal, as in
+    verify-toolchain.sh; make's strings are only reported (C18).
     """
     fatal, other = [], []
     for rel, data in files:
@@ -230,8 +243,9 @@ def renviron_site(existing: bytes | None) -> bytes:
     # R_HOME is <site-packages>/r_zig/R/lib/R; ziglang installs its binary
     # as <site-packages>/ziglang/zig. Renviron expands a nested default
     # only when it is a whole ${...} term, hence the helper variable. When
-    # ziglang lives elsewhere this names a missing file and rzig
-    # fall back to PATH, then `python3 -m ziglang`.
+    # ziglang lives elsewhere this names a missing file and rzig looks
+    # further (zigbuild/tools/rzig/find_zig.zig): PATH, then
+    # `python3 -m ziglang` when that python3 has ziglang.
     add = (
         "## r-zig wheel: compile packages with the PyPI ziglang package\n"
         "## installed next to this one (see r_zig/__init__.py).\n"
@@ -318,6 +332,10 @@ pip install r-zig-toolchain
 
 It requires exactly the `r-zig` it was built with. Packages with Fortran
 sources need a Fortran compiler, which this toolchain does not provide.
+
+GNU make is conda-forge's build of it, unchanged, in
+R_HOME/bin/toolchain/usr/bin: `usr/SOURCES` names its package and where
+its source is, and `usr/LICENSES/` holds its licence.
 """
     return (
         "Metadata-Version: 2.1\n"
@@ -347,8 +365,10 @@ def main() -> None:
     variant = os.environ.get("R_BUILD_VARIANT", "slim")
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--prefix", default=os.path.join(ROOT, "dist", f"R-{r_version}-{variant}-zig"),
+    ap.add_argument("--prefix", default=os.path.join(ROOT, "dist", variant, f"R-{r_version}-zig"),
                     help="installed R tree, as zig-build.sh leaves it (default: %(default)s)")
+    ap.add_argument("--toolchain-prefix", default=os.path.join(ROOT, "dist", "toolchain", f"R-{r_version}-zig"),
+                    help="toolchain tree, as zig-toolchain.sh leaves it (default: %(default)s)")
     ap.add_argument("--out-dir", default=os.path.join(ROOT, "dist", "wheel"))
     ap.add_argument("--version", default=r_version, help="wheel version (default: the R version)")
     ap.add_argument("--build-tag", default="", help="wheel build tag, e.g. 1 (PEP 427)")
@@ -357,6 +377,7 @@ def main() -> None:
     args = ap.parse_args()
 
     prefix = os.path.abspath(args.prefix)
+    tc_prefix = os.path.abspath(args.toolchain_prefix)
     if variant != "minimal" and not args.any_variant:
         die(f"R_BUILD_VARIANT is {variant!r}; the wheel wraps the minimal variant (--any-variant to override)")
     if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "exec", "R")):
@@ -369,20 +390,34 @@ def main() -> None:
         has_ca = b"\nR_ZIG_CA_BUNDLE=" in b"\n" + f.read()
     if not (has_ca and os.path.isfile(os.path.join(prefix, "lib", "R", "etc", "ca-bundle.crt"))):
         die(f"{prefix} has no CA bundle (etc/ca-bundle.crt, R_ZIG_CA_BUNDLE) — run `pixi run -e minimal build` first")
+    if not os.path.isfile(os.path.join(tc_prefix, "lib", "R", "bin", "toolchain", "usr", "bin", "make")):
+        die(f"no GNU make in the toolchain tree {tc_prefix} — run `pixi run -e minimal toolchain` first")
     if args.build_tag and not args.build_tag[0].isdigit():
         die("--build-tag must start with a digit (PEP 427)")
 
     base = f"{IMPORT_NAME}/R/"
     tree = collect_tree(prefix)
     print(f"make-wheel: {len(tree)} files from {prefix}")
-    files: list[tuple[str, bytes]] = []  # (path inside prefix, content)
+    tc_tree = [(rel, path) for rel, path in collect_tree(tc_prefix) if rel.startswith(TOOLCHAIN_USR)]
+    print(f"make-wheel: {len(tc_tree)} files from {tc_prefix}/{TOOLCHAIN_USR}")
+    files: list[tuple[str, bytes]] = []  # (path inside the trees, content)
     modes: dict[str, int] = {}
-    for rel, path in tree:
+    for rel, path in tree + tc_tree:
         if os.path.islink(path):
             print(f"make-wheel: note: dereferencing symlink {rel} (wheels cannot hold symlinks)")
         with open(path, "rb") as f:
             files.append((rel, f.read()))
         modes[rel] = stat.S_IMODE(os.stat(path).st_mode)
+
+    # The R tree's R_HOME/bin/toolchain holds rzig only, under each of its
+    # names (feat-standalone-toolchain B19, B30): anything else there is a
+    # leftover of an older build, since zig's install never removes a
+    # file, and would ship beside the toolchain tree's copy. The R tree's
+    # files come first in `files`.
+    rzig = dict(files)[TOOLCHAIN_PREFIX + "zig-cc"]
+    stray = [r for r, d in files[:len(tree)] if r.startswith(TOOLCHAIN_PREFIX) and d != rzig]
+    if stray:
+        die(f"not rzig in {prefix}'s R_HOME/bin/toolchain: {', '.join(stray)} — remove {prefix} and run `pixi run -e minimal build` again")
 
     needles = [ROOT.encode()]
     if os.environ.get("CONDA_PREFIX"):

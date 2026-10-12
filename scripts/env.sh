@@ -22,19 +22,6 @@ BLAS="${R_BLAS:-internal}"
 FLAVOR="$VARIANT"
 [ "$BLAS" != internal ] && FLAVOR="$VARIANT-$BLAS"
 
-BUILD_DIR="$ROOT/build"
-SRC_DIR="$BUILD_DIR/R-$R_VERSION"
-OBJ_DIR="$BUILD_DIR/obj-$R_VERSION-$FLAVOR"
-# R_INSTALL_PREFIX override: the conda recipe installs into rattler's $PREFIX
-PREFIX="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR}"
-# The bash compiler shims, for configure-only.sh's capture (gen-subst.sh
-# turns this path into @ZR_TOOLCHAIN@). What gets installed is rzig
-# (zigbuild/tools/rzig/), which parity-test.sh holds to these.
-TOOLCHAIN="$ROOT/toolchain"
-TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
-CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
-CHECKSUM_FILE="$ROOT/scripts/checksums/R-$R_VERSION.sha256"
-
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) OS=windows ;;
   Darwin) OS=macos ;;
@@ -42,7 +29,20 @@ case "$(uname -s)" in
   *) OS=unknown ;;
 esac
 
-# R_HOME is <prefix>/lib/R on unix. On Windows this MUST NOT be "lib/R":
+# The platform, as conda names it (linux-64, linux-aarch64, osx-64,
+# osx-arm64, win-64), and the archive format: the archives' names say
+# both (feat-standalone-toolchain B17).
+case "$OS-$(uname -m)" in
+  linux-x86_64) PLAT=linux-64 ;;
+  linux-*) PLAT="linux-$(uname -m)" ;;
+  macos-x86_64) PLAT=osx-64 ;;
+  macos-*) PLAT="osx-$(uname -m)" ;;
+  windows-*) PLAT=win-64 ;;
+  *) PLAT=unknown ;;
+esac
+if [ "$OS" = windows ]; then ARCHIVE_EXT=zip; else ARCHIVE_EXT=tar.gz; fi
+
+# R_HOME in a prefix: lib/R on unix. On Windows this MUST NOT be "lib/R":
 # NTFS is case-insensitive, and a real conda/pixi env already has a
 # top-level "Lib" (capital L, Python's stdlib) by the time R installs —
 # "mkdir -p $PREFIX/lib/R" silently resolves into that SAME directory,
@@ -52,11 +52,48 @@ esac
 # pre-existing Python Lib to collide with). "Library/" is the standard
 # conda-forge convention for non-Python Windows packages and doesn't
 # collide with anything.
-if [ "$OS" = windows ]; then
-  R_HOME_DIR="$PREFIX/Library/lib/R"
-else
-  R_HOME_DIR="$PREFIX/lib/R"
-fi
+if [ "$OS" = windows ]; then RH=Library/lib/R; else RH=lib/R; fi
+
+BUILD_DIR="$ROOT/build"
+SRC_DIR="$BUILD_DIR/R-$R_VERSION"
+OBJ_DIR="$BUILD_DIR/obj-$R_VERSION-$FLAVOR"
+# Every tree and every archive has one top directory, R-<ver>-zig
+# (feat-standalone-toolchain B1, B36): each flavor's R tree is
+# dist/<flavor>/R-<ver>-zig, the toolchain tree (the groups' directories,
+# B30) dist/toolchain/R-<ver>-zig. So no flavor may be named toolchain,
+# conda or wheel, dist/'s other directories.
+TOP="R-$R_VERSION-zig"
+# R_INSTALL_PREFIX override: the conda recipe installs into rattler's $PREFIX
+PREFIX="${R_INSTALL_PREFIX:-$ROOT/dist/$FLAVOR/$TOP}"
+TOOLCHAIN_PREFIX="${R_TOOLCHAIN_PREFIX:-$ROOT/dist/toolchain/$TOP}"
+R_HOME_DIR="$PREFIX/$RH"
+# The toolchain groups (feat-standalone-toolchain B38) and the directories
+# under R_HOME/bin/toolchain each one holds (B20, B23, B24): compilers,
+# zig/ (phase 5), flang/ (phase 6) and openmp/; build-tools, usr/ and
+# Windows' binutils/. Only those that exist count: a group's archive
+# holds its directories that the toolchain tree has (package-standalone.sh).
+TOOLCHAIN_GROUPS="compilers build-tools"
+group_dirs() {
+  case "$1" in
+    compilers) echo "zig flang openmp" ;;
+    build-tools) echo "usr binutils" ;;
+    *) echo "error: no toolchain group named '$1'" >&2; return 1 ;;
+  esac
+}
+# The compile tree (PHASE3 open point B (a); scripts/compile-tree.sh): a
+# copy of the flavor's R tree with the toolchain tree's group directories,
+# but zig/ and flang/, in its R_HOME/bin/toolchain. contract and stress
+# compile packages with it, since the R tree is the base alone (B19) and
+# Windows' Makeconf names the build-tools group's binutils by their path
+# under R_HOME (B24). Under build/, not dist/: it never ships.
+COMPILE_TREE="$BUILD_DIR/compile-tree/$FLAVOR/$TOP"
+# The bash compiler shims, for configure-only.sh's capture (gen-subst.sh
+# turns this path into @ZR_TOOLCHAIN@). What gets installed is rzig
+# (zigbuild/tools/rzig/), which parity-test.sh holds to these.
+TOOLCHAIN="$ROOT/toolchain"
+TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
+CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
+CHECKSUM_FILE="$ROOT/scripts/checksums/R-$R_VERSION.sha256"
 
 # macOS defaults to 256 open files; zig's linker opens every object of
 # libR at once (~300+) and fails with ProcessFdQuotaExceeded without this.
@@ -73,26 +110,30 @@ if [ "$OS" != windows ] && [ -n "${CONDA_PREFIX:-}" ]; then
 fi
 
 # The zig the scripts run (zig-build.sh, rzig's test.sh, verify-bundle's
-# compiles), found as rzig finds it (zigbuild/tools/rzig/find_zig.zig):
-# ZIG_BIN, else zig on PATH, the env's (conda-forge's). R builds with
-# conda-forge's zig and with upstream zig, the ziglang.org release, which
-# PyPI's ziglang is (feat-no-host-paths F4): with ZIG_BIN=<its path>
+# compiles): ZIG_BIN, else zig on PATH, the env's (conda-forge's). rzig
+# finds the same one in a dev tree (zigbuild/tools/rzig/find_zig.zig): it
+# looks in the toolchain's zig/ and the tree's bin/ before PATH, and a dev
+# tree has no zig in either (feat-standalone-toolchain B2, B34). R builds
+# with conda-forge's zig and with upstream zig, the ziglang.org release,
+# which PyPI's ziglang is (feat-no-host-paths F4): with ZIG_BIN=<its path>
 # (`pixi run fetch-zig` prints one) the pipeline tasks that run zig
-# (build, check, rzig-test, contract, verify-package) build, compile and
-# test with it. Not conda-package, whose rattler-build gives the recipe a
-# clean environment and so its build env's zig, nor wheel-test, which
-# compiles with the venv's ziglang. On win-64 conda-forge's real binary is
-# x86_64-w64-mingw32-zig: its `zig` is a .bat, which MSYS bash cannot run.
+# (build, check, rzig-test, contract, verify-package, toolchain,
+# toolchain-test) build, compile and test with it. Not conda-package,
+# whose rattler-build gives the recipe a clean environment and so its
+# build env's zig, nor wheel-test, which compiles with the venv's
+# ziglang. On win-64 conda-forge's real binary is x86_64-w64-mingw32-zig:
+# its `zig` is a .bat, which MSYS bash cannot run.
 # Empty with no zig at all (scripts that run none still work).
 #
 # Always an absolute path, so that it names the same zig from every
 # directory: rzig resolves ZIG_BIN from its working directory, which R
-# CMD and verify-bundle's compiles change, and quietly takes PATH's zig,
-# the env's, when it finds nothing there. So a bare name in ZIG_BIN is
-# looked up on PATH, a relative path is taken from here (the project
-# root, where pixi runs tasks), a ZIG_BIN that does not run stops here,
-# and ZIG_BIN is exported as the result (C:/... on Windows, as fetch-zig
-# prints it), the file that builds R and keys its caches below.
+# CMD and verify-bundle's compiles change, and quietly looks further
+# (in a dev tree: PATH's zig, the env's) when it finds nothing there. So
+# a bare name in ZIG_BIN is looked up on PATH, a relative path is taken
+# from here (the project root, where pixi runs tasks), a ZIG_BIN that
+# does not run stops here, and ZIG_BIN is exported as the result (C:/...
+# on Windows, as fetch-zig prints it), the file that builds R and keys its
+# caches below.
 if [ -n "${ZIG_BIN:-}" ]; then
   case "$ZIG_BIN" in
     */*|*\\*) ZIG="$ZIG_BIN" ;;

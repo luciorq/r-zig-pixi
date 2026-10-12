@@ -29,8 +29,9 @@ pub const Lang = enum { c, cxx };
 ///   cc|c++ -fno-sanitize=undefined -mcpu=baseline -Wno-error=date-time
 ///          [-g0] [<target>] [-F<SDK frameworks>] [<soname>]
 ///          [-Wl,--undefined-version] [-Wl,--strip-debug] [<linux shared
-///          library's finalization object | Windows link's CFG stub>]
-///          <caller's, rewritten, no -mtune=>
+///          library's finalization object | Windows link's CFG stub and
+///          import library>]
+///          <caller's, rewritten, no -mtune= (Windows links: no -flto)>
 ///          [<environments' -L/-rpath>] <environments' headers> [-lomp]
 ///          [-L<SDK>/usr/lib]
 pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
@@ -68,9 +69,15 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     const strip_debug = ctx.os == .linux and strip.wanted(ctx, args);
     args = try envFlags(ctx, args);
     // after envFlags: an -l, -lomp included, resolves in its directories
+    var implib: Args = &.{};
     if (ctx.os == .windows) {
         args = try windows.libs(ctx, args);
         args = try windows.exeSuffix(ctx, args);
+        // after exeSuffix: the import library is named after the output
+        if (cfguard.wanted(args)) {
+            args = try windows.noLtoLink(ctx, args);
+            implib = try windows.implib(ctx, args);
+        }
     }
     if (ctx.os == .macos) {
         args = try darwin.dedupLibs(ctx, args);
@@ -123,6 +130,9 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     // zig's MinGW runtime lacks __guard_dispatch_icall_dummy (stress
     // round 2, Z11: magick's bundle); cfguard.zig
     if (cfg) |o| try out.append(a, o);
+    // zig's import library, which GNU ld does not write, where it is
+    // deleted after the link; windows.implib
+    try out.appendSlice(a, implib);
     try out.appendSlice(a, args);
     try out.appendSlice(a, link_last);
     return out.items;
@@ -256,7 +266,8 @@ fn sonameFlag(ctx: *Ctx, args: Args) !?[]const u8 {
 const windows_headers_always = true;
 
 /// The environments' flags (environment.zig), each only when its directory
-/// exists, R's own environment first:
+/// exists, R's own environment first, then the toolchain's openmp/ (when
+/// the base has libomp, B40; its lib/ only on Windows, with libomp.lib):
 ///   -I<dir>/include (Windows: -idirafter <dir>/include) on every call,
 ///     after the caller's arguments: a package's own and its LinkingTo
 ///     headers come first, and the environment's still before the C
@@ -273,11 +284,12 @@ const windows_headers_always = true;
 ///     (and lld) search every -L directory for every -l;
 ///   -lomp on a -fopenmp link: zig cc does -fopenmp codegen but bundles
 ///     neither omp.h nor libomp and won't link it, so llvm-openmp's, when
-///     an environment has omp.h and the caller does not link libomp
-///     itself. Some packages (data.table) probe OpenMP themselves and put
-///     -lomp in PKG_LIBS on top of R's SHLIB_OPENMP_CFLAGS; a second
-///     libomp would be a duplicate LC_LOAD_DYLIB, which newer macOS dyld
-///     refuses to load. On Windows windows.libs resolves it to libomp.lib.
+///     an environment (openmp/ included) has omp.h and the caller does not
+///     link libomp itself. Some packages (data.table) probe OpenMP
+///     themselves and put -lomp in PKG_LIBS on top of R's
+///     SHLIB_OPENMP_CFLAGS; a second libomp would be a duplicate
+///     LC_LOAD_DYLIB, which newer macOS dyld refuses to load. On Windows
+///     windows.libs resolves it to libomp.lib.
 fn envFlags(ctx: *Ctx, args: Args) !Args {
     const a = ctx.arena;
     const envs = try environment.list(ctx);
@@ -533,14 +545,70 @@ test "Windows: -idirafter, no rpath, -lz and -lomp through the environment's -L"
     const z = f.path("env/Library/lib/libz.dll.a");
     try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-c", "z.c", "-o", "z.o", "-idirafter", inc }, try argv(c, .c, &.{ "-c", "z.c", "-o", "z.o" }));
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", z, l, "-idirafter", inc, omp },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", z, l, "-idirafter", inc, omp },
         try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz" }),
     );
     // the caller's -lomp, resolved the same way; none added
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lomp" }),
     );
+}
+
+test "the toolchain's openmp/: headers on every call, -lomp on -fopenmp links, only with the base's libomp (B40)" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    try decoy(&f);
+    const c = &f.ctx;
+    // a standalone tree after phase 3: no include/omp.h of its own
+    c.self_exe = try tree(&f, "tree", false, false);
+    try f.touch("tree/lib/R/bin/toolchain/openmp/include/omp.h");
+    const l = f.fmt("-L{s}", .{f.path("tree/lib")});
+    const oinc = f.fmt("-I{s}", .{f.path("tree/lib/R/bin/toolchain/openmp/include")});
+    // minimal: no libomp in the base, so nothing from openmp/
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "p.so", "a.o", l }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-fopenmp", "-c", "a.c" }, try argv(c, .c, &.{ "-fopenmp", "-c", "a.c" }));
+    // slim and full: libomp.so in <top>/lib, where -lomp then finds it
+    try f.touch("tree/lib/libomp.so");
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "p.so", "a.o", l, oinc, "-lomp" }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-c", "a.c", oinc }, try argv(c, .c, &.{ "-c", "a.c" }));
+    // the caller's own -lomp: none added
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "dt.so", "a.o", "-lomp", l, oinc }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "dt.so", "a.o", "-lomp" }));
+    // after R's own environment's headers, before R_ZIG_EXTRA_ENV's
+    try f.touch("tree/include/zlib.h");
+    _ = try tree(&f, "env", true, true);
+    try f.env.put("R_ZIG_EXTRA_ENV", f.path("env"));
+    try expectArgs(
+        pre ++ &[_][]const u8{ "-c", "a.c", f.fmt("-I{s}", .{f.path("tree/include")}), oinc, f.fmt("-I{s}", .{f.path("env/include")}) },
+        try argv(c, .c, &.{ "-c", "a.c" }),
+    );
+}
+
+test "Windows: the toolchain's openmp/: -idirafter, -L openmp/lib and libomp.lib, with libomp.dll beside R.dll" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    try decoy(&f);
+    const c = &f.ctx;
+    try f.env.put("PATH", f.path("nothing"));
+    for ([_][]const u8{ "env/Library/lib/R/bin/toolchain/gcc.exe", "env/Library/lib/R/bin/toolchain/openmp/include/omp.h", "env/Library/lib/R/bin/toolchain/openmp/lib/libomp.lib" }) |p| try f.touch(p);
+    c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
+    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" };
+    const implib: Args = &.{ "-Xlinker", "--out-implib=pkg.dll.rzig.lib" };
+    const l = f.fmt("-L{s}", .{f.path("env/Library/lib")});
+    const ol = f.fmt("-L{s}", .{f.path("env/Library/lib/R/bin/toolchain/openmp/lib")});
+    const oinc = f.path("env/Library/lib/R/bin/toolchain/openmp/include");
+    const omp = f.path("env/Library/lib/R/bin/toolchain/openmp/lib/libomp.lib");
+    // no libomp.dll beside R.dll: nothing from openmp/
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, implib, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l } }), try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o" }));
+    try f.touch("env/Library/lib/R/bin/x64/libomp.dll");
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, implib, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l, ol, "-idirafter", oinc, omp } }),
+        try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o" }),
+    );
+    // a compile: the headers only
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ "-c", "a.cpp", "-o", "a.o", "-idirafter", oinc } }), try argv(c, .cxx, &.{ "-c", "a.cpp", "-o", "a.o" }));
 }
 
 test "Windows: no target, the Fortran runtime before the -l lookup" {
@@ -551,7 +619,7 @@ test "Windows: no target, the Fortran runtime before the -l lookup" {
     try f.touch("d/libz.dll.a");
     const l = f.fmt("-L{s}", .{f.path("d")});
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lc++" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lc++" },
         try argv(&f.ctx, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", l, "-lz", "-lflang_rt.runtime", "-lc++" }),
     );
 }
@@ -571,10 +639,10 @@ test "every OS: -lgfortran and -lquadmath link flang's runtime, once; no gfortra
     try f.write("bin/gfortran", f.fmt("#!/bin/sh\n: > '{s}'\necho '{s}'\n", .{ f.path("gfortran-ran"), f.path("gcc/libgfortran.dll.a") }), .fromMode(0o755));
     try f.env.put("PATH", f.path("bin"));
     const mac: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0" };
-    const targets = [_]struct { os: Ctx.Os, target: Args, strip: Args = &.{} }{
+    const targets = [_]struct { os: Ctx.Os, target: Args, strip: Args = &.{}, implib: Args = &.{} }{
         .{ .os = .linux, .target = &.{ "-target", linux_target }, .strip = &.{"-Wl,--strip-debug"} },
         .{ .os = .macos, .target = mac },
-        .{ .os = .windows, .target = &.{} },
+        .{ .os = .windows, .target = &.{}, .implib = &.{ "-Xlinker", "--out-implib=p.so.rzig.lib" } },
     };
     for (targets) |t| {
         c.os = t.os;
@@ -582,13 +650,13 @@ test "every OS: -lgfortran and -lquadmath link flang's runtime, once; no gfortra
         // R CMD SHLIB's link of a package whose Makevars was written for
         // gcc (PKG_LIBS = -lgfortran -lquadmath), then $(FLIBS)
         try expectArgs(
-            try mem.concat(c.arena, []const u8, &.{ head, t.target, t.strip, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", rt, "-lm" } }),
+            try mem.concat(c.arena, []const u8, &.{ head, t.target, t.strip, t.implib, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", rt, "-lm" } }),
             try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", "-lgfortran", "-lquadmath", "-lflang_rt.runtime", "-lm" }),
         );
         // either alone
         for ([_][]const u8{ "-lgfortran", "-lquadmath" }) |l| {
             try expectArgs(
-                try mem.concat(c.arena, []const u8, &.{ head, t.target, t.strip, &.{ "-shared", "-o", "p.so", "a.o", rt } }),
+                try mem.concat(c.arena, []const u8, &.{ head, t.target, t.strip, t.implib, &.{ "-shared", "-o", "p.so", "a.o", rt } }),
                 try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", l }),
             );
         }
@@ -772,7 +840,7 @@ test "linker options zig cannot take, through the whole line" {
     // StanHeaders' Makevars.win
     c.os = .windows;
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-shared", "-o", "StanHeaders.dll", "a.o" },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=StanHeaders.dll.rzig.lib", "-shared", "-o", "StanHeaders.dll", "a.o" },
         try argv(c, .cxx, &.{ "-shared", "-Wl,--allow-multiple-definition", "-o", "StanHeaders.dll", "a.o" }),
     );
 }
@@ -847,7 +915,7 @@ test "linux shared links: the finalization object first among the inputs; nothin
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 
-test "Windows links: the CFG stub before the caller's arguments; nothing elsewhere" {
+test "Windows links: the CFG stub and the import library before the caller's arguments, no -flto; nothing elsewhere" {
     if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for zig
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
@@ -859,18 +927,37 @@ test "Windows links: the CFG stub before the caller's arguments; nothing elsewhe
     try testing.expect(mem.startsWith(u8, stub, f.path("cache/r-zig/cfguard-")));
     const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" };
     // magick's link, and an executable (CMake's)
-    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2" } }), try argv(c, .cxx, &.{ "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2" }));
-    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-o", "cmTC_1.exe", "a.obj" } }), try argv(c, .cxx, &.{ "-o", "cmTC_1.exe", "a.obj" }));
-    // compiles, windres' preprocessing, --version
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-Xlinker", "--out-implib=magick.dll.rzig.lib", "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2" } }),
+        try argv(c, .cxx, &.{ "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2" }),
+    );
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-Xlinker", "--out-implib=cmTC_1.exe.rzig.lib", "-o", "cmTC_1.exe", "a.obj" } }), try argv(c, .cxx, &.{ "-o", "cmTC_1.exe", "a.obj" }));
+    // R CMD INSTALL --use-LTO (LTO_OPT=-flto): the compile keeps it, the
+    // link drops it, after exeSuffix's name
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ "-O2", "-flto", "-c", "f.cpp", "-o", "f.o" } }), try argv(c, .cxx, &.{ "-O2", "-flto", "-c", "f.cpp", "-o", "f.o" }));
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-Xlinker", "--out-implib=px.exe.rzig.lib", "-O2", "-o", "px.exe", "f.o" } }),
+        try argv(c, .cxx, &.{ "-flto", "-O2", "-o", "px", "f.o", "-flto=thin" }),
+    );
+    // what main.zig's run deletes after each link: the import libraries
+    try expectArgs(&.{ "magick.dll.rzig.lib", "cmTC_1.exe.rzig.lib", "px.exe.rzig.lib" }, c.discard.items);
+    // compiles, windres' preprocessing, --version, a partial link
+    c.discard = .empty;
     for ([_]Args{
         &.{ "-c", "a.cpp", "-o", "a.o" },
         &.{ "-E", "-xc", "-DRC_INVOKED", "r.rc" },
         &.{"--version"},
-    }) |args| for (try argv(c, .cxx, args)) |x| try testing.expect(mem.find(u8, x, "cfguard") == null);
-    // linux and macOS: none
+        &.{ "-r", "-flto", "a.o", "-o", "part.o" },
+    }) |args| for (try argv(c, .cxx, args)) |x| {
+        try testing.expect(mem.find(u8, x, "cfguard") == null and mem.find(u8, x, "implib") == null);
+    };
+    // linux and macOS: none, and -flto stays
     for ([_]Ctx.Os{ .linux, .macos }) |os| {
         c.os = os;
-        for (try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o" })) |x| try testing.expect(mem.find(u8, x, "cfguard") == null);
+        const got = try argv(c, .c, &.{ "-shared", "-flto", "-o", "p.so", "a.o" });
+        for (got) |x| try testing.expect(mem.find(u8, x, "cfguard") == null and mem.find(u8, x, "implib") == null);
+        try testing.expect(cmdline.anyWord(got, "-flto"));
     }
+    try testing.expectEqual(0, c.discard.items.len);
     try testing.expectEqualStrings("", f.takeWarnings());
 }

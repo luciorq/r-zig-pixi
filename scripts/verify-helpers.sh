@@ -1,11 +1,107 @@
-# Helpers shared by verify-tree.sh, verify-bundle.sh, hermetic-check.sh
-# and vendor-libs.sh (whose Windows walk copies what needed_of names, the
-# imports verify-tree.sh then checks, and which removes what
-# vendored_files names, the files verify-tree.sh counts as conda's).
-# Source this after env.sh (which sets OS and holds MACOS_MIN, macho_minos
-# and version_gt); do not execute it. Each reads what a binary needs and
-# where it looks for it from the file itself: patchelf on linux, otool on
-# macOS, binutils' objdump on Windows.
+# Helpers shared by verify-tree.sh, verify-toolchain.sh, verify-bundle.sh,
+# hermetic-check.sh, unpack-toolchain.sh and vendor-libs.sh (whose Windows
+# walk copies what needed_of names, the imports verify-tree.sh then
+# checks, and which removes what vendored_files names, the files
+# verify-tree.sh counts as conda's). Source this after env.sh (which sets
+# OS and holds MACOS_MIN, macho_minos and version_gt); do not execute it.
+# Each reads what a binary needs and where it looks for it from the file
+# itself: patchelf on linux, otool on macOS, binutils' objdump on Windows.
+
+# An archive's members that are files or links, one per line, as stored
+# (R-<ver>-zig/...): not its directories, which every archive of a tree
+# repeats (zip stores them as members of their own). The lists of archives
+# extracted into one directory compare on these (PHASE3 C6), in
+# unpack-toolchain.sh and verify-bundle.sh.
+archive_files() {
+  case "$1" in
+    *.zip) unzip -Z1 "$1" ;;
+    *) tar -tzf "$1" ;;
+  esac | awk '!/\/$/'
+}
+
+# A tree's files and links as archive_files lists an archive made of it
+# from its parent (package-standalone.sh): its own name, then the path in
+# it (R-<ver>-zig/...), one per line, no directories. verify-bundle.sh
+# holds the base archive's list to the R tree's.
+tree_files() {
+  (cd "$1/.." && find "$(basename "$1")" ! -type d)
+}
+
+# The names rzig is installed under in R_HOME/bin/toolchain (build.zig's
+# installRzig) on this OS, one line: the names Makeconf runs it by, and
+# nothing else is there (feat-standalone-toolchain B19, B30). Windows:
+# gcc.exe and g++.exe (CC, CXX), zig-fc.exe (FC), zig-ar.exe and
+# zig-ranlib.exe (AR, RANLIB) and the LTO block's gcc-ar.exe and
+# gcc-ranlib.exe (B43), and ar.exe and ranlib.exe (what CMake finds
+# beside CC); no extensionless zig-cc or zig-cxx, since the compile
+# preflight and R CMD config run gcc.exe's check mode (B26 a). rzig /
+# rzig.exe: the name install.R's hook runs `rzig build` and `rzig def`
+# by (patch 0013; feat-zig-pkg-build PLAN.md).
+rzig_names() {
+  if [ "$OS" = windows ]; then
+    echo "gcc.exe g++.exe zig-fc.exe zig-ar.exe zig-ranlib.exe gcc-ar.exe gcc-ranlib.exe ar.exe ranlib.exe rzig.exe"
+  else
+    echo "zig-cc zig-cxx zig-fc zig-ar zig-ranlib rzig"
+  fi
+}
+
+# A configure script in package directory $1 (unix configure, Windows
+# configure.win) that leaves the file configure-ran there with a shell
+# builtin, so that it starts no program: scenario 3 (verify-bundle.sh)
+# tells from it whether the install preflight (patch 0009) stopped a
+# package before its configure ran (B26, C26). That is the one place
+# where R CMD config passes, so configure could run: without the build
+# tools R CMD config (patch 0010) fails first, wherever the preflight
+# sits.
+configure_marker() {
+  local f
+  for f in configure configure.win; do
+    printf '#!/bin/sh\n: > configure-ran\n' > "$1/$f"
+    chmod +x "$1/$f"
+  done
+}
+
+# Extract archive $1 into directory $2. unzip -n: an archive extracted
+# beside another never overwrites its files, and never stops to ask
+# (unzip's overwrite prompt waits on stdin, which hangs a CI leg; C6).
+extract_archive() {
+  case "$1" in
+    *.zip) unzip -q -n "$1" -d "$2" ;;
+    *) tar -xzf "$1" -C "$2" ;;
+  esac
+}
+
+# Each directory named, as it is set and resolved (Windows: also C:/...,
+# and with long and short, 8.3, names), one per line: what a build path in
+# a file may look like (verify-tree.sh's and verify-toolchain.sh's scans).
+path_forms() {
+  local d
+  for d in "$@"; do
+    [ -n "$d" ] || continue
+    printf '%s\n' "$d"
+    if [ -d "$d" ]; then (cd "$d" && pwd -P); fi
+    if [ "$OS" = windows ]; then
+      cygpath -m "$d"
+      if [ -d "$d" ]; then cygpath -m -l "$d"; cygpath -m -s "$d"; fi
+    fi
+  done
+}
+
+# One ERE for the paths on stdin: trailing separators dropped, each
+# separator either one, once or more (a newline stands in while the regex
+# characters are escaped), duplicates once. More than once: a Windows
+# binary can hold a path with every backslash doubled (the conda package's
+# R.dll built in CI on 2026-09-25 named its work dir 84 times as
+# D:\\a\\..., and no other way).
+path_re() {
+  local f r re=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    r="$(printf '%s' "$f" | sed -e 's#[/\\]*$##' -e 's#[/\\]#\n#g' -e 's#[][*.^$+?(){}|]#\\&#g' -e 's#\n#[/\\\\]+#g')"
+    if [ -n "$r" ]; then re="${re:+$re|}$r"; fi
+  done < <(sort -u)
+  printf '%s\n' "$re"
+}
 
 # The files vendor-libs.sh vendored from the env $2 into the tree at
 # prefix $1, one path per line, recognised by name, the one rule both

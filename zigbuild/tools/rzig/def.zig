@@ -6,12 +6,17 @@
 //! (`--export-all-symbols`) is not the same set (design record, step 4).
 //!
 //! nm's [BCDRT]: a global symbol defined in a code, data or bss section, or
-//! a common. Not undefined (U), not weak (w/W), not a local (lowercase),
-//! not a section or debug symbol, and not the compiler's own `.refptr.*`
-//! and `.weak.*` helpers. Oracle: cli's 185 symbols on kappa (M5,
-//! 2026-10-10) are the M1 "make" list (187) without `_CRT_INIT` and
-//! `__mingw_module_is_dll`, which that list only had because kappa has no
-//! sed: winshlib.mk's tmp.def came out empty and lld auto-exported.
+//! a common. Not undefined (U), not weak (w/W: a WEAK_EXTERNAL), not a
+//! local (lowercase), not a section or debug symbol. The compiler's own
+//! globals are kept, as nm lists them: the `.refptr.<name>` stubs
+//! (EXTERNAL, in their own .rdata COMDAT; nm: R) and a weak function's
+//! `.weak.<name>.default.<other>` alias (EXTERNAL in .text; nm: T). R's
+//! winshlib.mk filters those only through NM_FILTER, which this tree's
+//! Makeconf.win leaves empty, so make's tmp.def exports them, and
+//! pkg-parity holds this to make (kappa, 2026-10-12: cli's nine
+//! `.refptr.*`). M5's oracle on kappa (cli's 185) was lld's auto-export,
+//! since kappa then had no sed: winshlib.mk's tmp.def came out empty;
+//! auto-export leaves them out.
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
@@ -62,7 +67,7 @@ pub fn exports(a: mem.Allocator, data: []const u8, out: *std.ArrayList([]const u
             if (off >= strtab.buffer.len) return error.BadObject;
             break :blk strtab.get(off);
         };
-        if (name.len == 0 or name[0] == '.') continue;
+        if (name.len == 0) continue;
         var seen = false;
         for (out.items) |x| if (mem.eql(u8, x, name)) {
             seen = true;
@@ -123,12 +128,15 @@ const testing = std.testing;
 // testdata/win-syms.c compiled with `zig cc -target x86_64-windows-gnu -O2 -c`
 const win_syms = @embedFile("testdata/win-syms.o");
 
-test "exports: nm's [BCDRT] set without the compiler's helpers" {
+test "exports: nm's [BCDRT] set, the compiler's helpers included" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     var names: std.ArrayList([]const u8) = .empty;
     try exports(arena.allocator(), win_syms, &names);
-    const expected = [_][]const u8{ "exported_bss", "exported_data", "exported_fn", "exported_rodata", "uses_locals" };
+    // nm: B exported_bss, D exported_data, T exported_fn, R exported_rodata,
+    // T uses_locals, R .refptr.imported_var, T .weak.weak_fn.default.exported_fn;
+    // not W weak_fn, U strlen, U imported_var, the locals
+    const expected = [_][]const u8{ "exported_bss", "exported_data", "exported_fn", "exported_rodata", "uses_locals", ".refptr.imported_var", ".weak.weak_fn.default.exported_fn" };
     try testing.expectEqual(expected.len, names.items.len);
     for (expected) |e| {
         var found = false;

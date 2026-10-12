@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Static checks of the installed R tree, the tree that ships
 # (feat-no-host-paths PLAN.md, F1, F1.6 and F1.7). `zig build` installs
-# it into dist/R-<ver>-<flavor>-zig (Windows: its Library/ layout) with
+# it into dist/<flavor>/R-<ver>-zig (Windows: its Library/ layout) with
 # the runtime data it needs from the env (build.zig's installEnvRuntime),
 # zig-build.sh then vendors the env's shared libraries into it
 # (vendor-libs.sh), and package-standalone.sh only archives it. CI runs
@@ -10,22 +10,35 @@
 #
 # Usage: verify-tree.sh [TREE]   (default: zig-build.sh's prefix)
 #
-# Everything here reads files, headers and load commands, so the answer
-# does not depend on where the tree sits:
-#   - the compilers Makeconf names are rzig (one binary, no scripts);
+# Everything here reads files, headers and load commands (the tree's own
+# Rscript reads its compressed files), so the answer does not depend on
+# where the tree sits:
+#   - R_HOME/bin/toolchain holds rzig and nothing else, under the names
+#     Makeconf and the compile preflight use (one binary, no scripts):
+#     the groups' files are the toolchain tree's (feat-standalone-toolchain
+#     B19, B30; verify-toolchain.sh), a conda env's win-64 binutils/
+#     excepted (B41);
 #   - Makeconf names no build path and has no rpath; CPPFLAGS and LDFLAGS
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
 #   - Windows (every tree): CRAN's layout, Makeconf's R_ARCH is /x64 and
 #     R_HOME/bin has R.exe and Rscript.exe;
+#   - the build tools (every tree): R puts the build-tools group's usr/bin
+#     first on PATH (unix: etc/Renviron, and MAKE is make; Windows:
+#     etc/Rcmd_environ; B25), and Windows' Makeconf runs ar and ranlib as
+#     rzig, names each binutils tool by its path under
+#     R_HOME/bin/toolchain/binutils/ and pkg-config bare (B24, B43);
 #   - every OS (a tree that is not a conda env): no file of R's own names
-#     the build machine's checkout, zig's caches, the env or $HOME; the
-#     vendored conda libraries that name one are listed, and so are
-#     build.zig's verbatim copies of env files that name only $HOME's
-#     path (conda-forge's build path);
-#   - where Makeconf offers OpenMP (a tree that is not a conda env, not
-#     minimal): omp.h and libomp where rzig and the loader find them
-#     (Windows: Library/include/omp.h, Library/lib/libomp.lib and
-#     R_HOME/bin/x64/libomp.dll; unix: include/omp.h and lib/libomp);
+#     the build machine's checkout, the tree's own place, zig's caches,
+#     the env or $HOME, R's lazy-load databases and .rds files read
+#     uncompressed; the vendored conda libraries that name one are
+#     listed, and so are build.zig's verbatim copies of env files that
+#     name only $HOME's path (conda-forge's build path);
+#   - OpenMP (a tree that is not a conda env): no compile-time file
+#     (omp.h, libomp.lib), which is the compilers group's (B22); where
+#     Makeconf offers OpenMP, the runtime where the loader finds it (unix
+#     lib/libomp; Windows R_HOME/bin/x64/libomp.dll), which makes rzig
+#     count the group's openmp/ (B40); where it does not (minimal), no
+#     runtime, so rzig leaves openmp/ alone;
 #   - Windows (a tree that is not a conda env): the Tcl/Tk runtime is in
 #     R_HOME/Tcl (with Tcl's modules), Makeconf's TCL_VERSION names its
 #     DLLs (tcl86t, tk86t), Tcl/Tk's headers (tcl.h, tk.h) are in
@@ -43,34 +56,36 @@
 #     instruction (AVX, AVX2, FMA, AVX-512, on any register width): R is
 #     compiled for the baseline CPU, not the build machine's;
 #   - minimal: no binary of R's own links a library the profile excludes;
-#   - linux: no ELF needs a glibc above the floor (2.17; toolchain helpers
-#     conda-forge's 2.28);
+#   - linux: no ELF needs a glibc above the floor, 2.17;
 #   - unix: every rpath is relative to its file; none of R's own binaries
 #     needs a shared C++ runtime; linux: every DT_NEEDED is a bare name;
 #   - macOS: every Mach-O at or below MACOS_MIN; install names relative,
 #     dependencies relative or the system's, and only what conda has no
 #     copy of from the SDK's /usr/lib.
 # verify-bundle.sh (pixi task verify-package, after package) keeps what
-# only a moved, environment-free copy can show: the archive extracts, R
-# runs from the new place under env -i, TLS trust with the shipped CA
+# only a moved, environment-free copy can show, with this tree's archive
+# and the two group archives extracted into one directory, a scenario
+# after each (the base alone, with the compilers, with the build tools):
+# R runs from the new place under env -i, TLS trust with the shipped CA
 # bundle, the CPU its C compiler compiles for (the arch's baseline, every
 # OS), and packages compiled with the relocated tree build and load
 # under env -i (C++, Fortran, USE_FC_TO_LINK, FLIBS without flang,
 # OpenMP, decoy CONDA_PREFIX runs, zig-fc with no flang; Windows: rzig's
-# dry runs, and OpenMP C and Fortran packages built with the tree alone
-# and loaded with only bin\x64 and System32 on PATH). The archive is
+# dry runs, the binutils Makeconf names, and OpenMP C and Fortran
+# packages loaded with only bin\x64 and System32 on PATH). The archive is
 # this tree as it is, so the checks here run once, here. (What runs in
 # between leaves the tree as it was: smoke and check only run it,
-# contract installs into build/testlib-*, hermetic works on a copy.)
+# contract compiles with a copy, the compile tree (compile-tree.sh), and
+# installs into build/testlib-*, hermetic works on a copy.)
 # Shared helpers (rpaths_of, needed_of, cxx_deps, minos_over_floor,
 # win_system_dll): verify-helpers.sh; MACOS_MIN, macho_minos, version_gt:
 # env.sh.
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
 
-TREE="${1:-${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}}"
+TREE="${1:-$PREFIX}"
 command -v cygpath > /dev/null 2>&1 && TREE="$(cygpath -u "$TREE")"
-if [ "$OS" = windows ]; then rh="Library/lib/R"; else rh="lib/R"; fi
+rh="$RH"
 test -d "$TREE/$rh" || { echo "error: no R tree at $TREE ($rh missing): run 'pixi run build' first" >&2; exit 1; }
 TREE="$(cd "$TREE" && pwd)"
 echo "== verifying the installed tree $TREE ($OS/$FLAVOR)"
@@ -78,14 +93,24 @@ echo "== verifying the installed tree $TREE ($OS/$FLAVOR)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# What a tree that is not a conda env carries from the env: the runtime
+# data build.zig installs (installEnvRuntime) and the shared libraries
+# vendor-libs.sh copies. A conda env (<tree>/conda-meta, the conda build's
+# prefix) has both from its own packages, and gets neither. On win-64 it
+# also has the build-tools group's binutils/ in R_HOME/bin/toolchain,
+# r-zig-toolchain's copies (feat-standalone-toolchain B41).
+conda_tree=""
+if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
+
 # The compilers Makeconf names are rzig (feat-no-host-paths F3), one
 # binary under every name: compiling runs no shell script of ours. FC is
-# rzig's zig-fc (F3c).
-if [ "$OS" = windows ]; then
-  tc_dir="$rh/bin/toolchain"; tc_names="gcc.exe g++.exe zig-fc.exe zig-cc zig-cxx rzig.exe"
-else
-  tc_dir="$rh/bin/toolchain"; tc_names="zig-cc zig-cxx zig-fc zig-ar zig-ranlib rzig"
-fi
+# rzig's zig-fc (F3c). Windows: AR and RANLIB are rzig's zig-ar.exe and
+# zig-ranlib.exe, the LTO block's gcc-ar and gcc-ranlib its gcc-ar.exe
+# and gcc-ranlib.exe (B43), and CMake's ar and ranlib, which it looks for
+# beside CC, its ar.exe and ranlib.exe. The names: rzig_names
+# (verify-helpers.sh), which verify-bundle.sh holds the base archive to.
+tc_dir="$rh/bin/toolchain"
+tc_names="$(rzig_names)"
 for t in $tc_names; do
   f="$TREE/$tc_dir/$t"
   if [ ! -f "$f" ] || [ "$(head -c2 "$f")" = '#!' ] || ! cmp -s "$f" "$TREE/$tc_dir/${tc_names%% *}"; then
@@ -93,7 +118,27 @@ for t in $tc_names; do
     exit 1
   fi
 done
-echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig"
+# And nothing else is there (B19, B30): the toolchain groups' files
+# (openmp/, usr/, binutils/) are the toolchain tree's (zig-toolchain.sh,
+# verify-toolchain.sh), whose archives a user extracts beside this tree's.
+# A conda env is the exception: on win-64 r-zig-toolchain carries
+# binutils/ here (B41). zig's install never removes a file, so a tree
+# built before phase 3 still has the files that left it (PHASE3 C25).
+bad=""
+while IFS= read -r f; do
+  n="${f##*/}"
+  if [ -d "$f" ]; then
+    if [ -n "$conda_tree" ] && [ "$OS" = windows ] && [ "$n" = binutils ]; then continue; fi
+    bad="$bad $n/"
+  else
+    case " $tc_names " in *" $n "*) ;; *) bad="$bad $n" ;; esac
+  fi
+done < <(find "$TREE/$tc_dir" -mindepth 1 -maxdepth 1)
+if [ -n "$bad" ]; then
+  echo "error: $tc_dir holds more than rzig:$bad (the toolchain groups' files are the toolchain tree's now, and zig's install removes no file, so a tree built before phase 3 keeps them): remove the tree and build again" >&2
+  exit 1
+fi
+echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig, and nothing else is there"
 
 # rzig build's zig build roots (feat-zig-pkg-build), beside the compilers
 for f in build_t1.zig build_t2.zig rpkg.zig; do
@@ -109,7 +154,8 @@ echo "== rzig build roots verified: $rh/share/zig/rpkg/{build_t1.zig,build_t2.zi
 # rpath, and nothing edits the file afterwards. Comment lines count.
 # CPPFLAGS and LDFLAGS are empty (F3b): the compilers, rzig, add the
 # environment's -I and -L (and a conda env's rpath) themselves. FC is
-# rzig's zig-fc (F3c), which runs the flang on PATH.
+# rzig's zig-fc (F3c), which runs the flang rzig finds (the toolchain's
+# flang/, the environment's bin, PATH).
 if [ "$OS" = windows ]; then mk="$TREE/$rh/etc/x64/Makeconf"; else mk="$TREE/$rh/etc/Makeconf"; fi
 bad=""
 # Windows: ROOT and TREE are env.sh's /c/... form; PIXI_PROJECT_ROOT is the
@@ -157,27 +203,85 @@ if [ "$OS" = windows ]; then
   echo "== CRAN's layout verified: Makeconf's R_ARCH = /x64, $rh/bin/{R,Rscript}.exe"
 fi
 
-# What a tree that is not a conda env carries from the env: the runtime
-# data build.zig installs (installEnvRuntime) and the shared libraries
-# vendor-libs.sh copies. A conda env (<tree>/conda-meta, the conda build's
-# prefix) has both from its own packages, and gets neither.
-conda_tree=""
-if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
+# The build tools (feat-standalone-toolchain B24, B25, B43), every tree:
+# the conda packages carry the same files (B41). R puts the build-tools
+# group's usr/bin first on PATH, where a missing directory is harmless
+# (B25 a): unix etc/Renviron prepends it (R reads the file at startup,
+# and bin/Rcmd sources it and exports what it sets, patch 0008), and MAKE
+# is make for every flavor; Windows etc/Rcmd_environ through R's own
+# installer line, with that directory in Rtools' place by a helper
+# variable (Renviron.c expands a default only when it is a whole ${...}
+# term). Windows' Makeconf runs ar and ranlib as rzig, in its LTO block
+# too (gcc-ar, gcc-ranlib; its gcc-nm names a file that does not ship,
+# B43-2), names each of conda-forge's binutils by its path under
+# R_HOME/bin/toolchain/binutils/, the build-tools group's directory
+# (objdump without .exe, which R CMD check adds: sotools.R), and
+# none through BINPREF (the template sets NM twice, and make takes the
+# last), and pkg-config bare, found on PATH (B43-3); Rcmd_environ's RC,
+# for CMake, is the same windres. The lines are the vendored
+# Makeconf.win's and build.zig's (rcmdEnviron, finalRenviron), as PHASE3
+# sections 5 and 6 give them, each compared whole with its CR dropped:
+# R's Windows files have CRLF ends, and so does a checkout with autocrlf
+# (C20). (has_line: not grep -q, which may exit before tr has written
+# everything, and tr's SIGPIPE would then fail the pipeline, pipefail.)
+has_line() { tr -d '\r' < "$1" | grep -xF -- "$2" > /dev/null; }
+bad=""
+if [ "$OS" = windows ]; then
+  bu='$(R_HOME)/bin/toolchain/binutils'
+  for l in 'AR = $(BINPREF)zig-ar.exe' 'RANLIB = $(BINPREF)zig-ranlib.exe' \
+    "NM = $bu/nm.exe" "DLLTOOL = $bu/dlltool.exe --as $bu/as.exe \$(DT_ARCH)" \
+    "RESCOMP = $bu/windres.exe --preprocessor=\$(BINPREF)gcc.exe --preprocessor-arg=-E --preprocessor-arg=-xc --preprocessor-arg=-DRC_INVOKED \$(RC_ARCH)" \
+    "OBJDUMP = $bu/objdump" "STRIP_SHARED_LIB = $bu/strip.exe --strip-unneeded" \
+    "STRIP_STATIC_LIB = $bu/strip.exe --strip-debug" 'PKG_CONFIG = pkg-config' \
+    '  AR = $(BINPREF)gcc-ar' '  NM = $(BINPREF)gcc-nm' '  RANLIB = $(BINPREF)gcc-ranlib'; do
+    has_line "$mk" "$l" || bad="$bad
+  ${mk#$TREE/} lacks: $l"
+  done
+  grep -E '\$\(BINPREF\)(\$\(LLVMPREF\))?(pkg-config|dlltool|as|nm|windres|objdump|strip|ar|ranlib)([^a-z]|$)' "$mk" |
+    tr -d '\r' > "$WORK/binpref.txt" || true
+  while IFS= read -r l; do
+    bad="$bad
+  ${mk#$TREE/} names a tool through BINPREF: $l"
+  done < "$WORK/binpref.txt"
+  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin' \
+    'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"' \
+    'R_ZIG_RC=${R_HOME}/bin/toolchain/binutils/windres.exe'; do
+    has_line "$TREE/$rh/etc/Rcmd_environ" "$l" || bad="$bad
+  $rh/etc/Rcmd_environ lacks: $l"
+  done
+else
+  for l in 'PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}' "MAKE=\${MAKE-'make'}"; do
+    has_line "$TREE/$rh/etc/Renviron" "$l" || bad="$bad
+  $rh/etc/Renviron lacks: $l"
+  done
+fi
+if [ -n "$bad" ]; then
+  echo "error: the build tools' lines are not build.zig's:$bad" >&2
+  exit 1
+fi
+if [ "$OS" = windows ]; then
+  echo "== build tools verified: Makeconf's AR and RANLIB are rzig, its binutils in \$(R_HOME)/bin/toolchain/binutils/, PKG_CONFIG = pkg-config; etc/Rcmd_environ puts bin/toolchain/usr/bin first on PATH"
+else
+  echo "== build tools verified: etc/Renviron puts bin/toolchain/usr/bin first on PATH, MAKE=\${MAKE-'make'}"
+fi
 
 # No path of the build machine in any file of R's own (feat-no-host-paths
 # PLAN.md, Goal 1), in a tree that is not a conda env: the checkout (R's
 # source, the build dir and, as env.sh keeps them, zig's caches are in
-# it), zig's caches wherever they are, the env R was built in
+# it), the tree's own place (the install prefix, when it is not in the
+# checkout), zig's caches wherever they are, the env R was built in
 # (CONDA_PREFIX), and $HOME; each as it is set and resolved, matched with
 # either separator (doubled too), and on Windows also in its drive form
 # (C:/... or C:\..., beside MSYS' /c/...) and in any case. CI's paths
 # (/home/runner/work/..., D:\a\...) are just more of these. build.zig
 # keeps them out of R's files: -ffile-prefix-map for __FILE__ and the
 # debug info (filePathFlags), no tools/misc/top.txt, fontconfig's
-# configuration without the env's directories (installFontconfig). Files
-# are read as bytes, binaries' strings included; compressed ones (R's
-# lazy-load databases, .rds files) are not looked into. Not R's own, and
-# listed, not failed:
+# configuration without the env's directories (installFontconfig),
+# relative paths in the base packages' Rd objects and code databases
+# (build.zig's bootstrap). Files are read as bytes, binaries' strings
+# included; R's compressed ones (the lazy-load databases, .rds files) as
+# the objects they hold, which the tree's R writes out uncompressed. Not
+# R's own, and listed, not failed:
 #   - what vendor-libs.sh vendored from the env, recognised as it
 #     recognises it (vendored_files, verify-helpers.sh). conda's
 #     libraries carry their env's path compiled in (conda's prefix
@@ -185,24 +289,27 @@ if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
 #     configuration, Tcl's script library, ...); they are conda's
 #     binaries, not patched, and R overrides the defaults that matter
 #     (R_ZIG_CA_BUNDLE, FONTCONFIG_PATH, TCL_LIBRARY).
-#   - a file build.zig copies from the env as it is (minimal's make, the
-#     OpenMP headers, fontconfig's conf.d, Tcl/Tk's script libraries;
-#     Windows' binutils and Tcl/Tk DLLs), recognised by its bytes (an env
-#     file's, under any name), that names $HOME's path and nothing else
-#     here: conda-forge's own build path, which is under $HOME when the
-#     build machine's user has the name of conda-forge's builder
-#     (minimal's make on macOS names /Users/runner/miniforge3/conda-bld/
-#     ..., and GitHub's macOS runners run as runner). Such a copy that
-#     names the checkout, zig's caches or the env fails: the tree uses
-#     these files as they are, so the path would leave the machine with
-#     them (fonts.conf's did, before installFontconfig rewrote it).
+#   - a file build.zig copies from the env as it is (fontconfig's conf.d,
+#     Tcl/Tk's script libraries; Windows' Tcl/Tk DLLs), recognised by its
+#     bytes (an env file's, under any name), that names $HOME's path and
+#     nothing else here: conda-forge's own build path, which is under
+#     $HOME when the build machine's user has the name of conda-forge's
+#     builder (GitHub's macOS runners run as runner, and conda-forge's
+#     macOS make names /Users/runner/miniforge3/conda-bld/...). Such a
+#     copy that names the checkout, zig's caches or the env fails: the
+#     tree uses these files as they are, so the path would leave the
+#     machine with them (fonts.conf's did, before installFontconfig
+#     rewrote it). minimal's make, the OpenMP headers and Windows'
+#     binutils left the R tree in phase 3: they are the toolchain tree's
+#     (feat-standalone-toolchain B22, B23, B24), and verify-toolchain.sh
+#     lists its copies that name a build path the same way (C18).
 # A library directly in <prefix>/lib that the env no longer has (unix;
 # the build installs only directories there) was left by an earlier
 # vendor-libs.sh run (a soname bump); it fails, named as such.
 if [ -z "$conda_tree" ]; then
   conda_dir="${CONDA_PREFIX:?run through pixi: the env R was built in is CONDA_PREFIX}"
   command -v cygpath > /dev/null 2>&1 && conda_dir="$(cygpath -u "$conda_dir")"
-  build_dirs=("$ROOT" "${PIXI_PROJECT_ROOT:-}" "${ZIG_GLOBAL_CACHE_DIR:-}" "${ZIG_LOCAL_CACHE_DIR:-}" "$conda_dir")
+  build_dirs=("$ROOT" "${PIXI_PROJECT_ROOT:-}" "$TREE" "${ZIG_GLOBAL_CACHE_DIR:-}" "${ZIG_LOCAL_CACHE_DIR:-}" "$conda_dir")
   # $HOME, when it names a directory of its own (/home/<user>,
   # /Users/<user>, /c/Users/<user>): "/" or "/root" would also match what
   # names no build machine.
@@ -213,35 +320,8 @@ if [ -z "$conda_tree" ]; then
   esac
   # Windows: MSYS' HOME need not be the user's profile directory.
   if [ "$OS" = windows ] && [ -n "${USERPROFILE:-}" ]; then home_dirs+=("$(cygpath -u "$USERPROFILE")"); fi
-  # Each directory as it is set and resolved (Windows: also C:/..., and
-  # with long names).
-  path_forms() {
-    local d
-    for d in "$@"; do
-      [ -n "$d" ] || continue
-      printf '%s\n' "$d"
-      if [ -d "$d" ]; then (cd "$d" && pwd -P); fi
-      if [ "$OS" = windows ]; then
-        cygpath -m "$d"
-        if [ -d "$d" ]; then cygpath -m -l "$d"; fi
-      fi
-    done
-  }
-  # One ERE for the paths on stdin: trailing separators dropped, each
-  # separator either one, once or more (a newline stands in while the
-  # regex characters are escaped), duplicates once. More than once: a
-  # Windows binary can hold a path with every backslash doubled (the
-  # conda package's R.dll built in CI on 2026-09-25 named its work dir
-  # 84 times as D:\\a\\..., and no other way).
-  path_re() {
-    local f r re=""
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      r="$(printf '%s' "$f" | sed -e 's#[/\\]*$##' -e 's#[/\\]#\n#g' -e 's#[][*.^$+?(){}|]#\\&#g' -e 's#\n#[/\\\\]+#g')"
-      if [ -n "$r" ]; then re="${re:+$re|}$r"; fi
-    done < <(sort -u)
-    printf '%s\n' "$re"
-  }
+  # Each directory in its forms, as one regex (path_forms, path_re:
+  # verify-helpers.sh).
   re="$(path_forms "${build_dirs[@]}" "${home_dirs[@]}" | path_re)"
   re_build="$(path_forms "${build_dirs[@]}" | path_re)"
   n_paths="$(path_forms "${build_dirs[@]}" "${home_dirs[@]}" | sort -u | grep -c .)"
@@ -271,6 +351,17 @@ if [ -z "$conda_tree" ]; then
   done < "$WORK/vendored.txt"
   n_all="$(find "$TREE" -type f | wc -l | tr -d ' ')"
   grep -rlaE "${icase[@]}" -e "$re" "$TREE" > "$WORK/named.txt" || true
+  # R's compressed files (the lazy-load databases, .rds files), as the
+  # objects they hold: the tree's R writes each one out uncompressed
+  # under $WORK/serialized (uncompress-r-objects.R), and the same search
+  # reads those. (Windows: R takes C:/... paths.)
+  r_path() { if [ "$OS" = windows ]; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
+  if [ "$OS" = windows ]; then rscript="$TREE/$rh/bin/x64/Rscript.exe"; else rscript="$TREE/$rh/bin/Rscript"; fi
+  ser="$WORK/serialized"
+  R_DONT_USE_TK=1 "$rscript" --vanilla "$(r_path "$(cd "$(dirname "$0")" && pwd)/uncompress-r-objects.R")" "$(r_path "$TREE/$rh")" "$(r_path "$ser")" ||
+    { echo "error: the tree's R could not read its lazy-load databases and .rds files" >&2; exit 1; }
+  n_ser="$(find "$ser" -type f | wc -l | tr -d ' ')"
+  grep -rlaE "${icase[@]}" -e "$re" "$ser" > "$WORK/named-serialized.txt" || true
   offenders=""; n_bad=0; vendored_named=""; copies_named=""; n_copies=0
   while IFS= read -r f; do
     rel="${f#"$TREE"/}"
@@ -296,45 +387,62 @@ if [ -z "$conda_tree" ]; then
   $rel$what: $(first_match "$f" "$re")"
     n_bad=$((n_bad + 1))
   done < "$WORK/named.txt"
+  while IFS= read -r f; do
+    offenders="$offenders
+  $rh/${f#"$ser"/} (its objects, uncompressed): $(first_match "$f" "$re")"
+    n_bad=$((n_bad + 1))
+  done < "$WORK/named-serialized.txt"
   if [ -n "$offenders" ]; then
-    echo "error: $n_bad files name the build machine (the checkout, zig's caches, the env or \$HOME), R's own unless marked, first match each:$offenders" >&2
+    echo "error: $n_bad files name the build machine (the checkout, the tree's own place, zig's caches, the env or \$HOME), R's own unless marked, first match each:$offenders" >&2
     exit 1
   fi
   n_vendored_named="$(echo $vendored_named | wc -w | tr -d ' ')"
-  echo "== build paths verified: no file of R's own names the checkout, zig's caches, the env or \$HOME ($((n_all - n_vendored)) files besides vendor-libs.sh's; $n_paths distinct paths, either separator)"
+  echo "== build paths verified: no file of R's own names the checkout, the tree's own place, zig's caches, the env or \$HOME ($((n_all - n_vendored)) files besides vendor-libs.sh's, $n_ser of them read uncompressed; $n_paths distinct paths, either separator)"
   echo "   $n_vendored files vendored from the env, $n_vendored_named of them naming one of those paths, compiled in by conda:${vendored_named:- none}"
   if [ "$n_copies" -gt 0 ]; then
     echo "   build.zig's verbatim copies of env files that name only \$HOME's path, conda-forge's build path: $n_copies$copies_named"
   fi
 fi
 
-# OpenMP for packages (build.zig installOpenMP, vendor-libs.sh), wherever
-# Makeconf offers it (SHLIB_OPENMP_CFLAGS non-empty: every variant but
-# minimal): llvm-openmp's omp.h in the environment's include/, where rzig
-# looks (and finding it is what makes rzig add -lomp to a -fopenmp link),
-# and libomp where links and the loader find it. Windows: libomp.lib in
-# Library/lib, and libomp.dll in R_HOME/bin/x64 beside R's executables
-# (vendor-libs.sh copies it there because the tree has libomp.lib); R
-# itself has no OpenMP there (upstream's choice), so nothing in the tree
-# imports it and the DLL closure check below would not notice it
-# missing. unix: libR links libomp, which vendor-libs.sh copies into
-# lib/. (That a package builds with these alone and loads:
-# verify-bundle.sh.)
-if [ -z "$conda_tree" ] && grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
+# OpenMP for packages (feat-standalone-toolchain B22, B40), in a tree that
+# is not a conda env (there conda-forge's llvm-openmp brings headers and
+# runtime in one package, B41). The compile-time files, llvm-openmp's
+# omp.h (Windows: and libomp.lib), are the compilers group's openmp/, and
+# none is in the base: rzig looks for omp.h in its environment's include/
+# and would turn OpenMP on without the group. Where Makeconf offers OpenMP
+# (SHLIB_OPENMP_CFLAGS non-empty: every variant but minimal), the base has
+# the libomp runtime where the loader finds it, which is also what makes
+# rzig count the group's openmp/ (B40): unix, libR links libomp, which
+# vendor-libs.sh copies into lib/; Windows, libomp.dll in R_HOME/bin/x64
+# beside R's executables, which vendor-libs.sh copies there because
+# Makeconf offers OpenMP. R itself has no OpenMP on Windows (upstream's
+# choice), so nothing in the tree imports it and the DLL closure check
+# below would not notice it missing. Where Makeconf offers none
+# (minimal), the base has no runtime, so rzig leaves openmp/ alone and a
+# configure script's flagless omp.h probe finds no header. (That a package
+# builds with the base and the group, and loads: verify-bundle.sh.)
+if [ -z "$conda_tree" ]; then
   case "$OS" in
-    windows) omp_files="Library/include/omp.h Library/lib/libomp.lib $rh/bin/x64/libomp.dll" ;;
-    linux) omp_files="include/omp.h lib/libomp.so" ;;
-    macos) omp_files="include/omp.h lib/libomp.dylib" ;;
+    windows) omp_runtime="$rh/bin/x64/libomp.dll" ;;
+    linux) omp_runtime="lib/libomp.so" ;;
+    macos) omp_runtime="lib/libomp.dylib" ;;
   esac
   bad=""
-  for f in $omp_files; do
-    [ -s "$TREE/$f" ] || bad="$bad $f"
+  for f in "$TREE"/include/omp*.h "$TREE"/Library/include/omp*.h "$TREE"/Library/lib/libomp.lib; do
+    if [ -e "$f" ]; then bad="$bad ${f#"$TREE"/}(the compilers group's)"; fi
   done
+  if grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
+    [ -s "$TREE/$omp_runtime" ] || bad="$bad $omp_runtime(missing, and Makeconf offers OpenMP)"
+    omp_ok="$omp_runtime, as Makeconf offers OpenMP"
+  else
+    [ ! -e "$TREE/$omp_runtime" ] || bad="$bad $omp_runtime(Makeconf offers no OpenMP, and rzig would count openmp/)"
+    omp_ok="no runtime, as Makeconf offers no OpenMP"
+  fi
   if [ -n "$bad" ]; then
-    echo "error: Makeconf offers OpenMP (SHLIB_OPENMP_CFLAGS), but the tree lacks:$bad" >&2
+    echo "error: OpenMP in the base:$bad" >&2
     exit 1
   fi
-  echo "== OpenMP for packages verified: ${omp_files// /, }"
+  echo "== OpenMP for packages verified: $omp_ok; no omp.h or libomp.lib (the compilers group's openmp/)"
 fi
 
 # The baseline CPU (x86_64): R's own binaries are compiled for their
@@ -353,8 +461,8 @@ fi
 # R's own: every binary under R_HOME but the conda libraries
 # vendor-libs.sh copied there (vendored_files: Windows' bin/x64) and the
 # env files build.zig copies as they are (Windows' Tcl/Tk in R_HOME/Tcl;
-# in the toolchain directory only rzig is R's own, not Windows' binutils
-# nor minimal's make). conda-forge's binaries are built for its own
+# in the toolchain directory only rzig is R's own, not a conda env's
+# win-64 binutils/, B41). conda-forge's binaries are built for its own
 # baseline, and some carry AVX2 code behind a run-time CPU check
 # (libdeflate, libcrypto), so they are not counted. objdump: on Windows
 # the env's x86_64-w64-mingw32-objdump; on macOS /usr/bin/objdump, which
@@ -380,7 +488,7 @@ case "$(uname -m)" in
     esac > "$WORK/r-bins-all.txt"
     : > "$WORK/r-bins.txt"
     while IFS= read -r f; do
-      if [ "${f%/*}" = "$TREE/$tc_dir" ] && ! cmp -s "$f" "$rzig_file"; then continue; fi
+      case "$f" in "$TREE/$tc_dir"/*) cmp -s "$f" "$rzig_file" || continue ;; esac
       if grep -qxF -- "$f" "$WORK/vendored-r.txt"; then continue; fi
       printf '%s\n' "$f" >> "$WORK/r-bins.txt"
     done < "$WORK/r-bins-all.txt"
@@ -580,8 +688,8 @@ if [ "$VARIANT" = minimal ]; then
 fi
 
 # Every ELF (linux) or 64-bit Mach-O (macOS) file in the tree, by magic
-# number: R's own binaries, the vendored libraries in lib/ and the tools
-# in lib/R/bin/toolchain. The list is collected first, then checked: an
+# number: R's own binaries, the vendored libraries in lib/ and rzig in
+# lib/R/bin/toolchain. The list is collected first, then checked: an
 # `exit 1` inside a `while read < <(find ...)` loop fires the EXIT trap's
 # rm -rf while find is still walking (the first CI failure of the glibc
 # check was a screenful of that noise after the real error line).
@@ -597,56 +705,43 @@ n_bins="$(wc -l < "$bin_list" | tr -d ' ')"
 [ "$n_bins" -gt 0 ] || { echo "error: no binaries found under $TREE" >&2; exit 1; }
 
 # Old-server guarantee (Linux only): fail if any shipped ELF requires glibc
-# newer than the floor build.zig's target pin promises. This is the check
-# side of the floor — a zig update or stray flag that raises the
-# requirement should die here, not on a customer's old box.
+# newer than the floor build.zig's target pin promises, 2.17, anywhere in
+# the tree. This is the check side of the floor — a zig update or stray
+# flag that raises the requirement should die here, not on a customer's
+# old box.
 #
-# Two tiers, learned from the first hosted-CI run of this check
-# (2026-09-19): everything R needs to *run* (R itself, its modules and
-# package .so files, every vendored library under lib/) must stay at the
-# 2.17 floor — and does. lib/R/bin/toolchain holds what build.zig
-# installs for compiling packages: rzig under the compiler names (built
-# for R's own target, so at the floor) and, in minimal, conda-forge's
-# GNU make (4.4.1 needs GLIBC_2.17 on linux-64). conda-forge's linux
-# baseline is glibc 2.28, and these only run when compiling, which
-# needs zig anyway, so the toolchain is bounded at that baseline instead
-# — anything above *that* still trips (a host tool leaking in,
-# conda-forge moving to 2.34). (The 2.28 case was coreutils' `realpath`,
-# one of the nm/realpath/sed/... helpers stage.sh copied there until
-# phase A5, 5f23127.)
+# Until phase 3, lib/R/bin/toolchain had a tier of its own, conda-forge's
+# linux baseline 2.28, for the env's tools build.zig copied there, which
+# run only to compile (minimal's GNU make, which needs 2.17; until phase
+# A5, 5f23127, coreutils' `realpath` too, which needed 2.28). It holds
+# rzig alone now, built for R's own target and so at the floor
+# (feat-standalone-toolchain B19); make is the toolchain tree's, and
+# verify-toolchain.sh keeps the 2.28 tier for it.
 # objdump: conda-forge's binutils (pixi.toml).
 if [ "$OS" = linux ] && ! command -v objdump > /dev/null 2>&1; then
   cannot_check "objdump unavailable; glibc ceiling not checked"
 elif [ "$OS" = linux ]; then
-  GLIBC_FLOOR="2.17"          # runtime artifacts: R + vendored libs
-  GLIBC_TOOLS_CEILING="2.28"  # lib/R/bin/toolchain helpers (conda-forge baseline)
-  worst=""; worst_file=""; tools_over=0; failed=0
+  GLIBC_FLOOR="2.17"
+  worst=""; worst_file=""; failed=0
   while IFS= read -r f; do
     # `|| true`: an ELF with no versioned glibc imports makes grep exit 1,
     # and env.sh's pipefail + set -e would silently kill the whole script
     # on that assignment (latent in the first version of this check too).
     ceil=$(objdump -T "$f" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/^GLIBC_//' | sort -uV | tail -1 || true)
     [ -z "$ceil" ] && continue
-    case "$f" in
-      "$TREE"/lib/R/bin/toolchain/*) limit="$GLIBC_TOOLS_CEILING"; tier="toolchain helper" ;;
-      *) limit="$GLIBC_FLOOR"; tier="runtime" ;;
-    esac
-    if [ "$(printf '%s\n' "$ceil" "$limit" | sort -V | tail -1)" != "$limit" ]; then
-      echo "error: $f ($tier) requires GLIBC_$ceil > $limit" >&2
+    if [ "$(printf '%s\n' "$ceil" "$GLIBC_FLOOR" | sort -V | tail -1)" != "$GLIBC_FLOOR" ]; then
+      echo "error: $f requires GLIBC_$ceil > $GLIBC_FLOOR" >&2
       failed=1
-    elif [ "$tier" = "toolchain helper" ] && [ "$(printf '%s\n' "$ceil" "$GLIBC_FLOOR" | sort -V | tail -1)" != "$GLIBC_FLOOR" ]; then
-      echo "note: ${f#$TREE/} (toolchain helper, compile-time only) requires GLIBC_$ceil > runtime floor $GLIBC_FLOOR"
-      tools_over=$((tools_over + 1))
     fi
-    if [ "$tier" = runtime ] && { [ -z "$worst" ] || [ "$(printf '%s\n' "$ceil" "$worst" | sort -V | tail -1)" = "$ceil" ]; }; then
+    if [ -z "$worst" ] || [ "$(printf '%s\n' "$ceil" "$worst" | sort -V | tail -1)" = "$ceil" ]; then
       worst="$ceil"; worst_file="${f#$TREE/}"
     fi
   done < "$bin_list"
   [ "$failed" = 0 ] || exit 1
   if [ -z "$worst" ]; then
-    cannot_check "objdump -T read no glibc version from any runtime file; glibc ceiling not checked"
+    cannot_check "objdump -T read no glibc version from any ELF file; glibc ceiling not checked"
   else
-    echo "== glibc ceiling verified: runtime worst $worst ($worst_file) <= floor $GLIBC_FLOOR; $tools_over toolchain helper(s) above the floor, all <= $GLIBC_TOOLS_CEILING"
+    echo "== glibc ceiling verified: worst $worst ($worst_file) <= floor $GLIBC_FLOOR, every ELF file of the tree"
   fi
 fi
 

@@ -1,18 +1,36 @@
-R CMD config: say that make is missing
+R CMD config: name the missing build tools (rzig's check mode)
 
 src/scripts/config evaluates Makeconf through make, so without the
-toolchain it died with "make: not found"; pkgbuild and pak call it to
-detect a compiler. Check for make first and say where it comes from.
-feat-no-host-paths PLAN.md, phase T.
+build tools it died with "make: not found"; pkgbuild and pak call it to
+detect a compiler. First run rzig's check mode,
+R_HOME/bin/toolchain/zig-cc --rzig-check=build-tools (gcc.exe on
+Windows, where this script is bin/config.sh and the check also finds sh
+and the binutils Makeconf.win names): it says what is missing and names
+the build-tools group on stderr, and R CMD config exits with its status.
+With no rzig (R without its toolchain package), check for make and name
+that package, from R_ZIG_TOOLCHAIN_HINT. feat-no-host-paths PLAN.md,
+phase T; feat-standalone-toolchain PLAN.md, B26.
 
 --- a/src/scripts/config
 +++ b/src/scripts/config
-@@ -175,6 +175,11 @@
+@@ -175,6 +175,23 @@
    R_SHARE_DIR=${R_HOME}/share
  fi
  
-+## r-zig: make check (make comes with the r-zig toolchain package)
-+if ! command -v "${MAKE%% *}" > /dev/null 2>&1; then
++## r-zig: the build tools, by rzig's check mode (feat-standalone-toolchain
++## B26): it finds make as R runs it (Windows: also sh and the binutils),
++## or names the build-tools group on stderr and exits non-zero, which ends
++## this script with its status. Its ok line goes to /dev/null: stdout is
++## the value R CMD config prints. Without rzig (R without its toolchain
++## package), make alone, and R_ZIG_TOOLCHAIN_HINT names that package.
++if test "${R_OSTYPE}" = "windows"; then
++  rzig="${R_HOME}/bin/toolchain/gcc.exe"
++else
++  rzig="${R_HOME}/bin/toolchain/zig-cc"
++fi
++if test -f "${rzig}"; then
++  "${rzig}" --rzig-check=build-tools > /dev/null || exit
++elif ! command -v "${MAKE%% *}" > /dev/null 2>&1; then
 +  echo "ERROR: 'R CMD config' needs make, which comes with the r-zig toolchain: ${R_ZIG_TOOLCHAIN_HINT:-install the r-zig toolchain package for this R}" >&2
 +  exit 1
 +fi

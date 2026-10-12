@@ -16,7 +16,7 @@
 #    its own there (environment.zig), and R_ZIG_EXTRA_ENV is unset for
 #    this part: the shims know neither, and an extra environment would add
 #    an rpath.
-# 2. With an R prefix (an installed tree such as dist/R-4.6.1-slim-zig,
+# 2. With an R prefix (an installed tree such as dist/slim/R-4.6.1-zig,
 #    whose bin/toolchain is rzig since F3a): small C, C++, Fortran and
 #    OpenMP packages install from source and load, and with
 #    RZIG_SMOKE_CRAN=1 also CRAN's Rcpp, data.table and quadprog.
@@ -222,10 +222,13 @@ echo 'threads <- function() .Call("rzomp_threads", PACKAGE = "rzomp")' > "$T/pkg
 mkdir -p "$T/lib"
 pkgs="rzc rzcxx rzomp"
 grep -q '^FLIBS = .*flang_rt' "$1/lib/R/etc/Makeconf" && command -v flang > /dev/null && pkgs="$pkgs rzf"
+# R CMD INSTALL builds these through rzig build (tier 1, patch 0013), so
+# the compilers' lines appear only under RZIG_TRACE, which also names the
+# tier: shown, not asserted
 for p in $pkgs; do
-  "$R" CMD INSTALL -l "$T/lib" "$T/pkgs/$p" > "$T/install-$p.log" 2>&1 || { cat "$T/install-$p.log"; exit 1; }
+  RZIG_TRACE=1 "$R" CMD INSTALL -l "$T/lib" "$T/pkgs/$p" > "$T/install-$p.log" 2>&1 || { cat "$T/install-$p.log"; exit 1; }
 done
-grep -h 'zig-c' "$T"/install-*.log | sed 's/^/   /' | head -8
+{ grep -h 'rzig build: tier\|^zig-c[^:]*: [^ ]*zig' "$T"/install-*.log || true; } | sed 's/^/   /' | head -8
 OMP_NUM_THREADS=2 R_SMOKE_LIB="$T/lib" R_SMOKE_PKGS="$pkgs" "$R" --vanilla -s -e '
   lib <- Sys.getenv("R_SMOKE_LIB")
   pkgs <- strsplit(Sys.getenv("R_SMOKE_PKGS"), " ")[[1]]

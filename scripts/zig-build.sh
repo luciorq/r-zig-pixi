@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Milestone 5 entry point: build R entirely with zig build (no autoconf, no
-# make). Wraps `zig build` so the zig cache lands in the workspace and the
-# prefix matches the layout the make-driven pipeline used.
+# make). Wraps `zig build` so the zig cache lands in the workspace and R
+# installs into env.sh's prefix, dist/<flavor>/R-<ver>-zig
+# (feat-standalone-toolchain B36).
 . "$(dirname "$0")/env.sh"
 
 # (macOS fd ulimit for zig's linker opening ~300 libR objects at once is
@@ -15,8 +16,6 @@
   { echo "error: cannot run zig '$ZIG' (ZIG_BIN=${ZIG_BIN:-}, else zig on PATH)" >&2; exit 1; }
 zig_lib="$("$ZIG" env | sed -n 's/^ *\.lib_dir = "\(.*\)",$/\1/p' | sed 's/\\\\/\\/g')"
 echo "r-zig: zig = $ZIG ($("$ZIG" version); lib dir $zig_lib)"
-
-PREFIX_ZIG="${R_INSTALL_PREFIX:-$ROOT/dist/R-$R_VERSION-$FLAVOR-zig}"
 
 # --- R source patches (feat-no-host-paths PLAN.md, phase F2) ---------------
 # zigbuild/patches/R-<version>/*.patch, one file per concern, each saying
@@ -74,6 +73,6 @@ fi
 # before the env's library (Windows: bin/x64 before PATH; macOS: the
 # rpath before the fallback path): after a `pixi update` it would be the
 # env's old one. A no-op for the conda build, whose prefix is the env.
-R_INSTALL_PREFIX="$PREFIX_ZIG" bash "$(dirname "$0")/vendor-libs.sh"
-"$ZIG" build --prefix "$PREFIX_ZIG" -Dvariant="$VARIANT" -Dblas="$BLAS" "${conda[@]}" "$@"
-R_INSTALL_PREFIX="$PREFIX_ZIG" bash "$(dirname "$0")/vendor-libs.sh"
+R_INSTALL_PREFIX="$PREFIX" bash "$(dirname "$0")/vendor-libs.sh"
+"$ZIG" build --prefix "$PREFIX" -Dvariant="$VARIANT" -Dblas="$BLAS" "${conda[@]}" "$@"
+R_INSTALL_PREFIX="$PREFIX" bash "$(dirname "$0")/vendor-libs.sh"

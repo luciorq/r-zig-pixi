@@ -7,6 +7,8 @@
 //!   zig build --build-file <this file> -Dplan=<plan.zon> --prefix <dir> --cache-dir <cache>
 //! and finds <dir>/<libs_dir>/<output>.
 const std = @import("std");
+const builtin = @import("builtin");
+const windows = builtin.os.tag == .windows;
 
 pub const Source = struct { lang: []const u8, path: []const u8, obj: []const u8 };
 
@@ -21,9 +23,11 @@ pub const Plan = struct {
     /// rzig itself, for `rzig def` (Windows); "" when not needed
     rzig: []const u8 = "",
     link_driver: []const u8,
-    cc_tool: []const u8 = "zig-cc",
-    cxx_tool: []const u8 = "zig-cxx",
-    fc_tool: []const u8 = "zig-fc",
+    // the plan always names them (pkgplan.zig, from Makeconf); the defaults
+    // are the names installRzig (build.zig) uses on this OS
+    cc_tool: []const u8 = if (windows) "gcc.exe" else "zig-cc",
+    cxx_tool: []const u8 = if (windows) "g++.exe" else "zig-cxx",
+    fc_tool: []const u8 = if (windows) "zig-fc.exe" else "zig-fc",
     sources: []const Source,
     cc: []const []const u8 = &.{},
     cxx: []const []const u8 = &.{},
