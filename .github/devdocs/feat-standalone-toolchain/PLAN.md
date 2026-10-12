@@ -2561,24 +2561,24 @@ Tests:
   routing check moved, on the packages that use it.
 - File lists: base ∪ groups = R tree ∪ toolchain tree, no overlap.
 
-**Status (2026-10-11): steps 1 to 6 done. Steps 1 to 3 and P3-C are
-committed (a40fadb); steps 4 to 6 are not. Tested on linux-64 (both
-zigs), omicron (osx-arm64; osx-64 under Rosetta) and kappa (win-64); CI
-has not run.** The worktree feat-standalone-phase3 (branch
-feat-standalone-phase3, from main 966d661, with main 888faa6 (PR #23)
-merged) follows the reviewed implementation plan
-(PHASE3-IMPLEMENTATION.md and CRITIQUE.md, in
-/data/gamma/luciorq/workspaces/temp/r-zig-pixi/phase3plan/critic/), with
-the user's answers to its open points: A (a), the toolchain build in its
-own zigbuild/toolchain/build.zig, run by `pixi run toolchain` through
-`zig build --build-file`; B (a), a compile tree for contract and stress;
-P3-C (a); and to step 3's review (2026-10-11; step 4's record). B24's
-routing check moved no tool; dlltool (with as) and windres can move in
-follow-up PRs (step 6's record). Next: the user commits steps 4 to 6;
-before merging, universe must hold build 8 for all five subdirs (C13);
-then CI on the PR (the core tier with conda-package, the `full-ci`
-label, the `upstream-zig` label, one stress dispatch; PHASE3 section
-10).
+**Status (2026-10-12): steps 1 to 6 done and committed (548da1a, PR
+#24). Tested on linux-64 (both zigs), omicron (osx-arm64; osx-64 under
+Rosetta), kappa (win-64) and CI (the full tier, upstream-zig and one
+stress dispatch, all green; "Phase 3 record: CI on PR #24").** The
+worktree feat-standalone-phase3 (branch feat-standalone-phase3, from
+main 966d661, with main 888faa6 (PR #23) merged) follows the reviewed
+implementation plan (PHASE3-IMPLEMENTATION.md and CRITIQUE.md, in
+/data/gamma/luciorq/workspaces/temp/r-zig-pixi/phase3plan/critic/),
+with the user's answers to its open points: A (a), the toolchain build
+in its own zigbuild/toolchain/build.zig, run by `pixi run toolchain`
+through `zig build --build-file`; B (a), a compile tree for contract and
+stress; P3-C (a); and to step 3's review (2026-10-11; step 4's record).
+B24's routing check moved no tool; dlltool (with as) and windres can
+move in follow-up PRs (step 6's record). Next: PR #24 merges; then
+feat-zig-pkg-build merges main and adapts to this layout (the user's
+order (a), 2026-10-11: its install path needs the build tools only for
+packages that need make, so 0009's build-tools check is gated on its
+tier); then phase 4.
 
 #### Phase 3 record: step 1, paths (2026-10-10, linux-64)
 
@@ -3705,6 +3705,39 @@ static-library and LTO packages and verify-package; conda-package on
 macOS (omicron's list did not have it); upstream zig on osx-64 (no host
 or leg). Before merging: C13's check that universe holds build 8 for all
 five subdirs (`pixi run -e pkg conda-channel-list`).
+
+#### Phase 3 record: CI on PR #24 (2026-10-12)
+
+The user committed steps 4 to 6 as 548da1a and opened PR #24 with the
+`full-ci` and `upstream-zig` labels. Every run on 548da1a passed:
+- build.yaml, run 38247190923, the full tier: 25 jobs. The five
+  toolchain legs (toolchain.yaml, one per platform) took 0 to 2 minutes
+  each, so the CI wall-time risk (PHASE3 risk 3) does not arise and the
+  30-minute timeout is ample. The 15 build legs (default, minimal, full,
+  openblas where the tier has them) downloaded their platform's
+  archives and ran unpack-toolchain; the packaging legs ran
+  verify-package's three scenarios. conda-package passed on all five
+  subdirs, macOS included.
+- windows-latest's verify-package: scenario 3's Makeconf tools are
+  files, $(NM), $(DLLTOOL) --as, $(AR), $(RANLIB), $(STRIP_STATIC_LIB),
+  $(RESCOMP) and $(OBJDUMP) run as R's makefiles run them, the OpenMP
+  packages build with openmp/ and load, and the LTO record matches
+  kappa's: ltodef and ltonodef install (exit 0) and load, f() = 42, with
+  gcc-nm's absence named in ltonodef's log (B43-2).
+- upstream-zig.yaml, run 38247190926: its three toolchain legs and three
+  default legs, built with upstream zig.
+- stress.yaml, dispatch 38251125721 (ubuntu-latest, tree, the default
+  targets g3 and g4): its toolchain job and the stress leg, which
+  unpacked the archives and ran in the compile tree. Targets: 22 ok, 1
+  install-failed, 0 unexpected; dependencies 37 ok. The failure is
+  magick, as its row expects (linux=fail-abi): the C++ ABI boundary
+  (stress round 1's A1, under "Later and future checks"): it needs
+  `Magick::magickImage(std::__1::basic_string const&)`, and conda-forge's
+  libMagick++ exports only the libstdc++ (`std::__cxx11`) one. The job
+  exits 0 unless --strict, so a row's failure shows only in its table.
+C13 holds: universe has r-zig-slim and r-zig-toolchain build 8 on all
+five subdirs (repodata, 2026-10-11), so phase 3's files publish nothing
+until phase 4's bump. Not run anywhere: upstream zig on osx-64.
 
 #### Phase 3 review: steps 1 and 2 (2026-10-10)
 

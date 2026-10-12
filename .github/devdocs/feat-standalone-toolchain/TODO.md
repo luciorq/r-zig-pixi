@@ -379,7 +379,7 @@ the results; B24's routing check moved no tool (follow-up PRs).
       `Sys.which("make")` (step 3, 2026-10-10, uncommitted:
       `--toolchain-prefix`, only rzig taken from the R tree's TC; tested
       on linux-64, PLAN.md's "Phase 3 record: step 3")
-- [ ] CI (B31 a, B12; PHASE3 section 3): toolchain.yaml, called from
+- [x] CI (B31 a, B12; PHASE3 section 3): toolchain.yaml, called from
       build.yaml, upstream-zig.yaml and stress.yaml (C3), builds,
       archives and checks the groups once per platform and uploads them
       as `toolchain-<runner.os>-<runner.arch>` (`-upstream` for upstream
@@ -391,8 +391,9 @@ the results; B24's routing check moved no tool (follow-up PRs).
       scenarios and upload only the base, as
       `standalone-<env>-<os>[-upstream]`, kept 7 days (step 5,
       2026-10-11, uncommitted; actionlint clean, PLAN.md's "Phase 3
-      record: step 5"; open until a live CI run: no push or dispatch yet)
-- [ ] kappa and windows-latest: a static-library package through
+      record: step 5"; PR #24's CI, 2026-10-12: all green, the toolchain
+      legs 0-2 min, PLAN.md's "Phase 3 record: CI on PR #24")
+- [x] kappa and windows-latest: a static-library package through
       `$(AR)`/`$(RANLIB)` (rzig), an `--use-LTO` build, and the packages
       that use each tool the routing check moved; stress RcppParallel
       with no ar on PATH (CMake finds rzig's `ar.exe` beside CC), and
@@ -401,7 +402,8 @@ the results; B24's routing check moved no tool (follow-up PRs).
       2026-10-11: all pass, the LTO builds once rzig drops -flto at
       Windows links, which zig 0.16.0 cannot link; no tool moved, so no
       moved tool's packages; PLAN.md's "Phase 3 record: step 6".
-      windows-latest waits for CI)
+      windows-latest, PR #24's CI, 2026-10-12: verify-package's scenario
+      3 and the LTO record pass)
 - [x] compile-tree.sh requires the toolchain tree's `openmp/` where the
       base has the libomp runtime (the user's answer (4) to step 3's
       review, 2026-10-11; step 4, uncommitted; checked on linux-64,
@@ -420,15 +422,17 @@ the results; B24's routing check moved no tool (follow-up PRs).
       uncommitted; linux-64 and kappa's round 3)
 - [x] PLAN.md: the records of steps 4 to 6 with B24's result, the
       build-number texts (C14), Risks and the Verification recipe
-- [ ] Tested: linux-64 (slim, minimal, wheel, conda-package), omicron
-      (osx-arm64 slim and minimal, osx-64 slim), kappa, CI (all but CI
-      pass, 2026-10-11, PLAN.md's "Phase 3 record: step 6"; omicron ran
-      no conda-package, which CI's macOS jobs run)
-- [ ] Before merging: universe holds build 8 for all five subdirs (C13,
-      `pixi run -e pkg conda-channel-list`)
-- [ ] The user commits steps 4 to 6 (hand over the commands); then the
+- [x] Tested: linux-64 (slim, minimal, wheel, conda-package), omicron
+      (osx-arm64 slim and minimal, osx-64 slim), kappa, CI (2026-10-11
+      and 2026-10-12; PLAN.md's "Phase 3 record: step 6" and "CI on
+      PR #24"; conda-package on macOS ran in CI)
+- [x] Before merging: universe holds build 8 for all five subdirs (C13,
+      `pixi run -e pkg conda-channel-list`) (r-zig-slim and
+      r-zig-toolchain build 8 on all five, repodata, 2026-10-11)
+- [x] The user commits steps 4 to 6 (hand over the commands); then the
       PR's CI: the core tier with conda-package, the `full-ci` label, the
       `upstream-zig` label, one stress dispatch (PHASE3 section 10)
+      (548da1a, PR #24, 2026-10-12: all green)
 
 ## Phase 4 — conda and PyPI on the same boundary
 
