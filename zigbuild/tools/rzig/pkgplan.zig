@@ -4,8 +4,10 @@
 //! strings make would have put on each compile and link line, derived as
 //! install.R's .shlib_internal derives them (its makefile order and its
 //! command-line overrides), expanded by makefile.zig and word-split by
-//! shellwords.zig. `rzig build --plan-only` prints it; proto/mkplan.sh in
-//! the design record did the same with make, and is the oracle.
+//! shellwords.zig. `rzig build --plan-only` prints it. The oracle is make
+//! itself: scripts/pkg-parity.sh (pixi run pkg-parity) installs the same
+//! packages through make and through this plan and asserts identical
+//! compiler command lines and exports.
 //!
 //! Tiers: 0 no `src/` (R only); 2 `src/build.zig`; 1 Makevars with
 //! assignments only; 3 everything else (configure, src/Makefile, Objective

@@ -7,7 +7,9 @@ and measurements; no file of R, rzig or build.zig changed. Milestone 2
 Milestone 3 (2026-10-09, below): R CMD INSTALL calls it (patches 0012,
 0013). Milestone 5 (2026-10-10, below): the patched R on macOS and
 Windows. Milestone 4 (2026-10-10, below, done after M5): the parity
-check in the repo, `pixi run pkg-parity`, in CI.
+check in the repo, `pixi run pkg-parity`, in CI. The last commit of
+the branch removed the prototype files the table in "Cleanup before
+merge" lists; they are in history at aff0f4c.
 
 ## The question (the user, 2026-10-08)
 
@@ -193,8 +195,10 @@ through zig-fc, `$(BLAS_LIBS) $(FLIBS)`, PKG_FFLAGS with
 Rcpp (C++, `-I../inst/include/`, a `cleanup` script). Every Makevars is
 assignment-only: all five are tier 1.
 
-The prototype (`proto/` here, copied from the session's scratch):
-- `proto/mkplan.sh`: PROTOTYPE ONLY. Writes `plan.zon` from the dev
+The prototype (`proto/` here, copied from the session's scratch; the
+files marked "removed" are in history at aff0f4c, see "Cleanup before
+merge"):
+- `proto/mkplan.sh` (removed): PROTOTYPE ONLY. Writes `plan.zon` from the dev
   tree's Makeconf and the package's Makevars using make recipes that
   `printf` (not GNU make 4's `$(file)`: macOS ships make 3.81) the exact strings `.shlib_internal`'s make
   invocation would use (its include chain and command-line overrides:
@@ -202,7 +206,7 @@ The prototype (`proto/` here, copied from the session's scratch):
   Fortran, `OBJECTS`, `CLINK_CPPFLAGS`). This is what rzig's evaluator
   must reproduce without make; the real work of milestone 2.
 - `proto/rpkg/build_t1.zig`, `build_t2.zig`, `rpkg.zig`,
-  `build_t2.zig.zon` (the root's zon; `.pkg` is a relative path to the
+  `build_t2.zig.zon` (removed; now `zigbuild/rpkg/`) (the root's zon; `.pkg` is a relative path to the
   package's `src/`). The plan names the tool files (`cc_tool`,
   `cxx_tool`, `fc_tool`; defaults zig-cc/zig-cxx/zig-fc, Windows
   gcc.exe/g++.exe/zig-fc.exe) and `readPlan` raises
@@ -211,12 +215,12 @@ The prototype (`proto/` here, copied from the session's scratch):
 - `proto/hosts/`: the step-4 drivers (`omicron.sh`, `kappa-step[123].bat`),
   the hand-derived Windows plans (`plans-win/`), the `.def` files, the
   tier-2 root zon, and `results/` (host logs and Windows export lists).
-  Kept in the branch's history for the record; see "Cleanup before
-  merge".
+  All but `defs/` removed; in the branch's history for the record, see
+  "Cleanup before merge".
 - `proto/zighello/`: the tier-2 hello-world package (DESCRIPTION,
   NAMESPACE with `useDynLib(zighello, .registration = TRUE, .fixes = "C_")`,
   `R/hello.R`, `src/build.zig`, `src/hello.zig`).
-- `proto/plan-cli.example.zon`: cli's generated plan. `proto/smoke.R`.
+- `proto/plan-cli.example.zon` (removed): cli's generated plan. `proto/smoke.R`.
 
 Reference: each fixture installed with the make path
 (`R CMD INSTALL --no-test-load`, `RZIG_TRACE=1`) into `lib-make`; the
@@ -529,7 +533,8 @@ b490bdf; conda-forge zig 0.16.0, flang 23.1.1), then the M3 acceptance
 run against those dists: `R CMD INSTALL -l <lib> <CRAN tarball>` with the
 test load, `RZIG_TRACE=1` on both paths, `R_ZIG_PKG_BUILDER=make` for the
 reference. Drivers `proto/hosts/m5-omicron.sh`, `m5-kappa.bat` +
-`m5-kappa.R`; raw output in `proto/hosts/results/m5-*.log`. Scratch
+`m5-kappa.R`; raw output in `proto/hosts/results/m5-*.log` (history,
+aff0f4c). Scratch
 (`~/rz-m5`, `C:\Users\admin\rz-m5`) deleted afterwards. The argv
 comparison takes rzig's `RZIG_TRACE` command lines from both logs
 (basenames, sorted; the `self` and `environment` lines dropped).
@@ -577,8 +582,8 @@ compiles the build runner and fills a cold zig cache.
 | Rcpp | tier 1, 21 s | fails as digest | zig 738 | 6 compile lines identical |
 
 The cli export set settles M1's Windows question: `rzig def`'s 185
-symbols are exactly the M1 "make" list (`proto/hosts/results/kappa-exports-cli-make.txt`,
-187) without `_CRT_INIT` and `__mingw_module_is_dll`. Those two were
+symbols are exactly the M1 "make" list (`proto/hosts/results/kappa-exports-cli-make.txt`
+in history at aff0f4c, 187) without `_CRT_INIT` and `__mingw_module_is_dll`. Those two were
 never in a nm \| sed `.def`: they came from the same empty `tmp.def`, so
 M1's "make vs `--export-all-symbols` identical, 187" compared two
 auto-exports. On a host with Rtools' sed, make's DLL exports the 185.
@@ -612,10 +617,12 @@ line.
 ## Cleanup before merge
 
 The milestone-1 commit keeps every prototype file so the record is
-complete in history. The last commit of the PR removes what M2 makes
-redundant and keeps what M2 and M4 build on (decided 2026-10-09):
+complete in history. The last commit of the PR (2026-10-10) removed
+what M2 makes redundant and kept what M2 and M4 build on (decided
+2026-10-09). Everything removed is in the tree at aff0f4c
+(`git show aff0f4c:.github/devdocs/feat-zig-pkg-build/proto/mkplan.sh`):
 
-| remove in the last commit | why |
+| removed in the last commit | why |
 |---|---|
 | `proto/hosts/results/` | raw host logs and export lists (M1 step 4 and M5); the tables above carry every number |
 | `proto/hosts/plans-win/` | hand-derived Windows plans; `rzig build` generates them |
@@ -628,12 +635,9 @@ Keep: `PLAN.md`, `proto/zighello/` (pkg-parity's tier-2 fixture), `proto/hosts/d
 host drivers `proto/hosts/m5-omicron.sh`, `m5-kappa.bat`, `m5-kappa.R`,
 `t2.R` (the rerun recipe for the hosts).
 
-    git rm -r -q .github/devdocs/feat-zig-pkg-build/proto/hosts/{results,plans-win} \
-      .github/devdocs/feat-zig-pkg-build/proto/hosts/{omicron.sh,kappa-step1.bat,kappa-step2.bat,kappa-step3.bat,smoke-win.R,root-t2.build.zig.zon} \
-      .github/devdocs/feat-zig-pkg-build/proto/{mkplan.sh,plan-cli.example.zon} \
-      .github/devdocs/feat-zig-pkg-build/proto/rpkg
-
-Then drop the prototype part of the rerun section below.
+Also removed then: the M2 oracle line and the M1 prototype block of
+"How to rerun" (history, aff0f4c). What remains of `proto/`:
+`zighello/`, `hosts/defs/`, `hosts/m5-*`, `hosts/t2.R`, `smoke.R`.
 
 ## How to rerun
 
@@ -657,18 +661,4 @@ flang on PATH:
     R_HOME=$R /tmp/rz/bin/rzig build --pkg <unpacked pkg> --plan-only          # the plan
     R_HOME=$R RZIG_TRACE=1 /tmp/rz/bin/rzig build --pkg <pkg> --out /tmp/out/<pkg> \
         --rpkg-dir zigbuild/rpkg --cache-dir /tmp/zc -j8                        # -> /tmp/out/<pkg>/libs/<pkg>.so
-    LC_ALL=C bash proto/mkplan.sh $R <pkg>/src <pkg> plan-make.zon             # the oracle (needs make)
     zig build --build-file zigbuild/tools/rzig/build.zig test                 # unit tests
-
-The M1 prototype:
-
-    R=<dist>/R-4.6.1-slim-zig/lib/R          # pixi run build
-    bash proto/mkplan.sh $R <pkg>/src <pkg> plan.zon   # needs make (prototype only)
-    cd proto/rpkg && zig build --build-file build_t1.zig --cache-dir /tmp/zc -Dplan=plan.zon --prefix /tmp/out -j8
-    # tier 2: a root dir with build_t2.zig as build.zig, build_t1.zig, rpkg.zig,
-    # build_t2.zig.zon as build.zig.zon (fix the .pkg path; proto/hosts/root-t2.build.zig.zon
-    # is the one used on the hosts), plan.zon with .target and .r_include set;
-    # then zig build as above.
-    # hosts: proto/hosts/omicron.sh (bundle = proto/, root-t2/, cli and quadprog
-    # tarballs in ~/rz-pkgbuild); kappa-step1.bat (make reference), step2 (zig
-    # builds + smoke + tier 2), step3 (.def relinks); plans in proto/hosts/plans-win.

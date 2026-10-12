@@ -1,3 +1,0 @@
-_CRT_INIT
-__mingw_module_is_dll
-R_init_zighello
