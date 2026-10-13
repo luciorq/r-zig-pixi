@@ -19,6 +19,24 @@
 //!                             sh, which runs configure.win, and the
 //!                             binutils Makeconf.win names by path, in
 //!                             <rzig dir>/binutils (B24)
+//!   --rzig-check=package      the install preflight for the package in
+//!                             the working directory (patch 0009), decided
+//!                             as `rzig build` decides (pkgbuild.decide: the
+//!                             files, then the Makevars and Makeconf): the
+//!                             compilers, flang when Fortran is compiled
+//!                             (the plan's sources for tiers 1 and 2;
+//!                             src/'s top level, either case of the f, for
+//!                             tier 3), and the build tools when the package
+//!                             needs make or R runs a configure script
+//!                             (R_ZIG_CONFIGURE=1, from install.R), with
+//!                             rzig's own reason in the failing line
+//!                             ("<pkg> needs make: <reason>; no make on
+//!                             PATH"). R_ZIG_C_STD is install.R's use_C
+//!                             (the hook's --c-std); R_ZIG_PKG_BUILDER=make
+//!                             forces make. Two inputs differ from the
+//!                             hook's and are recorded (feat-zig-pkg-build
+//!                             PLAN.md): CLINK_CPPFLAGS is set after the
+//!                             preflight, and a user Makevars skips 0009.
 //!
 //! All there: one line on stdout, what it found, and exit 0. A tool
 //! missing: a line that says which, then its group's text (groups.zig), on
@@ -44,10 +62,12 @@ const environment = @import("environment.zig");
 const find_zig = @import("find_zig.zig");
 const flang_rt = @import("flang_rt.zig");
 const groups = @import("groups.zig");
+const pkgbuild = @import("pkgbuild.zig");
+const pkgplan = @import("pkgplan.zig");
 
 pub const flag = "--rzig-check";
 
-pub const Kind = enum { compilers, fortran, build_tools };
+pub const Kind = enum { compilers, fortran, build_tools, package };
 
 /// The check `arg` asks for; null when it is none. zig-fc's (`fc`) plain
 /// check is fortran's.
@@ -57,6 +77,7 @@ pub fn parse(arg: []const u8, fc: bool) error{UnknownCheck}!?Kind {
     const v = arg[flag.len + 1 ..];
     if (mem.eql(u8, v, "fortran")) return .fortran;
     if (mem.eql(u8, v, "build-tools")) return .build_tools;
+    if (mem.eql(u8, v, "package")) return .package;
     return error.UnknownCheck;
 }
 
@@ -72,6 +93,7 @@ pub fn run(ctx: *Ctx, kind: Kind) !Result {
         .compilers => compilers(ctx, false),
         .fortran => compilers(ctx, true),
         .build_tools => buildTools(ctx),
+        .package => package(ctx),
     };
 }
 
@@ -107,6 +129,16 @@ fn compilers(ctx: *Ctx, fortran: bool) !Result {
 const binutils = [_][]const u8{ "nm", "dlltool", "as", "windres", "strip", "objdump" };
 
 fn buildTools(ctx: *Ctx) !Result {
+    return switch (try buildToolsFound(ctx)) {
+        .ok => |line| .{ .code = 0, .line = line },
+        .missing => |what| fail(ctx, 127, what, .build_tools),
+    };
+}
+
+const Found = union(enum) { ok: []const u8, missing: []const u8 };
+
+/// The build tools: what was found (one line), or what is missing.
+fn buildToolsFound(ctx: *Ctx) !Found {
     // R on Windows runs make whatever MAKE says (install.R, R CMD config)
     const make_var = if (ctx.os == .windows) null else ctx.getenv("MAKE");
     var words = mem.tokenizeScalar(u8, make_var orelse "make", ' ');
@@ -118,21 +150,102 @@ fn buildTools(ctx: *Ctx) !Result {
             try ctx.fmt("no {s} on PATH (MAKE={s})", .{ word, m })
         else
             "no make on PATH";
-        return fail(ctx, 127, what, .build_tools);
+        return .{ .missing = what };
     };
     const line = try ctx.fmt("build-tools ok: make at {s}", .{try display(ctx, make)});
     // R runs configure.win and config.sh through sh (install.R, rcmdfn.c)
-    if (ctx.os != .windows) return .{ .code = 0, .line = line };
-    const sh = (try find_zig.onPath(ctx, "sh")) orelse return fail(ctx, 127, "no sh on PATH", .build_tools);
+    if (ctx.os != .windows) return .{ .ok = line };
+    const sh = (try find_zig.onPath(ctx, "sh")) orelse return .{ .missing = "no sh on PATH" };
     // the binutils beside rzig, as Makeconf.win names them, not on PATH;
     // with no directory of its own (the OS would not say) rzig finds none
     const tc = environment.toolchain(ctx);
     const dir = try ctx.fmt("{s}/binutils", .{tc orelse "R_HOME/bin/toolchain"});
     for (binutils) |tool| {
         const exe = try ctx.fmt("{s}/{s}.exe", .{ dir, tool });
-        if (tc == null or !ctx.isFile(exe)) return fail(ctx, 127, try ctx.fmt("no {s}", .{try display(ctx, exe)}), .build_tools);
+        if (tc == null or !ctx.isFile(exe)) return .{ .missing = try ctx.fmt("no {s}", .{try display(ctx, exe)}) };
     }
-    return .{ .code = 0, .line = try ctx.fmt("{s}; sh at {s}; binutils at {s}", .{ line, try display(ctx, sh), try display(ctx, dir) }) };
+    return .{ .ok = try ctx.fmt("{s}; sh at {s}; binutils at {s}", .{ line, try display(ctx, sh), try display(ctx, dir) }) };
+}
+
+/// A switch in the environment, as install.R sets it: set, not empty, not "0".
+fn envSet(ctx: *const Ctx, name: []const u8) bool {
+    const v = ctx.getenv(name) orelse return false;
+    return v.len > 0 and !mem.eql(u8, v, "0");
+}
+
+/// A value in the environment, empty counting as unset.
+fn envValue(ctx: *const Ctx, name: []const u8) ?[]const u8 {
+    const v = ctx.getenv(name) orelse return null;
+    return if (v.len == 0) null else v;
+}
+
+/// 0009's own test for Fortran, for a package make builds: src/'s top
+/// level, either case of the f (R's default OBJECTS rule compiles .f, .f90
+/// and .f95; a package's own rules may compile .F too).
+fn topLevelFortran(ctx: *Ctx, src_dir: []const u8) bool {
+    var d = std.Io.Dir.cwd().openDir(ctx.io, src_dir, .{ .iterate = true }) catch return false;
+    defer d.close(ctx.io);
+    var it = d.iterate();
+    while (it.next(ctx.io) catch null) |entry| {
+        if (entry.kind == .directory) continue;
+        const n = entry.name;
+        const exts = [_][]const u8{ ".f", ".F", ".f90", ".F90", ".f95", ".F95" };
+        for (exts) |e| if (mem.endsWith(u8, n, e)) return true;
+    }
+    return false;
+}
+
+/// --rzig-check=package (the header): the preflight for the package in
+/// the working directory.
+fn package(ctx: *Ctx) !Result {
+    const r_home_in = ctx.getenv("R_HOME") orelse {
+        ctx.warn("{s}=package needs R_HOME in the environment", .{flag});
+        return .{ .code = 2 };
+    };
+    const r_home = pkgbuild.canonical(ctx, r_home_in) catch return .{ .code = 2 };
+    const pkg_dir = pkgbuild.canonical(ctx, ".") catch return .{ .code = 2 };
+    const src_dir = try ctx.fmt("{s}/src", .{pkg_dir});
+    const name = pkgbuild.packageName(ctx, pkg_dir) orelse std.fs.path.basename(pkg_dir);
+    const configure = envSet(ctx, "R_ZIG_CONFIGURE");
+    const forced_make = if (ctx.getenv("R_ZIG_PKG_BUILDER")) |b| mem.eql(u8, b, "make") else false;
+    const d: pkgbuild.Decision = if (forced_make)
+        .{ .tier = .make, .reason = "R_ZIG_PKG_BUILDER=make", .class = .{ .tier = .make } }
+    else
+        try pkgbuild.decide(ctx, .{
+            .r_home = r_home,
+            .pkg_dir = pkg_dir,
+            .src_dir = src_dir,
+            .name = name,
+            .c_std = envValue(ctx, "R_ZIG_C_STD"),
+            .rzig = ctx.self_exe orelse "rzig",
+        });
+    // what the preflight is for: compiled code, or a configure R runs
+    if (d.tier == .r_only and !configure) return .{ .code = 0, .line = try ctx.fmt("package ok: {s} has no src/, nothing to compile", .{name}) };
+    const fortran = switch (d.tier) {
+        .makevars, .zig => blk: {
+            var any = false;
+            for (d.plan.?.sources) |s| if (mem.eql(u8, s.lang, "f") or mem.eql(u8, s.lang, "f9x")) {
+                any = true;
+            };
+            break :blk any;
+        },
+        .make, .r_only => topLevelFortran(ctx, src_dir),
+    };
+    const comp = try compilers(ctx, fortran);
+    if (comp.code != 0) return comp;
+    const tier: []const u8 = switch (d.tier) {
+        .r_only => "no src/",
+        .makevars => "tier 1 (rzig build)",
+        .zig => "tier 2 (rzig build)",
+        .make => "needs make",
+    };
+    if (!configure and d.tier != .make) return .{ .code = 0, .line = try ctx.fmt("package ok: {s} {s}; {s}", .{ name, tier, comp.line }) };
+    // make, or a configure R runs: the build tools, with the reason first
+    const why = if (configure) "a configure script R runs" else d.reason;
+    return switch (try buildToolsFound(ctx)) {
+        .ok => |line| .{ .code = 0, .line = try ctx.fmt("package ok: {s} {s} ({s}); {s}; {s}", .{ name, tier, why, comp.line, line }) },
+        .missing => |what| fail(ctx, 127, try ctx.fmt("{s} needs make: {s}; {s}", .{ name, why, what }), .build_tools),
+    };
 }
 
 /// A path as the check's lines show it: with `/` only on Windows.
@@ -162,6 +275,7 @@ test parse {
     try testing.expectEqual(Kind.fortran, (try parse("--rzig-check", true)).?);
     try testing.expectEqual(Kind.fortran, (try parse("--rzig-check=fortran", false)).?);
     try testing.expectEqual(Kind.build_tools, (try parse("--rzig-check=build-tools", true)).?);
+    try testing.expectEqual(Kind.package, (try parse("--rzig-check=package", false)).?);
     for ([_][]const u8{ "--rzig-check=make", "--rzig-check=", "--rzig-check=Fortran" }) |x| {
         try testing.expectError(error.UnknownCheck, parse(x, false));
     }

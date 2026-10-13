@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 # Makeconf toolchain-contract test: compile real CRAN packages from source
 # against the built R, then exercise them.
-#   Rcpp       — C++ compile + runtime evalCpp (compiles C++ through Makeconf)
-#   data.table — plain C package
+# Which builder each takes (feat-zig-pkg-build, patch 0013, the default
+# R_ZIG_PKG_BUILDER=auto): Rcpp, quadprog and, on unix, minqa qualify for
+# `rzig build` (tier 1: a Makevars of assignments); data.table and ps
+# have configure scripts, and minqa's Makevars.win a $(shell), so they
+# take the make path; pak's configure installs its embedded library,
+# cli, lpSolve, pkgcache and yaml through rzig build and keyring and zip
+# (Makevars rules) through make. Each install's log (RZIG_TRACE=1,
+# keep_outputs) must say so: `rzig build: tier 1`, `needs make`, or both
+# for pak. Rcpp's evalCpp compiles at run time through R CMD SHLIB,
+# which is make on every OS.
+#   Rcpp       — C++ compile (rzig build) + runtime evalCpp (R CMD SHLIB:
+#                compiles C++ through Makeconf and make)
+#   data.table — plain C package (configure: make)
 #   minqa      — depends on Rcpp AND compiles Fortran: full mixed-toolchain
-#                test (zig C/C++ + flang) through R's package build
+#                test (zig C/C++ + flang) through R's package build (unix:
+#                rzig build, the C++ link through SHLIB_CXXLD with FLIBS;
+#                Windows: make)
 #   pak        — the real-world repro case behind F7.1/F7.6/F7.7 (see
 #                TODO.md): its own configure script recursively
 #                re-invokes R.exe/Rterm.exe (the access-violation crash
@@ -22,7 +35,7 @@
 #                straight into that compiled code; on linux/windows ps
 #                has no Objective-C to exercise, so only the plain
 #                load + a basic call is asserted there.
-# (No backslash escapes in the R code — see smoke-test.sh.)
+# (The R program is written to a file, not passed with -e: see below.)
 . "$(dirname "$0")/env.sh"
 
 if [ "$OS" = windows ]; then
@@ -46,9 +59,15 @@ mkdir -p "$LIB"
 
 echo "Contract test (variant: $VARIANT, os: $OS)"
 echo "Compiling Rcpp + data.table + minqa + quadprog + pak + ps from source..."
-R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
+# The program goes through a file: R's front end omits a `-e` expression
+# over 10000 bytes once bin/R has encoded it (spaces as `~+~`), with a
+# warning and exit 0, which would make this test vacuous.
+cat > "$LIB/contract.R" <<'RCODE'
   lib <- Sys.getenv("R_CONTRACT_LIB")
   pkgs <- c("Rcpp", "data.table", "minqa", "quadprog", "pak", "ps")
+  # the builder each took, from its kept install log (keep_outputs)
+  outs <- file.path(lib, "install-logs")
+  dir.create(outs, showWarnings = FALSE)
   # CRAN mirror hiccups are real (main-branch openblas leg, 2026-09-20:
   # "SSL connect error" downloading Rcpp, then minqa failed on the
   # missing dependency): bounded retries, and fail *here* with a clear
@@ -57,7 +76,7 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   options(timeout = 300)
   for (attempt in 1:3) {
     install.packages(pkgs, repos = "https://cloud.r-project.org",
-                     lib = lib, type = "source", Ncpus = 4)
+                     lib = lib, type = "source", Ncpus = 4, keep_outputs = outs)
     missing <- setdiff(pkgs, rownames(installed.packages(lib.loc = lib)))
     if (!length(missing)) break
     message("contract: attempt ", attempt, " left ", paste(missing, collapse = ", "),
@@ -65,6 +84,24 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
     if (attempt < 3) Sys.sleep(30)
   }
   if (length(missing)) stop("contract: could not install ", paste(missing, collapse = ", "))
+  # pak has no src/ of its own: its configure installs its embedded
+  # library, where cli, lpSolve, pkgcache and yaml are tier 1 (rzig
+  # build) and keyring and zip have Makevars rules (make): mixed
+  windows <- .Platform$OS.type == "windows"
+  builder_of <- function(p) {
+    log <- readLines(file.path(outs, paste0(p, ".out")), warn = FALSE)
+    zig <- any(grepl("rzig build: tier 1", log, fixed = TRUE))
+    mk <- any(grepl("^rzig build: [^ ]+ needs make: ", log))
+    if (zig && mk) "mixed" else if (zig) "rzig build" else if (mk) "make" else "unknown"
+  }
+  want <- c(Rcpp = "rzig build", data.table = "make", minqa = if (windows) "make" else "rzig build",
+            quadprog = "rzig build", pak = "mixed", ps = "make")
+  builders <- vapply(pkgs, builder_of, "")
+  cat("builders:", paste(pkgs, builders, sep = " = ", collapse = ", "), "\n")
+  bad <- names(want)[builders[names(want)] != want]
+  if (length(bad)) stop("contract: not the expected builder for ", paste(bad, collapse = ", "),
+                        " (", paste(bad, builders[bad], sep = " = ", collapse = ", "),
+                        "; wanted ", paste(bad, want[bad], sep = " = ", collapse = ", "), ")")
   .libPaths(lib)
   library(Rcpp); library(data.table); library(minqa); library(quadprog); library(pak); library(ps)
   stopifnot(evalCpp("2 + 2") == 4)
@@ -96,16 +133,16 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
   stopifnot(max(abs(fit$par - c(3, 3))) < 1e-4)
   # quadprog: a *pure-Fortran* package (no C/C++ sources at all) — the one
   # shape minqa cannot cover, since its C++ sends the link through
-  # SHLIB_CXXLD. Here R CMD SHLIB compiles every file with $(FC), the
-  # zig-fc of rzig (F3c: the flang on PATH, on every platform since Phase 2),
-  # and links through SHLIB_LD, the zig-cc of rzig (gcc.exe on Windows),
-  # with $(FLIBS) appended — -lflang_rt.runtime, which rzig resolves to
-  # the static runtime archive, and on Windows libc++. (R only links via
+  # SHLIB_CXXLD. rzig build compiles every file with $(FC), the zig-fc of
+  # rzig (F3c: the flang on PATH, on every platform since Phase 2), and
+  # links through SHLIB_LD, the zig-cc of rzig (gcc.exe on Windows), with
+  # $(FLIBS) appended — -lflang_rt.runtime, which rzig resolves to the
+  # static runtime archive, and on Windows libc++: the words make would
+  # have run (pkg-parity asserts they are identical). (R only links via
   # $(FC) itself when a package opts in with USE_FC_TO_LINK in Makevars;
   # verify-bundle.sh and the recipe test build such a package.)
   # minimize (1/2) t(x) D x - t(d) x subject to x >= 0, with D = 2I and
-  # d = (2, 6): the solution is x = (1, 3). (No apostrophes in this R
-  # program: it sits inside a single-quoted shell string.)
+  # d = (2, 6): the solution is x = (1, 3).
   qp <- solve.QP(Dmat = diag(2, 2), dvec = c(2, 6), Amat = diag(2), bvec = c(0, 0))
   stopifnot(max(abs(qp$solution - c(1, 3))) < 1e-8)
   # pak: no network calls here (this test is about the compiled-code
@@ -152,14 +189,17 @@ R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" "$R_BIN" --vanilla -e '
     stopifnot(file.exists(nm))
     cat("R CMD config NM:", nm, "exists: OK\n")
   }
-  cat("Rcpp evalCpp (runtime C++ compile via Makeconf): OK\n")
-  cat("data.table grouped aggregation: OK\n")
-  cat("minqa (Rcpp-dependent + package Fortran) bobyqa: OK\n")
-  cat("quadprog (pure Fortran: zig-fc compile, FLIBS link through rzig) solve.QP: OK\n")
+  cat("Rcpp (rzig build) evalCpp (runtime C++ compile via Makeconf and make): OK\n")
+  cat("data.table (make) grouped aggregation: OK\n")
+  cat("minqa (Rcpp-dependent + package Fortran;", builders[["minqa"]], ") bobyqa: OK\n")
+  cat("quadprog (pure Fortran: zig-fc compile, FLIBS link through rzig; rzig build) solve.QP: OK\n")
   cat("R CMD config FC:", fc1, "OK\n")
   cat("pak (recursive R.exe invocation + mbedtls quoted -D flags): OK\n")
   cat("ps (process introspection", if (ps::ps_os_type()[["MACOS"]]) "+ apps.m Objective-C ps_apps()" else "", "): OK\n")
-'
+  cat("contract program ran to the end\n")
+RCODE
+R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" RZIG_TRACE=1 "$R_BIN" --vanilla "$LIB/contract.R" | tee "$LIB/contract.out"
+grep -q '^contract program ran to the end$' "$LIB/contract.out" || { echo "error: the contract program did not run to its end" >&2; exit 1; }
 # The environments rzig compiled those against (feat-no-host-paths F3b):
 # the tree's own (R_HOME/../..), then the pixi env, which pixi.toml names
 # in R_ZIG_EXTRA_ENV. A link line as rzig would run it: both -L after the

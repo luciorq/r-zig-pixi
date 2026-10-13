@@ -651,6 +651,69 @@ mkdir -p "$wtc/binutils"
 for t in nm dlltool as windres strip objdump; do : > "$wtc/binutils/$t.exe"; done
 check "--rzig-check=build-tools on Windows: make, sh and the binutils" \
   bash -c "$win_env '$wtc/gcc' --rzig-check=build-tools | grep -q '^zig-cc: build-tools ok: make at .*; sh at .*; binutils at $wtc/binutils\$'"
+# --rzig-check=package: the install preflight (patch 0009) for the package
+# in the working directory, decided as `rzig build` decides (pkgbuild.decide):
+# a tier-1 package asks for the compilers alone; one that needs make (a
+# Makevars rule, MAKEFLAGS setting a variable, R_ZIG_PKG_BUILDER=make) or a
+# configure script R runs (R_ZIG_CONFIGURE=1) asks for the build tools too,
+# with rzig's reason first in the failing line; Fortran asks for flang.
+rh=$W/tree/lib/R
+mkdir -p "$rh/etc" "$rh/share/make" "$W/pkgs/p0" "$W/pkgs/p1/src" "$W/pkgs/p2/src" "$W/pkgs/pf/src"
+cat > "$rh/etc/Makeconf" <<'MK'
+CC = $(R_HOME)/bin/toolchain/zig-cc
+CFLAGS = -O2
+CPICFLAGS = -fpic
+CXX = $(R_HOME)/bin/toolchain/zig-cxx
+FC = $(R_HOME)/bin/toolchain/zig-fc
+FFLAGS = -O2
+FPICFLAGS = -fpic
+FLIBS = -lflang_rt.runtime
+LIBR = -L"$(R_HOME)/lib" -lR
+SHLIB_EXT = .so
+SHLIB_LD = $(CC)
+SHLIB_LDFLAGS = -shared
+SHLIB_LINK = $(SHLIB_LD) $(SHLIB_LDFLAGS)
+ALL_CFLAGS = $(PKG_CFLAGS) $(CPICFLAGS) $(CFLAGS)
+ALL_CPPFLAGS = -I"$(R_INCLUDE_DIR)" $(PKG_CPPFLAGS) $(CLINK_CPPFLAGS)
+ALL_FFLAGS = $(PKG_FFLAGS) $(FPICFLAGS) $(FFLAGS)
+ALL_LIBS = $(PKG_LIBS) $(SHLIB_LIBADD) $(LIBR)
+MK
+printf 'all: $(SHLIB)\n' > "$rh/share/make/shlib.mk"
+for d in p0 p1 p2 pf; do printf 'Package: %s\n' "$d" > "$W/pkgs/$d/DESCRIPTION"; done
+: > "$W/pkgs/p1/src/a.c"; : > "$W/pkgs/p2/src/a.c"; printf 'all: $(SHLIB)\n' > "$W/pkgs/p2/src/Makevars"; : > "$W/pkgs/pf/src/a.f"
+pkg_check() { # <pkg> <env...>: the package check from the package's directory, stdout and stderr to $W/check.out and $W/check.err
+  local d="$1"; shift
+  (cd "$W/pkgs/$d" && env -i R_HOME="$rh" "$@" "$tc/zig-cc" --rzig-check=package > "$W/check.out" 2> "$W/check.err")
+}
+# the function and its variables, for the `bash -c` the cases run
+pc="W='$W'; rh='$rh'; tc='$tc'; $(declare -f pkg_check);"
+check "--rzig-check=package: no src/, 0" \
+  bash -c "$pc pkg_check p0 PATH='$W/nothing' && grep -qx 'zig-cc: package ok: p0 has no src/, nothing to compile' '$W/check.out'"
+if [ -n "$real_zig" ]; then
+  check "--rzig-check=package: tier 1 asks for the compilers alone (no make on PATH), 0" \
+    bash -c "$pc pkg_check p1 ZIG_BIN='$real_zig' PATH='$W/nothing' && grep -q '^zig-cc: package ok: p1 tier 1 (rzig build); compilers ok: zig ' '$W/check.out'"
+  check "--rzig-check=package: a Makevars rule needs make, 127, rzig's reason, the build-tools group" \
+    bash -c "$pc pkg_check p2 ZIG_BIN='$real_zig' PATH='$W/nothing'; [ \$? = 127 ] &&
+      grep -qx 'zig-cc: p2 needs make: src/Makevars has a rule or target line: .all: .(SHLIB).; no make on PATH' '$W/check.err' &&
+      grep -q '^Building packages needs the r-zig build tools for R ' '$W/check.err'"
+  check "--rzig-check=package: a configure script R runs needs make whatever the tier, 127" \
+    bash -c "$pc pkg_check p1 ZIG_BIN='$real_zig' PATH='$W/nothing' R_ZIG_CONFIGURE=1; [ \$? = 127 ] &&
+      grep -qxF 'zig-cc: p1 needs make: a configure script R runs; no make on PATH' '$W/check.err'"
+  check "--rzig-check=package: R_ZIG_PKG_BUILDER=make needs make, 127" \
+    bash -c "$pc pkg_check p1 ZIG_BIN='$real_zig' PATH='$W/nothing' R_ZIG_PKG_BUILDER=make; [ \$? = 127 ] &&
+      grep -qxF 'zig-cc: p1 needs make: R_ZIG_PKG_BUILDER=make; no make on PATH' '$W/check.err'"
+  check "--rzig-check=package: MAKEFLAGS setting a variable needs make, 127" \
+    bash -c "$pc pkg_check p1 ZIG_BIN='$real_zig' PATH='$W/nothing' MAKEFLAGS='k -j2 -- LTO_OPT=-flto'; [ \$? = 127 ] &&
+      grep -qxF 'zig-cc: p1 needs make: MAKEFLAGS sets LTO_OPT; no make on PATH' '$W/check.err'"
+  check "--rzig-check=package: make's options in MAKEFLAGS plan tier 1, 0" \
+    bash -c "$pc pkg_check p1 ZIG_BIN='$real_zig' PATH='$W/nothing' MAKEFLAGS='k -j2 --jobserver-auth=fifo:/tmp/x' && grep -q 'p1 tier 1 (rzig build)' '$W/check.out'"
+  check "--rzig-check=package: make and a configure script, 0, the reason and make named" \
+    bash -c "$pc pkg_check p2 ZIG_BIN='$real_zig' PATH='$(dirname "$(command -v make)")' R_ZIG_CONFIGURE=1 && grep -q '^zig-cc: package ok: p2 needs make (a configure script R runs); compilers ok: zig .*; build-tools ok: make at ' '$W/check.out'"
+  check "--rzig-check=package: Fortran asks for flang, 127 without one, the compilers group" \
+    bash -c "$pc pkg_check pf ZIG_BIN='$real_zig' PATH='$W/nothing'; [ \$? = 127 ] && grep -q '^zig-cc: no flang (' '$W/check.err'"
+  check "--rzig-check=package: Fortran with flang on PATH, 0, flang named" \
+    bash -c "$pc pkg_check pf ZIG_BIN='$real_zig' PATH='$W/flang' && grep -q 'pf tier 1 (rzig build); compilers ok: zig .*; flang at $W/flang/flang' '$W/check.out'"
+fi
 check "--rzig-check=other: usage, 2" \
   bash -c "env -i '$tc/zig-cc' --rzig-check=other 2> /dev/null; [ \$? = 2 ]"
 check "a compile with no zig: 127, the compilers group" \

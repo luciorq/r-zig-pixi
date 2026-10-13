@@ -84,11 +84,21 @@ check = { cmd = "bash scripts/zig-build.sh check", depends-on = ["fetch"] }
 # scripts/env.sh (feat-standalone-toolchain B36), so callers need not
 # know it.
 smoke = "bash scripts/zig-smoke.sh"
-# contract: CRAN packages compiled through Makeconf (R CMD SHLIB/INSTALL:
-# Rcpp, data.table, minqa + OpenMP), on every OS (Windows: etc/x64/Makeconf
-# and R.exe's CMD dispatcher), with the compile tree (compile-tree below):
-# the installed tree and the toolchain tree's openmp/ and build tools.
+# contract: CRAN packages compiled through Makeconf (R CMD INSTALL: Rcpp,
+# quadprog and unix minqa through `rzig build`, data.table, pak and ps
+# through make, each asserted from its log; Rcpp's evalCpp through R CMD
+# SHLIB, make; + OpenMP), on every OS (Windows: etc/x64/Makeconf and
+# R.exe's CMD dispatcher), with the compile tree (compile-tree below): the
+# installed tree and the toolchain tree's openmp/ and build tools.
 contract = { cmd = "bash scripts/zig-contract.sh", depends-on = ["compile-tree"] }
+# pkg-parity: R CMD INSTALL through `rzig build` (install.R's hook, no
+# make) against the make path, on the compile tree: cli, digest,
+# quadprog, Rcpp and unix minqa from CRAN give identical exports and
+# identical rzig command lines on both paths; the caches, the tier-2 zig
+# package (and its offline rule), the tier-3 fall through; and on the
+# base alone an install with no make or sh on PATH
+# (.github/devdocs/feat-zig-pkg-build/PLAN.md, scripts/pkg-parity.sh).
+pkg-parity = { cmd = "bash scripts/pkg-parity.sh", depends-on = ["compile-tree"] }
 # `zig build` installs the final tree (feat-no-host-paths PLAN.md, F1);
 # kept as an alias of build for existing commands.
 install = { depends-on = ["build"] }

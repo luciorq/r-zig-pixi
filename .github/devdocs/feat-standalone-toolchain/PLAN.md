@@ -2580,6 +2580,42 @@ order (a), 2026-10-11: its install path needs the build tools only for
 packages that need make, so 0009's build-tools check is gated on its
 tier); then phase 4.
 
+**feat-zig-pkg-build consolidated (2026-10-12; its PLAN.md,
+"Consolidation with phase 3", and `consolidation/CONSENSUS.md` and
+`FINDINGS.md` there).** Patch 0009's preflight now runs rzig's
+`--rzig-check=package`, which decides as `rzig build` (patch 0013)
+decides in run_shlib, through one function (classify the files, then
+plan the Makevars and Makeconf): the compilers (flang when Fortran is
+compiled), and the build tools only when the package needs make (a
+configure script, src/Makefile*, a Makevars with rules, conditionals,
+`$(shell)` or a foreign compiler, MAKEFLAGS setting a variable,
+`R_ZIG_PKG_BUILDER=make`) or when R runs a configure script
+(`R_ZIG_CONFIGURE=1` from install.R, whatever the tier: tier 0 and 2
+packages can have one, and install.R's `R CMD config`, 0010, runs
+before it). The failing line gives rzig's reason first (`<pkg> needs
+make: src/Makevars has a rule or target line: '...'; no make on PATH`),
+then the group's text. 0010 is unchanged: install.R reaches it only
+through an R-run configure. The build-tools group is also needed by
+`R CMD SHLIB` (run-time compilation: Rcpp's sourceCpp, inline, rstan,
+TMB; pkgbuild's has_compiler probe, through which pak refuses every
+compiled package before `R CMD INSTALL`), by `R CMD config`'s direct
+callers and `R CMD check`'s objdump, and on Windows by cleanup.win
+under `--clean`; tier 0 to 2 installs through `R CMD INSTALL` and
+install.packages need it no more. verify-bundle scenario 2 asserts the
+tier-1 install through rzig build with the compilers alone, the stops
+for a Makevars rule and for an R-only package with a configure script;
+scenario 3 asserts btA through rzig build and btLib through the group's
+make in one install.packages run, and the LTO record's tier-1 twin
+going to make for MAKEFLAGS' assignment. Phase 7 and B24 are re-scoped
+from the stress table that followed the push (TODO.md; the table in
+feat-zig-pkg-build's PLAN.md, "Stress dispatch", 2026-10-12: five
+runners, 0 unexpected rows, 16 or 17 of 46 compiled rows through rzig
+build, the rest through make for configure scripts and Makevars rules;
+no tool to move, no shared runner needed). `rzig` /
+`rzig.exe` is one more name in `rzig_names()` (the hook's name for
+`rzig build` and `rzig def`), and `R_HOME/share/zig/rpkg/` holds the zig
+build roots. No build-number bump: phase 4's (8 to 9) publishes both.
+
 #### Phase 3 record: step 1, paths (2026-10-10, linux-64)
 
 What changed (B36, B17):

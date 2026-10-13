@@ -42,6 +42,15 @@ on:
         type: choice
         options: [conda, upstream]
         default: conda
+      trace:
+        description: 'RZIG_TRACE=1 (stress.R --trace): rzig prints its commands into the logs, and `rzig build` its tier (feat-zig-pkg-build: the tier table reads it)'
+        type: boolean
+        default: false
+      builder:
+        description: 'R_ZIG_PKG_BUILDER: auto, R CMD INSTALL builds through rzig build where the package qualifies (patch 0013); make, the make path for every package (a make reference)'
+        type: choice
+        options: [auto, make]
+        default: auto
 
 permissions:
   contents: read
@@ -119,11 +128,14 @@ jobs:
           SKIP: ${{ inputs.skip }}
           STRESS_JOBS: ${{ inputs.jobs }}
           CHANNEL: ${{ matrix.dist == 'conda' && inputs.channel || '' }}
+          TRACE: ${{ inputs.trace }}
+          R_ZIG_PKG_BUILDER: ${{ inputs.builder }}
         run: |
           set -euo pipefail
           args=("--out=$STRESS_OUT")
           if [ -n "$CHANNEL" ]; then args+=("--conda=$CHANNEL"); fi
           if [ -n "$SKIP" ]; then args+=("--skip=$SKIP"); fi
+          if [ "$TRACE" = true ]; then args+=("--trace"); fi
           # one target per word
           # shellcheck disable=SC2086
           pixi run -e stress stress "${args[@]}" $TARGETS

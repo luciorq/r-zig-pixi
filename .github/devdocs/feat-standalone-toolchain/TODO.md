@@ -285,7 +285,9 @@ the results; B24's routing check moved no tool (follow-up PRs).
       "Phase 3 record: step 6": dlltool passes and takes as with it,
       windres works behind a front still to write, strip, nm and as are
       not routable; nothing moved in phase 3. Open until the dlltool/as
-      follow-up PR; windres' front is the PR after it)
+      follow-up PR; windres' front is the PR after it. feat-zig-pkg-build's
+      stress table, 2026-10-12: no Windows make row called dlltool,
+      windres, objdump or strip; the table adds no tool to move)
 - [x] unix etc/Renviron: `PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}`,
       `MAKE=${MAKE-'make'}` for every flavor (minimal's `R_ZIG_MAKE` goes)
       (step 3, 2026-10-10, uncommitted: the file's last line; tested on
@@ -548,6 +550,26 @@ Needs (answered): B11, B25, B39, B43 (pkg-config).
 - [ ] groups.zig (B35): Windows' build-tools standalone line names
       `R-<ver>-win-64-build-tools.zip`
 - [ ] `R CMD config` without the build tools fails with one clear message
+- [ ] Re-scope from feat-zig-pkg-build's stress table (its PLAN.md,
+      "Consolidation with phase 3", M6: one dispatch after its push, with
+      stress.yaml's `trace` and `builder` inputs): which rows need the
+      group at all. `R CMD INSTALL` of tier 0 to 2 packages (no
+      configure, no src/Makefile, a Makevars of assignments, or a
+      src/build.zig) builds through rzig build with no sh or make; the
+      group is for packages that need make, configure scripts R runs,
+      `R CMD SHLIB` (run-time compilation, pkgbuild's probe and so pak),
+      `R CMD config`'s direct callers, `R CMD check`'s objdump and
+      cleanup.win under `--clean`. The table (2026-10-12, run
+      38317654371 on 45892fb, five runners, `trace`, `builder = auto`;
+      feat-zig-pkg-build's PLAN.md, "Stress dispatch"): of the suite's
+      46 compiled rows, 17 go through rzig build on Windows and 29 need
+      make (12 configure.win scripts, 9 Makevars.win/.ucrt rules, 5
+      `$(shell)`, 2 conditionals, 1 include); the make rows ran rzig's
+      AR/RANLIB, sed, pkg-config (s2, igraph), cmake (Rhdf5lib) and
+      cp/mkdir/rm; no dlltool, windres, objdump or strip. So: sh, make,
+      coreutils, sed, pkg-config and the make path's nm stay in the
+      group; nothing leaves it on the table's evidence; cmake stays the
+      extras candidate
 - [ ] verify-bundle scenario 3 on Windows with PATH = bin\x64 + System32:
       the contract set, pak, data.table, glue and a pkg-config package
       build and load
@@ -576,7 +598,10 @@ Needs (answered): B27, B33.
 Needs (answered): B14 (a), with B37 (a).
 
 - [ ] Build number per B14 (a): a bump only if a package changed since
-      the last bump; conda-package on all five platforms
+      the last bump; conda-package on all five platforms.
+      feat-zig-pkg-build's PR changes r-zig-slim (patches 0012, 0013,
+      share/zig/rpkg) and r-zig-toolchain (the rzig name) and bumps
+      nothing (its N5, 2026-10-12): phase 4's bump to 9 publishes both
 - [ ] feat-no-host-paths PLAN.md: What remains 3 points here; the T
       record and the OpenMP note (467-470) updated
 - [ ] This PLAN.md: status and records with dates and test results
@@ -592,7 +617,21 @@ Needs (answered): B14 (a), with B37 (a).
 - [ ] Make Windows slim really slim (B42, the user's note of 2026-10-08;
       relates to C1, Windows minimal); until then it has full's content
 - [ ] Depend less on make for package installs (Windows needs sh/make
-      for now)
+      for now): done for `R CMD INSTALL` of tier 0 to 2 packages by
+      feat-zig-pkg-build (rzig build; its PLAN.md, "What the build-tools
+      group is for"). Left: route `R CMD SHLIB` through rzig build (it
+      would also clear pkgbuild's has_compiler probe, and so pak, which
+      today refuses every compiled package on base + compilers), or give
+      it a preflight; revisit 0010 for pkgbuild's probe; a shared tier-1
+      build runner (the per-install zig build cache rebuilds it each
+      install, about 3 s warm) only if the stress table's times ask for
+      it (they do not, 2026-10-12: every tier-1 row through rzig build
+      took as long as or less than the 548da1a make reference, the
+      runner compile shows once per cache in sys, 5 to 15 s; its
+      PLAN.md, "Stress dispatch"); verify-bundle scenario 2's new
+      assertions (the tier-1 install
+      with the compilers alone, the Makevars-rule and configure-only
+      stops) are the gate for the group's scope
 - [ ] Optional extras group, only when the stress suite shows a need
       (the suite starts now, D15 a)
 - [ ] After the stress suite: reassess B39's list and B43's pkg-config

@@ -115,6 +115,12 @@ jobs:
       # it, full and openblas too, which CI does not package (B31 a).
       - name: Package contract test (Rcpp, data.table, minqa + OpenMP)
         run: pixi run -e ${{ inputs.env }} contract
+      # Packages built without make (feat-zig-pkg-build): R CMD INSTALL
+      # through rzig build must give the make path's exports and pass rzig
+      # the same command lines; a zig package, the fall-through, no make
+      # on PATH (scripts/pkg-parity.sh).
+      - name: Package parity (rzig build against make)
+        run: pixi run -e ${{ inputs.env }} pkg-parity
       - name: Regression suite (Examples/Specific/Reg)
         run: pixi run -e ${{ inputs.env }} check
       # Tiers 0/1 (feat-no-host-paths): a copy of the installed tree starts

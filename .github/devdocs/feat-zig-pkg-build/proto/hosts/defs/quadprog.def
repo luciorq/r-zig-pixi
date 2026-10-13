@@ -1,0 +1,7 @@
+EXPORTS
+ aind_
+ dpori_
+ dposl_
+ qpgen1_
+ qpgen2_
+ R_init_quadprog

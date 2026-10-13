@@ -140,6 +140,15 @@ if [ -n "$bad" ]; then
 fi
 echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig, and nothing else is there"
 
+# rzig build's zig build roots (feat-zig-pkg-build), beside the compilers
+for f in build_t1.zig build_t2.zig rpkg.zig; do
+  if [ ! -f "$TREE/$rh/share/zig/rpkg/$f" ]; then
+    echo "error: $rh/share/zig/rpkg/$f is missing" >&2
+    exit 1
+  fi
+done
+echo "== rzig build roots verified: $rh/share/zig/rpkg/{build_t1.zig,build_t2.zig,rpkg.zig}"
+
 # Makeconf names no build path (feat-no-host-paths F1.5): build.zig writes
 # the environment as $(R_HOME)/../.., FLIBS as -lflang_rt.runtime and no
 # rpath, and nothing edits the file afterwards. Comment lines count.

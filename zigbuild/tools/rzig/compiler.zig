@@ -235,7 +235,7 @@ fn armMcpu(a: mem.Allocator, v: []const u8) !?[]const u8 {
 
 /// zig's name for this binary's own architecture. The shim asked `uname
 /// -m`, which agrees on x86_64 and aarch64, the two linux arches shipped.
-const linux_target = @tagName(builtin.cpu.arch) ++ "-linux-gnu." ++ floors.majorMinor(floors.glibc);
+pub const linux_target = @tagName(builtin.cpu.arch) ++ "-linux-gnu." ++ floors.majorMinor(floors.glibc);
 
 /// GNU ld records a bare "libR.so" as DT_NEEDED when a library has no
 /// SONAME; zig's lld records the path it resolved (e.g.

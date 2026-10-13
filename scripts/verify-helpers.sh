@@ -34,12 +34,14 @@ tree_files() {
 # zig-ranlib.exe (AR, RANLIB) and the LTO block's gcc-ar.exe and
 # gcc-ranlib.exe (B43), and ar.exe and ranlib.exe (what CMake finds
 # beside CC); no extensionless zig-cc or zig-cxx, since the compile
-# preflight and R CMD config run gcc.exe's check mode (B26 a).
+# preflight and R CMD config run gcc.exe's check mode (B26 a). rzig /
+# rzig.exe: the name install.R's hook runs `rzig build` and `rzig def`
+# by (patch 0013; feat-zig-pkg-build PLAN.md).
 rzig_names() {
   if [ "$OS" = windows ]; then
-    echo "gcc.exe g++.exe zig-fc.exe zig-ar.exe zig-ranlib.exe gcc-ar.exe gcc-ranlib.exe ar.exe ranlib.exe"
+    echo "gcc.exe g++.exe zig-fc.exe zig-ar.exe zig-ranlib.exe gcc-ar.exe gcc-ranlib.exe ar.exe ranlib.exe rzig.exe"
   else
-    echo "zig-cc zig-cxx zig-fc zig-ar zig-ranlib"
+    echo "zig-cc zig-cxx zig-fc zig-ar zig-ranlib rzig"
   fi
 }
 

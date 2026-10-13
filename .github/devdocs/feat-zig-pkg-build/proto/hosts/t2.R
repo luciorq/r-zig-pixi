@@ -1,0 +1,1 @@
+.libPaths(c(commandArgs(TRUE)[1], .libPaths())); library(zighello); print(hello(21L)); print(getDLLRegisteredRoutines("zighello")$.Call); print(basename(getLoadedDLLs()[["zighello"]][["path"]])); unloadNamespace("zighello"); cat("ok\n")

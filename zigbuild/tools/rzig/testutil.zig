@@ -55,8 +55,12 @@ pub const Fixture = struct {
         return f.write(sub, "", .default_file);
     }
 
+    /// An empty executable file (on a Windows host a plain file: its
+    /// Permissions have no mode, and a file is what rzig's lookups count
+    /// there; tests that need a program use touchProgram).
     pub fn touchExe(f: *Fixture, sub: []const u8) !void {
-        return f.write(sub, "", .fromMode(0o755));
+        const perm: std.Io.File.Permissions = if (@import("builtin").os.tag == .windows) .default_file else .fromMode(0o755);
+        return f.write(sub, "", perm);
     }
 
     /// A program rzig's lookups find as <dir>/<name> (find_zig.inDir): an

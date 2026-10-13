@@ -1,0 +1,10 @@
+Package: zighello
+Type: Package
+Title: Hello from Zig
+Version: 0.1.0
+Author: r-zig
+Maintainer: r-zig <noreply@example.org>
+Description: A tier-2 r-zig package whose native code is Zig.
+License: MIT
+Encoding: UTF-8
+SystemRequirements: zig
