@@ -2587,9 +2587,10 @@ tier); then phase 4.
 decides in run_shlib, through one function (classify the files, then
 plan the Makevars and Makeconf): the compilers (flang when Fortran is
 compiled), and the build tools only when the package needs make (a
-configure script, src/Makefile*, a Makevars with rules, conditionals,
-`$(shell)` or a foreign compiler, MAKEFLAGS setting a variable,
-`R_ZIG_PKG_BUILDER=make`) or when R runs a configure script
+configure script, src/Makefile*, an Objective-C source, a Makevars
+with rules, an `include`, conditionals, `$(shell)` or a foreign
+compiler, MAKEFLAGS setting a variable, `R_ZIG_PKG_BUILDER=make`)
+[records-REC-6] or when R runs a configure script
 (`R_ZIG_CONFIGURE=1` from install.R, whatever the tier: tier 0 and 2
 packages can have one, and install.R's `R CMD config`, 0010, runs
 before it). The failing line gives rzig's reason first (`<pkg> needs
@@ -2599,22 +2600,51 @@ through an R-run configure. The build-tools group is also needed by
 `R CMD SHLIB` (run-time compilation: Rcpp's sourceCpp, inline, rstan,
 TMB; pkgbuild's has_compiler probe, through which pak refuses every
 compiled package before `R CMD INSTALL`), by `R CMD config`'s direct
-callers and `R CMD check`'s objdump, and on Windows by cleanup.win
-under `--clean`; tier 0 to 2 installs through `R CMD INSTALL` and
-install.packages need it no more. verify-bundle scenario 2 asserts the
-tier-1 install through rzig build with the compilers alone, the stops
-for a Makevars rule and for an R-only package with a configure script;
+callers and `R CMD check`'s objdump (Windows), and on Windows by
+cleanup.ucrt/cleanup.win under `--clean` or `--preclean`; tier 0 to 2
+installs without a configure script R runs, through `R CMD INSTALL` and
+install.packages, need it no more [records-REC-6, stress-S10].
+verify-bundle scenario 2 asserts the tier-1 install through rzig build
+with the compilers alone, the stops for a Makevars rule and (unix) for
+an R-only package with a configure script (Windows' pfC and pfM since
+the review follow-up below [phase3-P3-9]);
 scenario 3 asserts btA through rzig build and btLib through the group's
 make in one install.packages run, and the LTO record's tier-1 twin
 going to make for MAKEFLAGS' assignment. Phase 7 and B24 are re-scoped
 from the stress table that followed the push (TODO.md; the table in
 feat-zig-pkg-build's PLAN.md, "Stress dispatch", 2026-10-12: five
-runners, 0 unexpected rows, 16 or 17 of 46 compiled rows through rzig
-build, the rest through make for configure scripts and Makevars rules;
-no tool to move, no shared runner needed). `rzig` /
+runners, 0 unexpected rows; of the 47 rows that compile, 16 (unix) or
+17 (Windows) through rzig build, and 31 or 30 need the group: through
+make for configure scripts, Makevars rules and (Windows) `$(shell)`,
+conditionals and an include [stress-S8], and Rhdf5lib through its
+configure script's CMake [stress-S9]; it adds no evidence on B24,
+whose dlltool/as follow-up PR stands [stress-S2];
+the shared tier-1 runner stays open, since the dispatch shared one
+cache and did not measure the per-install cost [stress-S1]). `rzig` /
 `rzig.exe` is one more name in `rzig_names()` (the hook's name for
 `rzig build` and `rzig def`), and `R_HOME/share/zig/rpkg/` holds the zig
 build roots. No build-number bump: phase 4's (8 to 9) publishes both.
+
+**feat-zig-pkg-build's review follow-up (2026-10-13;
+fix-zig-pkg-build-review's PLAN.md, and the review in `review/`
+there).** PR #25 merged before the phase 3 session's review finished;
+the review's 51 confirmed findings, and 9 more from the fixes' own
+review, are fixed in one follow-up PR on main 07e12c0. What
+touches this plan: Makeconf.win's NM_FILTER is CRAN's (build.zig
+substitutes it; `rzig def` leaves out `.refptr.` and `.weak.` names
+too), so package DLLs export what CRAN's do; 0009's stops say "this
+package needs the r-zig toolchain (compiled code or a configure
+script), which is incomplete (see above)" or "..., which is not
+installed: <hint>"; a src/build.zig package whose build would need
+make fails with "<pkg>: src/build.zig cannot be built by make:
+<reason>" instead of reaching make, and a src/Makefile wins over a
+src/build.zig (install.R runs the Makefile with make, so the preflight
+asks for the build tools); verify-bundle scenario 2 runs on
+Windows too (pfC and pfM) and scenario 3 builds the OpenMP packages
+through rzig build there; verify-bundle and contract use the
+per-install zig build cache a user's install gets. The records above
+and TODO.md's phase 4, 7 and later items are corrected from the
+review's B items.
 
 #### Phase 3 record: step 1, paths (2026-10-10, linux-64)
 
@@ -3221,7 +3251,10 @@ What changed (B26 a, B35; C8, C26, C29):
   `--rzig-check=build-tools`. A failing check prints what is missing and
   the group's text on stderr, as it comes, and the install stops with
   "ERROR: this package has compiled code, and the r-zig toolchain is
-  incomplete (see above)". The
+  incomplete (see above)" (since feat-zig-pkg-build's review follow-up,
+  2026-10-13: "this package needs the r-zig toolchain (compiled code or
+  a configure script), which is incomplete (see above)", one
+  `--rzig-check=package` call [tests-T11]). The
   Makeconf-CC fallback is gone. Without rzig (r-zig-slim or the r_zig
   wheel without their toolchain package, until phase 4) the old branch
   and message stay, with R_ZIG_TOOLCHAIN_HINT (C8).

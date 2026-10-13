@@ -9,10 +9,11 @@
 //! packages through make and through this plan and asserts identical
 //! compiler command lines and exports.
 //!
-//! Tiers: 0 no `src/` (R only); 2 `src/build.zig`; 1 Makevars with
-//! assignments only; 3 everything else (configure, src/Makefile, Objective
-//! C, rules, conditionals, $(shell), a compiler that is not R's toolchain,
-//! a shell metacharacter in a flag): error.NeedsMake with `reason`.
+//! Tiers: 0 no `src/` (R only); 2 `src/build.zig` and no src/Makefile*
+//! (install.R runs a Makefile itself); 1 Makevars with assignments only;
+//! 3 everything else (configure, src/Makefile, Objective C, rules,
+//! conditionals, $(shell), a compiler that is not R's toolchain, a shell
+//! metacharacter in a flag): error.NeedsMake with `reason`.
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
@@ -127,12 +128,21 @@ pub const Planner = struct {
     pub fn classify(p: *Planner, pkg_dir: []const u8, src_dir: []const u8) Error!Classification {
         const ctx = p.ctx;
         if (!ctx.isDir(src_dir)) return .{ .tier = .r_only };
-        if (ctx.isFile(try ctx.fmt("{s}/build.zig", .{src_dir}))) return .{ .tier = .zig };
         const windows = ctx.os == .windows;
+        // install.R runs a src/Makefile (Windows: Makefile.ucrt, else
+        // Makefile.win) with make itself, never run_shlib and its rzig
+        // build hook, so a Makefile wins over src/build.zig [code-2].
+        // build.zig wins over configure and the Makevars: install.R runs
+        // configure, then run_shlib. A configure script stays the reason
+        // given first, as before.
+        const makefiles: []const []const u8 = if (windows) &.{ "Makefile.ucrt", "Makefile.win" } else &.{"Makefile"};
+        const src_makefile: ?[]const u8 = for (makefiles) |m| {
+            if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ src_dir, m }))) break m;
+        } else null;
+        if (src_makefile == null and ctx.isFile(try ctx.fmt("{s}/build.zig", .{src_dir}))) return .{ .tier = .zig };
         const configures: []const []const u8 = if (windows) &.{ "configure.ucrt", "configure.win" } else &.{"configure"};
         for (configures) |c| if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ pkg_dir, c }))) return .{ .tier = .make, .reason = try ctx.fmt("a {s} script", .{c}) };
-        const makefiles: []const []const u8 = if (windows) &.{ "Makefile.ucrt", "Makefile.win" } else &.{"Makefile"};
-        for (makefiles) |m| if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ src_dir, m }))) return .{ .tier = .make, .reason = try ctx.fmt("src/{s}", .{m}) };
+        if (src_makefile) |m| return .{ .tier = .make, .reason = try ctx.fmt("src/{s}", .{m}) };
         for (try p.listSources(src_dir)) |s| if (isObjC(s)) return .{ .tier = .make, .reason = try ctx.fmt("an Objective-C source, src/{s}", .{s}) };
         const candidates: []const []const u8 = if (windows) &.{ "Makevars.ucrt", "Makevars.win", "Makevars" } else &.{"Makevars"};
         var makevars: ?[]const u8 = null;
@@ -171,8 +181,10 @@ pub const Planner = struct {
         // a variable set in MAKEFLAGS (`make LTO_OPT=-flto`, or MAKEFLAGS=
         // 'CFLAGS=-O0' in the environment) changes make's build and not
         // this plan: make it (install.packages' `k -j2 --jobserver-auth=`
-        // are options, not assignments)
-        if (ctx.getenv("MAKEFLAGS")) |mf| if (makeflagsAssignment(mf)) |v| return p.needsMake("MAKEFLAGS sets {s}", .{v});
+        // are options, not assignments). Tier 1 only: a tier-2 package has
+        // no make build to differ from, make cannot build build.zig
+        // [preflight-PF-1]
+        if (class.tier != .zig) if (ctx.getenv("MAKEFLAGS")) |mf| if (makeflagsAssignment(mf)) |v| return p.needsMake("MAKEFLAGS sets {s}", .{v});
         var e = makefile.Evaluator.init(a, ctx.io, src_dir);
         try e.importEnvironment(ctx.env);
         try e.setEnvironment("R_HOME", opts.r_home);
@@ -295,7 +307,12 @@ pub const Planner = struct {
             if (v == null or v.?.value.len == 0) return p.needsMake("C{s} standard requested but CC{s} is not defined", .{ s, s });
         }
 
-        // OBJECTS to sources
+        // OBJECTS to sources. Tier 2 compiles what its build.zig names
+        // (rpkg's c_sources and cxx_sources), never these: its sources are
+        // src/'s files a suffix rule would compile, for the compiler lines
+        // reportCompilers prints, and a file none would (an Objective-C
+        // source its build.zig compiles itself) is no reason for make
+        // [code-3].
         const objects = try p.wordsOf(&e, "$(OBJECTS)");
         var sources: std.ArrayList(Source) = .empty;
         for (objects) |o| {
@@ -305,7 +322,7 @@ pub const Planner = struct {
                 const candidate = try ctx.fmt("{s}{s}", .{ base, ext });
                 if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ src_dir, candidate }))) break .{ .lang = @tagName(langOf(candidate).?), .path = candidate, .obj = o };
             } else null;
-            try sources.append(a, found orelse return p.needsMake("no source for {s} in src/ (a Makevars rule would have to make it)", .{o}));
+            if (found) |s| try sources.append(a, s) else if (class.tier != .zig) return p.needsMake("no source for {s} in src/ (a Makevars rule would have to make it)", .{o});
         }
 
         // the command lines, as Makeconf's suffix rules and shlib.mk's link
@@ -628,7 +645,8 @@ const test_shlib_mk =
     "\tfi\n\n" ++
     ".PHONY: all shlib-clean compilers\n";
 
-fn rHome(f: *testutil.Fixture) ![]const u8 {
+/// The small R_HOME, at <root>/R (pkgbuild's and check's tests use it too).
+pub fn rHome(f: *testutil.Fixture) ![]const u8 {
     try f.write("R/etc/Makeconf", test_makeconf, .default_file);
     try f.write("R/share/make/vars.mk", "R_PKGS_BASE = base tools\n", .default_file);
     try f.write("R/share/make/shlib.mk", test_shlib_mk, .default_file);
@@ -747,8 +765,28 @@ test "tiers: R only, zig, configure, Makefile, Objective-C, rules, shell, foreig
     try testing.expectEqualStrings("a configure script", cc.reason);
     try f.touch("m/src/Makefile");
     try testing.expectEqual(Tier.make, (try p.classify(f.path("m"), f.path("m/src"))).tier);
+    // src/Makefile wins over src/build.zig: install.R runs the Makefile and
+    // never reaches the hook [code-2]; a configure script is still the
+    // reason given first
+    try f.touch("zm/src/build.zig");
+    try f.touch("zm/src/Makefile");
+    const zmc = try p.classify(f.path("zm"), f.path("zm/src"));
+    try testing.expectEqual(Tier.make, zmc.tier);
+    try testing.expectEqualStrings("src/Makefile", zmc.reason);
+    try f.touch("zm/configure");
+    try testing.expectEqualStrings("a configure script", (try p.classify(f.path("zm"), f.path("zm/src"))).reason);
     try f.touch("o/src/a.m");
     try testing.expectEqual(Tier.make, (try p.classify(f.path("o"), f.path("o/src"))).tier);
+    // a tier-2 package's stray Objective-C source: its build.zig compiles
+    // what it names, so no source for x.o is no reason for make [code-3]
+    try f.touch("zo/src/build.zig");
+    try f.touch("zo/src/bridge.m");
+    try f.touch("zo/src/a.c");
+    const zoc = try p.classify(f.path("zo"), f.path("zo/src"));
+    try testing.expectEqual(Tier.zig, zoc.tier);
+    const zop = try p.plan(.{ .r_home = r, .pkg_dir = f.path("zo"), .name = "zo", .linkingto = &.{} }, zoc);
+    try testing.expectEqual(1, zop.sources.len);
+    try testing.expectEqualStrings("a.c", zop.sources[0].path);
     // cleanup does not make a package tier 3
     try f.touch("d/cleanup");
     try f.touch("d/src/a.c");
@@ -781,6 +819,13 @@ test "tiers: R only, zig, configure, Makefile, Objective-C, rules, shell, foreig
     try f.env.put("MAKEFLAGS", "CFLAGS=-O0");
     try testing.expectError(error.NeedsMake, p.plan(.{ .r_home = r, .pkg_dir = f.path("mf"), .name = "mf", .linkingto = &.{} }, mfc));
     try testing.expectEqualStrings("MAKEFLAGS sets CFLAGS", p.reason);
+    // tier 2 plans whatever MAKEFLAGS sets: no make build to differ from
+    // [preflight-PF-1]
+    try f.touch("mz/src/build.zig");
+    const mzc = try p.classify(f.path("mz"), f.path("mz/src"));
+    try testing.expectEqual(Tier.zig, mzc.tier);
+    try f.env.put("MAKEFLAGS", "k -j2 -- X=1");
+    _ = try p.plan(.{ .r_home = r, .pkg_dir = f.path("mz"), .name = "mz", .linkingto = &.{} }, mzc);
     _ = f.env.swapRemove("MAKEFLAGS");
     // the package's Makevars cannot change CC (Makeconf comes after it);
     // the user's ~/.R/Makevars, read last, can, and then make must build
@@ -853,6 +898,19 @@ test "Windows: Makevars.win, .def, libs/x64, gcc.exe" {
     const plan2 = try p.plan(.{ .r_home = r, .pkg_dir = f.path("cli"), .name = "cli", .linkingto = &.{} }, class);
     try testing.expect(!plan2.def);
     try testing.expectEqualStrings("cli-win.def", plan2.win_def);
+    // Makefile.ucrt, then Makefile.win, win over src/build.zig: install.R
+    // runs it with make [code-2]
+    try f.touch("zm/src/build.zig");
+    try f.touch("zm/src/Makefile.win");
+    try testing.expectEqualStrings("src/Makefile.win", (try p.classify(f.path("zm"), f.path("zm/src"))).reason);
+    try f.touch("zm/src/Makefile.ucrt");
+    const zmc = try p.classify(f.path("zm"), f.path("zm/src"));
+    try testing.expectEqual(Tier.make, zmc.tier);
+    try testing.expectEqualStrings("src/Makefile.ucrt", zmc.reason);
+    // a plain Makefile is not R's on Windows
+    try f.touch("zu/src/build.zig");
+    try f.touch("zu/src/Makefile");
+    try testing.expectEqual(Tier.zig, (try p.classify(f.path("zu"), f.path("zu/src"))).tier);
 }
 
 test "macOS adds the install name" {

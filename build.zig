@@ -1859,6 +1859,17 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     try ctx.subst.put("OPENMP", if (ctx.openmp) "-fopenmp" else "");
     try ctx.subst.put("PTHREAD", "-pthread");
     try ctx.subst.put("SYMPAT", "'s/^.* [BCDRT] / /p'");
+    // NM_FILTER: MkRules.rules' default, which gnuwin32's fixed/Makefile
+    // writes into etc/x64/Makeconf (`s@NM_FILTER =@NM_FILTER =
+    // $(NM_FILTER)@`; make expands its $(SED) to sed there, as Makeconf's
+    // own SED = sed does here). winshlib.mk pipes the .def's symbol list
+    // through it after SYMPAT, which drops the compiler's .refptr.<name>
+    // and .weak.<name>.default.* globals, so a CRAN package DLL exports
+    // neither. The vendored template's `NM_FILTER =` had stayed empty, and
+    // r-zig's DLLs exported them; `rzig def`, the zig path's .def, drops
+    // them too, so both paths match CRAN (PR #25 review records-REC-3,
+    // the user's menu 4 a).
+    try mk.put("NM_FILTER", "| $(SED) -e '/[.]refptr[.]/d' -e '/[.]weak[.]/d'");
 
     const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
     var mkc = try gnuwin32O3ToO2(b, try substituteWith(ctx, raw, &mk));

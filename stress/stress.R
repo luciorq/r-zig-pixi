@@ -34,12 +34,17 @@
 #   --trace       RZIG_TRACE=1: rzig prints its commands into the logs, and
 #                 `rzig build` (patch 0013) its tier; R_ZIG_PKG_BUILDER=make
 #                 in the environment makes every install take the make path
+#   --no-shared-cache  leave ZIG_LOCAL_CACHE_DIR unset: each install through
+#                 `rzig build` has its own zig build cache in its build root
+#                 and compiles its build runner, as a user's install does
+#                 (zig's global cache stays in the run directory)
 #   --list        print the install plan and stop
 #   --sysdeps     print the sysdeps of the rows the run installs on this OS
 #                 (the selected ones and their dependencies' rows) and stop
 #   --strict      exit 1 when a target's result differs from its expect
 #   --help        print this
-# Environment: STRESS_JOBS (as --jobs), STRESS_TSV (another data file).
+# Environment: STRESS_JOBS (as --jobs), STRESS_TSV (another data file),
+# R_ZIG_PKG_BUILDER (auto or make; the report records it).
 
 argv <- commandArgs(trailingOnly = TRUE)
 opt <- function(name, default = NULL) {
@@ -49,7 +54,7 @@ opt <- function(name, default = NULL) {
   if (nzchar(v)) v else TRUE
 }
 flag <- function(name) isTRUE(opt(name))
-known <- c("skip", "tree", "conda", "out", "jobs", "resume", "keep-path", "trace", "list", "sysdeps", "strict", "help")
+known <- c("skip", "tree", "conda", "out", "jobs", "resume", "keep-path", "trace", "no-shared-cache", "list", "sysdeps", "strict", "help")
 bad <- setdiff(sub("=.*", "", sub("^--", "", grep("^--", argv, value = TRUE))), known)
 if (length(bad)) stop("unknown option: --", paste(bad, collapse = " --"), " (see --help)", call. = FALSE)
 ca <- commandArgs()                                             # Rscript passes -f FILE (R 4.6) or --file=FILE
@@ -164,12 +169,16 @@ if (!flag("resume") && length(list.files(lib))) stop(lib, " is not empty: use --
 
 # --- the classifier --------------------------------------------------------------
 # The class is a suggestion from the failing part of the log; a person
-# decides (README). First match wins.
+# decides (README). First match wins. toolchain has rzig build's own
+# failures, not its `zig build failed (N)`, which follows every failed
+# compile: the compiler's lines above it decide, as under make [tests-T4];
+# and the install preflight's stop (patch 0009), in build 8's words (as
+# universe's packages print it until phase 4) and today's [tests-T11].
 patterns <- c(
   network   = "cannot open URL|cannot open the connection to '?https?:|Could not resolve host|Failed to connect|Connection (timed out|refused|reset)|Temporary failure in name resolution|status was '[45][0-9][0-9]|HTTP (error|status) [45][0-9][0-9]|HTTP/[0-9.]+ [45][0-9][0-9]|Timeout of [0-9]+ seconds was reached|curl: \\([0-9]+\\)|download (failed|error)|SSL connect error",
   resource  = "No space left on device|[Cc]annot allocate memory|[Oo]ut of memory|std::bad_alloc|Killed signal terminated|virtual memory exhausted|OutOfMemory",
   abi       = "(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__cxx11|B5cxx11|St3__1|std::__1|__cxa_|__gxx_personality|_Unwind_|\\?[A-Za-z_][A-Za-z0-9_@?$]*@@)|undefined symbol: _Z|could not open 'lib(MSVCRT|OLDNAMES|LIBCMT|msvcprt)\\.a'|-LIBPATH:|Windows Kits/10/Lib|/(W[0-4]|bigobj|wd[0-9]+): unrecognized file extension",
-  toolchain = "unknown CPU: '|unrecognized file extension|Could NOT find Threads|thread [0-9]+ panic: |/bin/R(term\\.exe|script\\.exe)?: No such file or directory|is not a full path to an existing compiler tool|windres: command not found|Building for: NMake Makefiles|make: invalid option -- \\?|ar(\\.exe)?: [^ ]+\\.o: No such file or directory|unsupported linker arg: |-Werror,-Wdate-time|version script assignment of '[^']+' to symbol '[^']+' failed: symbol not defined|rzig: |(zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib): (cannot |waiting for |could not |no flang|warning: no |warning: R_ZIG_EXTRA_ENV)|rzig build: (zig build failed|no zig|cannot |waiting for zig build)|R_HOME/share/zig/rpkg is not installed|r-zig toolchain is (incomplete|not installed)|zig: error|error: unable to (spawn|create|open|load|parse|emit)|LLVM ERROR|PLEASE submit a bug report|unknown target CPU|unsupported option|unsupported argument '[^']*' to option '|unknown argument|compiler cannot create executables|relocation R_[A-Z0-9_]+ .*against|(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__(u)?(div|mod|mul)ti3|___chkstk_ms|__extend|__trunc|__emutls|__guard_(dispatch|check)_icall)",
+  toolchain = "unknown CPU: '|unrecognized file extension|Could NOT find Threads|thread [0-9]+ panic: |/bin/R(term\\.exe|script\\.exe)?: No such file or directory|is not a full path to an existing compiler tool|windres: command not found|Building for: NMake Makefiles|make: invalid option -- \\?|ar(\\.exe)?: [^ ]+\\.o: No such file or directory|unsupported linker arg: |-Werror,-Wdate-time|version script assignment of '[^']+' to symbol '[^']+' failed: symbol not defined|rzig: |(zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib): (cannot |waiting for |could not |no flang|warning: no |warning: R_ZIG_EXTRA_ENV)|rzig build: (no zig|cannot |waiting for zig build)|R_HOME/share/zig/rpkg is not installed|r-zig toolchain (is|\\(compiled code or a configure script\\), which is) (incomplete|not installed)|zig: error|error: unable to (spawn|create|open|load|parse|emit)|LLVM ERROR|PLEASE submit a bug report|unknown target CPU|unsupported option|unsupported argument '[^']*' to option '|unknown argument|compiler cannot create executables|relocation R_[A-Z0-9_]+ .*against|(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__(u)?(div|mod|mul)ti3|___chkstk_ms|__extend|__trunc|__emutls|__guard_(dispatch|check)_icall)",
   crash     = "\\*\\*\\* caught (segfault|bus error|illegal operation) \\*\\*\\*|R is aborting now|An irrecoverable exception occurred",
   upstream  = "Library not loaded: (/opt/homebrew|/usr/local/(opt|Cellar))/|(system library '|cannot find -l|library not found for -l|unable to find library -l)(debug|optimized)\\b|[Tt]he specified procedure could not be found|failed to solve the environment|Cannot solve the request|[Cc]ould not solve for environment specs",
   sysdep    = "(?m)configure: error|was not found in the pkg-config search path|No package '[^']+' found|fatal error: '?[^ ']+\\.h(pp|xx)?'?( file)? not found|\\.h: No such file|cannot find -l|unable to find (dynamic |static )?system library|library not found for -l|command not found|: not found$|[Cc][Mm]ake.*not found|Could NOT find")
@@ -190,16 +199,30 @@ first_error <- function(log, after = NULL) {
   if (length(sym)) line <- sub(".*(undefined symbol: |[Ss]ymbol not found: |Library not loaded: |LoadLibrary failure: )", "\\1", x[sym[1]])
   # the install preflight's stop (patch 0009) points "see above": the line
   # is rzig's last one above it, which names what is missing (zig-cc: on
-  # every OS, also run as gcc.exe), not the stop itself
-  if (!is.na(hit) && grepl("r-zig toolchain is incomplete (see above)", x[hit], fixed = TRUE)) {
+  # every OS, also run as gcc.exe), not the stop itself; its words differ
+  # between builds, its end does not [tests-T11]. For a src/build.zig
+  # package make cannot build it is the line with rzig's reason, which the
+  # line "the r-zig toolchain is complete" follows. The failing part then
+  # starts at rzig's line, which classify reads too [code-6]
+  if (!is.na(hit) && grepl("r-zig toolchain", x[hit], fixed = TRUE) && grepl("incomplete (see above)", x[hit], fixed = TRUE)) {
     z <- grep("^zig-cc: ", x[seq_len(hit - 1)])
-    if (length(z)) line <- x[tail(z, 1)]
+    c1 <- z[grepl("src/build.zig cannot be built by make: ", x[z], fixed = TRUE)]
+    if (length(c1)) z <- c1
+    if (length(z)) {
+      line <- x[tail(z, 1)]
+      from <- min(from, tail(z, 1))
+    }
   }
   # classify on the failing part only: a benign line earlier in the log
   # (a download that was retried, a configure probe) must not decide it
   list(line = substr(trimws(line), 1, 240), text = paste(x[from:max(from, length(x))], collapse = "\n"))
 }
 classify <- function(text) {
+  # a src/build.zig package make cannot build (rzig's line, from the hook
+  # or the preflight, whose stop after it says the toolchain is
+  # incomplete): the package's own or a site's settings, not the
+  # toolchain [code-6]
+  if (grepl("src/build.zig cannot be built by make: ", text, fixed = TRUE)) return("package")
   for (k in names(patterns)) if (grepl(patterns[[k]], text, perl = TRUE)) return(k)
   "package"
 }
@@ -300,7 +323,13 @@ Sys.setenv(
 if (win) Sys.setenv(TMP = tmp, TEMP = tmp)
 # zig caches every object it compiles: in the run directory, whatever the
 # caller set (as scripts/env.sh does for the build). --resume reuses it.
-Sys.setenv(ZIG_GLOBAL_CACHE_DIR = file.path(out, "zig-cache"), ZIG_LOCAL_CACHE_DIR = file.path(out, "zig-cache"))
+# By default rzig build takes it too (ZIG_LOCAL_CACHE_DIR), so its build
+# runner compiles once per run; --no-shared-cache leaves each install its
+# own, in its build root, as a user gets (N3), to measure that cost
+# [stress-S1, I-B1].
+shared_cache <- !flag("no-shared-cache")
+Sys.setenv(ZIG_GLOBAL_CACHE_DIR = file.path(out, "zig-cache"))
+if (shared_cache) Sys.setenv(ZIG_LOCAL_CACHE_DIR = file.path(out, "zig-cache")) else Sys.unsetenv("ZIG_LOCAL_CACHE_DIR")
 # rzig's own cache is outside the run directory, where cache.zig puts it
 # (an empty variable counts as unset). The run removes at its end what it
 # added there (V8's archive copy on macOS, a libc++ mirror per zig, linux's
@@ -333,12 +362,16 @@ if (!flag("keep-path") && nzchar(sysroot)) Sys.setenv(PATH = paste(if (win) c(
   file.path(Sys.getenv("SystemRoot", "C:/Windows"), c("System32", ""))) else c(file.path(sysroot, "bin"), "/usr/bin", "/bin"),
   collapse = .Platform$path.sep))
 zig <- Sys.getenv("ZIG_BIN", Sys.which("zig"))
+# the builder R CMD INSTALL takes (patch 0013), as the hook reads it
+builder <- Sys.getenv("R_ZIG_PKG_BUILDER")
+if (!nzchar(builder)) builder <- "auto"
 info <- list(
   date = format(t_start, "%Y-%m-%d %H:%M %Z", tz = "UTC"), r = R.version.string, os = os, arch = arch, dist = dist,
   channel = Sys.getenv("STRESS_CHANNEL"), r_zig = paste(meta("^r-zig-(slim|toolchain)-.*\\.json$"), collapse = " "),
   r_home = rhome, libraries_env = sysroot, commit = commit, jobs = jobs, path = if (flag("keep-path")) "kept" else "narrowed",
   zig = if (nzchar(zig)) tryCatch(system2(zig, "version", stdout = TRUE, stderr = FALSE)[1], error = function(e) "") else "",
   cc = tryCatch(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "--no-user-files", "CC"), stdout = TRUE)[1], error = function(e) ""),
+  builder = builder, shared_cache = shared_cache,
   sysdeps_missing = paste(sysdeps_missing, collapse = " "), tsv = tsv, out = out, rzig_cache = rzig_cache,
   rzig_cache_removed = "", args = paste(argv, collapse = " "), minutes = 0, finished = FALSE, error = "")
 
@@ -362,6 +395,8 @@ write_report <- function(final = FALSE) {
                   info$minutes, jobs, info$path),
           sprintf("zig %s; CC `%s`; libraries env `%s`%s.", info$zig, info$cc, sysroot,
                   if (dist == "conda") sprintf(" (%s from %s)", info$r_zig, info$channel) else ""),
+          sprintf("Builder %s (R_ZIG_PKG_BUILDER); zig build cache %s.", builder,
+                  if (shared_cache) "shared by the run (ZIG_LOCAL_CACHE_DIR)" else "per install (--no-shared-cache)"),
           if (length(sysdeps_missing)) sprintf("Sysdeps missing from the env: %s.", info$sysdeps_missing),
           if (nzchar(info$rzig_cache_removed)) sprintf("The run added to rzig's cache `%s`, and removed at its end: %s.",
                                                        info$rzig_cache, info$rzig_cache_removed),

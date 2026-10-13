@@ -51,6 +51,10 @@ on:
         type: choice
         options: [auto, make]
         default: auto
+      shared_cache:
+        description: 'true: rzig build shares the run''s zig cache (its build runner compiles once per run); false: stress.R --no-shared-cache, each install has its own cache in its build root, as a user''s does (the per-install cost)'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -129,6 +133,7 @@ jobs:
           STRESS_JOBS: ${{ inputs.jobs }}
           CHANNEL: ${{ matrix.dist == 'conda' && inputs.channel || '' }}
           TRACE: ${{ inputs.trace }}
+          SHARED_CACHE: ${{ inputs.shared_cache }}
           R_ZIG_PKG_BUILDER: ${{ inputs.builder }}
         run: |
           set -euo pipefail
@@ -136,6 +141,7 @@ jobs:
           if [ -n "$CHANNEL" ]; then args+=("--conda=$CHANNEL"); fi
           if [ -n "$SKIP" ]; then args+=("--skip=$SKIP"); fi
           if [ "$TRACE" = true ]; then args+=("--trace"); fi
+          if [ "$SHARED_CACHE" = false ]; then args+=("--no-shared-cache"); fi
           # one target per word
           # shellcheck disable=SC2086
           pixi run -e stress stress "${args[@]}" $TARGETS

@@ -14,6 +14,9 @@
 //!   zig-ranlib,       zig ranlib
 //!     gcc-ranlib, ranlib
 //!   rzig <name> ...   the same, naming the tool explicitly
+//!   rzig build ...    one package's library with zig build alone
+//!                     (pkgbuild.zig; install.R's hook, patch 0013)
+//!   rzig def ...      a package DLL's .def from its objects (def.zig)
 //!
 //! gcc-ar and gcc-ranlib are the names Makeconf.win's LTO lines use
 //! (feat-standalone-toolchain B43); Windows has those copies from phase 3.
@@ -24,9 +27,10 @@
 //! zig is found by find_zig.zig: ZIG_BIN, the compilers group's zig/ in
 //! rzig's own directory, the environment's bin, PATH, python3 -m ziglang.
 //! None: rzig names the compilers group and how to install it (groups.zig)
-//! and exits 127. `<name> --rzig-check[=fortran|build-tools]` checks a
-//! group's tools instead of compiling (check.zig): what the install
-//! preflight and R CMD config call.
+//! and exits 127. `<name> --rzig-check[=fortran|build-tools|package]`
+//! checks a group's tools instead of compiling (check.zig): the install
+//! preflight calls `=package` (patch 0009), R CMD config `=build-tools`
+//! (patch 0010).
 //!
 //! build.zig installs it under those names into R_HOME/bin/toolchain, the
 //! directory Makeconf names (Windows: gcc.exe and g++.exe, Makeconf.win's

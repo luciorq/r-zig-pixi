@@ -14,7 +14,14 @@ feat-standalone-toolchain's phase 3 (main e1ce179, PR #24; "Consolidation
 with phase 3", 2026-10-12, below): the merge of main, the install
 preflight deciding the tier as `rzig build` does, the per-install zig
 build cache, tier 2 offline, MAKEFLAGS, and each test asserting its
-builder.
+builder. PR #25 merged (07e12c0, 2026-10-13) before the phase 3
+session's review of it finished; the review's findings are fixed in one
+follow-up PR, branch fix-zig-pkg-build-review, recorded in
+`.github/devdocs/fix-zig-pkg-build-review/PLAN.md` (the review itself
+in `review/` there). The corrections it made to this file carry the
+review's ids in brackets (code-2 to code-6 and coverage-1 are its
+second review's) and its interface names (I-C1, I-T11, I-PF5), all
+defined there.
 
 ## The question (the user, 2026-10-08)
 
@@ -77,7 +84,7 @@ the staged-install rename, test-load.
 | tier | condition in the unpacked package | path |
 |---|---|---|
 | 0 | no `src/` | R only |
-| 2 | `src/build.zig` exists (wins over Makevars and configure) | rzig build → zig build, tier-2 root |
+| 2 | `src/build.zig` exists and no `src/Makefile*` (it wins over Makevars and configure; a src/Makefile, which install.R runs itself, wins over it [code-2]); the package's own src/Makevars is not read [code-4] | rzig build → zig build, tier-2 root |
 | 1 | `src/` present; no `configure` (unix) or `configure.win/.ucrt` (Windows); no `src/Makefile*`; the selected `Makevars` (Windows: `.ucrt`, `.win`, then `Makevars`; unix: `Makevars`) holds only assignments | rzig build → zig build, tier-1 root |
 | 3 | anything else: recipes, targets, `include`, `ifeq`, `$(shell`, configure, `src/Makefile`, Type: Frontend | today's make path when the build-tools group is present, else an error naming it |
 
@@ -145,7 +152,11 @@ data.table, stringi, xml2, curl, openssl, Matrix, arrow, sf are tier 3.
    include path, as `@import("R")`; `addLibrary(b, opts, .{ root_source_file, c_sources })`
    = `b.addObject` for the zig root (link_libc, pic, the R module
    imported) plus tier-1 Run steps for C sources, all linked by the
-   same rzig link rule. A pure-zig package exports
+   same rzig link rule. The C and C++ sources get the plan's flags:
+   Makeconf's with the site and user Makevars, not the package's own
+   src/Makevars, which tier 2 does not read (PKG_CPPFLAGS and
+   PKG_CFLAGS do not apply; noted in the follow-up [code-4]). A
+   pure-zig package exports
    `export fn R_init_<pkg>(dll: *R.DllInfo) void` and registers its
    routines with `R.R_registerRoutines`.
 6. R, in-process: everything after the native library, unchanged.
@@ -178,6 +189,15 @@ install, `<build root>/zig-cache`, gone with the root. The shared cache
 never reused an entry (the Run steps' keys hash the whole environment,
 `R_SESSION_TMPDIR` included) and only grew; the build runner is rebuilt
 per install (about 3 s warm). zig's global cache is the shared part.
+It too grew per install until the follow-up (2026-10-13): zig cc keys
+its objects on the source path as given, and build_t1.zig passed the
+absolute path under install.R's new R.INSTALL directory, so every
+tarball install added one entry per source, never reused (cli: 26 per
+install). The compiles now name their source relative to src/, as make
+does, and a reinstall adds nothing [tests-T1, records-REC-2]. So
+CONSENSUS D's "keyed by target, bounded" (`consolidation/CONSENSUS.md`)
+was wrong until the follow-up, because zig cc keyed the objects on the
+absolute source path; the copy is left as it was agreed (R2).
 
 ### What must remain on the R side (small)
 
@@ -299,7 +319,10 @@ zig cc's object cache (global, `~/.cache/zig`) is keyed by the source
 path: the make path (`-c ansi.c` in `src/`) and the zig build path
 (absolute path) do not share entries, and a copy of the package in
 another directory recompiles. This only matters for benchmarks and for
-the choice of build-root paths.
+the choice of build-root paths. (It mattered more: install.R unpacks a
+tarball into a new directory each time, so the absolute paths added
+entries on every install; the follow-up of 2026-10-13 names the source
+relative to src/ [tests-T1].)
 
 ### Assumptions checked
 
@@ -389,7 +412,7 @@ alone. New in `zigbuild/tools/rzig/` (2 577 lines with tests) and
 | `shellwords.zig` | the words a POSIX shell hands the compiler from one recipe line: `'…'`, `"…"`, backslashes; an unquoted `$ \` \| & ; < > ( ) * ? [`, a `#` or `~` at a word's start, is refused |
 | `pkgplan.zig` | the tiers (`classify`) and the plan: install.R's `.shlib_internal` order (the package's Makevars, Makeconf, Makevars.site, shlib.mk / winshlib.mk, the user Makevars) and its command-line overrides (`SHLIB`, `OBJECTS` unless the Makevars sets it, the C++ standard from `CXX_STD`/`USE_CXXnn`/`R_PKG_CXX_STD` with `CXX=$(CXXnn) $(CXXnnSTD)` and the `SHLIB_CXXnnLD` link, the default C++ link, `USE_FC_TO_LINK`, `SHLIB_LIBADD` with `$(FLIBS) $(FCLIBS_XTRA)` for Fortran, `CCnn`/`CnnFLAGS`, `P_FCFLAGS`, `WIN=64 TCLBIN=`, `DEBUG=T`, `LTO`/`LTO_FC`), then `$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS)` and its siblings, `$(SHLIB_LINK)` (winshlib's `$(SHLIB_LD) $(SHLIB_LDFLAGS) $(LDFLAGS) $(DLLFLAGS)` on Windows), `$(ALL_LIBS)`, word-split. Every compiler on a line that is used must be a file of `R_HOME/bin/toolchain` (else: needs make, as with `CC = ccache gcc` in `~/.R/Makevars`). Objects map to sources in `.SUFFIXES` order; an object without a source needs make. macOS appends `-Wl,-install_name,<pkg>.so`; Windows sets `def` (or `win_def` when `<pkg>-win.def` exists) and `libs/x64` |
 | `pkgbuild.zig` | `rzig build --pkg <dir> --out <dir> [--name] [--linkingto <dir>]… [--cxx-std NN] [--c-std NN] [--use-lto yes\|no] [--debug] [-j N] [--r-home] [--rpkg-dir] [--cache-dir] [--keep-root]`; `--plan-only` prints plan.zon, `--classify` the tier. Exit 0 built or nothing to build, **3 needs make** (why, on stderr), 2 usage, 1 failed. Writes `<out>/.rzig/plan.zon`; tier 2 also copies the three root files there as `build.zig`, `build_t1.zig`, `rpkg.zig` and writes `build.zig.zon` with `.pkg = .{ .path = "<relative src>" }`; runs `zig build --build-file … --cache-dir <cache>/zig-build --prefix <out> -Dplan=… [-jN]` with zig from find_zig; removes `.rzig` after success (`--keep-root`, `RZIG_KEEP_ROOT=1` keep it). Site and user Makevars found as install.R does (`R_MAKEVARS_SITE`, `etc<R_ARCH>/Makevars.site`; `R_MAKEVARS_USER`, `~/.R/Makevars.ucrt`/`.win64`/`.win` on Windows, `~/.R/Makevars-<R_PLATFORM>`, `~/.R/Makevars`) |
-| `def.zig` | `rzig def -o <pkg>.def <objects>`: winshlib.mk's `nm \| sed -n 's/^.* [BCDRT] / /p'` from the objects' COFF symbol tables (std.coff's records at the object's offsets; `Coff.init` reads images only): storage class EXTERNAL, defined in a CODE, INITIALIZED_DATA or UNINITIALIZED_DATA section that is not LNK_INFO/LNK_REMOVE/MEM_DISCARDABLE, or a common; not undefined, not weak; the compiler's `.refptr.*` / `.weak.*.default.*` globals kept since the consolidation (nm lists them as R and T, and make's tmp.def exports them with the empty NM_FILTER of this tree's Makeconf.win; M5's "make" reference on kappa was lld's auto-export, with no sed there); de-duplicated. Test object `testdata/win-syms.{c,o}` (zig cc, x86_64-windows-gnu) holds every kind |
+| `def.zig` | `rzig def -o <pkg>.def <objects>`: winshlib.mk's `nm \| sed -n 's/^.* [BCDRT] / /p'` from the objects' COFF symbol tables (std.coff's records at the object's offsets; `Coff.init` reads images only): storage class EXTERNAL, defined in a CODE, INITIALIZED_DATA or UNINITIALIZED_DATA section that is not LNK_INFO/LNK_REMOVE/MEM_DISCARDABLE, or a common; not undefined, not weak; the compiler's `.refptr.*` / `.weak.*.default.*` globals left out, as CRAN's NM_FILTER (MkRules.rules' default, which fixed/Makefile writes into the installed Makeconf) leaves them out of make's tmp.def (kept from the consolidation to the follow-up, to match this tree's Makeconf.win, whose NM_FILTER was the template's empty line: a gap against CRAN, see "def.zig" in the consolidation and fix-zig-pkg-build-review's PLAN.md, menu 4 [records-REC-3]; M5's "make" reference on kappa was lld's auto-export, with no sed there); de-duplicated. Test object `testdata/win-syms.{c,o}` (zig cc, x86_64-windows-gnu) holds every kind |
 | `main.zig` | `rzig build` and `rzig def` dispatch only when rzig is started as itself (never through a compiler's name, where `build` could be a source file) |
 | `zigbuild/rpkg/build_t1.zig`, `build_t2.zig`, `rpkg.zig` | the M1 roots, now shipped: `libs_dir` from the plan, the `def` Run step (`rzig def`) or the package's `-win.def` before the objects in the link, `rpkg.addLibrary` with `cxx_sources` and extra imports; installed to `R_HOME/share/zig/rpkg` by build.zig's `installRzig`, which also installs rzig as `rzig` / `rzig.exe`; `scripts/verify-tree.sh` checks both |
 
@@ -597,7 +620,10 @@ symbols are exactly the M1 "make" list (`proto/hosts/results/kappa-exports-cli-m
 in history at aff0f4c, 187) without `_CRT_INIT` and `__mingw_module_is_dll`. Those two were
 never in a nm \| sed `.def`: they came from the same empty `tmp.def`, so
 M1's "make vs `--export-all-symbols` identical, 187" compared two
-auto-exports. On a host with Rtools' sed, make's DLL exports the 185.
+auto-exports. On a host with Rtools' sed, make's DLL exports the 185
+with CRAN's NM_FILTER; this tree's Makeconf.win had it empty until the
+follow-up of 2026-10-13, so the consolidation's kappa run measured 195
+on both paths (cli's nine `.refptr.*` names among them) [records-REC-3].
 Smoke (`proto/smoke.R`) on the zig library: the same values as linux and
 macOS, `*.dll` loaded, unload 0 (the make library lacks digest, so the
 make smoke stops there). zighello from its directory: 64 s with the test
@@ -638,10 +664,30 @@ files are in `consolidation/` (R2): `CONSENSUS.md`, the decisions, the
 corrected facts and the implementation checklist (sections A to I),
 and `FINDINGS.md`, each finding with file:line evidence and the
 verifier's note; the ids below (coverage-C1, preflight-F2,
-channels-C3, ...) point there. The user decided every point on
-2026-10-12 (each the recommended option), and this session implemented
-them in the worktree; the phase 3 session reviews the uncommitted
-result before the merge commit and the push (N7).
+channels-C3, ...) point there. The copies cite CONSOLIDATION.md and
+HANDOFF.md by line, as they were in the worktree at 8ce3f77; neither
+was committed (R1), and their content is folded into this section, so
+those line citations cannot be checked in the repository
+[records-REC-14]. The user decided every point on 2026-10-12 (each the
+recommended option), and this session implemented them in the
+worktree; the phase 3 session was to review the uncommitted result
+before the merge commit and the push (N7).
+
+What happened instead (2026-10-13) [records-REC-5]: the merge commit
+47e8436 (2026-10-12 20:10Z), the Windows test fix 45892fb (20:40Z) and
+the stress follow-up 5416d8d (2026-10-13 10:04Z) were committed and
+pushed first, CI and the stress dispatch ran on them (the user: "When
+everything is green, I will start the stress and then we can
+communicate with the other session"), and PR #25 merged (07e12c0,
+10:07Z) about a minute after the review was asked for. The review then
+ran on the merged state, 5416d8d (47e8436, 45892fb and 5416d8d): five
+angles (phase 3 interfaces, preflight and hook, tests, records, the
+stress follow-up), 51 findings confirmed by an adversarial verifier and
+3 refuted, copied into `fix-zig-pkg-build-review/review/`
+(REVIEW-SUMMARY.md, REVIEW.md; ids such as tests-T1, preflight-PF-1,
+records-REC-3). The user took every menu's recommendation on 2026-10-13
+and asked for one follow-up PR on the new main:
+`.github/devdocs/fix-zig-pkg-build-review/PLAN.md`.
 
 ### Decisions
 
@@ -661,7 +707,7 @@ result before the merge commit and the push (N7).
 | N4 | (a) a variable assignment in MAKEFLAGS makes the package need make, with that reason |
 | N5 | (a) no build-number bump in this PR; phase 4's bump (8 to 9) publishes both packages |
 | N6 | (a) tier 2 means vendored or path dependencies only: a URL dependency is refused, zig build runs with `--system` |
-| N7 | (a) this session implements; the phase 3 session reviews before the commit and push |
+| N7 | (a) this session implements; the phase 3 session reviews before the commit and push (it reviewed after the merge instead, 2026-10-13: above [records-REC-5]) |
 | R1 | (a) CONSOLIDATION.md not committed: its decisions and corrected facts are here; HANDOFF.md folded in below and deleted |
 | R2 | (a) CONSENSUS.md and FINDINGS.md copied into `consolidation/`, cited by finding id |
 
@@ -669,7 +715,11 @@ result before the merge commit and the push (N7).
 
 Line numbers: pristine CRAN install.R (R 4.6.1), then the merged tree's
 (`build/R-4.6.1` after patches 0001 to 0013; `git grep` in the patches
-for the text).
+for the text). They are PR #25's: the review follow-up's longer 0013
+and 0009 move the merged lines after rzig_build by 20 and those after
+the preflight by 24 (1392, 1427, 1491 and 2640 are 1416, 1451, 1515
+and 2664 there; checked by applying both series to the pristine
+tarball, 2026-10-13).
 
 1. **`R CMD config` runs on unix too** [preflight-F1, F6, coverage-C8,
    channels-C10]. install.R calls it for an executable `configure`,
@@ -701,7 +751,8 @@ for the text).
    paths on the compile tree.
 5. **Tier-3 checks on the base fail on Windows** [channels-C2]: the
    preflight's build-tools stop (no binutils/) comes before the hook.
-   On the compile tree too.
+   So pkg-parity runs the tier-3 checks on the compile tree, where
+   they pass [records-REC-10, preflight-PF-7].
 6. **macOS trace lines** [channels-C3] (inferred, run on omicron
    below): with conda-forge zig, rzig's trace line is `zig-cc:
    ZIG_LIB_DIR=<mirror> <zig> cc ...`; pkg-parity's `argv_of` dropped
@@ -719,15 +770,19 @@ for the text).
    `<pkg> needs make: <reason>`), and each shape keeps one make run.
 8. **`R CMD SHLIB` never reaches the hook** [coverage-C1,
    channels-C8]: `.SHLIB` calls `.shlib_internal` and make (pristine
-   2537). Run-time compilation (Rcpp's sourceCpp, cppFunction and
-   evalCpp, cpp11::cpp_source, inline, rstan, TMB) still needs make,
-   and so does pkgbuild's has_compiler probe (`R CMD SHLIB`), which
-   pak runs before every compiled package: on base + compilers pak
-   installs no compiled package, tier 1 included. remotes and devtools
-   were not checked.
+   2537, merged 2640 [records-REC-10]). Run-time compilation (Rcpp's
+   sourceCpp, cppFunction and evalCpp, cpp11::cpp_source, inline,
+   rstan, TMB) still needs make, and so does pkgbuild's has_compiler
+   probe (`R CMD SHLIB`), which pak runs before every compiled package:
+   on base + compilers pak installs no compiled package, tier 1
+   included. remotes and devtools were not checked.
 9. **The zig build cache grew without bound** [channels-C5]: measured,
-   two new `o/` entries per install, never reused (fact 9 in
-   CONSENSUS.md). Per install now (N3).
+   two new `o/` entries per install, never reused (FINDINGS.md's
+   channels-C5 verifier note; CONSENSUS.md's fact 9 says only that
+   nothing removes them [records-REC-10]). Per install now (N3). zig's
+   global cache grew per tarball install too, through zig cc's absolute
+   source paths (the same verifier note); fixed only in the follow-up
+   [tests-T1, records-REC-2].
 10. **MAKEFLAGS** [coverage-C7]: `MAKEFLAGS='LTO_OPT=-flto'` or
     `CFLAGS=...` changed make's build and not rzig build's. `plan()`
     now declines with "MAKEFLAGS sets NAME" for a word after GNU make's
@@ -763,7 +818,9 @@ always carries them).
 - **rzig** (`zigbuild/tools/rzig/`):
   - `pkgbuild.decide` (pkgbuild.zig): classify, then plan; the tier,
     the reason, the plan. `run` and check.zig's `package` both call it.
-    `--classify` prints the decided tier.
+    `--classify` prints the decided tier (for a tier-2 package whose
+    plan needs make: `make`, which the follow-up made the I-C1 line and
+    exit 1 [coverage-1]).
   - `--rzig-check=package` (check.zig): the preflight for the package
     in the working directory: the compilers, flang when the plan's
     sources have Fortran (tiers 1 and 2) or src/'s top level has a
@@ -771,8 +828,11 @@ always carries them).
     the build tools when the package needs make or `R_ZIG_CONFIGURE=1`,
     the failing line `"<pkg> needs make: <reason>; no make on PATH"`
     before the group text. `R_ZIG_C_STD` is use_C (the hook's
-    `--c-std`); `R_ZIG_PKG_BUILDER=make` forces make. Unit tests and
-    ten parity-test.sh cases.
+    `--c-std`); `R_ZIG_PKG_BUILDER=make` forces make. Ten
+    parity-test.sh cases (the real binary, linux CI); no unit test ran
+    `package()` or `decide` until the follow-up [preflight-PF-7]. The
+    flang rule for tier 2 changed in the follow-up (never; I-PF5,
+    "Known differences").
   - pkgplan.zig: `makeflagsAssignment` and the "MAKEFLAGS sets NAME"
     reason (N4), unit-tested.
   - The per-install cache (N3): `--cache-dir` defaults to `<build
@@ -792,7 +852,8 @@ always carries them).
   the call goes to CC's name, zig-cc / gcc.exe, which hermetic-check's
   strace allowlist admits [coverage-C12]; the rzig-missing branch and
   `R_ZIG_TOOLCHAIN_HINT` stay); 0013 regenerated on it (the hunks at
-  683, 746 and 1544; CC's binary beside no `rzig` name stops with "the
+  683, 746 and 1544, 1548 on the review follow-up's 0009; CC's binary
+  beside no `rzig` name stops with "the
   r-zig toolchain is older than this R" instead of a silent make path
   [preflight-F7]). The series applies to the pristine tarball with no
   offset. 0010 unchanged (M7).
@@ -813,14 +874,21 @@ always carries them).
   "a configure script R runs", its configure not run; pfF as before;
   all three stops with 0009's ERROR line. Each `R CMD SHLIB` shape
   (C++, Fortran, USE_FC_TO_LINK, $(FLIBS) with no flang on PATH,
-  OpenMP C, Fortran OpenMP, the CONDA_PREFIX decoys) is also a package
-  installed through rzig build (`shape_pkg`), with the same rpath,
-  NEEDED, C++ runtime, minos, libomp and load checks on
-  `lib/<pkg>/libs/<pkg>.so`. Scenario 3: btA through rzig build and
-  btLib (Windows: btRc too) through the group's make in one
-  install.packages(Ncpus = 2) run, asserted from the kept logs; the LTO
-  record's tier-1 twin ltotier1 must go to make with "MAKEFLAGS sets
-  LTO_OPT". The header says so.
+  OpenMP C, Fortran OpenMP, and the C++ one with the CONDA_PREFIX
+  decoys) is also a package installed through rzig build (`shape_pkg`),
+  with the same rpath, NEEDED, C++ runtime, minos, libomp and load
+  checks on `lib/<pkg>/libs/<pkg>.so`. Not yet: the OpenMP decoy rebuild
+  through rzig build, and the macOS floor on rzig build's objects (the
+  .so only) [tests-T8]; both in the follow-up. Scenario 3: btA through
+  rzig build and btLib (Windows: btRc too) through the group's make in
+  one install.packages(Ncpus = 2) run, asserted from the kept logs; the
+  LTO record's tier-1 twin ltotier1 must go to make with "MAKEFLAGS sets
+  LTO_OPT". The header says so, and also said Windows scenario 3's
+  OpenMP packages were built as packages through rzig build, which they
+  were not (R CMD SHLIB only: checklist G's "likewise Windows scenario
+  3's OpenMP packages" was not done) [phase3-P3-1, records-REC-1,
+  tests-T3]; scenario 2's new assertions were unix-only [phase3-P3-9].
+  Both are in the follow-up.
 - **contract-test.sh**: `RZIG_TRACE=1`, `keep_outputs`, the builder
   asserted per package from its log (Rcpp, quadprog, unix minqa: rzig
   build; data.table, ps, Windows minqa: make; pak mixed: its configure
@@ -833,33 +901,57 @@ always carries them).
   vacuous and "passed"; main's program is 9173 bytes, just under), and
   the script requires the program's last line. **recipe/test-toolchain.R**: rzigc's default
   install asserts `rzig build: tier 1`; rzigc, rzigz, rzigfl and unix
-  rzigf also through `R_ZIG_PKG_BUILDER=make` into a second library.
+  rzigf also through `R_ZIG_PKG_BUILDER=make` into a second library
+  (their builder not asserted: RZIG_TRACE was unset there, so "no `rzig
+  build:` line" held either way; asserted since the follow-up
+  [tests-T2]).
   **wheel-test.sh**: the console-script install asserts rzig build
   (the first under PyPI's ziglang), the bundled bin/R install runs
   with `R_ZIG_PKG_BUILDER=make`, and a Makevars-rule package
   (rzigwheelar, a static library through $(AR)) is built by the
   wheel's make; the header says which. **smoke-test.sh** part 2:
-  `RZIG_TRACE=1`, the display grep no longer a gate (coverage-C13).
+  `RZIG_TRACE=1`, the display grep no longer a gate (coverage-C13);
+  it ran in no task until the follow-up's `pixi run rzig-test <prefix>`
+  [tests-T12].
 - **stress**: stress.yaml inputs `trace` (bool) and `builder`
   (auto|make); stress.R's toolchain pattern gains `rzig build: (zig
   build failed|no zig|cannot |waiting for zig build)` and
   `R_HOME/share/zig/rpkg is not installed`; packages.tsv's notes for
   Rcpp, lme4, mlpack, fst and geos say they build through rzig build.
+  (The follow-up drops `zig build failed`, which follows every failed
+  compile [tests-T4], and corrects the fst, geos and lme4 notes against
+  the stress table [records-REC-12, tests-T5].)
 - **def.zig** (found by kappa's first pkg-parity run, 2026-10-12):
   `rzig def` kept out every name starting with `.`, and make's DLL
   exported cli's nine `.refptr.*` stubs: winshlib.mk's `nm | sed -n
   's/^.* [BCDRT] / /p'` filters them only through `NM_FILTER`, which
-  phase 3's Makeconf.win leaves empty (R's MkRules.dist comments the
-  filter out too). M5's kappa had no sed, so its make reference was
-  lld's auto-export, which leaves them out, and the difference never
-  showed. `rzig def` now keeps the compiler's EXTERNAL globals as nm
-  lists them (`.refptr.<name>`, a weak function's `.weak.<name>.default.*`
-  alias); its unit fixture has one of each.
+  phase 3's Makeconf.win leaves empty. M5's kappa had no sed, so its
+  make reference was lld's auto-export, which leaves them out, and the
+  difference never showed. `rzig def` now keeps the compiler's EXTERNAL
+  globals as nm lists them (`.refptr.<name>`, a weak function's
+  `.weak.<name>.default.*` alias); its unit fixture has one of each.
+  Corrected by the review [records-REC-3]: CRAN's R does filter them.
+  MkRules.rules sets `NM_FILTER ?= | $(SED) -e '/[.]refptr[.]/d' -e
+  '/[.]weak[.]/d'` and gnuwin32's fixed/Makefile writes it into the
+  installed etc/x64/Makeconf (MkRules.dist's commented line documents
+  that default, it does not switch it off); this tree's Makeconf.win
+  kept the vendored template's empty `NM_FILTER =` (since 174c952, the
+  initial vendoring, never decided). So this change matched a gap
+  against CRAN, and r-zig's DLLs exported stubs CRAN's do not. The
+  follow-up (menu 4 a) substitutes CRAN's NM_FILTER into Makeconf.win
+  (build.zig) and `rzig def` leaves those names out again, so both
+  paths match CRAN.
 - **Records**: this section; feat-standalone-toolchain PLAN.md's phase
   3 note and TODO.md's items (below, "What the build-tools group is
   for"); no build-number bump (N5).
 
 ### Known differences between the preflight and the hook (recorded)
+
+Four inputs differ, in the first three items below: CLINK_CPPFLAGS,
+the user-Makevars skip, use_LTO and Windows' `--debug` (0009's header
+and check.zig said two until the follow-up [preflight-PF-7]). Then the
+rules where the two look at different things, as the follow-up left
+them.
 
 - `CLINK_CPPFLAGS` is set after the preflight (merged install.R 1491),
   so the preflight plans without the LinkingTo paths. It differs from
@@ -871,32 +963,67 @@ always carries them).
 - use_LTO and Windows' `--debug` are not passed to the preflight
   (they change flags, LTO and DEBUG, not the tier).
 - Fortran in a subdirectory a Makevars OBJECTS names: the plan's
-  sources catch it for tiers 1 and 2; tier 3 keeps 0009's top-level
-  match, so such a package stops later, at zig-fc, with the same text
+  sources catch it for tier 1; tier 3 keeps 0009's top-level match, so
+  such a package stops later, at zig-fc, with the same text
   [preflight-F5].
+- flang for tier 2 (I-PF5, the follow-up): never, since rpkg compiles C
+  and C++ only, so a stray top-level `.f`, which the plan's sources
+  list, is no reason to stop (the hook builds such a package with no
+  flang) [preflight-PF-5]; with `R_ZIG_CONFIGURE=1`, whatever the tier,
+  src/'s top level in either case, as CONSENSUS B agreed (the
+  consolidation used the plan's sources there too) [records-REC-11].
+  For tier 2 this departs from CONSENSUS B, which said "plan().sources
+  has f or f9x (tiers 1-2)": recorded here.
+- The user Makevars: R's makevars_user() reads `R_MAKEVARS_USER` with
+  `Sys.getenv(, NA)`, so set but empty is none; rzig does the same since
+  the follow-up (it took empty for unset and fell back to
+  ~/.R/Makevars) [preflight-PF-2]. `~` as R expands it: on Windows
+  R_USER, else HOME, else HOMEDRIVE and HOMEPATH; on unix HOME, where R
+  also falls back to the passwd home when HOME is unset or empty, which
+  rzig does not mirror, so the hook passes R's own choice,
+  makevars_user(), as `R_MAKEVARS_USER` when it names a file (when R
+  finds none, rzig's lookup finds none either) [code-5]. The preflight
+  runs only when R found no user Makevars.
+- A tier-2 package whose plan needs make (I-C1, the follow-up): the
+  hook, `rzig build --classify` and the preflight all say "<pkg>:
+  src/build.zig cannot be built by make: <reason>" and exit 1; the
+  preflight adds "<pkg>: the r-zig toolchain is complete: change what
+  the line above names", since 0009's stop after it says the toolchain
+  is incomplete (I-T11, a fixed text) [preflight-PF-1, coverage-1,
+  code-6].
 
 ### What the build-tools group is for (N2, the scope statement)
 
 The build-tools group (unix make; Windows sh, make and the binutils) is
 needed by: packages that need make (tier 3: configure scripts,
-src/Makefile*, Makevars with rules, conditionals, `$(shell)`, a foreign
-compiler, OBJECTS without a source, `MAKEFLAGS` setting a variable); any
-package whose configure script R runs (tier 0 or 2 can have one; `R CMD
-config` runs before it on unix, 0010); `R CMD SHLIB`, so run-time
-compilation (Rcpp's sourceCpp/cppFunction/evalCpp, cpp11::cpp_source,
-inline, rstan, TMB) and pkgbuild's has_compiler probe, through which pak
-refuses every compiled package, tier 1 included, before `R CMD INSTALL`;
-`R CMD config`'s direct callers (users, pkgbuild); `R CMD check`'s
-objdump (Windows); on Windows, cleanup.ucrt/cleanup.win under `--clean`
-or `--preclean` (without sh only a warning: the cleanup is skipped)
-[coverage-C1, channels-C8, preflight-F7]. Not needed by tier 0 to 2
-installs through `R CMD INSTALL` and install.packages(). Phase 7
-(Windows usr/bin) and B24 are re-scoped from the stress table (M6;
-"Stress dispatch" below: 30 of the suite's 46 compiled rows need make
-on unix, 29 on Windows, 24 and 12 of them for a configure script; no
-tool to move, no shared runner needed). Later items: route `R CMD
-SHLIB` through rzig build (it would also clear pak's probe), or give it
-a preflight; revisit 0010 for pkgbuild's probe.
+src/Makefile*, an Objective-C source, Makevars with rules, an
+`include`, conditionals, `$(shell)`, a foreign compiler, OBJECTS
+without a source, `MAKEFLAGS` setting a variable); any package whose
+configure script R runs (tier 0 or 2 can have one; `R CMD config` runs
+before it on unix, 0010); `R CMD SHLIB`, so run-time compilation
+(Rcpp's sourceCpp/cppFunction/evalCpp, cpp11::cpp_source, inline,
+rstan, TMB) and pkgbuild's has_compiler probe, through which pak
+refuses every compiled package, tier 1 included, before `R CMD
+INSTALL`; `R CMD config`'s direct callers (users, pkgbuild); `R CMD
+check`'s objdump (Windows); on Windows, cleanup.ucrt/cleanup.win under
+`--clean` or `--preclean` (without sh only a warning: the cleanup is
+skipped) [coverage-C1, channels-C8, preflight-F7]. Not needed by tier 0
+to 2 installs without a configure script R runs, through `R CMD
+INSTALL` and install.packages() [records-REC-6]. Phase 7 (Windows
+usr/bin) and B24 are re-scoped from the stress table (M6; "Stress
+dispatch" below: 31 of the suite's 47 rows that compile need the group
+on unix and 30 on Windows, 30 and 29 of them through make in run_shlib,
+24 and 12 of those for a configure script, and Rhdf5lib through its
+configure script's CMake [stress-S9]; the table adds no evidence on
+B24, whose dlltool/as follow-up PR stands [stress-S2]). Later items:
+route `R CMD SHLIB` through rzig build (it would also clear pak's
+probe), or give it a preflight; revisit 0010 for pkgbuild's probe; a
+shared tier-1 build runner, still open: the stress dispatch shared one
+zig build cache, so it did not measure the per-install runner cost,
+and a dispatch with `shared_cache = false` decides it (CONSENSUS H;
+"Stress dispatch" below; fix-zig-pkg-build-review's PLAN.md)
+[stress-S1, records-REC-4]; a g1 dispatch with trace (Rcpp, rstan),
+whose smokes compile at run time [stress-S6].
 
 ### The couplings to R's tree (from HANDOFF.md, updated for the merge)
 
@@ -977,12 +1104,15 @@ The per-install cache (N3): the build runner compiles per install
 (quadprog's 6 s against make's 2 s is that cost, about 3 to 4 s; the
 larger packages hide it in the compiles). cli twice from one
 directory: zig's global cache's `o/` unchanged (270 entries), no
-`zig-build` under rzig's cache, no build root left in src/. Tier 2
-(zighello): 47 s the first time (zig's global cache cold for the
-package target: std, translate-c of R's headers), then 5 s per install
-(the second and third installs; `--no-test-load` 5 s); cli
-`--no-test-load` 10 s. The base alone with PATH = sh, zig and flang:
-quadprog in 11 s.
+`zig-build` under rzig's cache, no build root left in src/. (One
+directory is the one case where zig cc's keys, the absolute source
+paths, coincide: from its tarball, as install.packages installs, each
+install added 26 entries until the follow-up [tests-T1,
+records-REC-2].) Tier 2 (zighello): 47 s the first time (zig's global
+cache cold for the package target: std, translate-c of R's headers),
+then 5 s per install (the second and third installs; `--no-test-load`
+5 s); cli `--no-test-load` 10 s. The base alone with PATH = sh, zig
+and flang: quadprog in 11 s.
 
 ### Test results (checklist I, 2026-10-12)
 
@@ -995,9 +1125,9 @@ quadprog in 11 s.
 | | `contract` | pass: builders Rcpp, minqa, quadprog = rzig build; data.table, ps = make; pak = mixed; evalCpp, OpenMP, the config checks as before |
 | | `package-toolchain`, `verify-package` | pass: scenario 2's pfC through rzig build, pfM, pfG and pfF stops, every shape as a package; scenario 3's btA/btLib builders |
 | linux-64, minimal | `toolchain`, `build`, `package-toolchain`, `verify-package` | pass |
-| linux-64, wheel | `wheel`, `wheel-test` | pass: the console-script install `rzig build: tier 1` under PyPI ziglang (9 rzig command lines), the bundled bin/R install through make, rzigwheelar through the wheel's make |
-| linux-64, pkg | `conda-package` | pass (r-zig-slim and r-zig-toolchain build 8, not published): test-toolchain.R asserts rzigc through rzig build from a captured `R CMD INSTALL` log (install.packages keeps no output for a local path: found by this run), and rzigc, rzigz, rzigf, rzigfl through make too |
-| omicron (osx-arm64, macOS 26.4.1, conda-forge zig) | `toolchain`, `build`, `compile-tree`, `rzig-test`, `pkg-parity`, `package-toolchain`, `verify-package` | pass. pkg-parity: cli 13 s / make 10 s (27 rzig lines identical, the `ZIG_LIB_DIR=` prefix stripped: the first macOS run, channels-C3), digest 17/7 (20), quadprog 9/3 (6), Rcpp, minqa 10/7 (19); zighello 29 s cold, URL refused; cli twice: 257 global entries unchanged; quadprog on the base 12 s. verify-package: pfC through rzig build, the shapes, btA = rzig build and btLib = make. Run twice, the second after the def.zig change: pass both times |
+| linux-64, wheel | `wheel`, `wheel-test` | pass: the console-script install `rzig build: tier 1` under PyPI ziglang (3 rzig commands, the two compiles and the link; the 9 counted then included rzig's self and environment lines [tests-T10]), the bundled bin/R install through make, rzigwheelar through the wheel's make |
+| linux-64, pkg | `conda-package` | pass (r-zig-slim and r-zig-toolchain build 8, not published): test-toolchain.R asserts rzigc through rzig build from a captured `R CMD INSTALL` log (install.packages keeps no output for a local path: found by this run), and rzigc, rzigz, rzigf, rzigfl through make too (their builder not asserted until the follow-up [tests-T2]) |
+| omicron (osx-arm64, macOS 26.4.1, conda-forge zig) | `toolchain`, `build`, `compile-tree`, `rzig-test`, `pkg-parity`, `package-toolchain`, `verify-package` | pass. pkg-parity: cli 13 s / make 10 s (27 rzig lines identical, the `ZIG_LIB_DIR=` prefix stripped: the first macOS run, channels-C3), digest 17/7 (20), quadprog 9/3 (6), Rcpp (its numbers not recorded [records-REC-10]), minqa 10/7 (19); zighello 29 s cold, URL refused; cli twice: 257 global entries unchanged; quadprog on the base 12 s. verify-package: pfC through rzig build, the shapes, btA = rzig build and btLib = make. Run twice, the second after the def.zig change: pass both times |
 | kappa (win-64, Windows 11 22621, conda-forge zig) | `toolchain`, `build`, `compile-tree`, `pkg-parity`, `package-toolchain`, `verify-package`, `conda-package` | pass. pkg-parity (its first runs on Windows) found three things, fixed and rerun: `rzig def` dropped the `.refptr.*` names make exports (def.zig, above); `argv_of` cut `--out-implib=<path>` to the bare file name on the zig path (the option name is kept now); the no-make env lacked zig's cache home (`LOCALAPPDATA`, `ZIG_GLOBAL_CACHE_DIR`) and took zig from `command -v zig`, which finds nothing on win-64 (env.sh's `$ZIG` now). Then: cli 31 s / make 18 s (195 exports, 27 rzig lines identical), digest 18/6 (129, 20), quadprog 15/4 (2, 6), Rcpp 29/9 (744, 7); cli twice: 1718 global entries unchanged; zighello 16 s warm (70 s cold); quadprog on the base 14 s with flang + System32, zig through ZIG_BIN. verify-package: scenario 3's btA = rzig build, btLib and btRc = make; ltotier1 goes to make with "MAKEFLAGS sets LTO_OPT"; the OpenMP DLLs; run twice (before and after def.zig), pass both times. conda-package: both packages build, test-toolchain.R's builder assertions pass |
 
 CI on PR #25 (run 38302765293, after the merge commit 47e8436):
@@ -1008,7 +1138,12 @@ Windows, this branch's pkgplan tests do, and the branch had never run
 on Windows CI (kappa's chains ran everything but rzig-test). Fixed with
 a comptime switch (a plain file there, as touchProgram makes); rzig-test
 on kappa: 94 passed, 25 skipped. CI on 45892fb (run 38305799627, the
-full tier): green. The stress dispatch followed (M6): the next section.
+full tier): green. The upstream-zig legs did not run on PR #25 (its
+only label was full-ci; runs 38302765022 and 38305799647 skipped), so
+rzig build on Windows under upstream zig, tier 2 with `--system` and
+pkg-parity's argv comparison had not run with upstream zig anywhere
+[phase3-P3-10]; the follow-up PR gets the `upstream-zig` label
+(menu 3). The stress dispatch followed (M6): the next section.
 
 ### Stress dispatch (M6, 2026-10-12)
 
@@ -1017,17 +1152,26 @@ ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest;
 packages g3 g4; distribution tree; `trace = true`; `builder = auto`.
 The make reference is phase 3's dispatch 38251125721 on 548da1a
 (ubuntu-latest, tree, g3 g4, no trace; every row through make), the
-only earlier run, so the make comparison is linux x86_64 only. Each leg
-installs 60 rows: 23 targets and 37 dependencies. A row's tier is its
-install log's `rzig build:` line: `tier 1, root ...`, or `<pkg> needs
-make: <reason>`; a row with no line built no native library in
+only earlier run, so the make comparison is linux x86_64 only. Each
+leg installs 60 rows: 23 targets and 37 dependencies. A row's tier is
+its install log's `rzig build:` line: `tier 1, root ...`, or `<pkg>
+needs make: <reason>`; a row with no line built no native library in
 run_shlib (R-only, or Rhdf5lib, whose configure builds HDF5 with cmake
-into inst/ and has no src/). stress.R points `ZIG_LOCAL_CACHE_DIR` at
-one run-wide `zig-cache`, so the tier-1 build runner compiles once per
-leg (the per-install default pays it per install). Smoke steps: no
-`*-smoke.log` holds an rzig trace line, so no row's smoke compiled at
-run time. The artifacts (`stress-<os>-tree`, the reference's too) were
-read row by row.
+into inst/ and has no src/: it still needs the group, sh, make through
+`R CMD config` and cmake [stress-S9]). stress.R points
+`ZIG_LOCAL_CACHE_DIR` at one run-wide `zig-cache`, so the tier-1 build
+runner compiles once per leg (the per-install default pays it per
+install), and this dispatch says nothing of the per-install cost
+[stress-S1]. Smoke steps: g3 g4 have no smoke that compiles at run
+time (Rcpp ran only as a dependency, its smoke `TRUE`; rstan is g1),
+so the `R CMD SHLIB` command (run-time compilation, pkgbuild's probe)
+was not exercised here; contract's evalCpp and verify-bundle scenario
+2's SHLIB shapes cover it [stress-S6, records-REC-9]. Nor would a
+smoke log have shown one: a local `stress.R --trace Rcpp` of the
+follow-up (2026-10-13) compiled and ran its cppFunction smoke, and
+Rcpp-smoke.log has no rzig line (sourceCpp keeps R CMD SHLIB's output
+to itself). The artifacts (`stress-<os>-tree`, the reference's too)
+were read row by row.
 
 Per leg:
 
@@ -1083,17 +1227,23 @@ The tier-1 rows, minutes per leg (ref = 548da1a through make):
 | gsl | make 0.09 | make 0.07 | make 0.08 | make 0.15 | make 0.58 | 0.07, then the load failure above |
 | nloptr | make 0.30 | make 0.21 | make 0.31 | make 0.69 | make 2.06 | 0.04 (tier 1) |
 
-Every row through rzig build took as long as or less than the
-reference's make build. The whole leg was faster (17.8 against 27
-min), the make rows by 25 to 40% too (s2 2.04 against 3.36,
-stringi:bundled 2.45 against 4.08), so a cross-run comparison is
-indicative only: it is runner variance, not the builder. The runner
-compile shows once per leg in sys (0.10 against 0.02 on ubuntu), and
-askpass, the next tier-1 row, is warm. The macos-15-intel runner is
-two to four times slower on every row, make rows included (s2 4.27
-against 1.94 on macos-latest, igraph 5.52 against 1.58, stringi:bundled
-8.45 against 3.11), so its tier-1 times are read against its own make
-rows only. No time asks for a shared runner.
+On ubuntu-latest the tier-1 rows ran at about the same ratio to the
+548da1a reference as the make rows: 0.67 against 0.65 summed (4.04
+against 6.02 min, 0.66 without sys; the make rows 11.94 against 18.43,
+each between 0.50 and 0.86 of its reference time), so with a shared
+cache there is no measurable builder difference, and runner variance
+explains the rest (the whole leg 17.8 against 27 min) [stress-S4,
+phase3-P3-8]. sys, the first tier-1 row,
+is slower than its reference on every leg (0.10 against 0.02 on
+ubuntu): it carries the one runner compile per cache, 5 to 15 s on
+four legs and about 35 s on macos-15-intel, inferred from sys against
+the reference and the next warm tier-1 row (askpass, base64enc on
+Windows) [stress-S5]. The macos-15-intel runner is two to four times
+slower on every row, make rows included (s2 4.27 against 1.94 on
+macos-latest, igraph 5.52 against 1.58, stringi:bundled 8.45 against
+3.11), so its tier-1 times are read against its own make rows only.
+These times say nothing of the per-install runner cost (one shared
+cache): see the re-scope below [stress-S1, records-REC-4].
 
 The make rows and their reasons:
 
@@ -1102,7 +1252,7 @@ The make rows and their reasons:
 | unix (the three legs agree) | a configure script (24) | curl, openssl, xml2, gert, units, systemfonts, stringi, stringi:bundled, textshaping, ragg, magick, hdf5r, ncdf4, gsl, Rmpfr, RPostgres, nloptr, s2, igraph, qs2, fstcore, gmp, RcppParallel, stringfish |
 | unix | src/Makevars has a rule or target line (6) | filelock `all: clean`, jsonlite `all: $(SHLIB) cleanup`, Matrix `$(SHLIB): $(sslib)`, rlang `all: $(SHLIB)`, timechange `$(SHLIB): libcctz.a`, zip `.PHONY: all clean` |
 | windows | a configure.win script (12) | curl, openssl, xml2, stringi, stringi:bundled, magick, hdf5r, RPostgres, s2, igraph, Rmpfr, RcppParallel |
-| windows | Makevars.win/.ucrt has a rule or target line (9) | the six above (`.win` or `.ucrt`), askpass `all: clean $(ASKPASS)`, libgeos `$(SHLIB): $(STATLIB)`, units (`.ucrt`) `all: clean` |
+| windows | a Makevars rule (src/Makevars, .win or .ucrt) (9) | jsonlite, Matrix, rlang, timechange (src/Makevars: no .win or .ucrt file), filelock, zip, askpass `all: clean $(ASKPASS)`, libgeos `$(SHLIB): $(STATLIB)` (Makevars.win), units `all: clean` (Makevars.ucrt) [stress-S8, records-REC-8] |
 | windows | Makevars.win has `$(shell ...)` (5) | textshaping, ragg, systemfonts, qs2, stringfish |
 | windows | a conditional (2) | gert (`ifneq`), ncdf4 (`.ucrt`, `ifeq`) |
 | windows | an include (1) | fstcore (`.ucrt`) |
@@ -1116,34 +1266,74 @@ library are the same everywhere: biocmake, blob, cpp11, credentials,
 DBI, dir.expiry, generics, hms, lifecycle, pkgconfig, R6, rstudioapi,
 withr (R-only) and Rhdf5lib.
 
-What the Windows rows not built by rzig ran, from their logs (make
-echoes the recipes; rzig prints its own lines): `$(AR)`/`$(RANLIB)`
-(rzig) in 12 and 2 rows, sed in 5 (stringi, igraph, ragg, s2,
-Rhdf5lib), pkg-config in 2 (s2, igraph), cmake in 2 (biocmake,
-Rhdf5lib), cp/mkdir/rm in 5 (askpass, filelock, ncdf4, Matrix, units);
-no dlltool, windres, objdump or strip call in any log; winshlib.mk's
-nm|sed def step is silent, so not countable here.
+What the Windows rows not built by rzig ran, from the recipes and the
+packages' own messages rather than counts of words in the logs (make
+echoes a recipe only when it is not `@`-silent, configure.win's
+commands and the binutils are not traced, and 6 of the 29 make rows
+failed before their end) [stress-S2, stress-S3, records-REC-8]:
+winshlib.mk's `@`-silent def and link recipe runs nm, sed (twice),
+basename, echo and rm in every make row that links; the 12
+configure.win scripts run under sh; pkg-config in at least 9 rows
+(ragg, textshaping, systemfonts, xml2, openssl and RPostgres print
+"using ... from Rtools", s2 and igraph its results, ncdf4's `-ldebug`
+comes from netcdf.pc); rzig's `$(AR)`/`$(RANLIB)` echoed in 12 and 2
+rows; rm echoed in 5 (askpass, filelock, units, ncdf4, Matrix); cmake
+in Rhdf5lib (its configure, "Building for: MSYS Makefiles") and in
+RcppParallel, whose TBB build keeps CMake's output unless it fails and
+whose `.rc` files reach windres through Rcmd_environ's `RC`, so windres
+ran there unseen. No echoed recipe calls dlltool, windres, objdump or
+strip, which says little: R CMD check, objdump's caller, did not run.
+(The earlier counts, sed in 5, cmake in biocmake and cp/mkdir, matched
+words such as "used" and a package's name.)
 
 **Re-scope of phase 7 and B24 (feat-standalone-toolchain TODO.md),
-from this table.** The suite is the hard set by construction
-(configure scripts, system libraries): 30 of its 46 compiled rows need
-make on unix and 29 on Windows, 24 and 12 of them for a configure
-script, so the build-tools group stays required for the suite's
-packages on every OS; the tier-1 share here (16 to 17 of 46) is below
-the CRAN estimate of about half because of that selection, not a
-measurement of CRAN. Phase 7's Windows `usr/bin` keeps sh and make
-(configure.win, Makevars rules, `$(shell)`), coreutils (the cp/mkdir/rm
-recipes), sed and pkg-config (B43-3; s2 and igraph), with the binutils
-the make path's rules name (nm for the def step; dlltool/windres as
-phase 3 step 6 left them); cmake stays the extras candidate (Rhdf5lib,
-through biocmake). B24: the table names no further tool to move; the
-dlltool/as follow-up PR stands. The shared tier-1 build runner (TODO.md
-"Depend less on make") is not asked for: one runner compile per cache
-(sys), 5 to 15 s, and the per-install cache's cost (about 3 s warm,
-measured on linux-64 above) is below every row's make time but the
-smallest. Not measured by this dispatch: `builder = make` on the legs
-without a reference, the preflight (fact 11: stress runs skip 0009),
-and the per-install cache's cost (the run shared one cache).
+from this table** (corrected by the follow-up of 2026-10-13 [stress-S1
+to S3, S8, S9, records-REC-4, REC-8]). The suite is the hard set by
+construction (configure scripts, system libraries): 31 of its 47 rows
+that compile need the group on unix and 30 on Windows, 30 and 29 of
+them through make in run_shlib (24 and 12 of those for a configure
+script) and Rhdf5lib through its configure script's CMake build, so the
+build-tools group stays required for the suite's packages on every OS;
+the tier-1 share here (16 to 17 of the 46 rows that build a library in
+run_shlib) is below the CRAN estimate of about half because of that
+selection, not a measurement of CRAN. Phase 7's Windows `usr/bin`
+keeps sh and make (configure.win, Makevars rules, `$(shell)`,
+conditionals, `include`), coreutils (winshlib.mk's basename and rm in
+every make row; rm also echoed in 5), sed (winshlib.mk's def
+step) and pkg-config (B43-3; at least 9 rows). The binutils stay in
+TC/binutils/ as phase 3 step 6 left them (B24), not in usr/bin: nm for
+the def step, windres for `RC` (RcppParallel's TBB), dlltool and as
+until their follow-up PR. cmake stays the extras candidate (Rhdf5lib
+through biocmake; RcppParallel's TBB). B24: the table adds no evidence
+either way (binutils calls are not traced, configure.win and
+`@`-recipes are silent, R CMD check did not run); the dlltool/as
+follow-up PR stands. The shared tier-1 build runner (TODO.md "Depend
+less on make") stays open: this dispatch shared one zig build cache,
+so it did not measure the per-install runner cost. The estimates:
+fact 9's about 3.1 s warm per tier-1 install on linux-64 (2026-10-13,
+the follow-up: 2 to 2.9 s with conda-forge zig, 1.1 to 1.3 s with
+upstream zig; fix-zig-pkg-build-review's PLAN.md), about the whole
+make install time of the smallest rows (0.02 min); on the hosts, rzig
+build against make in the consolidation's pkg-parity, 6 to 10 s more on
+omicron and 11 to 20 s on kappa. Decide with a dispatch with
+`shared_cache = false` (stress.R `--no-shared-cache`) on the five
+runners. Not measured by this dispatch: `builder = make` on the legs
+without a reference, the
+preflight (fact 11: stress runs skip 0009), the per-install cache's
+cost (the run shared one cache), and run-time compilation (no g3 g4
+smoke compiles; a g1 dispatch with trace, Rcpp and rstan, is a later
+item) [stress-S6].
+
+## Follow-up: the PR #25 review (2026-10-13)
+
+PR #25 merged (07e12c0) before the phase 3 session's review of it
+finished ("Consolidation with phase 3", above). The user took every
+menu's recommendation and asked for one follow-up PR on the new main,
+branch fix-zig-pkg-build-review. Its record,
+`.github/devdocs/fix-zig-pkg-build-review/PLAN.md`, holds the review
+(`review/` there), the decisions, the interfaces, what changed per
+item, the measurements and the tests; the corrections it made to this
+file carry the review's ids in brackets.
 
 ## Cleanup before merge
 
@@ -1174,6 +1364,8 @@ Also removed then: the M2 oracle line and the M1 prototype block of
 
     pixi run pkg-parity        # M4 and the consolidation: the five fixtures on the compile tree, tier 2, tier 3, the caches, the base with no make
     pixi run rzig-test         # rzig's unit tests and the shim parity, with --rzig-check=package's cases
+    pixi run rzig-test dist/slim/R-4.6.1-zig   # also smoke-test.sh on that tree (linux): packages through its R CMD INSTALL, rzig build
+    gh workflow run stress.yaml -f packages='g3 g4' -f trace=true -f shared_cache=false   # the per-install runner cost (stress.R --no-shared-cache)
 
 M3 and M5, with a dist of this branch (`pixi run build`) and the pixi
 env's zig and flang on PATH (any OS; `R` is the dist's `bin/R`, on

@@ -56,6 +56,11 @@ test -x "$R_BIN" || { echo "error: $R_BIN not built yet — run 'pixi run build'
 
 LIB="$BUILD_DIR/testlib-$VARIANT"
 mkdir -p "$LIB"
+# rzig build's cache as a user's install has it: per install, in the build
+# root, gone with it (N3). env.sh's ZIG_LOCAL_CACHE_DIR would be its cache
+# instead, one that only grows [phase3-P3-6]; zig cc keeps its objects in
+# env.sh's global cache.
+unset ZIG_LOCAL_CACHE_DIR
 
 echo "Contract test (variant: $VARIANT, os: $OS)"
 echo "Compiling Rcpp + data.table + minqa + quadprog + pak + ps from source..."

@@ -27,24 +27,27 @@
 #      the extracted tree, where the install preflight stops a compiled
 #      package with the compilers' text; TLS trust with the shipped CA
 #      bundle and nothing from the build env (unix).
-#   2. + compilers: rzig's check mode finds zig and flang; unix, the
+#   2. + compilers: rzig's check mode finds zig and flang; the
 #      preflight's other branches (zig from ZIG_BIN, no make, no flang;
-#      feat-zig-pkg-build M4): a C package with no Makevars builds
-#      through `rzig build` (patch 0013) with no make and loads; one
-#      whose Makevars has a rule stops with rzig's reason and the build
-#      tools' text, an R-only package with a configure script with "a
-#      configure script R runs" and the same text, a Fortran one with no
-#      flang and the compilers' text (C26); the C compiler compiles for
-#      the arch's baseline CPU, not this machine's, also when told
-#      -mtune=native (LLVM IR's target-cpu); packages compiled with the
-#      tree build and load. unix, under env -i: C++, Fortran,
-#      USE_FC_TO_LINK, $(FLIBS) without flang, zig-fc with no flang,
-#      OpenMP (C, and Fortran with `use omp_lib`) with the group's
-#      openmp/ where the base has libomp and openmp/ left alone on
-#      minimal (B40), decoy CONDA_PREFIX runs: each shape through R CMD
-#      SHLIB (make, the run-time compile path) and as a package through
-#      R CMD INSTALL (rzig build, asserted from its log), with the same
-#      checks on both libraries.
+#      feat-zig-pkg-build M4; Windows too [phase3-P3-9]): a C package
+#      with no Makevars builds through `rzig build` (patch 0013) with no
+#      make, in its own per-install cache, leaves no build root, and
+#      loads; one whose Makevars has a rule stops with rzig's reason and
+#      the build tools' text; unix also an R-only package with a
+#      configure script, with "a configure script R runs" and the same
+#      text, and a Fortran one with no flang and the compilers' text
+#      (C26); the C compiler compiles for the arch's baseline CPU, not
+#      this machine's, also when told -mtune=native (LLVM IR's
+#      target-cpu); packages compiled with the tree build and load.
+#      unix, under env -i: C++, Fortran, USE_FC_TO_LINK, $(FLIBS)
+#      without flang (or make), zig-fc with no flang, OpenMP (C, and
+#      Fortran with `use omp_lib`) with the group's openmp/ where the base
+#      has libomp and openmp/ left alone on minimal (B40), decoy
+#      CONDA_PREFIX runs (the C++ and, where offered, the OpenMP shape):
+#      each shape through R CMD SHLIB (make, the run-time compile path)
+#      and as a package through R CMD INSTALL (rzig build, asserted from
+#      its log), with the same checks on both libraries, and on rzig
+#      build's objects, kept in its build root, the macOS floor.
 #      Windows, where make is a build tool: rzig's dry runs (-L from
 #      where the tree now is, the group's openmp/, CONDA_PREFIX ignored),
 #      and an OpenMP DLL compiled and linked by gcc.exe alone, loaded
@@ -60,9 +63,9 @@
 #      B43), R CMD check's DLL check runs the group's objdump, a tools.mk
 #      runs each of the binutils (C10, C11), CMake's ar and ranlib beside
 #      CC are rzig, and the OpenMP C and Fortran packages (through R CMD
-#      SHLIB, make, and as packages through rzig build), the
-#      static-library package and a package with a .rc file (make) and a
-#      plain C one (rzig build) build and load with only bin\x64 and
+#      SHLIB, make, and as packages through rzig build [phase3-P3-1]),
+#      the static-library package and a package with a .rc file (make)
+#      and a plain C one (rzig build) build and load with only bin\x64 and
 #      System32 on PATH; LTO is recorded, not checked (B43-2, C9), with
 #      a tier-1 twin that MAKEFLAGS' assignment sends to make (N4). Every
 #      OS, with no ZIG_BIN (no zig: phase 5):
@@ -269,7 +272,9 @@ no_flang_line="zig-cc: no flang (R_HOME/bin/toolchain/flang/bin, the environment
 no_make_line="zig-cc: no make on PATH"
 compilers_head="Compiling needs the r-zig compilers for R $R_VERSION on $PLAT: "
 build_tools_head="Building packages needs the r-zig build tools for R $R_VERSION on $PLAT: "
-preflight_stop="ERROR: this package has compiled code, and the r-zig toolchain is incomplete (see above)"
+# 0009's own stop (pkgerrmsg), for compiled code and for a configure script
+# R runs alike [tests-T11]
+preflight_stop="ERROR: this package needs the r-zig toolchain (compiled code or a configure script), which is incomplete (see above)"
 starts_line() { tr -d '\r' < "$1" | awk -v p="$2" 'index($0, p) == 1 { f = 1 } END { exit !f }'; }
 
 # --- Scenario 1: the base alone ---------------------------------------------
@@ -299,7 +304,8 @@ if [ "$OS" = windows ]; then
     PATHEXT=".COM;.EXE;.BAT;.CMD" USERPROFILE="$(w "$home")" HOME="$(w "$home")" LOCALAPPDATA="$(w "$home")"
     TMPDIR="$(w "$home/tmp")" TMP="$(w "$home/tmp")" TEMP="$(w "$home/tmp")")
   zig_bin="${ZIG:+$(cygpath -m "$ZIG")}"
-  zig_env=(ZIG_BIN="$zig_bin" ZIG_GLOBAL_CACHE_DIR="$(cygpath -m "$ZIG_GLOBAL_CACHE_DIR")" ZIG_LOCAL_CACHE_DIR="$(cygpath -m "$ZIG_LOCAL_CACHE_DIR")")
+  # (no ZIG_LOCAL_CACHE_DIR: see unix's below)
+  zig_env=(ZIG_BIN="$zig_bin" ZIG_GLOBAL_CACHE_DIR="$(cygpath -m "$ZIG_GLOBAL_CACHE_DIR")")
 else
   R_BINDIR="$BUNDLE_DIR/bin"
   R_BIN="$R_BINDIR/R"
@@ -310,9 +316,13 @@ else
   # zig: env.sh's $ZIG, the one the build used (ZIG_BIN, else the env's),
   # passed on as ZIG_BIN, which env -i drops (rzig would then take the
   # env's zig from PATH and test conda-forge's zig after an upstream zig's
-  # build), with the caches env.sh keeps for that zig.
+  # build), with the global cache env.sh keeps for that zig. Not its
+  # ZIG_LOCAL_CACHE_DIR: rzig build would take that as its cache, and the
+  # installs here are to use the per-install cache in the build root that
+  # a user's install gets (N3) [phase3-P3-6]; zig cc then keeps its
+  # objects in the global cache.
   zig_bin="$ZIG"
-  zig_env=(ZIG_BIN="$zig_bin" ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR")
+  zig_env=(ZIG_BIN="$zig_bin" ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR")
 fi
 test -x "$R_BIN" || { echo "error: $R_BIN missing from the extracted base" >&2; exit 1; }
 
@@ -537,40 +547,51 @@ if [ -n "$ZIG" ]; then
 fi
 
 # The install preflight's other branches (B26, C26; feat-zig-pkg-build
-# M4), unix: zig from ZIG_BIN=$ZIG, PATH the tree's bin alone, so no make
-# (the build-tools group is not extracted yet) and no flang. The preflight
-# (patch 0009, rzig's --rzig-check=package) decides as `rzig build`
-# decides in install.R's hook (patch 0013): a package with C code and no
-# Makevars (pfC) passes the compilers' check, needs no make, and the hook
-# builds it through rzig build (RZIG_TRACE=1: `rzig build: tier 1`, no
-# make output), and it loads; one whose Makevars has a rule (pfM, mkpkg's
-# lib: a static library through $(AR)) needs make and stops at the build
-# tools' check with rzig's reason and their text; one with a Fortran
-# source, src/a.f (pfF), stops at the compilers' with no flang and their
-# text; an R-only package with a configure script (pfG, configure_marker)
-# stops at the build tools' with "a configure script R runs", its
-# configure not run. The preflight's own ERROR line tells its stop from
-# the one install.R's R CMD config (patch 0010) would make later, before
-# the configure (that call needs make too), which the marker alone could
-# not. None of the last three installs. (Windows: scenario 3 runs the
-# preflight with no zig.)
-if [ "$OS" != windows ] && [ -n "$ZIG" ]; then
+# M4): zig from ZIG_BIN=$ZIG, and no make (the build-tools group is not
+# extracted yet) and no flang on PATH: unix the tree's bin alone, Windows
+# bin\x64 and System32 [phase3-P3-9]. The preflight (patch 0009, rzig's
+# --rzig-check=package) decides as `rzig build` decides in install.R's
+# hook (patch 0013): a package with C code and no Makevars (pfC) passes
+# the compilers' check, needs no make, and the hook builds it through
+# rzig build (RZIG_TRACE=1: `rzig build: tier 1`, no recipe make echoed)
+# with the per-install cache in its build root, which goes with the
+# install (zig_env has no ZIG_LOCAL_CACHE_DIR) [phase3-P3-6], and it
+# loads; one whose Makevars has a rule (pfM, mkpkg's lib: a static library
+# through $(AR)) needs make and stops at the build tools' check with
+# rzig's reason and their text. unix also: one with a Fortran source,
+# src/a.f (pfF), stops at the compilers' with no flang and their text; an
+# R-only package with a configure script (pfG, configure_marker) stops at
+# the build tools' with "a configure script R runs", its configure not
+# run. The preflight's own ERROR line tells its stop from the one
+# install.R's R CMD config (patch 0010) would make later, before the
+# configure (that call needs make too), which the marker alone could not.
+# None but pfC installs. (Scenario 3 runs the preflight with no zig.)
+if [ -n "$ZIG" ]; then
   pf="$VERIFY_DIR/preflight"
+  # the R that installs (R CMD INSTALL) and its PATH; the R that loads
+  # pfC, with its PATH
+  if [ "$OS" = windows ]; then
+    pf_r="$R_EXE"; pf_path="$R_BINDIR:$sys32"; pf_load=(PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla)
+  else
+    pf_r="$R_BIN"; pf_path="$BUNDLE_DIR/bin"; pf_load=(PATH=/usr/bin:/bin "$R_BIN" --vanilla --no-echo)
+  fi
   mkpkg "$pf/pk" pfC 1
   mkpkg "$pf/pk" pfM 3 lib
-  mkpkg "$pf/pk" pfF 2
-  printf '      subroutine pff\n      end\n' > "$pf/pk/pfF/src/a.f"
-  mkdir -p "$pf/pk/pfG/R"
-  printf 'Package: pfG\nVersion: 0.1\nTitle: Verify Bundle\nDescription: R only, with a configure script.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' > "$pf/pk/pfG/DESCRIPTION"
-  echo 'export(g)' > "$pf/pk/pfG/NAMESPACE"
-  echo 'g <- function() 7L' > "$pf/pk/pfG/R/g.R"
-  configure_marker "$pf/pk/pfG"
+  if [ "$OS" != windows ]; then
+    mkpkg "$pf/pk" pfF 2
+    printf '      subroutine pff\n      end\n' > "$pf/pk/pfF/src/a.f"
+    mkdir -p "$pf/pk/pfG/R"
+    printf 'Package: pfG\nVersion: 0.1\nTitle: Verify Bundle\nDescription: R only, with a configure script.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' > "$pf/pk/pfG/DESCRIPTION"
+    echo 'export(g)' > "$pf/pk/pfG/NAMESPACE"
+    echo 'g <- function() 7L' > "$pf/pk/pfG/R/g.R"
+    configure_marker "$pf/pk/pfG"
+  fi
   mkdir -p "$pf/lib"
   # preflight_stops <package> <what is missing> <the group's first line>
   preflight_stops() {
     local rc=0
-    (cd "$pf" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$BUNDLE_DIR/bin" \
-      "$R_BIN" CMD INSTALL -l lib "pk/$1") > "$pf/$1.log" 2>&1 || rc=$?
+    (cd "$pf" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$pf_path" \
+      "$pf_r" CMD INSTALL -l lib "pk/$1") > "$pf/$1.log" 2>&1 || rc=$?
     if [ "$rc" = 0 ] || [ -e "$pf/lib/$1" ] || [ -e "$pf/pk/$1/configure-ran" ] ||
        ! starts_line "$pf/$1.log" "$2" || ! starts_line "$pf/$1.log" "$3" ||
        ! starts_line "$pf/$1.log" "$preflight_stop"; then
@@ -580,20 +601,33 @@ if [ "$OS" != windows ] && [ -n "$ZIG" ]; then
     fi
   }
   preflight_stops pfM "zig-cc: pfM needs make: src/Makevars has a rule or target line: '\$(SHLIB): lib/libval.a'; no make on PATH" "$build_tools_head"
-  preflight_stops pfF "$no_flang_line" "$compilers_head"
-  preflight_stops pfG "zig-cc: pfG needs make: a configure script R runs; no make on PATH" "$build_tools_head"
-  (cd "$pf" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$BUNDLE_DIR/bin" RZIG_TRACE=1 \
-    "$R_BIN" CMD INSTALL -l lib pk/pfC) > "$pf/pfC.log" 2>&1 ||
+  if [ "$OS" != windows ]; then
+    preflight_stops pfF "$no_flang_line" "$compilers_head"
+    preflight_stops pfG "zig-cc: pfG needs make: a configure script R runs; no make on PATH" "$build_tools_head"
+  fi
+  (cd "$pf" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$pf_path" RZIG_TRACE=1 \
+    "$pf_r" CMD INSTALL -l lib pk/pfC) > "$pf/pfC.log" 2>&1 ||
     { cat "$pf/pfC.log" >&2; echo "error: pfC (C, no Makevars) did not install with the compilers and no make" >&2; exit 1; }
   starts_line "$pf/pfC.log" "rzig build: tier 1" ||
     { cat "$pf/pfC.log" >&2; echo "error: pfC did not build through rzig build (no 'rzig build: tier 1' line)" >&2; exit 1; }
-  if grep -Eq '^make(\[[0-9]+\])?[: ]' "$pf/pfC.log"; then
-    cat "$pf/pfC.log" >&2; echo "error: make output in pfC's install log" >&2; exit 1
+  if [ -n "$(make_recipes "$pf/pfC.log")" ]; then
+    cat "$pf/pfC.log" >&2; echo "error: a recipe make echoed in pfC's install log" >&2; exit 1
   fi
-  (cd "$pf" && env -i "${base_env[@]}" PATH=/usr/bin:/bin \
-    "$R_BIN" --vanilla --no-echo -e 'stopifnot(getExportedValue(loadNamespace("pfC", lib.loc = "lib"), "f")() == 1L)') ||
+  # the traced zig build command names the cache: the build root's (grep
+  # reads to the end, no -q: grep -q's early exit could kill tr with
+  # SIGPIPE and fail the pipeline, pipefail [tests-SIGPIPE-1])
+  tr -d '\r' < "$pf/pfC.log" | grep -E -- '--cache-dir [^ ]*[\\/]\.rzig[\\/]zig-cache( |$)' > /dev/null ||
+    { cat "$pf/pfC.log" >&2; echo "error: pfC's zig build did not run with the per-install cache, <build root>/zig-cache (ZIG_LOCAL_CACHE_DIR leaked in?)" >&2; exit 1; }
+  test ! -e "$pf/pk/pfC/src/.rzig" ||
+    { echo "error: pfC's install left its build root, $pf/pk/pfC/src/.rzig" >&2; exit 1; }
+  (cd "$pf" && env -i "${base_env[@]}" \
+    "${pf_load[@]}" -e 'stopifnot(getExportedValue(loadNamespace("pfC", lib.loc = "lib"), "f")() == 1L)') ||
     { echo "error: pfC, built through rzig build, did not load" >&2; exit 1; }
-  echo "== the install preflight with zig and no build tools: a C package builds through rzig build and loads; a Makevars-rule package stops with rzig's reason and the build tools' text, an R-only package with a configure script with 'a configure script R runs' and that text (its configure not run), a Fortran one with no flang and the compilers' text"
+  if [ "$OS" = windows ]; then
+    echo "== the install preflight with zig and no build tools (PATH = bin\\x64 + System32): a C package builds through rzig build (its own cache, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text"
+  else
+    echo "== the install preflight with zig and no build tools: a C package builds through rzig build (its own cache, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text, an R-only package with a configure script with 'a configure script R runs' and that text (its configure not run), a Fortran one with no flang and the compilers' text"
+  fi
 fi
 
 # The CPU packages are compiled for, every OS: the baseline of this
@@ -762,27 +796,40 @@ if [ "$OS" != windows ]; then
     # code) under $shapes/<name>, installs it with the SHLIB runs' env -i
     # (PATH $shape_path, $pkg_path unless set; shape_env adds variables)
     # plus RZIG_TRACE=1, requires `rzig build: tier 1` in its log and no
-    # make output, and sets shape_so to its library; shape_load <name>
-    # <R code> loads the installed package with PATH=/usr/bin:/bin.
+    # recipe make echoed, and sets shape_so to its library. RZIG_KEEP_ROOT=1
+    # keeps rzig build's build root, src/.rzig, whose per-install cache
+    # holds the objects it compiled: each source's object is there and at
+    # or below the macOS floor, which only the objects show for a compiler
+    # that ignored it (the SHLIB runs check theirs) [tests-T8]; then the
+    # root goes, as rzig build removes it. shape_load <name> <R code> loads
+    # the installed package with PATH=/usr/bin:/bin.
     shapes="$pkg_dir/pkgs"
     mkdir -p "$shapes/lib"
     shape_path=""
     shape_env=()
     shape_pkg() {
-      local name="$1" d="$shapes/$1"; shift
+      local name="$1" d="$shapes/$1" f o objs=""; shift
       rm -rf "$d"; mkdir -p "$d/src"
       printf 'Package: %s\nVersion: 0.1\nTitle: Verify Bundle\nDescription: A shape R CMD INSTALL builds through rzig build.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' "$name" > "$d/DESCRIPTION"
       printf 'useDynLib(%s)\n' "$name" > "$d/NAMESPACE"
-      while [ $# -gt 0 ] && [ "$1" != -- ]; do cp "$1" "$d/src/"; shift; done
+      while [ $# -gt 0 ] && [ "$1" != -- ]; do
+        cp "$1" "$d/src/"; f="${1##*/}"; objs="$objs ${f%.*}.o"; shift
+      done
       if [ "${1:-}" = -- ]; then shift; printf '%s\n' "$@" > "$d/src/Makevars"; fi
-      (cd "$shapes" && env -i "${base_env[@]}" PATH="${shape_path:-$pkg_path}" "${zig_env[@]}" "${shape_env[@]}" RZIG_TRACE=1 \
+      (cd "$shapes" && env -i "${base_env[@]}" PATH="${shape_path:-$pkg_path}" "${zig_env[@]}" "${shape_env[@]}" RZIG_TRACE=1 RZIG_KEEP_ROOT=1 \
         "$R_BIN" CMD INSTALL -l lib "$name") > "$shapes/$name.log" 2>&1 ||
         { cat "$shapes/$name.log" >&2; echo "error: R CMD INSTALL of $name (a shape through rzig build) failed" >&2; exit 1; }
       starts_line "$shapes/$name.log" "rzig build: tier 1" ||
         { cat "$shapes/$name.log" >&2; echo "error: R CMD INSTALL of $name did not build through rzig build (no 'rzig build: tier 1')" >&2; exit 1; }
-      if grep -Eq '^make(\[[0-9]+\])?[: ]' "$shapes/$name.log"; then
-        cat "$shapes/$name.log" >&2; echo "error: make output in $name's install log" >&2; exit 1
+      if [ -n "$(make_recipes "$shapes/$name.log")" ]; then
+        cat "$shapes/$name.log" >&2; echo "error: a recipe make echoed in $name's install log" >&2; exit 1
       fi
+      for f in $objs; do
+        o="$(find "$d/src/.rzig/zig-cache/o" -name "$f" 2> /dev/null | head -1 || true)"
+        [ -n "$o" ] || { echo "error: no $f in $name's build root, $d/src/.rzig/zig-cache/o (RZIG_KEEP_ROOT=1): not compiled with the per-install cache?" >&2; exit 1; }
+        check_minos "$o"
+      done
+      rm -rf "$d/src/.rzig"
       shape_so="$shapes/lib/$name/libs/$name.so"
       test -f "$shape_so" || { echo "error: no $shape_so after the install of $name" >&2; exit 1; }
     }
@@ -940,12 +987,14 @@ FORTRAN
     (cd "$pkg_dir/cf" && env -i "${base_env[@]}" PATH=/usr/bin:/bin \
       "$R_BIN" --vanilla --no-echo -e 'dyn.load("cf.so"); stopifnot(.C("cfl", n = 0L)$n == 7L)')
     echo "== compiled package verified: \$(FLIBS) links with no Fortran compiler (C; R CMD SHLIB, make)"
-    # as a package: no make and no flang on PATH at all
-    shape_path="/usr/bin:/bin"
+    # as a package: no flang and no make on PATH at all, the tree's bin
+    # alone, as pfC's install (/usr/bin has the host's make on most
+    # machines) [phase3-P3-3]
+    shape_path="$BUNDLE_DIR/bin"
     shape_pkg cf "$pkg_dir/cf/cf.c" -- 'PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)'
     shape_path=""
     shape_load cf 'stopifnot(.C("cfl", n = 0L, PACKAGE = "cf")$n == 7L)'
-    echo "== compiled package verified: \$(FLIBS) links with no Fortran compiler (C; R CMD INSTALL, rzig build, no make on PATH)"
+    echo "== compiled package verified: \$(FLIBS) links with no Fortran compiler (C; R CMD INSTALL, rzig build, PATH the tree's bin alone: no flang, no make)"
 
     # OpenMP's compile-time files are the compilers group's openmp/
     # (feat-standalone-toolchain B22), which rzig counts as one more
@@ -1078,7 +1127,9 @@ FORTRAN
     # (real headers and libraries, a conda-meta) and a poisoned one
     # (#error in omp.h and zlib.h, junk libraries). The C++ package, and the
     # OpenMP one where the tree has OpenMP, rebuild with each as
-    # CONDA_PREFIX: no rpath, and rzig's command lines name neither.
+    # CONDA_PREFIX, through make and through rzig build (the OpenMP one
+    # includes omp.h, so an -I into the decoy fails its compile)
+    # [tests-T8]: no rpath, and rzig's command lines name neither.
     decoy="$VERIFY_DIR/decoy"
     mkdir -p "$decoy/conda-meta" "$decoy/include" "$decoy/lib"
     printf '#error decoy CONDA_PREFIX\n' > "$decoy/include/omp.h"; cp "$decoy/include/omp.h" "$decoy/include/zlib.h"
@@ -1094,11 +1145,15 @@ FORTRAN
           "$R_BIN" CMD SHLIB -o omp.so omp.c > decoy.log 2>&1) || { cat "$pkg_dir/omp/decoy.log" >&2; echo "error: the OpenMP package failed with CONDA_PREFIX=$cpfx" >&2; exit 1; }
         sos="$sos $pkg_dir/omp/omp.so"
       fi
-      # the C++ package through rzig build as well, with the decoy
+      # the C++ package, and the OpenMP one, through rzig build as well
       shape_env=(CONDA_PREFIX="$cpfx")
       shape_pkg rp "$pkg_dir/rp.cpp"
-      shape_env=()
       sos="$sos $shape_so"
+      if [ -f "$pkg_dir/omp/omp.c" ]; then
+        shape_pkg omp "$pkg_dir/omp/omp.c" -- 'PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)'
+        sos="$sos $shape_so"
+      fi
+      shape_env=()
       for so in $sos; do
         so_rp="$(rpaths_of "$so" | tr '\n' ' ')"
         [ -z "$so_rp" ] || { echo "error: ${so##*/} built with CONDA_PREFIX=$cpfx records rpaths: $so_rp" >&2; exit 1; }
@@ -1112,7 +1167,7 @@ FORTRAN
       fi
       printf '%s\n' "$argv" | grep -qxF -- "-L$(cd "$BUNDLE_DIR" && pwd -P)/lib" || { printf '%s\n' "$argv" >&2; echo "error: rzig's link lines lack the tree's -L" >&2; exit 1; }
     done
-    echo "== CONDA_PREFIX ignored: the C++ package (through make and through rzig build; and the OpenMP one, where offered) builds with a poisoned and with the build env as CONDA_PREFIX, no rpath, and rzig's command lines name neither"
+    echo "== CONDA_PREFIX ignored: the C++ package and, where offered, the OpenMP one (each through make and through rzig build) build with a poisoned and with the build env as CONDA_PREFIX, no rpath, and rzig's command lines name neither"
   else
     echo "== compiled-package checks skipped (no zig: ZIG_BIN unset, none on PATH)"
   fi
@@ -1456,7 +1511,64 @@ RCODE
     [ -z "$left" ] || { echo "error: the links left import libraries beside the DLLs: $left" >&2; exit 1; }
     (cd "$ow" && env -i "${base_env[@]}" PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla load.R) ||
       { echo "error: the OpenMP packages ($pkgs) did not load with PATH = bin\\x64 + System32" >&2; exit 1; }
-    echo "== compiled packages verified: OpenMP with the groups (probe $pkgs: omp.h, libomp.lib from openmp/; libomp.dll from bin\\x64 at load; no import library left beside a DLL)"
+    echo "== compiled packages verified: OpenMP with the groups (probe $pkgs: omp.h, libomp.lib from openmp/; libomp.dll from bin\\x64 at load; no import library left beside a DLL; R CMD SHLIB, make)"
+
+    # The same shapes as packages, which R CMD INSTALL builds through rzig
+    # build (tier 1, a Makevars of assignments; patch 0013, the default
+    # builder), the path a user's install of such a package takes here
+    # [phase3-P3-1, records-REC-1, tests-T3]: DESCRIPTION, useDynLib and
+    # the same Makevars, built with the environment and PATH of the SHLIB
+    # builds above, RZIG_TRACE=1. Each log says `rzig build: tier 1` and
+    # holds no recipe make echoed, fompfc's link is zig-fc's
+    # (USE_FC_TO_LINK), each DLL imports libomp.dll (SHLIB_OPENMP_*FLAGS
+    # and -lomp resolved by rzig, `rzig def` on the -fopenmp objects), no
+    # import library and no build root is left, and they load and run with
+    # PATH = bin\x64 + System32.
+    owp="$ow/pkgs"
+    mkdir -p "$owp/lib"
+    cat > "$owp/load.R" <<'RCODE'
+lib <- normalizePath("lib", "/")
+pkgs <- commandArgs(trailingOnly = TRUE)
+for (p in pkgs) loadNamespace(p, lib.loc = lib)
+n <- c(.C("ompn", n = 0L, PACKAGE = "omp")$n, .C("lompn", n = 0L, PACKAGE = "lomp")$n)
+stopifnot(n >= 1L)
+for (d in intersect(c("fomp", "fompfc"), pkgs)) {
+    r <- .Fortran("fompn", n = 0L, t = 0L, s = 0L, PACKAGE = d)
+    stopifnot(r$n >= 1L, r$t == 2L, r$s == 5050L)
+}
+cat("packages", pkgs, "loaded: omp_get_max_threads() =", n, "\n")
+RCODE
+    for d in $pkgs; do
+      mkdir -p "$owp/$d/src"
+      printf 'Package: %s\nVersion: 0.1\nTitle: Verify Bundle\nDescription: An OpenMP shape R CMD INSTALL builds through rzig build.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' "$d" > "$owp/$d/DESCRIPTION"
+      printf 'useDynLib(%s)\n' "$d" > "$owp/$d/NAMESPACE"
+      src="$d.c"; p="$bt_path"
+      if [ ! -f "$ow/$d/$src" ]; then src="$d.f"; p="$bt_path:$fc_dir"; fi
+      cp "$ow/$d/$src" "$ow/$d/Makevars" "$owp/$d/src/"
+      (cd "$owp" && env -i "${base_env[@]}" "${zig_env[@]}" CONDA_PREFIX="$(cygpath -w "$decoy")" PATH="$p" RZIG_TRACE=1 \
+        "$R_EXE" CMD INSTALL -l lib "$d") > "$owp/$d.log" 2>&1 ||
+        { cat "$owp/$d.log" >&2; echo "error: R CMD INSTALL of the OpenMP package $d failed with the base and the groups" >&2; exit 1; }
+      starts_line "$owp/$d.log" "rzig build: tier 1" ||
+        { cat "$owp/$d.log" >&2; echo "error: the OpenMP package $d did not build through rzig build (no 'rzig build: tier 1')" >&2; exit 1; }
+      if [ -n "$(make_recipes "$owp/$d.log")" ]; then
+        cat "$owp/$d.log" >&2; echo "error: a recipe make echoed in the OpenMP package $d's install log" >&2; exit 1
+      fi
+      # (grep reads to the end, no -q [tests-SIGPIPE-1])
+      if [ "$d" = fompfc ] && ! tr -d '\r' < "$owp/$d.log" | grep -E '^zig-fc: .* -o [^ ]*fompfc\.dll' > /dev/null; then
+        cat "$owp/$d.log" >&2; echo "error: the USE_FC_TO_LINK link of the fompfc package through rzig build did not run zig-fc" >&2; exit 1
+      fi
+      dll="$(find "$owp/lib/$d/libs" -name "$d.dll" 2> /dev/null | head -1 || true)"
+      [ -n "$dll" ] || { echo "error: no $d.dll under $owp/lib/$d/libs after its install" >&2; exit 1; }
+      needed_of "$dll" | grep -qix 'libomp\.dll' || { needed_of "$dll" >&2; echo "error: the $d package's DLL (rzig build) does not import libomp.dll" >&2; exit 1; }
+      left="$(find "$owp/$d/src" "$owp/lib/$d" -name '*.lib' 2> /dev/null || true)"
+      [ -z "$left" ] || { echo "error: the $d package's install left import libraries: $left" >&2; exit 1; }
+      test ! -e "$owp/$d/src/.rzig" || { echo "error: the $d package's install left its build root, $owp/$d/src/.rzig" >&2; exit 1; }
+    done
+    # $pkgs: one argument per package
+    # shellcheck disable=SC2086
+    (cd "$owp" && env -i "${base_env[@]}" PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla load.R $pkgs) ||
+      { echo "error: the OpenMP packages ($pkgs) built through rzig build did not load with PATH = bin\\x64 + System32" >&2; exit 1; }
+    echo "== compiled packages verified: OpenMP with the groups ($pkgs: tier 1, each DLL imports libomp.dll, no import library or build root left, loads with PATH = bin\\x64 + System32; R CMD INSTALL, rzig build)"
   fi
 
   if [ -n "$ZIG" ]; then

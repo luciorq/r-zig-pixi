@@ -2,9 +2,11 @@
 //! (feat-standalone-toolchain B35, B38). Two groups: compilers (zig,
 //! flang, the OpenMP files) and build-tools (make; on Windows also sh, the
 //! binutils and the other tools R's makefiles run). rzig prints a group's
-//! text when a compile finds no zig, when zig-fc finds no flang, and from
-//! its check mode (check.zig), which the install preflight and R CMD
-//! config call (patches 0009 and 0010, B26 a) and show.
+//! text when a compile finds no zig, when zig-fc finds no flang, when
+//! `rzig build` finds no zig (pkgbuild.zig), and from its check mode
+//! (check.zig), which the install preflight (patch 0009,
+//! `--rzig-check=package`) and R CMD config (patch 0010,
+//! `--rzig-check=build-tools`) call (B26 a) and show.
 //!
 //! One text per group, the same on every channel. It is built from R's
 //! version (build.zig passes it, a build option) and the platform rzig is

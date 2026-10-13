@@ -2,8 +2,9 @@ R CMD INSTALL: build the native library with rzig build (zig build alone)
 
 Before the make path, run_shlib asks R_HOME/bin/toolchain/rzig to build
 the package's library: `rzig build` classifies the package (no
-configure, no src/Makefile, a Makevars of assignments only, or its own
-src/build.zig), derives from etc/Makeconf and the Makevars the compile
+src/Makefile, which install.R runs with make before it gets here, and
+its own src/build.zig, or no configure and a Makevars of assignments
+only [code-2]), derives from etc/Makeconf and the Makevars the compile
 and link lines make would have run, and runs them as zig build steps
 that call the same compilers (zig-cc, zig-cxx, zig-fc). The library
 lands in src/ as make's does, and shlib_install() takes it from there
@@ -11,13 +12,21 @@ lands in src/ as make's does, and shlib_install() takes it from there
 make, and the make path runs unchanged. On unix rzig is started with
 .Internal(spawnWait()) (patch 0012), no shell; on Windows system2()
 spawns without one already. R_ZIG_PKG_BUILDER=auto|zig|make chooses
-(zig: a tier-3 package is an error; make: rzig is never asked), for
-parity runs and bisecting. R_ZIG_JOBS, else MAKEFLAGS' -j, is the job
-count; a variable assignment in MAKEFLAGS makes rzig build decline
-(make's build would differ). A src/build.zig alone (a zig package, no C
-source) counts as compiled code. patch_rpaths reads the OS from
-Sys.info() instead of `uname -a`. The install preflight (patch 0009)
-decides the tier the same way, before configure, through
+(zig: an error where the hook would hand the package to make, a tier-3
+package or a toolchain with no rzig [preflight-PF-4]; make: rzig is
+never asked), for parity runs and bisecting. R_ZIG_JOBS, else
+MAKEFLAGS' -j, is the job count; a variable assignment in MAKEFLAGS
+makes rzig build decline a package make can build (make's build would
+differ). A src/build.zig package has no make build: one whose build
+would need make anyway fails, exit 1, after rzig's line "<pkg>:
+src/build.zig cannot be built by make: <reason>", instead of a make
+path that ignores build.zig [preflight-PF-1]. rzig reads the user
+Makevars R found: the hook passes makevars_user() as R_MAKEVARS_USER
+when it names a file, since R's `~` falls back to the passwd home when
+HOME is unset and rzig's does not [code-5]. A src/build.zig alone (a
+zig package, no C source) counts as compiled code. patch_rpaths reads
+the OS from Sys.info() instead of `uname -a`. The install preflight
+(patch 0009) decides the tier the same way, before configure, through
 `--rzig-check=package`. CC's binary beside no rzig name (a toolchain
 older than this R) is an error, not a silent make path.
 .github/devdocs/feat-zig-pkg-build/PLAN.md, milestone 3 and the
@@ -25,7 +34,7 @@ consolidation with phase 3.
 
 --- a/src/library/tools/R/install.R
 +++ b/src/library/tools/R/install.R
-@@ -683,12 +683,71 @@
+@@ -683,12 +683,91 @@
              }
          }
  
@@ -36,9 +45,14 @@ consolidation with phase 3.
 +        ## the package, derives from Makeconf and the Makevars what make
 +        ## would have run, and runs it as zig build steps that call the same
 +        ## compilers. Exit 3 means the package needs make, and the make
-+        ## path below runs as before. R_ZIG_PKG_BUILDER = auto (default),
-+        ## zig (never make: an error instead), make (never rzig).
-+        ## R_ZIG_JOBS, else MAKEFLAGS' -j, sets the parallelism.
++        ## path below runs as before; a src/build.zig package that make
++        ## cannot build (make ignores build.zig) exits 1, a failure, after
++        ## rzig's line saying why [preflight-PF-1]. R_ZIG_PKG_BUILDER =
++        ## auto (default), zig (an error where this hook would hand the
++        ## package to make: a tier-3 package, or no rzig [preflight-PF-4];
++        ## a src/Makefile package goes to make without coming here), make
++        ## (never rzig). R_ZIG_JOBS, else MAKEFLAGS' -j, sets the
++        ## parallelism.
 +        ## .github/devdocs/feat-zig-pkg-build/PLAN.md.
 +        rzig_build <- function(pkg_name, instdir, arch, use_LTO)
 +        {
@@ -58,6 +72,11 @@ consolidation with phase 3.
 +                                     " but not ", basename(rzig),
 +                                     ": the r-zig toolchain is older than this R"),
 +                              pkg_name)
++                ## R_ZIG_PKG_BUILDER=zig means no make path, here too,
++                ## where there is no rzig to ask [preflight-PF-4]
++                if (builder == "zig")
++                    pkgerrmsg("R_ZIG_PKG_BUILDER is 'zig' and R_HOME/bin/toolchain has no rzig",
++                              pkg_name)
 +                return(NA)
 +            }
 +            args <- c("build", "--pkg", "..", "--src", ".", "--out", ".",
@@ -73,8 +92,18 @@ consolidation with phase 3.
 +                                           perl = TRUE))
 +            if (length(jobs) == 1L && grepl("^[0-9]+$", jobs))
 +                args <- c(args, "-j", jobs)
++            ## the user Makevars R found, which rzig then reads in place of
++            ## its own lookup: R's `~` falls back to the passwd home when
++            ## HOME is unset (unix), rzig's does not [code-5]. When R found
++            ## none, neither does rzig (Windows could not hold the empty
++            ## value that says so). The caller's value comes back after.
++            mu <- makevars_user()
++            mu_was <- Sys.getenv("R_MAKEVARS_USER", NA_character_)
++            if (length(mu)) Sys.setenv(R_MAKEVARS_USER = mu)
 +            status <- if (WINDOWS) system2(rzig, shQuote(args))
 +                      else .Internal(spawnWait(c(rzig, args), 0L))
++            if (is.na(mu_was)) Sys.unsetenv("R_MAKEVARS_USER")
++            else Sys.setenv(R_MAKEVARS_USER = mu_was)
 +            if (identical(status, 3L)) {
 +                if (builder == "zig")
 +                    pkgerrmsg("this package needs make, and R_ZIG_PKG_BUILDER is 'zig'",
@@ -97,7 +126,7 @@ consolidation with phase 3.
              args <- c(shargs,
                        if(isTRUE(use_LTO)) "--use-LTO",
                        if(isFALSE(use_LTO)) "--no-use-LTO",
-@@ -746,8 +805,8 @@
+@@ -746,8 +825,8 @@
  
              starsmsg(stars, "checking absolute paths in shared objects and dynamic libraries")
  
@@ -108,7 +137,7 @@ consolidation with phase 3.
              have_chrpath <- nzchar(Sys.which("chrpath"))
              have_patchelf <- nzchar(Sys.which("patchelf"))
              have_readelf <- nzchar(Sys.which("readelf"))
-@@ -1544,7 +1603,9 @@
+@@ -1548,7 +1627,9 @@
                      srcs <- dir(pattern = "\\.([cfmM]|cc|cpp|f90|f95|mm)$",
                                  all.files = TRUE)
                      ## This allows Makevars to set OBJECTS or its own targets.

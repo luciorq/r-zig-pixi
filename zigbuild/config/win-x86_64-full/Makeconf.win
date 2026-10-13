@@ -56,7 +56,7 @@ ifeq ($(R_INSTALLER_BUILD), yes)
 endif
 R_TOOLS_SOFT ?= $(LOCAL_SOFT)
 
-NM_FILTER =
+NM_FILTER = @NM_FILTER@
 
 ifneq ($(strip $(LOCAL_SOFT)),)
 LOCAL_CPPFLAGS = -I"$(LOCAL_SOFT)/include"

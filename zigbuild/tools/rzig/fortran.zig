@@ -41,8 +41,8 @@
 //! does for a command it cannot find (main.zig). FC names zig-fc whether
 //! or not a flang is installed, so a test such as `Sys.which(<R CMD config
 //! FC>)` finds a file either way: this message, at the first Fortran
-//! compile, is where a missing flang shows, unless the preflight's
-//! `--rzig-check=fortran` showed it first (check.zig).
+//! compile, is where a missing flang shows, unless the install preflight
+//! (`--rzig-check=package`, check.zig) showed it first.
 const std = @import("std");
 const mem = std.mem;
 const Ctx = @import("Ctx.zig");

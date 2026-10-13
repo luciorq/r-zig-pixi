@@ -3,9 +3,10 @@
 # build/compile-tree/<flavor>/R-<ver>-zig: a fresh copy of the flavor's R
 # tree ($PREFIX) with the toolchain tree's group directories in its
 # R_HOME/bin/toolchain, every one but zig/ and flang/ (C12): in phase 3
-# openmp/, and unix usr/ or Windows binutils/. contract and stress compile
-# packages with it (their pixi tasks depend on compile-tree), as a user
-# who extracted the base and both group archives into one directory does.
+# openmp/, and unix usr/ or Windows binutils/. contract, pkg-parity and
+# stress compile packages with it (their pixi tasks depend on
+# compile-tree) [phase3-P3-5], as a user who extracted the base and both
+# group archives into one directory does.
 # It stops when the R tree is missing, when the toolchain tree has no
 # build-tools directory, and when it has no openmp/ where the R tree has
 # the libomp runtime.
@@ -20,8 +21,10 @@
 # full) and leaves it alone on minimal (C12). zig/ and flang/ (phases 5
 # and 6) stay out, so dev compiles keep the zig that built R and the
 # env's flang (B30). The R tree and the toolchain tree are only read:
-# verify-tree, hermetic and package see the base, verify-toolchain and
-# package-toolchain the groups.
+# verify-tree, hermetic, package and pkg-parity see the base (pkg-parity's
+# no-make install runs the base's R in place, into its own library,
+# writing nothing under $PREFIX), verify-toolchain and package-toolchain
+# the groups.
 . "$(dirname "$0")/env.sh"
 
 # Windows: an override may be C:\...; cp and the messages want /c/....

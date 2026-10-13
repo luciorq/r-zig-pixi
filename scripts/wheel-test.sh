@@ -33,6 +33,7 @@
 # pip fetches ziglang (~100 MB) from PyPI, so this needs network; point
 # PIP_FIND_LINKS at a directory holding the ziglang wheel to avoid that.
 . "$(dirname "$0")/env.sh"
+. "$(dirname "$0")/verify-helpers.sh"
 
 shopt -s nullglob
 wheels=("$ROOT"/dist/wheel/r_zig-"$R_VERSION"-*.whl)
@@ -143,7 +144,9 @@ mkdir -p "$T/lib0"
 if run R CMD INSTALL -l "$T/lib0" "$P" > "$T/preflight.out" 2>&1; then
   cat "$T/preflight.out" >&2; echo "error: R CMD INSTALL compiled without the toolchain" >&2; exit 1
 fi
-grep -F "r-zig toolchain is not installed" "$T/preflight.out" | grep -F "pip install r-zig-toolchain" ||
+# 0009's stop for a package that needs the toolchain [tests-T11], with its
+# hint (R_ZIG_TOOLCHAIN_HINT)
+grep -F "needs the r-zig toolchain (compiled code or a configure script), which is not installed: " "$T/preflight.out" | grep -F "pip install r-zig-toolchain" ||
   { cat "$T/preflight.out" >&2; echo "error: no preflight message naming r-zig-toolchain" >&2; exit 1; }
 
 echo "== installing $(basename "$tc_wheel") (+ ziglang from PyPI)"
@@ -189,7 +192,9 @@ fi
 echo "== R CMD INSTALL via the console script (ZIG_BIN from import ziglang): rzig build"
 run RZIG_TRACE=1 R CMD INSTALL --preclean -l "$T/lib1" "$P" > "$T/install1.log" 2>&1 || { cat "$T/install1.log" >&2; exit 1; }
 grep -q 'rzig build: tier 1' "$T/install1.log" || { cat "$T/install1.log" >&2; echo "error: the console-script install did not build through rzig build (no 'rzig build: tier 1' in its log)" >&2; exit 1; }
-echo "ok: rzig build: tier 1 ($(grep -c '^zig-c[^:]*: ' "$T/install1.log") rzig command lines under PyPI ziglang)"
+# rzig's commands (the two compiles and the link), not its self and
+# environment lines [tests-T10]
+echo "ok: rzig build: tier 1 ($(grep -E '^zig-(cc|cxx|fc): ' "$T/install1.log" | grep -c -v -E '^zig-(cc|cxx|fc): (self|environment) ') rzig commands under PyPI ziglang)"
 run Rscript -e "
   library(rzigwheeltest, lib.loc = '$T/lib1')
   stopifnot(dot(1:3, 4:6) == 32, cxx_sum(1:10) == 55)
@@ -269,7 +274,9 @@ fi
 echo "== R CMD INSTALL via bundled bin/R, ZIG_BIN unset (Renviron.site -> sibling ziglang), through the bundled make (R_ZIG_PKG_BUILDER=make)"
 run R_ZIG_PKG_BUILDER=make RZIG_TRACE=1 "$r_home/bin/R" CMD INSTALL --preclean -l "$T/lib2" "$P" > "$T/install2.log" 2>&1 || { cat "$T/install2.log" >&2; exit 1; }
 if grep -q 'rzig build:' "$T/install2.log"; then cat "$T/install2.log" >&2; echo "error: R_ZIG_PKG_BUILDER=make still ran rzig build" >&2; exit 1; fi
-grep -q '^make' "$T/install2.log" || grep -q 'usr/bin/make\|^gcc\|toolchain/zig-cc' "$T/install2.log" || { cat "$T/install2.log" >&2; echo "error: no make or compiler lines in the make-path install's log" >&2; exit 1; }
+# make's echoed compiles: the toolchain's compilers by their path, which
+# rzig's own trace lines (`zig-cc: self <path>`) do not start with [tests-T6]
+[ -n "$(make_recipes "$T/install2.log")" ] || { cat "$T/install2.log" >&2; echo "error: no compile make echoed in the make path's log" >&2; exit 1; }
 echo "ok: the make path built it"
 run "$r_home/bin/Rscript" -e "
   stopifnot(nzchar(Sys.getenv('ZIG_BIN')), file.exists(Sys.getenv('ZIG_BIN')))

@@ -679,14 +679,32 @@ ALL_FFLAGS = $(PKG_FFLAGS) $(FPICFLAGS) $(FFLAGS)
 ALL_LIBS = $(PKG_LIBS) $(SHLIB_LIBADD) $(LIBR)
 MK
 printf 'all: $(SHLIB)\n' > "$rh/share/make/shlib.mk"
-for d in p0 p1 p2 pf; do printf 'Package: %s\n' "$d" > "$W/pkgs/$d/DESCRIPTION"; done
+# p3F a Makevars rule and a top-level .F (tier 3); pz src/build.zig and a
+# stray .f (tier 2); pzF src/build.zig and a .F; pzurl a URL dependency;
+# pw a configure.win, pu a configure.ucrt (Windows' rules)
+mkdir -p "$W/pkgs/p3F/src" "$W/pkgs/pz/src" "$W/pkgs/pzF/src" "$W/pkgs/pzurl/src" "$W/pkgs/pw/src" "$W/pkgs/pu/src"
+for d in p0 p1 p2 pf p3F pz pzF pzurl pw pu; do printf 'Package: %s\n' "$d" > "$W/pkgs/$d/DESCRIPTION"; done
 : > "$W/pkgs/p1/src/a.c"; : > "$W/pkgs/p2/src/a.c"; printf 'all: $(SHLIB)\n' > "$W/pkgs/p2/src/Makevars"; : > "$W/pkgs/pf/src/a.f"
-pkg_check() { # <pkg> <env...>: the package check from the package's directory, stdout and stderr to $W/check.out and $W/check.err
+printf 'all: $(SHLIB)\n' > "$W/pkgs/p3F/src/Makevars"; : > "$W/pkgs/p3F/src/x.F"
+: > "$W/pkgs/pz/src/build.zig"; : > "$W/pkgs/pz/src/x.f"; : > "$W/pkgs/pzF/src/build.zig"; : > "$W/pkgs/pzF/src/x.F"
+: > "$W/pkgs/pzurl/src/build.zig"; printf '.{ .dependencies = .{ .x = .{ .url = "https://example.invalid/x.tar.gz" } } }\n' > "$W/pkgs/pzurl/src/build.zig.zon"
+: > "$W/pkgs/pw/configure.win"; : > "$W/pkgs/pw/src/a.c"; : > "$W/pkgs/pu/configure.ucrt"; : > "$W/pkgs/pu/src/a.c"
+# a user Makevars with a compiler that is not R's toolchain's
+printf 'CC = ccache $(R_HOME)/bin/toolchain/zig-cc\n' > "$W/ccache.mk"
+mkdir -p "$W/home/.R"; cp "$W/ccache.mk" "$W/home/.R/Makevars"
+pkg_check() { # <pkg> <env...>: the package check from the package's directory (by $cc, default zig-cc), stdout and stderr to $W/check.out and $W/check.err
   local d="$1"; shift
-  (cd "$W/pkgs/$d" && env -i R_HOME="$rh" "$@" "$tc/zig-cc" --rzig-check=package > "$W/check.out" 2> "$W/check.err")
+  (cd "$W/pkgs/$d" && env -i R_HOME="$rh" "$@" "${cc:-$tc/zig-cc}" --rzig-check=package > "$W/check.out" 2> "$W/check.err")
 }
-# the function and its variables, for the `bash -c` the cases run
-pc="W='$W'; rh='$rh'; tc='$tc'; $(declare -f pkg_check);"
+# rzig build <pkg> <env...>: into $W/out/<pkg>, with the repo's root files
+# (zigbuild/rpkg), stdout and stderr to $W/check.out and $W/check.err
+pkg_build() {
+  local d="$1"; shift
+  rm -rf "$W/out/$d"
+  env -i R_HOME="$rh" "$@" "$RZIG" build --pkg "$W/pkgs/$d" --out "$W/out/$d" --rpkg-dir "$here/../../rpkg" > "$W/check.out" 2> "$W/check.err"
+}
+# the functions and their variables, for the `bash -c` the cases run
+pc="W='$W'; rh='$rh'; tc='$tc'; RZIG='$RZIG'; here='$here'; $(declare -f pkg_check pkg_build);"
 check "--rzig-check=package: no src/, 0" \
   bash -c "$pc pkg_check p0 PATH='$W/nothing' && grep -qx 'zig-cc: package ok: p0 has no src/, nothing to compile' '$W/check.out'"
 if [ -n "$real_zig" ]; then
@@ -713,7 +731,79 @@ if [ -n "$real_zig" ]; then
     bash -c "$pc pkg_check pf ZIG_BIN='$real_zig' PATH='$W/nothing'; [ \$? = 127 ] && grep -q '^zig-cc: no flang (' '$W/check.err'"
   check "--rzig-check=package: Fortran with flang on PATH, 0, flang named" \
     bash -c "$pc pkg_check pf ZIG_BIN='$real_zig' PATH='$W/flang' && grep -q 'pf tier 1 (rzig build); compilers ok: zig .*; flang at $W/flang/flang' '$W/check.out'"
+  # flang [preflight-PF-5]: tier 3 by src/'s top level, either case; tier 2
+  # never (rpkg compiles C and C++ only); a configure script R runs by
+  # src/'s top level whatever the tier
+  check "--rzig-check=package: tier 3 with a top-level .F asks for flang, 127 without one" \
+    bash -c "$pc pkg_check p3F ZIG_BIN='$real_zig' PATH='$W/nothing'; [ \$? = 127 ] && grep -q '^zig-cc: no flang (' '$W/check.err'"
+  check "--rzig-check=package: tier 2 with a stray .f asks for no flang, 0" \
+    bash -c "$pc pkg_check pz ZIG_BIN='$real_zig' PATH='$W/nothing' && grep -q '^zig-cc: package ok: pz tier 2 (rzig build); compilers ok: zig ' '$W/check.out' && ! grep -q flang '$W/check.out'"
+  check "--rzig-check=package: tier 2 and a configure script, a top-level .F asks for flang, 127 without one" \
+    bash -c "$pc pkg_check pzF ZIG_BIN='$real_zig' PATH='$W/nothing' R_ZIG_CONFIGURE=1; [ \$? = 127 ] && grep -q '^zig-cc: no flang (' '$W/check.err'"
+  # MAKEFLAGS cannot change a tier-2 build: no make build to differ from
+  # [preflight-PF-1]
+  check "--rzig-check=package: tier 2 with MAKEFLAGS setting a variable, 0" \
+    bash -c "$pc pkg_check pz ZIG_BIN='$real_zig' PATH='$W/nothing' MAKEFLAGS='k -j2 -- X=1' && grep -q 'pz tier 2 (rzig build)' '$W/check.out'"
+  # the user Makevars as R finds it [preflight-PF-2]: ~/.R/Makevars, and
+  # none when R_MAKEVARS_USER is set but empty
+  check "--rzig-check=package: ~/.R/Makevars with a foreign CC needs make, 127, its reason" \
+    bash -c "$pc pkg_check p1 ZIG_BIN='$real_zig' PATH='$W/nothing' HOME='$W/home'; [ \$? = 127 ] &&
+      grep -q '^zig-cc: p1 needs make: CC = ccache is not a compiler of R.s toolchain (.*); no make on PATH\$' '$W/check.err'"
+  check "--rzig-check=package: an empty R_MAKEVARS_USER leaves ~/.R/Makevars out, tier 1, 0" \
+    bash -c "$pc pkg_check p1 ZIG_BIN='$real_zig' PATH='$W/nothing' HOME='$W/home' R_MAKEVARS_USER= && grep -q 'p1 tier 1 (rzig build)' '$W/check.out'"
+  # Windows' rules (RZIG_OS, with RZIG_PRINT_ARGV): a configure script
+  # needs make, its reason before the missing binutils [preflight-PF-8]
+  tree winnobu/Library
+  wnb=$W/winnobu/Library/lib/R/bin/toolchain
+  mk_sh="$(dirname "$(command -v make)"):$(dirname "$(command -v sh)")"
+  check "--rzig-check=package on Windows: a configure.win script, no binutils, 127, the reason" \
+    bash -c "$pc cc='$wnb/gcc' pkg_check pw ZIG_BIN='$real_zig' RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$mk_sh'; [ \$? = 127 ] &&
+      grep -qxF 'zig-cc: pw needs make: a configure.win script; no $wnb/binutils/nm.exe' '$W/check.err' &&
+      grep -q '^Building packages needs the r-zig build tools for R ' '$W/check.err'"
+  check "--rzig-check=package on Windows: a configure.ucrt script, no binutils, 127, the reason" \
+    bash -c "$pc cc='$wnb/gcc' pkg_check pu ZIG_BIN='$real_zig' RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$mk_sh'; [ \$? = 127 ] &&
+      grep -qxF 'zig-cc: pu needs make: a configure.ucrt script; no $wnb/binutils/nm.exe' '$W/check.err'"
+  check "--rzig-check=package on Windows: a configure script R runs (R_ZIG_CONFIGURE=1), no binutils, 127" \
+    bash -c "$pc cc='$wnb/gcc' pkg_check pw ZIG_BIN='$real_zig' RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$mk_sh' R_ZIG_CONFIGURE=1; [ \$? = 127 ] &&
+      grep -qxF 'zig-cc: pw needs make: a configure script R runs; no $wnb/binutils/nm.exe' '$W/check.err'"
 fi
+# a tier-2 package whose plan needs make: make would ignore its build.zig,
+# so the check and rzig build stop with why, 1, not 3 [preflight-PF-1]
+# and, since 0009's stop after it says the toolchain is incomplete, a
+# line that says it is complete [code-6]
+check "--rzig-check=package: tier 2 whose plan needs make, 1, why, no group's text" \
+  bash -c "$pc pkg_check pz PATH='$W/nothing' R_MAKEVARS_USER='$W/ccache.mk'; [ \$? = 1 ] &&
+    grep -q '^zig-cc: pz: src/build.zig cannot be built by make: CC = ccache is not a compiler of R.s toolchain (' '$W/check.err' &&
+    [ \"\$(tail -1 '$W/check.err')\" = 'zig-cc: pz: the r-zig toolchain is complete: change what the line above names' ] &&
+    [ \$(wc -l < '$W/check.err') = 2 ]"
+check "rzig build: tier 2 whose plan needs make, 1, why, nothing made" \
+  bash -c "$pc pkg_build pz PATH='$W/nothing' R_MAKEVARS_USER='$W/ccache.mk'; [ \$? = 1 ] &&
+    grep -qx 'rzig build: pz: src/build.zig cannot be built by make: CC = ccache is not a compiler of R.s toolchain (.*)' '$W/check.err' &&
+    [ ! -e '$W/out/pz' ]"
+# --classify too: the line and 1, no tier on stdout [coverage-1]
+check "rzig build --classify: tier 2 whose plan needs make, 1, why, no tier" \
+  bash -c "env -i R_HOME='$rh' PATH='$W/nothing' R_MAKEVARS_USER='$W/ccache.mk' '$RZIG' build --pkg '$W/pkgs/pz' --classify > '$W/check.out' 2> '$W/check.err'; [ \$? = 1 ] &&
+    grep -qx 'rzig build: pz: src/build.zig cannot be built by make: CC = ccache is not a compiler of R.s toolchain (.*)' '$W/check.err' &&
+    [ ! -s '$W/check.out' ]"
+# a src/Makefile beside src/build.zig: install.R runs the Makefile, so
+# make it is [code-2]
+mkdir -p "$W/pkgs/pzm/src"; printf 'Package: pzm\n' > "$W/pkgs/pzm/DESCRIPTION"; : > "$W/pkgs/pzm/src/build.zig"; : > "$W/pkgs/pzm/src/Makefile"
+check "rzig build --classify: src/build.zig and src/Makefile, make" \
+  bash -c "env -i R_HOME='$rh' PATH='$W/nothing' '$RZIG' build --pkg '$W/pkgs/pzm' --classify > '$W/check.out' 2> '$W/check.err' && [ \"\$(cat '$W/check.out')\" = make ]"
+check "rzig build: tier 1 whose plan needs make, 3" \
+  bash -c "$pc pkg_build p1 PATH='$W/nothing' R_MAKEVARS_USER='$W/ccache.mk'; [ \$? = 3 ] &&
+    grep -q '^rzig build: p1 needs make: CC = ccache ' '$W/check.err'"
+# the build root goes on every return, unless kept [preflight-PF-3]
+check "rzig build: a URL dependency is refused, 1, and the build root is gone" \
+  bash -c "$pc pkg_build pzurl PATH='$W/nothing'; [ \$? = 1 ] &&
+    grep -qxF 'rzig build: src/build.zig.zon: dependency x is a URL; tier 2 builds offline, vendor it as a .path dependency' '$W/check.err' &&
+    [ -d '$W/out/pzurl' ] && [ ! -e '$W/out/pzurl/.rzig' ]"
+check "rzig build: no zig, 127, the compilers group, and the build root is gone" \
+  bash -c "$pc pkg_build p1 PATH='$W/nothing'; [ \$? = 127 ] &&
+    grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err' &&
+    [ -d '$W/out/p1' ] && [ ! -e '$W/out/p1/.rzig' ]"
+check "rzig build: RZIG_KEEP_ROOT=1 keeps it" \
+  bash -c "$pc pkg_build p1 PATH='$W/nothing' RZIG_KEEP_ROOT=1; [ \$? = 127 ] && [ -f '$W/out/p1/.rzig/plan.zon' ]"
 check "--rzig-check=other: usage, 2" \
   bash -c "env -i '$tc/zig-cc' --rzig-check=other 2> /dev/null; [ \$? = 2 ]"
 check "a compile with no zig: 127, the compilers group" \

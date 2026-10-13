@@ -69,7 +69,13 @@ fn applyEnv(run: *std.Build.Step.Run, plan: *const Plan) void {
     }
 }
 
-/// One object per source, in the plan's order.
+/// One object per source, in the plan's order. Each compile runs in
+/// srcdir and names its source relative to it, `-c one.c`, as make does
+/// from src/: zig cc keys its object cache (zig's global cache) on the
+/// source path as given, so the absolute path under install.R's new
+/// R.INSTALL directory added one entry per source on every tarball
+/// install, never reused, where make's entries are [tests-T1]. The file
+/// stays an input of the step (addFileInput).
 pub fn compileAll(b: *std.Build, plan: *const Plan) []std.Build.LazyPath {
     var objs = std.ArrayList(std.Build.LazyPath).empty;
     for (plan.sources) |s| {
@@ -80,7 +86,8 @@ pub fn compileAll(b: *std.Build, plan: *const Plan) []std.Build.LazyPath {
         applyEnv(run, plan);
         run.addArgs(d.flags);
         run.addArg("-c");
-        run.addFileArg(.{ .cwd_relative = b.pathJoin(&.{ plan.srcdir, s.path }) });
+        run.addArg(s.path);
+        run.addFileInput(.{ .cwd_relative = b.pathJoin(&.{ plan.srcdir, s.path }) });
         run.addArg("-o");
         objs.append(b.allocator, run.addOutputFileArg(std.fs.path.basename(s.obj))) catch @panic("OOM");
     }
@@ -98,7 +105,9 @@ pub fn link(b: *std.Build, plan: *const Plan, objs: []const std.Build.LazyPath) 
     run.addArg("-o");
     const out = run.addOutputFileArg(plan.output);
     if (plan.win_def.len > 0) {
-        run.addFileArg(.{ .cwd_relative = b.pathJoin(&.{ plan.srcdir, plan.win_def }) });
+        // relative to srcdir too, as winshlib.mk names it (compileAll)
+        run.addArg(plan.win_def);
+        run.addFileInput(.{ .cwd_relative = b.pathJoin(&.{ plan.srcdir, plan.win_def }) });
     } else if (plan.def) {
         // winshlib.mk's tmp.def, from the objects' symbol tables
         const def = b.addSystemCommand(&.{ plan.rzig, "def", "-o" });

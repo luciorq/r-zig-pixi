@@ -156,8 +156,8 @@ outputs:
   # R_HOME/bin/toolchain, which Makeconf points at (on win-64 with
   # binutils/, the MinGW binutils Makeconf.win names, B41), and the
   # compiler run dependencies; everything else is R. Without the
-  # toolchain, installing a package that has compiled code stops with the
-  # preflight message (zigbuild/patches/) naming it.
+  # toolchain, installing a package that has compiled code or a configure
+  # script stops with the preflight message (zigbuild/patches/) naming it.
   - staging:
       name: r-zig-build
     requirements:

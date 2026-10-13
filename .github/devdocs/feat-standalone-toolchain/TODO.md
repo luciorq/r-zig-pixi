@@ -286,8 +286,12 @@ the results; B24's routing check moved no tool (follow-up PRs).
       windres works behind a front still to write, strip, nm and as are
       not routable; nothing moved in phase 3. Open until the dlltool/as
       follow-up PR; windres' front is the PR after it. feat-zig-pkg-build's
-      stress table, 2026-10-12: no Windows make row called dlltool,
-      windres, objdump or strip; the table adds no tool to move)
+      stress table, 2026-10-12: no dlltool, windres, objdump or strip in
+      make's echoed recipes of the Windows rows, which shows little:
+      binutils calls are not traced, configure.win and `@`-recipes run
+      silently, R CMD check did not run, and RcppParallel's TBB build ran
+      windres through Rcmd_environ's RC, unseen; the table adds no
+      evidence on B24 either way [stress-S2])
 - [x] unix etc/Renviron: `PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}`,
       `MAKE=${MAKE-'make'}` for every flavor (minimal's `R_ZIG_MAKE` goes)
       (step 3, 2026-10-10, uncommitted: the file's last line; tested on
@@ -449,7 +453,16 @@ Needs (answered): B14, B28, B29, B35, B38, B39, B11, B41; D7, D12, E2.
       `Library/...`); r-zig-compilers, r-zig-build-tools, r-zig-toolchain
       metapackage; build number: the one after the number published
       when phase 4 merges (build 8 is on universe, so 9 unless another
-      PR bumps first; B14 a, C14)
+      PR bumps first; B14 a, C14). feat-zig-pkg-build (PR #25 and its
+      review follow-up) changes r-zig-slim (patches 0009, 0012, 0013,
+      share/zig/rpkg) and r-zig-toolchain (rzig: `--rzig-check=package`,
+      `rzig build`, `rzig def`, the `rzig` name) and bumps nothing (its
+      N5). They are coupled: a new r-zig-slim with an older
+      r-zig-toolchain stops every compiled install (the old rzig answers
+      `--rzig-check=package` with exit 2; without the preflight, 0013
+      stops on CC's binary with no rzig). This bump publishes both
+      together, and until then no channel mixes a locally built `_8`
+      with universe's `_8` [phase3-P3-7, records-REC-7]
 - [ ] win-64 r-zig-build-tools: B41's binutils copies (nm, dlltool, as,
       strip, windres, objdump, less any tool moved to rzig); run
       dependencies on conda-forge packages for B39's list and pkg-config
@@ -553,23 +566,31 @@ Needs (answered): B11, B25, B39, B43 (pkg-config).
 - [ ] Re-scope from feat-zig-pkg-build's stress table (its PLAN.md,
       "Consolidation with phase 3", M6: one dispatch after its push, with
       stress.yaml's `trace` and `builder` inputs): which rows need the
-      group at all. `R CMD INSTALL` of tier 0 to 2 packages (no
-      configure, no src/Makefile, a Makevars of assignments, or a
-      src/build.zig) builds through rzig build with no sh or make; the
+      group at all. `R CMD INSTALL` of tier 0 to 2 packages without a
+      configure script R runs (a src/build.zig and no src/Makefile, or
+      no configure, no src/Makefile and a Makevars of assignments)
+      builds through rzig build with no sh or make [records-REC-6]; the
       group is for packages that need make, configure scripts R runs,
       `R CMD SHLIB` (run-time compilation, pkgbuild's probe and so pak),
-      `R CMD config`'s direct callers, `R CMD check`'s objdump and
-      cleanup.win under `--clean`. The table (2026-10-12, run
-      38317654371 on 45892fb, five runners, `trace`, `builder = auto`;
-      feat-zig-pkg-build's PLAN.md, "Stress dispatch"): of the suite's
-      46 compiled rows, 17 go through rzig build on Windows and 29 need
-      make (12 configure.win scripts, 9 Makevars.win/.ucrt rules, 5
-      `$(shell)`, 2 conditionals, 1 include); the make rows ran rzig's
-      AR/RANLIB, sed, pkg-config (s2, igraph), cmake (Rhdf5lib) and
-      cp/mkdir/rm; no dlltool, windres, objdump or strip. So: sh, make,
-      coreutils, sed, pkg-config and the make path's nm stay in the
-      group; nothing leaves it on the table's evidence; cmake stays the
-      extras candidate
+      `R CMD config`'s direct callers, `R CMD check`'s objdump (Windows)
+      and cleanup.ucrt/cleanup.win under `--clean` or `--preclean`
+      [stress-S10]. The table (2026-10-12, run 38317654371 on 45892fb,
+      five runners, `trace`, `builder = auto`; feat-zig-pkg-build's
+      PLAN.md, "Stress dispatch", corrected by its review follow-up): of
+      the suite's 47 rows that compile, 30 need the group on Windows: 29
+      whose run_shlib goes to make (12 configure.win scripts, 9 Makevars
+      rules in src/Makevars, .win or .ucrt, 5 `$(shell)`, 2
+      conditionals, 1 include) [stress-S8] and Rhdf5lib, whose
+      configure script builds HDF5 through CMake and make [stress-S9];
+      17 go through rzig build. From the recipes and the packages'
+      messages, not word counts in the logs [stress-S3]: winshlib.mk's
+      silent def and link recipe runs nm, sed, basename and rm in every
+      make row, the configure.win scripts sh, pkg-config at least 9
+      rows, rzig's AR/RANLIB 12 and 2, cmake Rhdf5lib and RcppParallel's
+      TBB (which also runs windres through RC). So: sh, make, coreutils,
+      sed, pkg-config and the make path's nm stay in the group; nothing
+      leaves it on the table's evidence; cmake stays the extras
+      candidate
 - [ ] verify-bundle scenario 3 on Windows with PATH = bin\x64 + System32:
       the contract set, pak, data.table, glue and a pkg-config package
       build and load
@@ -599,9 +620,10 @@ Needs (answered): B14 (a), with B37 (a).
 
 - [ ] Build number per B14 (a): a bump only if a package changed since
       the last bump; conda-package on all five platforms.
-      feat-zig-pkg-build's PR changes r-zig-slim (patches 0012, 0013,
-      share/zig/rpkg) and r-zig-toolchain (the rzig name) and bumps
-      nothing (its N5, 2026-10-12): phase 4's bump to 9 publishes both
+      feat-zig-pkg-build's PR changes r-zig-slim (patches 0009, 0012,
+      0013, share/zig/rpkg) and r-zig-toolchain (rzig's new modes and
+      name) and bumps nothing (its N5, 2026-10-12): phase 4's bump to 9
+      publishes both, together (phase 4's item says why)
 - [ ] feat-no-host-paths PLAN.md: What remains 3 points here; the T
       record and the OpenMP note (467-470) updated
 - [ ] This PLAN.md: status and records with dates and test results
@@ -624,14 +646,36 @@ Needs (answered): B14 (a), with B37 (a).
       today refuses every compiled package on base + compilers), or give
       it a preflight; revisit 0010 for pkgbuild's probe; a shared tier-1
       build runner (the per-install zig build cache rebuilds it each
-      install, about 3 s warm) only if the stress table's times ask for
-      it (they do not, 2026-10-12: every tier-1 row through rzig build
-      took as long as or less than the 548da1a make reference, the
-      runner compile shows once per cache in sys, 5 to 15 s; its
-      PLAN.md, "Stress dispatch"); verify-bundle scenario 2's new
-      assertions (the tier-1 install
-      with the compilers alone, the Makevars-rule and configure-only
-      stops) are the gate for the group's scope
+      install) only if the per-install cost asks for it. Not decided
+      yet [stress-S1, records-REC-4, phase3-P3-8]: the stress dispatch
+      of 2026-10-12 shared one zig build cache (stress.R pointed
+      ZIG_LOCAL_CACHE_DIR at its run), so its times do not show that
+      cost; on ubuntu-latest its tier-1 rows ran at about the same ratio
+      to the 548da1a make reference as its make rows (0.67 against
+      0.65, runner variance), sys carrying the one runner compile (5 to
+      15 s, about 35 s on macos-15-intel). The estimates: about 3.1 s
+      warm per tier-1 install on linux-64 (fact 9; 2026-10-13: 2 to 2.9
+      s with conda-forge zig, 1.1 to 1.3 s with upstream zig), the
+      whole make install time of the smallest rows; 6 to 10 s on omicron
+      and 11 to 20 s on kappa in the consolidation's pkg-parity. Decide
+      with a dispatch with `shared_cache = false` (stress.R
+      `--no-shared-cache`) on the five runners (feat-zig-pkg-build's
+      PLAN.md, "Stress dispatch"; fix-zig-pkg-build-review's PLAN.md,
+      "Measurements"). verify-bundle
+      scenario 2's new assertions (the tier-1 install with the compilers
+      alone, the Makevars-rule stop; on unix also the configure-only and
+      no-flang stops; Windows since the review follow-up
+      [phase3-P3-9]) are the gate for the group's scope
+- [ ] A stress dispatch of g1 with trace (Rcpp's cppFunction, rstan's
+      stan_model): run-time compilation, `R CMD SHLIB`, which the g3 g4
+      dispatch of 2026-10-12 did not exercise (no smoke compiled)
+      [stress-S6, records-REC-9]. The smoke's result is the evidence, not
+      a trace line: R CMD SHLIB goes through make, and sourceCpp keeps
+      its output (a local Rcpp run, 2026-10-13)
+- [ ] Tier 2's own compile flags: an optional `cflags` in rpkg's
+      LibraryOptions, appended to each C/C++ source's flags, when a zig
+      package needs its own include paths or defines (tier 2 does not
+      read src/Makevars; fix-zig-pkg-build-review's PLAN.md, code-4)
 - [ ] Optional extras group, only when the stress suite shows a need
       (the suite starts now, D15 a)
 - [ ] After the stress suite: reassess B39's list and B43's pkg-config

@@ -13,42 +13,57 @@
 # it on make on Windows), fetched from CRAN once into
 # build/pkg-parity-<flavor>/src:
 #   - the zig path (`RZIG_TRACE=1`): the log says `rzig build: tier 1`
-#     and has no make output;
+#     and holds no recipe make echoed (verify-helpers.sh's make_recipes);
 #   - the make path (`R_ZIG_PKG_BUILDER=make`, also traced) builds the
-#     same package into a second library;
+#     same package into a second library, its log no `rzig build:` line
+#     and make's echoed compiles;
 #   - the two libraries' exported symbols are identical (nm; Windows:
 #     objdump's export table);
 #   - rzig received the same command lines on both paths: every compile
-#     and the link, compared as sorted sets of words (paths by basename,
-#     quotes dropped). The known differences are normalised away: on
-#     macOS the `-Wl,-install_name,<pkg>.so` only rzig passes (make's
-#     linker derives the same name from -o), on Windows the .def file's
-#     name (`tmp.def` from nm | sed, `<pkg>.def` from `rzig def`), and a
-#     `--option=<path>` word keeps its option name when its path is cut
-#     to the basename (Windows: rzig's `--out-implib=<output>.rzig.lib`,
-#     absolute on the zig path, where the link's output is a cache
-#     path); the `ZIG_LIB_DIR=<mirror>` word rzig prints first where it
-#     gives conda-forge's zig the libc++ mirror (every macOS env) is
-#     stripped;
+#     and the link, each line's words in order, the lines sorted, quotes
+#     dropped, and each path cut to its file name while a flag's prefix
+#     stays (`-I`, `-L`, `-Wl,-rpath,`, `--out-implib=`: an -I that became
+#     an -L, or a dropped rpath, still shows) [tests-T7]. A path's
+#     directory is not compared, so the zig path's compiles are also
+#     asserted to name their source relative to src/, `-c <file>`, as
+#     make's do: an absolute source would key zig's global cache per
+#     install [tests-T1, tests-T7]. The known
+#     differences are normalised away: on macOS the
+#     `-Wl,-install_name,<pkg>.so` only rzig passes (make's linker derives
+#     the same name from -o), on Windows the .def file's name (`tmp.def`
+#     from nm | sed, `<pkg>.def` from `rzig def`), and the directories of
+#     the paths (the zig path's objects and output are in its cache;
+#     Windows: rzig's `--out-implib=<output>.rzig.lib`, absolute there);
+#     the `ZIG_LIB_DIR=<mirror>` word rzig prints first where it gives
+#     conda-forge's zig the libc++ mirror (every macOS env) is stripped,
+#     and the make path's `--version` probes are left out;
 #   - a smoke script loads and exercises the packages from each library
 #     and prints the same values;
 #   - the caches (N3): an install leaves no `zig-build` under rzig's cache
 #     (the zig build cache is per install, in the build root, gone with
 #     it; the shared part is zig's global cache), and a second install of
-#     the same package from the same directory adds no entry to that
-#     global cache.
+#     the cli tarball, which R unpacks into a new directory each time as
+#     install.packages does, adds no entry to that global cache: rzig
+#     build's compiles are keyed as make's are [tests-T1]; with
+#     ZIG_LOCAL_CACHE_DIR set, rzig build's cache is there, and the build
+#     root still goes [preflight-PF-8].
 # Then the tier-2 fixture (.github/devdocs/feat-zig-pkg-build/proto/
 # zighello, a zig package: `rzig build: tier 2`, `hello(21L)` is 42), its
 # twin with a URL dependency in src/build.zig.zon (refused: tier 2 builds
-# offline, N6), the tier-3 negative (cli with a `configure` script falls
-# through to make; with R_ZIG_PKG_BUILDER=zig that is an error), all on
-# the compile tree; and, on the base alone ($PREFIX: rzig and nothing
-# else in R_HOME/bin/toolchain), an install with no make or sh on PATH
-# (unix: a directory holding only sh, zig and flang; Windows: System32
-# plus a copy of flang, zig through ZIG_BIN): the install preflight
-# (patch 0009, `--rzig-check=package`) asks a tier-1 package for the
-# compilers alone, and the hook builds it.
+# offline, N6; no build root left [preflight-PF-3]), zighello under a
+# MAKEFLAGS assignment (tier 2 still: no make build to differ from) and
+# with a foreign CC in a user Makevars (`src/build.zig cannot be built by
+# make`, a failure, never the make path [preflight-PF-1]), the tier-3
+# negative (cli with a `configure` script falls through to make; with
+# R_ZIG_PKG_BUILDER=zig that is an error), all on the compile tree; and,
+# on the base alone ($PREFIX: rzig and nothing else in
+# R_HOME/bin/toolchain), an install with no make on PATH (unix: a
+# directory holding only sh, zig and flang; Windows: System32 plus a copy
+# of flang, zig through ZIG_BIN) [tests-T10, phase3-P3-4]: the install
+# preflight (patch 0009, `--rzig-check=package`) asks a tier-1 package
+# for the compilers alone, and the hook builds it.
 . "$(dirname "$0")/env.sh"
+. "$(dirname "$0")/verify-helpers.sh"
 
 case "$OS" in
   linux|macos|windows) ;;
@@ -117,16 +132,28 @@ exports_of() {
   esac | LC_ALL=C sort
 }
 # rzig's command lines from a traced install log, normalised (see the
-# header) and sorted.
+# header) and sorted: its self and environment lines and a `--version`
+# word (the make path's compiler probes; a -Wl,--version-script= stays)
+# left out; a path keeps its flag's prefix (-I, -L, -Wl,<words>, and
+# --<option>=, also after -Wl,) and its file name, its directory dropped
+# whatever it is: the source operand's is checked by abs_sources below
+# [tests-T7].
 argv_of() {
-  grep -E '^(zig-cc|zig-cxx|zig-fc): ' "$1" \
-    | grep -v -E -- '--version|^zig-(cc|cxx|fc): (self|environment) ' \
+  tr -d '\r' < "$1" \
+    | grep -E '^(zig-cc|zig-cxx|zig-fc): ' \
+    | grep -v -E -- '^zig-(cc|cxx|fc): (self|environment) |(^| )--version( |$)' \
     | sed -E 's/^(zig-(cc|cxx|fc): )ZIG_LIB_DIR=[^ ]+ /\1/' \
     | tr -d "'\"" \
-    | sed -E 's#(--[A-Za-z-]+=)[^ ]*[\\/]([^\\/ ]+)#\1\2#g; s#[^ ]*[\\/]([^\\/ ]+)#\1#g; s/ -Wl,-install_name,[^ ]+//; s/[^ ]*\.def( |$)/X.def\1/' \
+    | sed -E 's#(^| )(-[IL]|-Wl,([^ ,]*,)*(--?[A-Za-z-]+=)?|--?[A-Za-z-]+=)?[^ ]*[\\/]([^\\/ ]+)#\1\2\5#g; s/ -Wl,-install_name,[^ ]+//; s/[^ ]*\.def( |$)/X.def\1/' \
     | LC_ALL=C sort
 }
-make_lines() { grep -c -E '^make(\[[0-9]+\])?[: ]' "$1" || true; }
+# The zig path's compiles in traced install log $1 that name their source
+# by an absolute path (`-c /...`, Windows `-c C:...`), one per line: none,
+# as make names it from src/ [tests-T1, tests-T7]. (grep reads to the
+# end, no -q: pipefail [tests-SIGPIPE-1].)
+abs_sources() {
+  tr -d '\r' < "$1" | grep -E '^zig-(cc|cxx|fc): ' | grep -E -- " -c ['\"]?(/|[A-Za-z]:)" || true
+}
 # Entries in zig's global cache's o/ (the objects zig cc keeps), a count.
 global_entries() { ls "$ZIG_GLOBAL_CACHE_DIR/o" 2> /dev/null | wc -l | tr -d ' '; }
 no_zig_build_left() {
@@ -157,11 +184,12 @@ for p in $PKGS; do
   t="$(tarball_of "$p")"
   tz=$(install_pkg "$WORK/lib-zig" "$t" "$p-zig") || { tail -20 "$WORK/logs/$p-zig.log" >&2; fail "$p: the zig path failed"; }
   grep -q "rzig build: tier 1" "$WORK/logs/$p-zig.log" || fail "$p: the zig path did not report 'rzig build: tier 1' (logs/$p-zig.log)"
-  [ "$(make_lines "$WORK/logs/$p-zig.log")" = 0 ] || fail "$p: make output in the zig path's log"
+  [ -z "$(make_recipes "$WORK/logs/$p-zig.log")" ] || fail "$p: a recipe make echoed in the zig path's log"
   grep -q '^using C compiler\|^using C++ compiler\|^using Fortran compiler' "$WORK/logs/$p-zig.log" || fail "$p: no 'using ... compiler' line in the zig path's log"
   no_zig_build_left "$p"
   tm=$(R_ZIG_PKG_BUILDER=make install_pkg "$WORK/lib-make" "$t" "$p-make") || { tail -20 "$WORK/logs/$p-make.log" >&2; fail "$p: the make path failed"; }
   grep -q "rzig build:" "$WORK/logs/$p-make.log" && fail "$p: R_ZIG_PKG_BUILDER=make still ran rzig build"
+  [ -n "$(make_recipes "$WORK/logs/$p-make.log")" ] || fail "$p: no compile make echoed in the make path's log"
   z="$WORK/lib-zig/$p/$LIBSUB/$p.$SO"; m="$WORK/lib-make/$p/$LIBSUB/$p.$SO"
   test -f "$z" || fail "$p: no $z"; test -f "$m" || fail "$p: no $m"
   exports_of "$z" > "$WORK/logs/$p-exports-zig"; exports_of "$m" > "$WORK/logs/$p-exports-make"
@@ -172,6 +200,7 @@ for p in $PKGS; do
   a=$(wc -l < "$WORK/logs/$p-argv-zig" | tr -d ' ')
   [ "$a" -gt 1 ] || fail "$p: no rzig command lines in the zig path's log (RZIG_TRACE)"
   cmp -s "$WORK/logs/$p-argv-zig" "$WORK/logs/$p-argv-make" || { diff "$WORK/logs/$p-argv-zig" "$WORK/logs/$p-argv-make" | head -20 >&2; fail "$p: rzig's command lines differ between the zig and the make path"; }
+  [ -z "$(abs_sources "$WORK/logs/$p-zig.log")" ] || { abs_sources "$WORK/logs/$p-zig.log" | head -3 >&2; fail "$p: rzig build compiled a source by its absolute path (logs/$p-zig.log): compiles must name it relative to src/, as make does"; }
   printf '   %-9s zig %3ss, make %3ss: %s exports and %s rzig command lines identical\n' "$p" "$tz" "$tm" "$n" "$a"
 done
 
@@ -197,18 +226,40 @@ cmp -s "$WORK/logs/smoke-zig.out" "$WORK/logs/smoke-make.out" || { diff "$WORK/l
 echo "   smoke: $(grep -c . "$WORK/logs/smoke-zig.out") lines identical on both libraries"
 
 # --- the caches: nothing per install outlives it ----------------------------
-echo "== caches: no zig-build in rzig's cache; a second install adds nothing to zig's global cache"
-rm -rf "$WORK/work/again"; mkdir -p "$WORK/work/again" "$WORK/work/lib-again"
-tar -xzf "$(tarball_of cli)" -C "$WORK/work/again"
-install_pkg "$WORK/work/lib-again" "$WORK/work/again/cli" "again-1" > /dev/null || { tail -20 "$WORK/logs/again-1.log" >&2; fail "cli (from its directory) failed to install"; }
+echo "== caches: no zig-build in rzig's cache; a second install of a tarball adds nothing to zig's global cache; ZIG_LOCAL_CACHE_DIR"
+# From the tarball, as install.packages installs: R unpacks it into a new
+# R.INSTALL directory each time, so a compile keyed on the source's
+# absolute path would add one entry per source per install, which make's
+# `-c <file>` from src/ does not [tests-T1].
+rm -rf "$WORK/work/lib-again"; mkdir -p "$WORK/work/lib-again"
+install_pkg "$WORK/work/lib-again" "$(tarball_of cli)" "again-1" > /dev/null || { tail -20 "$WORK/logs/again-1.log" >&2; fail "cli (its tarball) failed to install"; }
 g1=$(global_entries)
-install_pkg "$WORK/work/lib-again" "$WORK/work/again/cli" "again-2" > /dev/null || { tail -20 "$WORK/logs/again-2.log" >&2; fail "cli (from its directory, again) failed to install"; }
+install_pkg "$WORK/work/lib-again" "$(tarball_of cli)" "again-2" > /dev/null || { tail -20 "$WORK/logs/again-2.log" >&2; fail "cli (its tarball, again) failed to install"; }
 g2=$(global_entries)
 grep -q "rzig build: tier 1" "$WORK/logs/again-2.log" || fail "the second install of cli did not go through rzig build"
-[ "$g1" = "$g2" ] || fail "a second install of cli from the same directory added $((g2 - g1)) entries to zig's global cache ($ZIG_GLOBAL_CACHE_DIR/o: $g1, then $g2)"
-no_zig_build_left "cli, twice"
-test ! -e "$WORK/work/again/cli/src/.rzig" || fail "the build root was left in cli's src/"
-echo "   cli twice from one directory: $g1 entries in zig's global cache before and after; no zig-build under $RZIG_CACHE; no build root left in src/"
+[ "$g1" = "$g2" ] || fail "a second install of the cli tarball added $((g2 - g1)) entries to zig's global cache ($ZIG_GLOBAL_CACHE_DIR/o: $g1, then $g2): rzig build's compiles must be keyed as make's, by the source's path relative to src/"
+no_zig_build_left "cli's tarball, twice"
+# and why: each compile named its source relative to src/ (the count holds
+# only while R's temp dir has no build.zig above it, where zig cc would
+# cache in that directory's .zig-cache instead) [tests-T1, tests-T7]
+[ -z "$(abs_sources "$WORK/logs/again-2.log")" ] || { abs_sources "$WORK/logs/again-2.log" | head -3 >&2; fail "rzig build compiled a source by its absolute path (logs/again-2.log): compiles must name it relative to src/, as make does"; }
+echo "   cli's tarball twice: $g1 entries in zig's global cache before and after, every source named relative to src/; no zig-build under $RZIG_CACHE"
+# ZIG_LOCAL_CACHE_DIR, when set, is rzig build's --cache-dir in place of
+# the build root's own (pkgbuild.zig), and the root still goes with the
+# install: from a directory, where the root is the package's src/.rzig
+# [preflight-PF-8].
+rm -rf "$WORK/work/again" "$WORK/work/zlc"; mkdir -p "$WORK/work/again"
+tar -xzf "$(tarball_of cli)" -C "$WORK/work/again"
+ZIG_LOCAL_CACHE_DIR="$(wpath "$WORK/work/zlc")" install_pkg "$WORK/work/lib-again" "$WORK/work/again/cli" "again-zlc" > /dev/null || { tail -20 "$WORK/logs/again-zlc.log" >&2; fail "cli (from its directory, ZIG_LOCAL_CACHE_DIR set) failed to install"; }
+grep -q "rzig build: tier 1" "$WORK/logs/again-zlc.log" || fail "cli with ZIG_LOCAL_CACHE_DIR set did not go through rzig build"
+# the file itself, not `tr | grep -q`: grep -q stops at its match, and
+# tr's SIGPIPE on the rest of a 64 KiB log fails the pipeline (pipefail);
+# the match ends in a space, so a CR does not matter [tests-SIGPIPE-1]
+grep -q -E -- '--cache-dir [^ ]*zlc( |$)' "$WORK/logs/again-zlc.log" || fail "with ZIG_LOCAL_CACHE_DIR set, zig build did not run with --cache-dir <it> (logs/again-zlc.log)"
+[ -n "$(ls "$WORK/work/zlc/o" 2> /dev/null)" ] || fail "with ZIG_LOCAL_CACHE_DIR=$WORK/work/zlc, nothing of rzig build's cache is there"
+test ! -e "$WORK/work/again/cli/src/.rzig" || fail "the build root was left in cli's src/ (ZIG_LOCAL_CACHE_DIR set)"
+no_zig_build_left "cli with ZIG_LOCAL_CACHE_DIR"
+echo "   cli with ZIG_LOCAL_CACHE_DIR: rzig build's cache there, no build root left in src/"
 
 # --- tier 2: a zig package --------------------------------------------------
 echo "== tier 2: zighello"
@@ -218,7 +269,7 @@ tz=$(install_pkg "$WORK/lib-zig" "$WORK/work/zighello" "zighello") || { tail -30
 grep -q "rzig build: tier 2" "$WORK/logs/zighello.log" || fail "zighello: no 'rzig build: tier 2' in the log"
 grep -q "^using zig: " "$WORK/logs/zighello.log" || fail "zighello: no 'using zig:' line in the log"
 grep -q -- '--system ' "$WORK/logs/zighello.log" || fail "zighello: zig build did not run with --system (tier 2 builds offline)"
-[ "$(make_lines "$WORK/logs/zighello.log")" = 0 ] || fail "zighello: make output in the log"
+[ -z "$(make_recipes "$WORK/logs/zighello.log")" ] || fail "zighello: a recipe make echoed in the log"
 v=$("$RSCRIPT" --vanilla -e '.libPaths(c(commandArgs(TRUE)[1], .libPaths())); library(zighello); cat(hello(21L), "\n"); unloadNamespace("zighello")' "$(wpath "$WORK/lib-zig")" 2>&1 | tail -1 | tr -d ' \r')
 [ "$v" = 42 ] || fail "zighello: hello(21L) printed '$v', not 42"
 exports_of "$WORK/lib-zig/zighello/$LIBSUB/zighello.$SO" | grep -q "R_init_zighello" || fail "zighello: R_init_zighello is not exported"
@@ -234,7 +285,30 @@ rm -rf "$WORK/work/lib-url"; mkdir -p "$WORK/work/lib-url"
 if install_pkg "$WORK/work/lib-url" "$WORK/work/zigurl" "zigurl" > /dev/null; then fail "tier 2: a package whose build.zig.zon fetches a URL installed"; fi
 grep -q "src/build.zig.zon: dependency remote is a URL; tier 2 builds offline, vendor it as a .path dependency" "$WORK/logs/zigurl.log" || { tail -10 "$WORK/logs/zigurl.log" >&2; fail "tier 2: the URL dependency was not refused with the expected line (logs/zigurl.log)"; }
 grep -q "rzig build: tier 2" "$WORK/logs/zigurl.log" && fail "tier 2: zig build ran for the package with a URL dependency"
-echo "   zigurl: a URL dependency in src/build.zig.zon is refused before zig runs"
+# the build root, made before the refusal, goes too [preflight-PF-3]
+test ! -e "$WORK/work/zigurl/src/.rzig" && test ! -e "$WORK/work/zigurl/src/.zig-cache" || fail "zigurl: the refusal left a build root (src/.rzig) or a .zig-cache in src/"
+echo "   zigurl: a URL dependency in src/build.zig.zon is refused before zig runs, no build root left"
+# A tier-2 package has no make build: a MAKEFLAGS assignment, which sends
+# a tier-1 package to make (its build would differ), leaves it on zig
+# build; a plan that needs make (here a foreign CC from a user Makevars:
+# ccache) fails with rzig's line, exit 1, instead of a make path that
+# ignores build.zig (I-C1) [preflight-PF-1]. A user Makevars skips the
+# preflight (patch 0009), so this is the hook's decision.
+rm -rf "$WORK/work/zigmf" "$WORK/work/lib-zigmf"; cp -R "$ZIGHELLO" "$WORK/work/zigmf"; mkdir -p "$WORK/work/lib-zigmf"
+MAKEFLAGS='-- X=1' install_pkg "$WORK/work/lib-zigmf" "$WORK/work/zigmf" "zighello-makeflags" > /dev/null || { tail -20 "$WORK/logs/zighello-makeflags.log" >&2; fail "zighello under MAKEFLAGS='-- X=1' failed to install (tier 2 has no make build to differ from)"; }
+grep -q "rzig build: tier 2" "$WORK/logs/zighello-makeflags.log" || fail "zighello under MAKEFLAGS='-- X=1' did not build through rzig build: tier 2"
+rm -rf "$WORK/work/zigcc" "$WORK/work/lib-zigcc"; cp -R "$ZIGHELLO" "$WORK/work/zigcc"; mkdir -p "$WORK/work/lib-zigcc"
+printf 'CC = ccache cc\n' > "$WORK/work/ccache-makevars"
+if R_MAKEVARS_USER="$(wpath "$WORK/work/ccache-makevars")" install_pkg "$WORK/work/lib-zigcc" "$WORK/work/zigcc" "zighello-ccache" > /dev/null; then
+  fail "zighello with CC = ccache in the user Makevars installed: tier 2 cannot be built by make"
+fi
+grep -q "zighello: src/build.zig cannot be built by make: CC = ccache is not a compiler of R's toolchain" "$WORK/logs/zighello-ccache.log" ||
+  { tail -10 "$WORK/logs/zighello-ccache.log" >&2; fail "zighello with CC = ccache did not fail with 'zighello: src/build.zig cannot be built by make: CC = ccache ...' (logs/zighello-ccache.log)"; }
+if grep -q "zighello needs make: " "$WORK/logs/zighello-ccache.log" || [ -n "$(make_recipes "$WORK/logs/zighello-ccache.log")" ]; then
+  fail "zighello with CC = ccache went to the make path (rzig build's exit 3), not a failure"
+fi
+test ! -e "$WORK/work/zigcc/src/.rzig" || fail "zighello with CC = ccache: a build root was left in src/"
+echo "   zighello: tier 2 under MAKEFLAGS='-- X=1'; with CC = ccache in the user Makevars, 'src/build.zig cannot be built by make', no make path"
 
 # --- tier 3: falls through to make, or is refused ---------------------------
 echo "== tier 3: a configure script"
@@ -250,7 +324,7 @@ if R_ZIG_PKG_BUILDER=zig install_pkg "$WORK/work/lib-neg" "$WORK/work/neg/cli" "
 grep -q "needs make, and R_ZIG_PKG_BUILDER is 'zig'" "$WORK/logs/neg-zig.log" || { tail -5 "$WORK/logs/neg-zig.log" >&2; fail "tier 3: R_ZIG_PKG_BUILDER=zig failed without the expected message"; }
 echo "   configure: falls through to make under auto, refused under zig"
 
-# --- the base alone, no make, no sh ------------------------------------------
+# --- the base alone, no make (unix: sh, zig and flang only) -----------------
 echo "== the base alone ($BASE_RH), no make on PATH"
 NOMAKE="$WORK/work/nomake-bin"; rm -rf "$NOMAKE"; mkdir -p "$NOMAKE"
 # env.sh's $ZIG: ZIG_BIN, else the env's zig (win-64: x86_64-w64-mingw32-zig.exe)
@@ -277,4 +351,4 @@ grep -q "rzig build: tier 1" "$WORK/logs/nomake-$pkg.log" || fail "$pkg on the b
 test -f "$WORK/lib-nomake/$pkg/$LIBSUB/$pkg.$SO" || fail "no $pkg.$SO from the no-make install"
 echo "   $pkg: installed on the base in $((e - s))s with PATH = $(ls "$NOMAKE" | tr '\n' ' ')$([ "$OS" = windows ] && echo '+ System32 (zig through ZIG_BIN)')"
 
-echo "== pkg-parity verified ($OS/$FLAVOR): $PKGS through rzig build match make on the compile tree; tier 2 (and its URL refusal), tier 3, the caches and the no-make install on the base behave"
+echo "== pkg-parity verified ($OS/$FLAVOR): $PKGS through rzig build match make on the compile tree; tier 2 (its URL refusal, MAKEFLAGS, a plan that needs make), tier 3, the caches and the no-make install on the base behave"
