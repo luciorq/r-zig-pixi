@@ -1,22 +1,25 @@
 //! `rzig def -o <pkg>.def <objects>`: the module-definition file
-//! winshlib.mk builds with `nm | sed -n 's/^.* [BCDRT] / /p'` for a
-//! package DLL, from the objects' COFF symbol tables (std.coff's records,
-//! read at the object's own offsets: std.coff.Coff reads PE images). The
-//! make path's exports exactly, without nm and sed; lld's auto-export
-//! (`--export-all-symbols`) is not the same set (design record, step 4).
+//! winshlib.mk builds with `nm | sed -n 's/^.* [BCDRT] / /p' $(NM_FILTER)`
+//! for a package DLL, from the objects' COFF symbol tables (std.coff's
+//! records, read at the object's own offsets: std.coff.Coff reads PE
+//! images). The make path's exports exactly, without nm and sed; lld's
+//! auto-export (`--export-all-symbols`) is not the same set (design
+//! record, step 4).
 //!
 //! nm's [BCDRT]: a global symbol defined in a code, data or bss section, or
 //! a common. Not undefined (U), not weak (w/W: a WEAK_EXTERNAL), not a
-//! local (lowercase), not a section or debug symbol. The compiler's own
-//! globals are kept, as nm lists them: the `.refptr.<name>` stubs
-//! (EXTERNAL, in their own .rdata COMDAT; nm: R) and a weak function's
-//! `.weak.<name>.default.<other>` alias (EXTERNAL in .text; nm: T). R's
-//! winshlib.mk filters those only through NM_FILTER, which this tree's
-//! Makeconf.win leaves empty, so make's tmp.def exports them, and
-//! pkg-parity holds this to make (kappa, 2026-10-12: cli's nine
-//! `.refptr.*`). M5's oracle on kappa (cli's 185) was lld's auto-export,
-//! since kappa then had no sed: winshlib.mk's tmp.def came out empty;
-//! auto-export leaves them out.
+//! local (lowercase), not a section or debug symbol. Then NM_FILTER, as
+//! CRAN's R has it (src/gnuwin32/MkRules.rules' default, which
+//! fixed/Makefile writes into the installed Makeconf, and build.zig into
+//! this tree's Makeconf.win): `sed -e '/[.]refptr[.]/d' -e
+//! '/[.]weak[.]/d'`, so no name containing `.refptr.` or `.weak.`: the
+//! compiler's own globals, the `.refptr.<name>` stubs (EXTERNAL, in their
+//! own .rdata COMDAT; nm: R) and a weak function's
+//! `.weak.<name>.default.<other>` alias (EXTERNAL in .text; nm: T). Both
+//! paths then export what CRAN's DLLs export (records-REC-3, menu 4 of
+//! the PR #25 review: until then this tree's Makeconf.win left NM_FILTER
+//! empty and rzig def kept them, to match it; cli exported 195 names so on
+//! kappa, 2026-10-12, and 185 without them in M5).
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
@@ -24,6 +27,11 @@ const coff = std.coff;
 const Ctx = @import("Ctx.zig");
 
 pub const Error = error{ BadObject, OutOfMemory };
+
+/// NM_FILTER's two seds: a name with `.refptr.` or `.weak.` anywhere.
+fn filtered(name: []const u8) bool {
+    return mem.find(u8, name, ".refptr.") != null or mem.find(u8, name, ".weak.") != null;
+}
 
 /// The exported names of one COFF object, in symbol-table order.
 pub fn exports(a: mem.Allocator, data: []const u8, out: *std.ArrayList([]const u8)) Error!void {
@@ -67,7 +75,7 @@ pub fn exports(a: mem.Allocator, data: []const u8, out: *std.ArrayList([]const u
             if (off >= strtab.buffer.len) return error.BadObject;
             break :blk strtab.get(off);
         };
-        if (name.len == 0) continue;
+        if (name.len == 0 or filtered(name)) continue;
         var seen = false;
         for (out.items) |x| if (mem.eql(u8, x, name)) {
             seen = true;
@@ -128,15 +136,16 @@ const testing = std.testing;
 // testdata/win-syms.c compiled with `zig cc -target x86_64-windows-gnu -O2 -c`
 const win_syms = @embedFile("testdata/win-syms.o");
 
-test "exports: nm's [BCDRT] set, the compiler's helpers included" {
+test "exports: nm's [BCDRT] set, then CRAN's NM_FILTER" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     var names: std.ArrayList([]const u8) = .empty;
     try exports(arena.allocator(), win_syms, &names);
     // nm: B exported_bss, D exported_data, T exported_fn, R exported_rodata,
-    // T uses_locals, R .refptr.imported_var, T .weak.weak_fn.default.exported_fn;
-    // not W weak_fn, U strlen, U imported_var, the locals
-    const expected = [_][]const u8{ "exported_bss", "exported_data", "exported_fn", "exported_rodata", "uses_locals", ".refptr.imported_var", ".weak.weak_fn.default.exported_fn" };
+    // T uses_locals; not W weak_fn, U strlen, U imported_var, the locals;
+    // and not what NM_FILTER drops, R .refptr.imported_var and
+    // T .weak.weak_fn.default.exported_fn (records-REC-3, menu 4)
+    const expected = [_][]const u8{ "exported_bss", "exported_data", "exported_fn", "exported_rodata", "uses_locals" };
     try testing.expectEqual(expected.len, names.items.len);
     for (expected) |e| {
         var found = false;
@@ -153,4 +162,7 @@ test "exports: nm's [BCDRT] set, the compiler's helpers included" {
     try testing.expectEqual(expected.len, names.items.len);
     try testing.expectEqualStrings("EXPORTS\na\nb\n", try text(arena.allocator(), &.{ "a", "b" }));
     try testing.expectError(error.BadObject, exports(arena.allocator(), "not an object", &names));
+    // the seds match anywhere in the name, not only at its start
+    for ([_][]const u8{ ".refptr.x", "a.refptr.b", ".weak.f.default.g", "x.weak.y" }) |n| try testing.expect(filtered(n));
+    for ([_][]const u8{ "refptr", "x.weak", "weak.x", "a_refptr_b", "R_init_pkg" }) |n| try testing.expect(!filtered(n));
 }

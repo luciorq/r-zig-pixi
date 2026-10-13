@@ -64,11 +64,20 @@ stopifnot(one() == 1L, two() == 2L)
 cat("toolchain: C and C++ package compiled (rzig build: tier 1) and loaded: OK\n")
 lib_make <- file.path(d, "lib-make")
 dir.create(lib_make)
+## The make path, asserted from its log [tests-T2]: traced, so that a run
+## of rzig build would show (its `rzig build: tier 1` needs RZIG_TRACE), and
+## with a compile make echoed (Makeconf's compiler by its path in
+## R_HOME/bin/toolchain; rzig's own trace lines start with `zig-cc: `).
+made_by_make <- function(log)
+    any(grepl("^[^ ]*/bin/toolchain/(zig-cc|zig-cxx|zig-fc|gcc|g\\+\\+)", sub("\r$", "", log)))
 make_ref <- function(pkg_dir, name) {
-    Sys.setenv(R_ZIG_PKG_BUILDER = "make")
-    on.exit(Sys.unsetenv("R_ZIG_PKG_BUILDER"))
+    Sys.setenv(R_ZIG_PKG_BUILDER = "make", RZIG_TRACE = "1")
+    on.exit(Sys.unsetenv(c("R_ZIG_PKG_BUILDER", "RZIG_TRACE")))
     log <- install_log(pkg_dir, name, lib_make)
-    stopifnot(!any(grepl("rzig build:", log, fixed = TRUE)))
+    if (any(grepl("rzig build:", log, fixed = TRUE)) || !made_by_make(log)) {
+        cat(log, sep = "\n")
+        stop(name, ": R_ZIG_PKG_BUILDER=make did not build it through make")
+    }
     name
 }
 make_ref(p, "rzigc")
@@ -192,9 +201,12 @@ pa <- mkpkg("rzigar", list(file = "f.c",
       "\t$(RANLIB) $@"))
 dir.create(file.path(pa, "src", "foo"))
 writeLines("int rzig_foo(void) { return 42; }", file.path(pa, "src", "foo", "foo.c"))
-install.packages(pa, repos = NULL, type = "source", lib = lib)
+## a Makevars rule: rzig build hands it to make, and says why (a line it
+## prints with or without RZIG_TRACE) [tests-T2]
+log <- install_log(pa, "rzigar", lib)
+stopifnot(any(grepl("rzig build: rzigar needs make: ", log, fixed = TRUE)), made_by_make(log))
 stopifnot(rzigar::f() == 42L)
-cat("toolchain: AR and RANLIB are rzig; a static library built with them links and loads: OK\n")
+cat("toolchain: AR and RANLIB are rzig; a static library built with them (make: a Makevars rule) links and loads: OK\n")
 
 if (windows) {
     ## The binutils Makeconf.win names by path (NM, DLLTOOL, RESCOMP,

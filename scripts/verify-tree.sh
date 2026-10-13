@@ -21,7 +21,7 @@
 #   - Makeconf names no build path and has no rpath; CPPFLAGS and LDFLAGS
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
 #   - Windows (every tree): CRAN's layout, Makeconf's R_ARCH is /x64 and
-#     R_HOME/bin has R.exe and Rscript.exe;
+#     its NM_FILTER CRAN's, and R_HOME/bin has R.exe and Rscript.exe;
 #   - the build tools (every tree): R puts the build-tools group's usr/bin
 #     first on PATH (unix: etc/Renviron, and MAKE is make; Windows:
 #     etc/Rcmd_environ; B25), and Windows' Makeconf runs ar and ranlib as
@@ -76,7 +76,9 @@
 # this tree as it is, so the checks here run once, here. (What runs in
 # between leaves the tree as it was: smoke and check only run it,
 # contract compiles with a copy, the compile tree (compile-tree.sh), and
-# installs into build/testlib-*, hermetic works on a copy.)
+# installs into build/testlib-*, pkg-parity runs the base's R in place
+# for its no-make install, into its own library, writing nothing under
+# $PREFIX [phase3-P3-5, coverage-3], hermetic works on a copy.)
 # Shared helpers (rpaths_of, needed_of, cxx_deps, minos_over_floor,
 # win_system_dll): verify-helpers.sh; MACOS_MIN, macho_minos, version_gt:
 # env.sh.
@@ -185,14 +187,25 @@ if [ -n "$bad" ]; then
 fi
 echo "== Makeconf verified: no build path, no rpath, CPPFLAGS and LDFLAGS empty, FLIBS = -lflang_rt.runtime, FC = zig-fc"
 
+# A file's line, compared whole with its CR dropped: R's Windows files
+# have CRLF ends, and so does a checkout with autocrlf (C20). (Not grep
+# -q, which may exit before tr has written everything, and tr's SIGPIPE
+# would then fail the pipeline, pipefail.)
+has_line() { tr -d '\r' < "$1" | grep -xF -- "$2" > /dev/null; }
+
 # Windows: CRAN's layout, which packages build against (stress round 1).
 # Makeconf's R_ARCH is /x64, so $(R_HOME)/bin$(R_ARCH)/Rterm.exe and
 # lib$(R_ARCH) name the arch directories. R_HOME/bin has R.exe and
 # Rscript.exe (build.zig's winRfe: they start bin/x64's), which packages
-# run as ${R_HOME}/bin/R and ${R_HOME}/bin/Rscript.
+# run as ${R_HOME}/bin/R and ${R_HOME}/bin/Rscript. Makeconf's NM_FILTER
+# is CRAN's, which gnuwin32's fixed/Makefile writes and build.zig
+# substitutes: winshlib.mk's .def then leaves out the compiler's
+# .refptr. and .weak. names, so a package DLL exports what CRAN's does
+# (PR #25 review records-REC-3).
 if [ "$OS" = windows ]; then
   bad=""
   grep -Eq '^R_ARCH = /x64 *'$'\r''?$' "$mk" || bad="$bad R_ARCH-not-/x64"
+  has_line "$mk" "NM_FILTER = | \$(SED) -e '/[.]refptr[.]/d' -e '/[.]weak[.]/d'" || bad="$bad NM_FILTER-not-CRAN"
   for f in R.exe Rscript.exe; do
     [ "$(head -c2 "$TREE/$rh/bin/$f" 2>/dev/null)" = MZ ] || bad="$bad bin/$f(missing, or no PE file)"
   done
@@ -200,7 +213,7 @@ if [ "$OS" = windows ]; then
     echo "error: $rh lacks CRAN's layout:$bad" >&2
     exit 1
   fi
-  echo "== CRAN's layout verified: Makeconf's R_ARCH = /x64, $rh/bin/{R,Rscript}.exe"
+  echo "== CRAN's layout verified: Makeconf's R_ARCH = /x64 and NM_FILTER, $rh/bin/{R,Rscript}.exe"
 fi
 
 # The build tools (feat-standalone-toolchain B24, B25, B43), every tree:
@@ -220,11 +233,8 @@ fi
 # last), and pkg-config bare, found on PATH (B43-3); Rcmd_environ's RC,
 # for CMake, is the same windres. The lines are the vendored
 # Makeconf.win's and build.zig's (rcmdEnviron, finalRenviron), as PHASE3
-# sections 5 and 6 give them, each compared whole with its CR dropped:
-# R's Windows files have CRLF ends, and so does a checkout with autocrlf
-# (C20). (has_line: not grep -q, which may exit before tr has written
-# everything, and tr's SIGPIPE would then fail the pipeline, pipefail.)
-has_line() { tr -d '\r' < "$1" | grep -xF -- "$2" > /dev/null; }
+# sections 5 and 6 give them, each compared whole with its CR dropped
+# (has_line, above).
 bad=""
 if [ "$OS" = windows ]; then
   bu='$(R_HOME)/bin/toolchain/binutils'

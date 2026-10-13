@@ -3,6 +3,8 @@
 # through the real zig.
 #
 #   zigbuild/tools/rzig/smoke-test.sh [R-prefix]
+#   pixi run rzig-test <R-prefix>     (test.sh: the unit and parity tests,
+#                                      then this with that prefix)
 #
 # 1. Copies of rzig named zig-cc, zig-cxx, zig-ar and zig-ranlib build a C
 #    and a C++ shared library, a static archive and a program using all

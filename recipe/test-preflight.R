@@ -34,7 +34,9 @@ out <- suppressWarnings(system2(file.path(R.home("bin"), "R"),
                                   shQuote(mkpkg("rzigsrc", src = TRUE))),
                                 stdout = TRUE, stderr = TRUE))
 cat(out, sep = "\n")
+## 0009's stop, for compiled code and a configure script alike [tests-T11]
 stopifnot(!is.null(attr(out, "status")),
-          any(grepl("r-zig toolchain is not installed", out, fixed = TRUE)),
+          any(grepl("needs the r-zig toolchain (compiled code or a configure script), which is not installed: ",
+                    out, fixed = TRUE)),
           !dir.exists(file.path(lib, "rzigsrc")))
 cat("base package without the toolchain: OK\n")

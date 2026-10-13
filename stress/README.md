@@ -77,7 +77,13 @@ Useful options (`--help` lists them all):
 - `--resume`: with an existing `--out`, keep what is already installed.
 - `--trace`: rzig prints the environments it chose and its zig command
   into the logs (`RZIG_TRACE=1`), as lines that start with `zig-cc:` and the
-  like.
+  like, and `rzig build` the tier it built a package with.
+- `--no-shared-cache`: no zig build cache shared by the run. By default
+  `rzig build` uses the run's zig cache (`ZIG_LOCAL_CACHE_DIR`), so its
+  build runner compiles once per run. With this option each install
+  through `rzig build` has its own cache in its build root and compiles its
+  build runner, as a user's install does: the per-install cost. zig's
+  global cache stays in the run directory either way.
 - `--keep-path`: keep your PATH and, on macOS, skip the runner's CMake
   toolchain file. By default the runner narrows PATH and, on macOS,
   leaves Homebrew out of CMake's searches. A tree that ships its own
@@ -93,12 +99,16 @@ Actions, "stress", "Run workflow", or with `gh`:
 gh workflow run stress.yaml -f oses='["ubuntu-latest","macos-latest"]' -f packages='g3 g4'
 gh workflow run stress.yaml -f packages=g2 -f distribution=both -f channel=universe
 gh workflow run stress.yaml -f packages=all -f skip=heavy -f jobs=2
+gh workflow run stress.yaml -f packages='g3 g4' -f trace=true -f shared_cache=false
 ```
 
 The inputs are the runners (a JSON list), the targets, rows to skip, the
 distribution (tree, conda or both), the conda channel (local: this run's
-`conda-package`; universe), the job count and the zig (conda-forge's, or
-upstream's from `pixi run fetch-zig`). Each OS and distribution is one job.
+`conda-package`; universe), the job count, the zig (conda-forge's, or
+upstream's from `pixi run fetch-zig`), `trace` (`--trace`), the builder
+(`R_ZIG_PKG_BUILDER`: auto, or make for a make reference) and
+`shared_cache` (true by default; false passes `--no-shared-cache`). Each
+OS and distribution is one job.
 Jobs never stop each other (`fail-fast: false`) and may take up to 6 hours.
 
 Every job builds the dev tree. The conda job with the local channel also
@@ -139,8 +149,9 @@ nothing else on the machine:
   `R_LIBS`, `R_LIBS_USER` and `R_LIBS_SITE` all point to it. Each package is
   installed once per run, and later packages use it.
 - An empty file for `R_MAKEVARS_USER`, `R_ENVIRON_USER` and `R_PROFILE_USER`.
-- `TMPDIR` and zig's cache in the run directory. The temp files are deleted
-  after each package. rzig's own cache is elsewhere: `$XDG_CACHE_HOME/r-zig`,
+- `TMPDIR` and zig's cache in the run directory, which `rzig build` also
+  uses unless `--no-shared-cache`. The temp files are deleted after each
+  package. rzig's own cache is elsewhere: `$XDG_CACHE_HOME/r-zig`,
   by default `~/.cache/r-zig` (Windows: `%LOCALAPPDATA%\r-zig`). There, with
   conda-forge's zig on macOS, rzig makes a libc++ mirror (a directory of
   symlinks) per zig. Since build 7 it also keeps a copy of each archive
@@ -186,8 +197,10 @@ working (the harness test); no row has timed out on macOS or Windows yet.
 ## Read the report
 
 `report.md` starts with the run: date, R, commit, minutes, jobs, zig, the
-`CC` from Makeconf, the libraries env, and what the run removed from rzig's
-cache. The commit is `GITHUB_SHA` when it is set, else the checkout's
+`CC` from Makeconf, the libraries env, the builder (`R_ZIG_PKG_BUILDER`,
+auto when unset), whether the run shared one zig build cache
+(`--no-shared-cache`), and what the run removed from rzig's cache. The
+commit is `GITHUB_SHA` when it is set, else the checkout's
 `git rev-parse HEAD`, plus "(modified)" when tracked files have changes; a
 copy without `.git` says "unknown". Then one line per target:
 
@@ -211,11 +224,11 @@ The classes, and who acts on them:
 | network | `cannot open URL`, HTTP 4xx/5xx, `curl: (n)`; also a package missing from the repositories | rerun |
 | resource | out of memory, no space left | fewer jobs, a bigger runner |
 | abi | an undefined symbol with `St3__1`, `__cxx11` or an MSVC name: libc++ code against a libstdc++ (or MSVC) library | a design decision for the user |
-| toolchain | rzig's own messages (`zig-cc: cannot run ...`), `LLVM ERROR`, an unknown option, a missing compiler-rt helper; also the install preflight's stop (patch 0009: `r-zig toolchain is incomplete`, whose row shows rzig's `zig-cc: ` line naming what is missing, or `is not installed`) | fix in rzig, after the user agrees; for the preflight's stop, add what it names |
+| toolchain | rzig's own messages (`zig-cc: cannot run ...`, `rzig build: no zig ...`), `LLVM ERROR`, an unknown option, a missing compiler-rt helper; also the install preflight's stop (patch 0009: `needs the r-zig toolchain (...), which is incomplete`, whose row shows rzig's `zig-cc: ` line naming what is missing, or `which is not installed`; build 8 said `r-zig toolchain is incomplete`). Not `rzig build: zig build failed`, which follows every failed compile: the compiler's lines decide, as under make | fix in rzig, after the user agrees; for the preflight's stop, add what it names |
 | crash | R died from a signal or a Windows exception (exit status 128 or more, or below 0), or printed `*** caught segfault ***` | read the log; after an unload on linux, Z9 until rzig's fix |
 | upstream | a packaging bug in a conda-forge library or in the channels: a Homebrew path in a conda library (`Library not loaded: /opt/homebrew/...`), CMake's `debug`/`optimized` keywords from a `.pc` file, an import library that lists what its DLL does not export (`The specified procedure could not be found`), a solver conflict when `--conda` makes its env (round 1's U1 to U4) | work around it in the env (a pin, a fixed file) and record it |
 | sysdep | `configure: error`, a missing header, `-l` or pkg-config module, `command not found` | add it to the stress feature (or the extras for tools) |
-| package | anything else: C23 keywords, gcc-only code, Rtools assumptions | record it |
+| package | anything else: C23 keywords, gcc-only code, Rtools assumptions; also `src/build.zig cannot be built by make` (a zig package whose build a site Makevars or the Makeconf sends to make), though the preflight's stop after it says the toolchain is incomplete | record it |
 | timeout | the row's timeout passed (step 3: its 10 minutes) | read the log: a hang, slowness, or memory |
 
 Three more values appear: `dependency` on a `skipped` row, `harness` on an

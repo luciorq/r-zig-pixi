@@ -19,11 +19,16 @@
 //!   rzig build --pkg <dir> --classify      the tier to stdout
 //!
 //! Exit 0 built (or nothing to build), 3 needs make (why, on stderr),
-//! 2 usage, 1 failed, 127 no zig (the compilers group's text). R_HOME
-//! from the environment, as under R. `--classify` prints the decided
-//! tier (r_only, makevars, zig, make: make also when the Makevars sends
-//! the package there); `--plan-only` the plan. The install preflight
-//! (check.zig's --rzig-check=package) decides through `decide` below.
+//! 2 usage, 1 failed, 127 no zig (the compilers group's text). A tier-2
+//! package whose plan needs make is 1, not 3: make would ignore its
+//! build.zig (`buildZigNeedsMake`). R_HOME from the environment, as
+//! under R. `--classify` prints the decided tier (r_only, makevars, zig,
+//! make: make also when the Makevars sends the package there), and for
+//! that tier-2 package the same line and exit 1 as a build;
+//! `--plan-only` the plan. The install preflight (check.zig's
+//! --rzig-check=package) decides through `decide` below. Whatever the
+//! exit, the build root <out>/.rzig is gone afterwards unless kept
+//! (--keep-root, RZIG_KEEP_ROOT=1).
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
@@ -108,10 +113,12 @@ fn parseArgs(ctx: *Ctx, argv: []const []const u8) !?Args {
     return a;
 }
 
-/// `path` absolute with `/` separators, as rzig keeps every path.
+/// `path` absolute with `/` separators, as rzig keeps every path. When it
+/// does not resolve, a line names it and why, after the caller's name
+/// (`rzig build: `, or the check mode's `zig-cc: `) [phase3-P3-2].
 pub fn canonical(ctx: *Ctx, path: []const u8) ![]const u8 {
     const real = Io.Dir.cwd().realPathFileAlloc(ctx.io, path, ctx.arena) catch |err| {
-        ctx.warn("build: {s}: {t}", .{ path, err });
+        ctx.warn("{s}: {t}", .{ path, err });
         return error.BadPath;
     };
     return slashes(ctx, real);
@@ -132,19 +139,25 @@ pub fn packageName(ctx: *Ctx, pkg_dir: []const u8) ?[]const u8 {
     return null;
 }
 
-/// install.R's makevars_site(): R_MAKEVARS_SITE, else etc<R_ARCH>/Makevars.site.
+// R_MAKEVARS_SITE and R_MAKEVARS_USER are read with ctx.env.get, where
+// ctx.getenv takes empty for unset: R reads them with
+// Sys.getenv(name, NA), so a set but empty value is a file that does not
+// exist, no Makevars, never the default file [preflight-PF-2].
+
+/// install.R's makevars_site(): R_MAKEVARS_SITE when set, else
+/// etc<R_ARCH>/Makevars.site.
 fn makevarsSite(ctx: *Ctx, r_home: []const u8, r_arch: []const u8) !?[]const u8 {
-    const f = ctx.getenv("R_MAKEVARS_SITE") orelse try ctx.fmt("{s}/etc{s}/Makevars.site", .{ r_home, r_arch });
+    const f = ctx.env.get("R_MAKEVARS_SITE") orelse try ctx.fmt("{s}/etc{s}/Makevars.site", .{ r_home, r_arch });
     return if (ctx.isFile(f)) f else null;
 }
 
-/// install.R's makevars_user(): R_MAKEVARS_USER; else, on Windows with
-/// R_ARCH /x64, ~/.R/Makevars.ucrt then ~/.R/Makevars.win64, then
-/// ~/.R/Makevars.win; on unix ~/.R/Makevars-<R_PLATFORM>; then
-/// ~/.R/Makevars. `~` as R expands it: HOME, else R_USER, else USERPROFILE.
+/// install.R's makevars_user(): R_MAKEVARS_USER when set; else, on
+/// Windows with R_ARCH /x64, ~/.R/Makevars.ucrt then ~/.R/Makevars.win64,
+/// then ~/.R/Makevars.win; on unix ~/.R/Makevars-<R_PLATFORM>; then
+/// ~/.R/Makevars.
 fn makevarsUser(ctx: *Ctx, r_arch: []const u8) !?[]const u8 {
-    if (ctx.getenv("R_MAKEVARS_USER")) |f| return if (ctx.isFile(f)) f else null;
-    const home = ctx.getenv("HOME") orelse ctx.getenv("R_USER") orelse ctx.getenv("USERPROFILE") orelse return null;
+    if (ctx.env.get("R_MAKEVARS_USER")) |f| return if (ctx.isFile(f)) f else null;
+    const home = (try userHome(ctx)) orelse return null;
     var names: std.ArrayList([]const u8) = .empty;
     if (ctx.os == .windows) {
         if (mem.eql(u8, r_arch, "/x64")) try names.appendSlice(ctx.arena, &.{ "Makevars.ucrt", "Makevars.win64" });
@@ -158,6 +171,21 @@ fn makevarsUser(ctx: *Ctx, r_arch: []const u8) !?[]const u8 {
         if (ctx.isFile(f)) return f;
     }
     return null;
+}
+
+/// `~` as R's path.expand expands it [preflight-PF-2]: on Windows R_USER
+/// (R sets it at startup, so rzig under R always has it), else HOME,
+/// else HOMEDRIVE and HOMEPATH (R_ExpandFileName, src/gnuwin32/
+/// sys-win32.c). unix: HOME only; R's passwd fallback (getpwuid when
+/// HOME is unset or empty, src/unix/sys-unix.c) is not mirrored, and
+/// under install.R the hook passes R's own choice, makevars_user(), as
+/// R_MAKEVARS_USER (patch 0013) [code-5]. Empty counts as unset.
+fn userHome(ctx: *Ctx) !?[]const u8 {
+    if (ctx.os != .windows) return ctx.getenv("HOME");
+    if (ctx.getenv("R_USER") orelse ctx.getenv("HOME")) |h| return h;
+    const drive = ctx.getenv("HOMEDRIVE") orelse return null;
+    const path = ctx.getenv("HOMEPATH") orelse return null;
+    return try ctx.fmt("{s}{s}", .{ drive, path });
 }
 
 /// What `rzig build` decides for one package: its tier, why it needs make
@@ -225,6 +253,19 @@ pub fn decide(ctx: *Ctx, in: Inputs) error{OutOfMemory}!Decision {
     return .{ .tier = class.tier, .class = class, .plan = plan };
 }
 
+/// A tier-2 package (src/build.zig) whose plan needs make (a foreign
+/// compiler from a site or user Makevars, an unreadable Makeconf, ...):
+/// make would compile src/'s sources and ignore build.zig, a missing or
+/// partial library, so there is nothing to fall back to
+/// [preflight-PF-1]. `rzig build` and the preflight (check.zig) both
+/// say so with this line and exit 1, not 3; the build tools would not
+/// help, so no group's text follows. True when it said so.
+pub fn buildZigNeedsMake(ctx: *Ctx, name: []const u8, d: Decision) bool {
+    if (d.tier != .make or d.class.tier != .zig) return false;
+    ctx.warn("{s}: src/build.zig cannot be built by make: {s}", .{ name, d.reason });
+    return true;
+}
+
 pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     ctx.name = "rzig build";
     const args = (try parseArgs(ctx, argv)) orelse return 2;
@@ -256,8 +297,11 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         .rzig = ctx.self_exe orelse "rzig",
     });
     // the decided tier: make also when the Makevars sends the package
-    // there (the preflight decides the same way)
+    // there, as the preflight decides; a tier-2 package that make cannot
+    // build is no tier to print, but the line and exit 1 that the hook and
+    // the preflight give [preflight-PF-1, coverage-1]
     if (args.classify) {
+        if (buildZigNeedsMake(ctx, name, d)) return 1;
         try stdoutPrint(ctx, "{t}\n", .{d.tier});
         return 0;
     }
@@ -267,7 +311,7 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
             if (isSet(ctx, "RZIG_TRACE")) ctx.warn("{s}: no src/, nothing to compile", .{name});
             return 0;
         },
-        .make => return needsMake(ctx, name, d.reason),
+        .make => return if (buildZigNeedsMake(ctx, name, d)) 1 else needsMake(ctx, name, d.reason),
         .makevars, .zig => {},
     }
     var plan = d.plan.?;
@@ -297,6 +341,13 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     Io.Dir.cwd().createDirPath(ctx.io, root) catch |err| {
         ctx.warn("cannot create {s}: {t}", .{ root, err });
         return 1;
+    };
+    // from here every return removes the root, a refusal, no zig or a
+    // failed write as much as a build: under install.R it is the
+    // package's src/.rzig, which R CMD build would ship [preflight-PF-3]
+    const keep = args.keep_root or isSet(ctx, "RZIG_KEEP_ROOT");
+    defer if (!keep) {
+        Io.Dir.cwd().deleteTree(ctx.io, root) catch |err| ctx.warn("cannot remove {s}: {t}", .{ root, err });
     };
     const plan_path = try ctx.fmt("{s}/plan.zon", .{root});
     {
@@ -362,8 +413,11 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     // the zig build cache: in the build root, gone with it, so that an
     // install leaves nothing behind (the Run steps' keys hash the whole
     // environment, R_SESSION_TMPDIR included, so entries are never reused
-    // across installs: a shared cache only grew). zig's global cache (std,
-    // compiler_rt, keyed by target) is the shared part. ZIG_LOCAL_CACHE_DIR
+    // across installs: a shared cache only grew). zig's global cache is the
+    // shared part: std and compiler_rt, keyed by target, and zig cc's
+    // objects, keyed by the source as named (relative to src/, as make
+    // names it: build_t1.zig) and its contents, so a reinstall of the same
+    // sources adds none, as on make's path [tests-T1]. ZIG_LOCAL_CACHE_DIR
     // names another place when set (stress.R points it at its run
     // directory); --cache-dir wins over both.
     const cache_dir = args.cache_dir orelse ctx.getenv("ZIG_LOCAL_CACHE_DIR") orelse try ctx.fmt("{s}/zig-cache", .{root});
@@ -408,11 +462,9 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         else => 1,
     };
     if (class.tier == .zig and !dep_cache_existed) Io.Dir.cwd().deleteTree(ctx.io, dep_cache) catch {};
-    const keep = args.keep_root or isSet(ctx, "RZIG_KEEP_ROOT");
     if (code != 0) {
         if (keep) ctx.warn("zig build failed ({d}); the build root is kept in {s}", .{ code, root }) else ctx.warn("zig build failed ({d})", .{code});
     }
-    if (!keep) Io.Dir.cwd().deleteTree(ctx.io, root) catch |err| ctx.warn("cannot remove {s}: {t}", .{ root, err });
     return if (code != 0) 1 else 0;
 }
 
@@ -551,8 +603,12 @@ fn stdoutPrint(ctx: *Ctx, comptime f: []const u8, args: anytype) !void {
     try w.interface.flush();
 }
 
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+const testutil = @import("testutil.zig");
+
 test "arguments" {
-    const testutil = @import("testutil.zig");
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
@@ -572,4 +628,144 @@ test "arguments" {
     try std.testing.expect((try parseArgs(&f.ctx, &.{"--pkg"})) == null);
     // no R_HOME: usage, exit 2
     try std.testing.expectEqual(2, try run(&f.ctx, &.{ "--pkg", f.root }));
+}
+
+test "site and user Makevars as R finds them; set but empty is none" {
+    // [preflight-PF-2]
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    // unix: ~/.R/Makevars-<R_PLATFORM>, then ~/.R/Makevars, ~ from HOME
+    try f.touch("home/.R/Makevars");
+    try f.env.put("HOME", f.path("home"));
+    try testing.expectEqualStrings(f.path("home/.R/Makevars"), (try makevarsUser(c, "")).?);
+    try f.env.put("R_PLATFORM", "x86_64-pc-linux-gnu");
+    try f.touch("home/.R/Makevars-x86_64-pc-linux-gnu");
+    try testing.expectEqualStrings(f.path("home/.R/Makevars-x86_64-pc-linux-gnu"), (try makevarsUser(c, "")).?);
+    // R_MAKEVARS_USER: that file or none, and set but empty is none, never
+    // ~/.R's (R's Sys.getenv(, NA) and file.exists(""))
+    try f.touch("mine.mk");
+    try f.env.put("R_MAKEVARS_USER", f.path("mine.mk"));
+    try testing.expectEqualStrings(f.path("mine.mk"), (try makevarsUser(c, "")).?);
+    try f.env.put("R_MAKEVARS_USER", f.path("no-such.mk"));
+    try testing.expect(try makevarsUser(c, "") == null);
+    try f.env.put("R_MAKEVARS_USER", "");
+    try testing.expect(try makevarsUser(c, "") == null);
+    _ = f.env.swapRemove("R_MAKEVARS_USER");
+    // unix's ~ is HOME alone
+    _ = f.env.swapRemove("HOME");
+    try f.env.put("R_USER", f.path("home"));
+    try testing.expect(try makevarsUser(c, "") == null);
+    // Windows: ~ is R_USER (R sets it), else HOME, else HOMEDRIVE and
+    // HOMEPATH; with R_ARCH /x64 Makevars.ucrt, then .win64, then .win
+    c.os = .windows;
+    try f.touch("ruser/.R/Makevars.win");
+    try f.touch("home/.R/Makevars.win");
+    try f.env.put("R_USER", f.path("ruser"));
+    try f.env.put("HOME", f.path("home"));
+    try testing.expectEqualStrings(f.path("ruser/.R/Makevars.win"), (try makevarsUser(c, "/x64")).?);
+    try f.touch("ruser/.R/Makevars.win64");
+    try testing.expectEqualStrings(f.path("ruser/.R/Makevars.win64"), (try makevarsUser(c, "/x64")).?);
+    try f.touch("ruser/.R/Makevars.ucrt");
+    try testing.expectEqualStrings(f.path("ruser/.R/Makevars.ucrt"), (try makevarsUser(c, "/x64")).?);
+    try testing.expectEqualStrings(f.path("ruser/.R/Makevars.win"), (try makevarsUser(c, "")).?);
+    _ = f.env.swapRemove("R_USER");
+    try testing.expectEqualStrings(f.path("home/.R/Makevars.win"), (try makevarsUser(c, "/x64")).?);
+    _ = f.env.swapRemove("HOME");
+    try f.env.put("HOMEDRIVE", f.root);
+    try f.env.put("HOMEPATH", "/ruser");
+    try testing.expectEqualStrings(f.path("ruser/.R/Makevars.ucrt"), (try makevarsUser(c, "/x64")).?);
+    // the site file: R_MAKEVARS_SITE when set, set but empty none; else
+    // etc<R_ARCH>/Makevars.site
+    c.os = .linux;
+    try f.touch("R/etc/Makevars.site");
+    try testing.expectEqualStrings(f.path("R/etc/Makevars.site"), (try makevarsSite(c, f.path("R"), "")).?);
+    try f.env.put("R_MAKEVARS_SITE", f.path("mine.mk"));
+    try testing.expectEqualStrings(f.path("mine.mk"), (try makevarsSite(c, f.path("R"), "")).?);
+    try f.env.put("R_MAKEVARS_SITE", "");
+    try testing.expect(try makevarsSite(c, f.path("R"), "") == null);
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "decide: an empty R_MAKEVARS_USER leaves ~/.R/Makevars out, as R does" {
+    // [preflight-PF-2]: a foreign CC there sent a tier-1 package to make
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try pkgplan.rHome(&f);
+    try f.touch("p/src/a.c");
+    try f.write("home/.R/Makevars", "CC = ccache gcc\n", .default_file);
+    try f.env.put("HOME", f.path("home"));
+    const in: Inputs = .{ .r_home = r, .pkg_dir = f.path("p"), .src_dir = f.path("p/src"), .name = "p", .rzig = "rzig" };
+    var d = try decide(&f.ctx, in);
+    try testing.expectEqual(pkgplan.Tier.make, d.tier);
+    try testing.expect(mem.startsWith(u8, d.reason, "CC = ccache is not a compiler of R's toolchain"));
+    try f.env.put("R_MAKEVARS_USER", "");
+    d = try decide(&f.ctx, in);
+    try testing.expectEqual(pkgplan.Tier.makevars, d.tier);
+}
+
+test "a tier-2 package whose plan needs make: 1 and why, never make" {
+    // [preflight-PF-1]: make would compile src/ and ignore build.zig
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    try f.env.put("R_HOME", r);
+    try f.write("z/DESCRIPTION", "Package: z\n", .default_file);
+    try f.touch("z/src/build.zig");
+    try f.write("ccache.mk", "CC = ccache gcc\n", .default_file);
+    try f.env.put("R_MAKEVARS_USER", f.path("ccache.mk"));
+    const d = try decide(c, .{ .r_home = r, .pkg_dir = f.path("z"), .src_dir = f.path("z/src"), .name = "z", .rzig = "rzig" });
+    try testing.expectEqual(pkgplan.Tier.make, d.tier);
+    try testing.expectEqual(pkgplan.Tier.zig, d.class.tier);
+    try testing.expectEqual(1, try run(c, &.{ "--pkg", f.path("z"), "--out", f.path("out") }));
+    const why = f.fmt("CC = ccache is not a compiler of R's toolchain ({s}/bin/toolchain)", .{r});
+    try testing.expectEqualStrings(f.fmt("rzig build: z: src/build.zig cannot be built by make: {s}\n", .{why}), f.takeWarnings());
+    try testing.expect(!c.exists(f.path("out")));
+    // --classify says the same, exit 1, no tier (make would be wrong)
+    // [coverage-1]
+    try testing.expectEqual(1, try run(c, &.{ "--pkg", f.path("z"), "--classify" }));
+    try testing.expectEqualStrings(f.fmt("rzig build: z: src/build.zig cannot be built by make: {s}\n", .{why}), f.takeWarnings());
+    // a tier-1 package: needs make, 3, as before
+    try f.write("t/DESCRIPTION", "Package: t\n", .default_file);
+    try f.touch("t/src/a.c");
+    try testing.expectEqual(exit_needs_make, try run(c, &.{ "--pkg", f.path("t"), "--out", f.path("out") }));
+    try testing.expectEqualStrings(f.fmt("rzig build: t needs make: {s}\n", .{why}), f.takeWarnings());
+}
+
+test "the build root goes on every return, unless kept" {
+    // [preflight-PF-3]: under install.R it is the package's src/.rzig
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    try f.env.put("R_HOME", r);
+    // the root's files, as R_HOME/share/zig/rpkg holds them
+    for ([_][]const u8{ "build_t1.zig", "build_t2.zig", "rpkg.zig" }) |n| try f.touch(f.fmt("rpkg/{s}", .{n}));
+    // tier 2 with a URL dependency: refused after the root is written, 1
+    try f.write("u/DESCRIPTION", "Package: u\n", .default_file);
+    try f.touch("u/src/build.zig");
+    try f.write("u/src/build.zig.zon", ".{ .dependencies = .{ .x = .{ .url = \"https://example.invalid/x.tar.gz\" } } }", .default_file);
+    const u_args = [_][]const u8{ "--pkg", f.path("u"), "--out", f.path("out-u"), "--rpkg-dir", f.path("rpkg") };
+    try testing.expectEqual(1, try run(c, &u_args));
+    try testing.expectEqualStrings("rzig build: src/build.zig.zon: dependency x is a URL; tier 2 builds offline, vendor it as a .path dependency\n", f.takeWarnings());
+    try testing.expect(c.isDir(f.path("out-u")) and !c.exists(f.path("out-u/.rzig")));
+    // tier 1 and no zig: 127, the compilers group's text
+    try f.write("t/DESCRIPTION", "Package: t\n", .default_file);
+    try f.touch("t/src/a.c");
+    const t_args = [_][]const u8{ "--pkg", f.path("t"), "--out", f.path("out-t"), "--rpkg-dir", f.path("rpkg") };
+    try testing.expectEqual(127, try run(c, &t_args));
+    try testing.expect(mem.startsWith(u8, f.takeWarnings(), "rzig build: " ++ groups.no_zig ++ "\n"));
+    try testing.expect(c.isDir(f.path("out-t")) and !c.exists(f.path("out-t/.rzig")));
+    // kept: --keep-root, RZIG_KEEP_ROOT=1
+    try testing.expectEqual(127, try run(c, &(t_args ++ [_][]const u8{"--keep-root"})));
+    try testing.expect(c.isFile(f.path("out-t/.rzig/plan.zon")));
+    try f.env.put("RZIG_KEEP_ROOT", "1");
+    try testing.expectEqual(1, try run(c, &u_args));
+    try testing.expect(c.isFile(f.path("out-u/.rzig/build.zig")) and c.isFile(f.path("out-u/.rzig/plan.zon")));
+    _ = f.takeWarnings();
 }

@@ -35,11 +35,12 @@ R_VERSION = "4.6.1"
 # offering it gets it from the same feature. Every build environment
 # lists this feature in [environments] below.
 # Dev and test runs compile packages with the dev tree, which is the tree
-# that ships, or (contract, stress) with the compile tree, its copy with
-# the toolchain groups added: their compilers (rzig) add the include/ and
-# lib/ of the environment R is installed in, which is the tree itself
-# (dist/<flavor>/R-<ver>-zig, build/compile-tree/<flavor>/R-<ver>-zig),
-# not this pixi env. R_ZIG_EXTRA_ENV names one more environment for rzig
+# that ships, or (contract, pkg-parity, stress) with the compile tree, its
+# copy with the toolchain groups added: their compilers (rzig) add the
+# include/ and lib/ of the environment R is installed in, which is the
+# tree itself (dist/<flavor>/R-<ver>-zig,
+# build/compile-tree/<flavor>/R-<ver>-zig), not this pixi env.
+# R_ZIG_EXTRA_ENV names one more environment for rzig
 # to add after it (feat-no-host-paths F3b,
 # zigbuild/tools/rzig/environment.zig): the pixi env's headers and
 # libraries, and an rpath into them (it is a conda env), as R installed
@@ -85,18 +86,22 @@ check = { cmd = "bash scripts/zig-build.sh check", depends-on = ["fetch"] }
 # know it.
 smoke = "bash scripts/zig-smoke.sh"
 # contract: CRAN packages compiled through Makeconf (R CMD INSTALL: Rcpp,
-# quadprog and unix minqa through `rzig build`, data.table, pak and ps
-# through make, each asserted from its log; Rcpp's evalCpp through R CMD
-# SHLIB, make; + OpenMP), on every OS (Windows: etc/x64/Makeconf and
-# R.exe's CMD dispatcher), with the compile tree (compile-tree below): the
-# installed tree and the toolchain tree's openmp/ and build tools.
+# quadprog and unix minqa through `rzig build`, data.table and ps through
+# make, pak mixed: its embedded cli, lpSolve, pkgcache and yaml through
+# rzig build, keyring and zip through make [phase3-P3-4]; each asserted
+# from its log; Rcpp's evalCpp through R CMD SHLIB, make; + OpenMP), on
+# every OS (Windows: etc/x64/Makeconf and R.exe's CMD dispatcher), with
+# the compile tree (compile-tree below): the installed tree and the
+# toolchain tree's openmp/ and build tools.
 contract = { cmd = "bash scripts/zig-contract.sh", depends-on = ["compile-tree"] }
 # pkg-parity: R CMD INSTALL through `rzig build` (install.R's hook, no
 # make) against the make path, on the compile tree: cli, digest,
 # quadprog, Rcpp and unix minqa from CRAN give identical exports and
-# identical rzig command lines on both paths; the caches, the tier-2 zig
-# package (and its offline rule), the tier-3 fall through; and on the
-# base alone an install with no make or sh on PATH
+# identical rzig command lines on both paths; the caches (a tarball
+# installed twice adds nothing to zig's global cache), the tier-2 zig
+# package (its offline rule, and a plan that needs make: a failure), the
+# tier-3 fall through; and on the base alone an install with no make on
+# PATH (unix: sh, zig and flang only) [tests-T10, phase3-P3-4]
 # (.github/devdocs/feat-zig-pkg-build/PLAN.md, scripts/pkg-parity.sh).
 pkg-parity = { cmd = "bash scripts/pkg-parity.sh", depends-on = ["compile-tree"] }
 # `zig build` installs the final tree (feat-no-host-paths PLAN.md, F1);
@@ -156,10 +161,10 @@ unpack-toolchain = "bash scripts/unpack-toolchain.sh"
 # The compile tree, build/compile-tree/<flavor>/R-<ver>-zig (PHASE3 open
 # point B): a fresh copy of the installed tree with the toolchain tree's
 # group directories, but zig/ and flang/, in its R_HOME/bin/toolchain.
-# contract and stress compile packages with it: the installed tree is the
-# base alone (B19), and Windows' Makeconf names the build-tools group's
-# binutils under R_HOME (B24). Needs `build` and the toolchain tree
-# (`toolchain`, or `unpack-toolchain`).
+# contract, pkg-parity and stress compile packages with it [phase3-P3-5]:
+# the installed tree is the base alone (B19), and Windows' Makeconf names
+# the build-tools group's binutils under R_HOME (B24). Needs `build` and
+# the toolchain tree (`toolchain`, or `unpack-toolchain`).
 compile-tree = "bash scripts/compile-tree.sh"
 # Tier 0/1 with an empty environment and only the tree's own programs on
 # PATH (unix: <tree>/bin, strace on linux; Windows: bin\x64 plus
@@ -170,7 +175,10 @@ compile-tree = "bash scripts/compile-tree.sh"
 hermetic = "bash scripts/hermetic-check.sh"
 # rzig, the compilers in R_HOME/bin/toolchain (zigbuild/tools/rzig/): its
 # unit tests here, and on linux the parity test against the bash shims in
-# toolchain/ for every OS's command lines. Needs no R build.
+# toolchain/ for every OS's command lines. Needs no R build. With an
+# installed tree's prefix (`pixi run rzig-test dist/slim/R-4.6.1-zig`),
+# linux also runs smoke-test.sh against it: packages installed through
+# that tree's R CMD INSTALL, rzig build [tests-T12].
 rzig-test = "bash zigbuild/tools/rzig/test.sh"
 clean = "bash scripts/clean.sh"
 # Not part of the build path (zig-build.sh never calls this) — exists

@@ -25,7 +25,11 @@ pub const LibraryOptions = struct {
     /// The zig root (exports R_init_<pkg>); null for C-only.
     root_source_file: ?std.Build.LazyPath = null,
     /// C sources relative to the package's src/, compiled by rzig with the
-    /// plan's flags (Makevars' PKG_CPPFLAGS and PKG_CFLAGS apply).
+    /// plan's flags: Makeconf's, with the site and user Makevars, what a
+    /// tier-1 package with an empty Makevars gets. Tier 2 does not read
+    /// the package's own src/Makevars, so its PKG_CPPFLAGS and PKG_CFLAGS
+    /// do not apply (`#include "x.h"` still finds a header beside the
+    /// source) [code-4].
     c_sources: []const []const u8 = &.{},
     /// C++ sources likewise.
     cxx_sources: []const []const u8 = &.{},

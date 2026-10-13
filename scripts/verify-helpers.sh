@@ -2,7 +2,8 @@
 # hermetic-check.sh, unpack-toolchain.sh and vendor-libs.sh (whose Windows
 # walk copies what needed_of names, the imports verify-tree.sh then
 # checks, and which removes what vendored_files names, the files
-# verify-tree.sh counts as conda's). Source this after env.sh (which sets
+# verify-tree.sh counts as conda's), and by pkg-parity.sh and
+# wheel-test.sh (make_recipes). Source this after env.sh (which sets
 # OS and holds MACOS_MIN, macho_minos and version_gt); do not execute it.
 # Each reads what a binary needs and where it looks for it from the file
 # itself: patchelf on linux, otool on macOS, binutils' objdump on Windows.
@@ -59,6 +60,17 @@ configure_marker() {
     printf '#!/bin/sh\n: > configure-ran\n' > "$1/$f"
     chmod +x "$1/$f"
   done
+}
+
+# The compile and link commands make echoed into install log $1, one per
+# line: R's Makeconf runs the compilers by their path in
+# R_HOME/bin/toolchain (zig-cc, zig-cxx, zig-fc; Windows gcc.exe, g++.exe)
+# and make echoes each recipe it runs, while rzig build runs no make and
+# its traced lines start with `zig-cc: ` or `rzig build: `. A make build
+# that succeeds prints no `make:` line, so this, not a `^make` grep, tells
+# a make path's log from rzig build's [tests-T6]. CRs dropped (Windows).
+make_recipes() {
+  tr -d '\r' < "$1" | grep -E '^[^ ]*/bin/toolchain/(zig-cc|zig-cxx|zig-fc|gcc|g\+\+)' || true
 }
 
 # Extract archive $1 into directory $2. unzip -n: an archive extracted

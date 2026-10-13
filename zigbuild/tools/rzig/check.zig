@@ -1,13 +1,10 @@
 //! rzig's check mode (feat-standalone-toolchain B26 a, B32 a): whether a
 //! toolchain group's tools are there, before anything is compiled. The
-//! install preflight (patch 0009: the compilers, or fortran when src/'s
-//! top level has Fortran sources, the ones R's default OBJECTS rule
-//! compiles, then the build tools; Fortran a Makevars builds from a
-//! subdirectory stops later, at zig-fc, with the same text) and R CMD
-//! config (patch 0010: the build tools) call it by CC's name, so the
-//! text that names a missing group comes from one place on every
-//! channel: rzig. Any of rzig's names takes it, as its only argument
-//! (zig-cc, or gcc.exe on Windows):
+//! install preflight (patch 0009: `--rzig-check=package`, one call per
+//! package) and R CMD config (patch 0010: `--rzig-check=build-tools`)
+//! call it by CC's name, so the text that names a missing group comes
+//! from one place on every channel: rzig. Any of rzig's names takes it,
+//! as its only argument (zig-cc, or gcc.exe on Windows):
 //!
 //!   --rzig-check              the compile lookup: zig (zig-fc: also flang)
 //!   --rzig-check=fortran      zig and flang
@@ -23,20 +20,27 @@
 //!                             the working directory (patch 0009), decided
 //!                             as `rzig build` decides (pkgbuild.decide: the
 //!                             files, then the Makevars and Makeconf): the
-//!                             compilers, flang when Fortran is compiled
-//!                             (the plan's sources for tiers 1 and 2;
-//!                             src/'s top level, either case of the f, for
-//!                             tier 3), and the build tools when the package
-//!                             needs make or R runs a configure script
-//!                             (R_ZIG_CONFIGURE=1, from install.R), with
-//!                             rzig's own reason in the failing line
+//!                             compilers; flang when Fortran is compiled
+//!                             (`packageIn`: tier 1 by the plan's sources,
+//!                             tier 2 never, tier 3 and a configure script
+//!                             R runs by src/'s top level, either case of
+//!                             the f; Fortran a Makevars builds from a
+//!                             subdirectory stops later, at zig-fc, with
+//!                             the same text); and the build tools when the
+//!                             package needs make or R runs a configure
+//!                             script (R_ZIG_CONFIGURE=1, from install.R),
+//!                             with rzig's own reason in the failing line
 //!                             ("<pkg> needs make: <reason>; no make on
-//!                             PATH"). R_ZIG_C_STD is install.R's use_C
-//!                             (the hook's --c-std); R_ZIG_PKG_BUILDER=make
-//!                             forces make. Two inputs differ from the
-//!                             hook's and are recorded (feat-zig-pkg-build
-//!                             PLAN.md): CLINK_CPPFLAGS is set after the
-//!                             preflight, and a user Makevars skips 0009.
+//!                             PATH"). A tier-2 package whose plan needs
+//!                             make stops, as `rzig build` does
+//!                             (pkgbuild.buildZigNeedsMake). R_ZIG_C_STD is
+//!                             install.R's use_C (the hook's --c-std);
+//!                             R_ZIG_PKG_BUILDER=make forces make. Four
+//!                             inputs differ from the hook's and are
+//!                             recorded (feat-zig-pkg-build PLAN.md):
+//!                             CLINK_CPPFLAGS is set after the preflight, a
+//!                             user Makevars skips 0009, and use_LTO and
+//!                             Windows' --debug are not passed.
 //!
 //! All there: one line on stdout, what it found, and exit 0. A tool
 //! missing: a line that says which, then its group's text (groups.zig), on
@@ -47,8 +51,14 @@
 //! text. R's zig is rzig's own (builtin.zig_version), since the same zig
 //! builds both. Compiles do not check the version. R_ZIG_NO_PREFLIGHT
 //! (non-empty, as the preflight's nzchar test), which skips the preflight,
-//! skips this comparison too. Any other `--rzig-check=` value: a usage
-//! line and exit 2 (main.zig).
+//! skips this comparison too. `=package` also exits 1 for a tier-2
+//! package whose plan needs make, after "<pkg>: src/build.zig cannot be
+//! built by make: <reason>" and "<pkg>: the r-zig toolchain is complete:
+//! change what the line above names", no group's text, since no group
+//! would help [preflight-PF-1, code-6]; and 2 when R_HOME is unset, or
+//! R_HOME or the working directory does not resolve (a line names the
+//! path and why).
+//! Any other `--rzig-check=` value: a usage line and exit 2 (main.zig).
 //!
 //! On Windows the paths in these lines have `/` only, as rzig's own path
 //! has (main.zig's selfExe), where find_zig joins a directory and a name
@@ -82,7 +92,9 @@ pub fn parse(arg: []const u8, fc: bool) error{UnknownCheck}!?Kind {
 }
 
 pub const Result = struct {
-    /// 0: all there; 127: a tool is missing; 1: zig is not R's zig.
+    /// 0: all there; 127: a tool is missing; 1: zig is not R's zig, or
+    /// a tier-2 package make cannot build; 2: `=package` with no R_HOME,
+    /// or a path that does not resolve (the header).
     code: u8,
     /// What it found, for stdout, when code is 0.
     line: []const u8 = "",
@@ -179,9 +191,10 @@ fn envValue(ctx: *const Ctx, name: []const u8) ?[]const u8 {
     return if (v.len == 0) null else v;
 }
 
-/// 0009's own test for Fortran, for a package make builds: src/'s top
-/// level, either case of the f (R's default OBJECTS rule compiles .f, .f90
-/// and .f95; a package's own rules may compile .F too).
+/// 0009's own test for Fortran, for a package make builds or a configure
+/// script R runs: src/'s top level, either case of the f (R's default
+/// OBJECTS rule compiles .f, .f90 and .f95; a package's own rules or its
+/// configure script may compile .F too).
 fn topLevelFortran(ctx: *Ctx, src_dir: []const u8) bool {
     var d = std.Io.Dir.cwd().openDir(ctx.io, src_dir, .{ .iterate = true }) catch return false;
     defer d.close(ctx.io);
@@ -204,6 +217,12 @@ fn package(ctx: *Ctx) !Result {
     };
     const r_home = pkgbuild.canonical(ctx, r_home_in) catch return .{ .code = 2 };
     const pkg_dir = pkgbuild.canonical(ctx, ".") catch return .{ .code = 2 };
+    return packageIn(ctx, r_home, pkg_dir);
+}
+
+/// package() for the package in `pkg_dir` (both paths canonical), where
+/// the unit tests call it.
+fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
     const src_dir = try ctx.fmt("{s}/src", .{pkg_dir});
     const name = pkgbuild.packageName(ctx, pkg_dir) orelse std.fs.path.basename(pkg_dir);
     const configure = envSet(ctx, "R_ZIG_CONFIGURE");
@@ -219,16 +238,32 @@ fn package(ctx: *Ctx) !Result {
             .c_std = envValue(ctx, "R_ZIG_C_STD"),
             .rzig = ctx.self_exe orelse "rzig",
         });
+    // a tier-2 package make cannot build: no tool would help, stop as
+    // `rzig build` stops, before asking for any [preflight-PF-1]. 0009's
+    // stop that follows says the toolchain is incomplete (its two texts are
+    // fixed, I-T11), so one more line here says it is not, and what to
+    // change: a site Makevars, the Makeconf, a C or C++ standard [code-6]
+    if (pkgbuild.buildZigNeedsMake(ctx, name, d)) {
+        ctx.warn("{s}: the r-zig toolchain is complete: change what the line above names", .{name});
+        return .{ .code = 1 };
+    }
     // what the preflight is for: compiled code, or a configure R runs
     if (d.tier == .r_only and !configure) return .{ .code = 0, .line = try ctx.fmt("package ok: {s} has no src/, nothing to compile", .{name}) };
-    const fortran = switch (d.tier) {
-        .makevars, .zig => blk: {
+    // flang when Fortran is compiled [preflight-PF-5, records-REC-11]: a
+    // configure script R runs may compile any of src/'s, so src/'s top
+    // level, either case, whatever the tier (CONSENSUS B); otherwise tier 1
+    // the plan's sources (R's default OBJECTS: .f, .f90, .f95); tier 2
+    // never, rpkg compiles C and C++ only, so a stray .f is no reason to
+    // stop; tier 3 src/'s top level, as 0009 tested before
+    const fortran = if (configure) topLevelFortran(ctx, src_dir) else switch (d.tier) {
+        .makevars => blk: {
             var any = false;
             for (d.plan.?.sources) |s| if (mem.eql(u8, s.lang, "f") or mem.eql(u8, s.lang, "f9x")) {
                 any = true;
             };
             break :blk any;
         },
+        .zig => false,
         .make, .r_only => topLevelFortran(ctx, src_dir),
     };
     const comp = try compilers(ctx, fortran);
@@ -500,6 +535,114 @@ test "Windows: one separator in the lines, `/` (display only)" {
     _ = try fakeZig(&f, "w\\bin/zig", same_zig);
     r = try run(c, .compilers);
     try testing.expectEqualStrings(f.fmt("compilers ok: zig {s} at {s}", .{ same_zig, zig }), r.line);
+}
+
+test "package: flang by tier, never for tier 2, by src/'s top level with a configure script" {
+    // [preflight-PF-5, records-REC-11]
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-ins
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    const zig = try fakeZig(&f, "bin/zig", same_zig);
+    try f.env.put("ZIG_BIN", zig);
+    try f.env.put("PATH", f.path("nothing"));
+    const ok = f.fmt("compilers ok: zig {s} at {s}", .{ same_zig, zig });
+    const no_flang = f.fmt("rzig-test: " ++ groups.no_flang ++ "\n{s}", .{try groups.text(c.arena, .compilers, groups.this)});
+    // tier 2 with a stray top-level .f: rpkg compiles C and C++ only
+    try f.touch("z/src/build.zig");
+    try f.touch("z/src/x.f");
+    var res = try packageIn(c, r, f.path("z"));
+    try testing.expectEqual(0, res.code);
+    try testing.expectEqualStrings(f.fmt("package ok: z tier 2 (rzig build); {s}", .{ok}), res.line);
+    // tier 1: the plan's sources, R's default OBJECTS (no .F)
+    try f.touch("t/src/a.c");
+    try f.touch("t/src/x.F");
+    res = try packageIn(c, r, f.path("t"));
+    try testing.expectEqualStrings(f.fmt("package ok: t tier 1 (rzig build); {s}", .{ok}), res.line);
+    try f.touch("t/src/y.f90");
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("t"))).code);
+    try testing.expectEqualStrings(no_flang, f.takeWarnings());
+    // tier 3 (a Makevars rule): src/'s top level, either case
+    try f.write("m/src/Makevars", "all: $(SHLIB)\n", .default_file);
+    try f.touch("m/src/x.F");
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("m"))).code);
+    try testing.expectEqualStrings(no_flang, f.takeWarnings());
+    // a configure script R runs: src/'s top level whatever the tier, so a
+    // tier-2 package's .F too (CONSENSUS B)
+    try f.touch("zF/src/build.zig");
+    try f.touch("zF/src/x.F");
+    res = try packageIn(c, r, f.path("zF"));
+    try testing.expectEqual(0, res.code);
+    try f.env.put("R_ZIG_CONFIGURE", "1");
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("zF"))).code);
+    try testing.expectEqualStrings(no_flang, f.takeWarnings());
+    // with flang: then the build tools, a configure script's reason first
+    const fc = try f.touchProgram("fl/flang");
+    try f.env.put("PATH", f.path("fl"));
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("zF"))).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: zF needs make: a configure script R runs; no make on PATH\n{s}", .{try groups.text(c.arena, .build_tools, groups.this)}), f.takeWarnings());
+    const make = try f.touchProgram("fl/make");
+    res = try packageIn(c, r, f.path("zF"));
+    try testing.expectEqual(0, res.code);
+    try testing.expectEqualStrings(f.fmt("package ok: zF tier 2 (rzig build) (a configure script R runs); {s}; flang at {s}; build-tools ok: make at {s}", .{ ok, fc, make }), res.line);
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "package: a tier-2 package whose plan needs make, 1 and why, no group's text" {
+    // [preflight-PF-1]: make would ignore src/build.zig
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    try f.env.put("PATH", f.path("nothing"));
+    try f.write("z/DESCRIPTION", "Package: zpkg\n", .default_file);
+    try f.touch("z/src/build.zig");
+    try f.write("ccache.mk", "CC = ccache gcc\n", .default_file);
+    try f.env.put("R_MAKEVARS_USER", f.path("ccache.mk"));
+    try testing.expectEqual(1, (try packageIn(c, r, f.path("z"))).code);
+    // and that the toolchain is complete, which 0009's stop after it does
+    // not say [code-6]
+    try testing.expectEqualStrings(f.fmt("rzig-test: zpkg: src/build.zig cannot be built by make: CC = ccache is not a compiler of R's toolchain ({s}/bin/toolchain)\n" ++
+        "rzig-test: zpkg: the r-zig toolchain is complete: change what the line above names\n", .{r}), f.takeWarnings());
+    // a tier-1 package with that Makevars needs make, as before
+    try f.touch("t/src/a.c");
+    if (builtin.os.tag == .windows) return; // shell-script stand-ins below
+    try f.env.put("ZIG_BIN", try fakeZig(&f, "bin/zig", same_zig));
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("t"))).code);
+    try testing.expect(mem.startsWith(u8, f.takeWarnings(), f.fmt("rzig-test: t needs make: CC = ccache is not a compiler of R's toolchain ({s}/bin/toolchain); no make on PATH\n", .{r})));
+}
+
+test "package on Windows: a configure.win script needs make, its reason before the missing binutils" {
+    // [preflight-PF-8]
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-ins
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    try f.env.put("ZIG_BIN", try fakeZig(&f, "bin/zig", same_zig));
+    _ = try f.touchProgram("p/make");
+    _ = try f.touchProgram("p/sh");
+    try f.env.put("PATH", f.path("p"));
+    c.os = .windows;
+    c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
+    const text = try groups.text(c.arena, .build_tools, groups.this);
+    const bu = f.path("env/Library/lib/R/bin/toolchain/binutils");
+    try f.touch("w/configure.win");
+    try f.touch("w/src/a.c");
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("w"))).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: w needs make: a configure.win script; no {s}/nm.exe\n{s}", .{ bu, text }), f.takeWarnings());
+    // configure.ucrt first, as R runs it
+    try f.touch("w/configure.ucrt");
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("w"))).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: w needs make: a configure.ucrt script; no {s}/nm.exe\n{s}", .{ bu, text }), f.takeWarnings());
+    // R_ZIG_CONFIGURE=1 (0009 runs it): that reason
+    try f.env.put("R_ZIG_CONFIGURE", "1");
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("w"))).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: w needs make: a configure script R runs; no {s}/nm.exe\n{s}", .{ bu, text }), f.takeWarnings());
 }
 
 test "compilers: a zig that does not run, exit 1 and why" {
