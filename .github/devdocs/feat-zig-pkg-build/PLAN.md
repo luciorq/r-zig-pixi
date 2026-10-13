@@ -891,11 +891,12 @@ objdump (Windows); on Windows, cleanup.ucrt/cleanup.win under `--clean`
 or `--preclean` (without sh only a warning: the cleanup is skipped)
 [coverage-C1, channels-C8, preflight-F7]. Not needed by tier 0 to 2
 installs through `R CMD INSTALL` and install.packages(). Phase 7
-(Windows usr/bin) and B24 are re-scoped from the stress table (M6; a
-follow-up commit on this PR). Later items: route `R CMD SHLIB` through
-rzig build (it would also clear pak's probe), or give it a preflight;
-revisit 0010 for pkgbuild's probe; a shared tier-1 build runner if the
-stress time asks for it.
+(Windows usr/bin) and B24 are re-scoped from the stress table (M6;
+"Stress dispatch" below: 30 of the suite's 46 compiled rows need make
+on unix, 29 on Windows, 24 and 12 of them for a configure script; no
+tool to move, no shared runner needed). Later items: route `R CMD
+SHLIB` through rzig build (it would also clear pak's probe), or give it
+a preflight; revisit 0010 for pkgbuild's probe.
 
 ### The couplings to R's tree (from HANDOFF.md, updated for the merge)
 
@@ -1006,10 +1007,143 @@ windows-latest / default failed in `rzig tests`: testutil.zig's
 Windows, this branch's pkgplan tests do, and the branch had never run
 on Windows CI (kappa's chains ran everything but rzig-test). Fixed with
 a comptime switch (a plain file there, as touchProgram makes); rzig-test
-on kappa: 94 passed, 25 skipped. Not run here: the stress dispatch (M6: after the
-push, `trace = true`, `builder = auto`, packages g3 g4, the five
-runners; its table and the phase 7 / B24 re-scope come in a follow-up
-commit on the same PR).
+on kappa: 94 passed, 25 skipped. CI on 45892fb (run 38305799627, the
+full tier): green. The stress dispatch followed (M6): the next section.
+
+### Stress dispatch (M6, 2026-10-12)
+
+stress.yaml run 38317654371 on 45892fb: oses ubuntu-latest,
+ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest;
+packages g3 g4; distribution tree; `trace = true`; `builder = auto`.
+The make reference is phase 3's dispatch 38251125721 on 548da1a
+(ubuntu-latest, tree, g3 g4, no trace; every row through make), the
+only earlier run, so the make comparison is linux x86_64 only. Each leg
+installs 60 rows: 23 targets and 37 dependencies. A row's tier is its
+install log's `rzig build:` line: `tier 1, root ...`, or `<pkg> needs
+make: <reason>`; a row with no line built no native library in
+run_shlib (R-only, or Rhdf5lib, whose configure builds HDF5 with cmake
+into inst/ and has no src/). stress.R points `ZIG_LOCAL_CACHE_DIR` at
+one run-wide `zig-cache`, so the tier-1 build runner compiles once per
+leg (the per-install default pays it per install). Smoke steps: no
+`*-smoke.log` holds an rzig trace line, so no row's smoke compiled at
+run time. The artifacts (`stress-<os>-tree`, the reference's too) were
+read row by row.
+
+Per leg:
+
+| leg | min | jobs | targets | dependencies | unexpected | tier 1 | make | no native library |
+|---|---|---|---|---|---|---|---|---|
+| ubuntu-latest, linux x86_64 | 17.8 | 4 | 22 ok, 1 install-failed | 37 ok | 0 | 16 | 30 | 14 |
+| ubuntu-24.04-arm, linux aarch64 | 21 | 4 | 22 ok, 1 install-failed | 37 ok | 0 | 16 | 30 | 14 |
+| macos-latest, macos aarch64 | 25.7 | 3 | 23 ok | 37 ok | 0 | 16 | 30 | 14 |
+| macos-15-intel, macos x86_64 | 68.8 | 4 | 23 ok | 37 ok | 0 | 16 | 30 | 14 |
+| windows-latest, windows x86_64 (ucrt) | 24 | 4 | 15 ok, 8 install-failed | 37 ok | 0 | 17 | 29 | 14 |
+| reference 548da1a, ubuntu-latest | 27 | 4 | 22 ok, 1 install-failed | 37 ok | 0 | 0 | 46 | 14 |
+
+Every non-ok row, with its builder:
+
+| leg | row | class | expect | first error | builder |
+|---|---|---|---|---|---|
+| linux x86_64, linux aarch64 | magick | abi | fail-abi | undefined symbol `_ZN6Magick11magickImageC1ERKNSt3__112basic_string...` (`Magick::magickImage(std::__1::basic_string const&)`) | make (a configure script); the libstdc++/libc++ boundary of stress round 1 (A1), as on 548da1a |
+| windows | ragg | package | fail-package | `lld-link: error: undefined symbol: __declspec(dllimport) htons` | make (Makevars.win has `$(shell ...)`); its pkg-config branch does not link ws2_32 |
+| windows | hdf5r | package | fail-package | `1_12_0/Wrapper_auto_H5FDlog.c:23:22: error: use of undeclared identifier 'H5FD_log_init'` | make (a configure.win script); Makevars.ucrt hardcodes the 1_12_0 wrappers, conda has HDF5 2.2 |
+| windows | ncdf4 | upstream | fail-upstream | `unable to find dynamic system library 'debug'` | make (Makevars.ucrt has a conditional); conda's netcdf.pc Libs.private has CMake keywords |
+| windows | gsl | upstream | fail-upstream | `LoadLibrary failure: The specified procedure could not be found.` | **rzig build, tier 1** (Makevars.win is assignments only; unix has a configure script): 31 compiles and the link produced gsl.dll; the load fails on conda's gslcblas.lib (MKL's import library lists vfprintf/fprintf the DLL does not export), the row's 2026-10-08 finding under make |
+| windows | RPostgres | abi | fail-abi | `lld-link: error: could not open 'libuuid.a'` | make (a configure.win script) |
+| windows | s2 | sysdep | fail-sysdep | `unable to find dynamic system library 'absl_raw_hash_set'` | make (a configure.win script) |
+| windows | igraph | sysdep | fail-sysdep | `vendor/cigraph/src/io/graphml.c:41:10: fatal error: 'libxml/globals.h' file not found` | make (a configure.win script) |
+| windows | Rhdf5lib | package | fail-package | `H5Tconv_integer.c:1746:75: error: use of undeclared identifier 'FLT16_MAX'` | configure's cmake build of HDF5 (no src/) |
+
+Each is the failure its packages.tsv row expects from stress round 1
+(2026-10-08, every row through make then); none is new, and the one
+row that went through rzig build (gsl on Windows) fails at load on the
+same import library make's build did.
+
+The tier-1 rows, minutes per leg (ref = 548da1a through make):
+
+| row | ref | ubuntu | arm | macos | intel | windows |
+|---|---|---|---|---|---|---|
+| sys (the first tier-1 row of every leg: the build runner compiles here) | 0.02 | 0.10 | 0.25 | 0.27 | 0.65 | 0.21 |
+| askpass | 0.02 | 0.01 | 0.02 | 0.03 | 0.12 | make 0.76: Makevars.win `all: clean $(ASKPASS)` |
+| base64enc | 0.02 | 0.02 | 0.02 | 0.03 | 0.08 | 0.02 |
+| bit | 0.07 | 0.06 | 0.07 | 0.09 | 0.24 | 0.07 |
+| bit64 | 0.09 | 0.06 | 0.08 | 0.11 | 0.20 | 0.08 |
+| cli | 0.14 | 0.09 | 0.12 | 0.16 | 0.52 | 0.17 |
+| fst | 0.11 | 0.07 | 0.08 | 0.13 | 0.26 | 0.08 |
+| geos | 0.08 | 0.06 | 0.07 | 0.13 | 0.27 | 0.09 |
+| glue | 0.02 | 0.02 | 0.02 | 0.05 | 0.10 | 0.03 |
+| lattice | 0.13 | 0.09 | 0.12 | 0.12 | 0.24 | 0.10 |
+| libgeos (C++, the largest tier-1 build) | 4.66 | 2.94 | 3.48 | 3.88 | 8.89 | make 3.05: Makevars.win `$(SHLIB): $(STATLIB)` |
+| lubridate | 0.09 | 0.07 | 0.09 | 0.09 | 0.29 | 0.08 |
+| magrittr | 0.02 | 0.02 | 0.02 | 0.04 | 0.06 | 0.03 |
+| Rcpp | 0.20 | 0.16 | 0.18 | 0.25 | 0.64 | 0.22 |
+| vctrs | 0.22 | 0.16 | 0.19 | 0.29 | 0.85 | 0.25 |
+| wk | 0.13 | 0.11 | 0.11 | 0.21 | 0.48 | 0.14 |
+| gmp | make 0.23 | make 0.16 | make 0.18 | make 0.33 | make 1.10 | 0.14 (tier 1: Makevars.win is assignments only) |
+| gsl | make 0.09 | make 0.07 | make 0.08 | make 0.15 | make 0.58 | 0.07, then the load failure above |
+| nloptr | make 0.30 | make 0.21 | make 0.31 | make 0.69 | make 2.06 | 0.04 (tier 1) |
+
+Every row through rzig build took as long as or less than the
+reference's make build. The whole leg was faster (17.8 against 27
+min), the make rows by 25 to 40% too (s2 2.04 against 3.36,
+stringi:bundled 2.45 against 4.08), so a cross-run comparison is
+indicative only: it is runner variance, not the builder. The runner
+compile shows once per leg in sys (0.10 against 0.02 on ubuntu), and
+askpass, the next tier-1 row, is warm. The macos-15-intel runner is
+two to four times slower on every row, make rows included (s2 4.27
+against 1.94 on macos-latest, igraph 5.52 against 1.58, stringi:bundled
+8.45 against 3.11), so its tier-1 times are read against its own make
+rows only. No time asks for a shared runner.
+
+The make rows and their reasons:
+
+| where | reason | rows |
+|---|---|---|
+| unix (the three legs agree) | a configure script (24) | curl, openssl, xml2, gert, units, systemfonts, stringi, stringi:bundled, textshaping, ragg, magick, hdf5r, ncdf4, gsl, Rmpfr, RPostgres, nloptr, s2, igraph, qs2, fstcore, gmp, RcppParallel, stringfish |
+| unix | src/Makevars has a rule or target line (6) | filelock `all: clean`, jsonlite `all: $(SHLIB) cleanup`, Matrix `$(SHLIB): $(sslib)`, rlang `all: $(SHLIB)`, timechange `$(SHLIB): libcctz.a`, zip `.PHONY: all clean` |
+| windows | a configure.win script (12) | curl, openssl, xml2, stringi, stringi:bundled, magick, hdf5r, RPostgres, s2, igraph, Rmpfr, RcppParallel |
+| windows | Makevars.win/.ucrt has a rule or target line (9) | the six above (`.win` or `.ucrt`), askpass `all: clean $(ASKPASS)`, libgeos `$(SHLIB): $(STATLIB)`, units (`.ucrt`) `all: clean` |
+| windows | Makevars.win has `$(shell ...)` (5) | textshaping, ragg, systemfonts, qs2, stringfish |
+| windows | a conditional (2) | gert (`ifneq`), ncdf4 (`.ucrt`, `ifeq`) |
+| windows | an include (1) | fstcore (`.ucrt`) |
+
+Windows differs from unix in five rows: gmp, gsl and nloptr are tier 1
+there (a configure script on unix, a Makevars.win of assignments on
+Windows) and askpass and libgeos go to make (unix Makevars of
+assignments, Makevars.win with a rule). The macos-15-intel leg's tiers
+are identical to macos-latest's. The 14 rows with no native
+library are the same everywhere: biocmake, blob, cpp11, credentials,
+DBI, dir.expiry, generics, hms, lifecycle, pkgconfig, R6, rstudioapi,
+withr (R-only) and Rhdf5lib.
+
+What the Windows rows not built by rzig ran, from their logs (make
+echoes the recipes; rzig prints its own lines): `$(AR)`/`$(RANLIB)`
+(rzig) in 12 and 2 rows, sed in 5 (stringi, igraph, ragg, s2,
+Rhdf5lib), pkg-config in 2 (s2, igraph), cmake in 2 (biocmake,
+Rhdf5lib), cp/mkdir/rm in 5 (askpass, filelock, ncdf4, Matrix, units);
+no dlltool, windres, objdump or strip call in any log; winshlib.mk's
+nm|sed def step is silent, so not countable here.
+
+**Re-scope of phase 7 and B24 (feat-standalone-toolchain TODO.md),
+from this table.** The suite is the hard set by construction
+(configure scripts, system libraries): 30 of its 46 compiled rows need
+make on unix and 29 on Windows, 24 and 12 of them for a configure
+script, so the build-tools group stays required for the suite's
+packages on every OS; the tier-1 share here (16 to 17 of 46) is below
+the CRAN estimate of about half because of that selection, not a
+measurement of CRAN. Phase 7's Windows `usr/bin` keeps sh and make
+(configure.win, Makevars rules, `$(shell)`), coreutils (the cp/mkdir/rm
+recipes), sed and pkg-config (B43-3; s2 and igraph), with the binutils
+the make path's rules name (nm for the def step; dlltool/windres as
+phase 3 step 6 left them); cmake stays the extras candidate (Rhdf5lib,
+through biocmake). B24: the table names no further tool to move; the
+dlltool/as follow-up PR stands. The shared tier-1 build runner (TODO.md
+"Depend less on make") is not asked for: one runner compile per cache
+(sys), 5 to 15 s, and the per-install cache's cost (about 3 s warm,
+measured on linux-64 above) is below every row's make time but the
+smallest. Not measured by this dispatch: `builder = make` on the legs
+without a reference, the preflight (fact 11: stress runs skip 0009),
+and the per-install cache's cost (the run shared one cache).
 
 ## Cleanup before merge
 

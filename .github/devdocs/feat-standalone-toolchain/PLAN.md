@@ -2607,7 +2607,11 @@ for a Makevars rule and for an R-only package with a configure script;
 scenario 3 asserts btA through rzig build and btLib through the group's
 make in one install.packages run, and the LTO record's tier-1 twin
 going to make for MAKEFLAGS' assignment. Phase 7 and B24 are re-scoped
-from the stress table that follows the push (TODO.md). `rzig` /
+from the stress table that followed the push (TODO.md; the table in
+feat-zig-pkg-build's PLAN.md, "Stress dispatch", 2026-10-12: five
+runners, 0 unexpected rows, 16 or 17 of 46 compiled rows through rzig
+build, the rest through make for configure scripts and Makevars rules;
+no tool to move, no shared runner needed). `rzig` /
 `rzig.exe` is one more name in `rzig_names()` (the hook's name for
 `rzig build` and `rzig def`), and `R_HOME/share/zig/rpkg/` holds the zig
 build roots. No build-number bump: phase 4's (8 to 9) publishes both.
