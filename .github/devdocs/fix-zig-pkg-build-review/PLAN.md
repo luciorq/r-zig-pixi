@@ -153,7 +153,7 @@ TODO.md.
 
 | item | what the records say now, and where |
 |---|---|
-| B1 [stress-S1, records-REC-4] | The shared tier-1 build runner is open again: TODO.md "Depend less on make", and the later items of feat-zig-pkg-build's scope statement (N2) and re-scope. The dispatch shared one zig build cache (stress.R pointed ZIG_LOCAL_CACHE_DIR at its run), so it never measured the per-install runner cost. Recorded: fact 9's about +3.1 s per tier-1 install on linux-64, this PR's 2 to 2.9 s (conda-forge zig) and 1.1 to 1.3 s (upstream zig) ("Measurements"), and the consolidation's host figures (6 to 10 s on omicron, 11 to 20 s on kappa). Decided by a dispatch with `shared_cache = false` (I-B1) |
+| B1 [stress-S1, records-REC-4] | The shared tier-1 build runner is open again: TODO.md "Depend less on make", and the later items of feat-zig-pkg-build's scope statement (N2) and re-scope. The dispatch shared one zig build cache (stress.R pointed ZIG_LOCAL_CACHE_DIR at its run), so it never measured the per-install runner cost. Recorded: fact 9's about +3.1 s per tier-1 install on linux-64, this PR's 2 to 2.9 s (conda-forge zig) and 1.1 to 1.3 s (upstream zig) ("Measurements"), and the consolidation's host figures (6 to 10 s on omicron, 11 to 20 s on kappa). Decided by a dispatch with `shared_cache = false` (I-B1). Closed by feat-shared-build-runner (2026-10-13, its PLAN.md): dispatch 38467907779 (`shared_cache = false`) measured +3.3 s (ubuntu-latest) to +12.8 s (windows-latest) per tier-1 install; tier 1 shares one build runner per content of build_t1.zig and zig in rzig's cache, and on linux-64 a small package then installs in 1.4 to 1.9 s warm (5.2 to 5.5 s cold, conda-forge zig; 1.4 to 1.8 s and 3.2 to 3.6 s with upstream zig), against make's 1.3 to 2.0 s; osx-arm64 and win-64 in its PLAN.md |
 | B2 [stress-S2] | Both PLANs: "the stress table adds no evidence on B24; the dlltool/as follow-up PR stands", no "no tool to move". TODO.md's B24 item: no dlltool, windres, objdump or strip in make's echoed recipes, which shows little (binutils calls are not traced, configure.win and `@`-recipes run silently, R CMD check did not run), and RcppParallel's TBB build ran windres through Rcmd_environ's `RC`, unseen |
 | B3 [stress-S3, records-REC-8] | The tools the Windows make rows ran, from the recipes and the packages' messages, not word counts: winshlib.mk's silent def and link recipe (nm, sed twice, basename, echo, rm) in every make row; the configure.win scripts under sh; pkg-config in at least 9 rows; rzig's AR/RANLIB in 12 and 2; rm echoed in 5; cmake in Rhdf5lib and RcppParallel. The old counts (sed in 5, cmake in biocmake, cp/mkdir) matched words such as "used" and a package's name. The binutils stay in TC/binutils/, not usr/bin |
 | B4 [stress-S6, records-REC-9] | g3 g4 have no smoke that compiles at run time (Rcpp only a dependency, its smoke `TRUE`), so the `R CMD SHLIB` command (run-time compilation, pkgbuild's probe) was not exercised; contract's evalCpp and verify-bundle's SHLIB shapes cover it. In the "Not measured" list; a g1 dispatch with trace is a TODO.md item. Found here: a smoke log would not show it anyway (a local `stress.R --trace Rcpp` compiled and ran cppFunction, and its smoke log has no rzig line: sourceCpp keeps R CMD SHLIB's output) |
@@ -255,6 +255,10 @@ TODO.md.
     ZIG_LOCAL_CACHE_DIR and contract-test.sh unsets it, so their
     installs use the per-install cache a user's install gets; pfC
     asserts `--cache-dir <...>/.rzig/zig-cache` and no root left.
+    (Since feat-shared-build-runner a user's tier-1 install shares one
+    build runner in rzig's cache: pfC asserts `--cache-dir
+    .../r-zig/build-runner-<key>`, and contract-test.sh keeps rzig's
+    cache in build/rzig-cache.)
 - **C7, the records.** [records-REC-5] the N7 record; [phase3-P3-7,
   records-REC-7] N5's note under phase 4's bump in TODO.md, naming 0009
   and rzig's new modes and the coupling (a new r-zig-slim with an older
@@ -327,12 +331,15 @@ install, three installs (cli: the second and third):
 
 So the runner costs 2 to 2.9 s per tier-1 install with conda-forge's
 zig and 1.1 to 1.3 s with upstream's (fact 9's estimate was 3.1 s).
+Since feat-shared-build-runner it is paid once per build_t1.zig and
+zig, not per install (its PLAN.md has the cold and warm times on the
+three hosts).
 digest and cli install faster than on main: their C objects now come
 from zig's global cache, as make's do. On kappa's pkg-parity
 (conda-forge zig) rzig build took 1.5 to 3 times make's time (cli 30
 against 18 s, digest 17 against 6, Rcpp 19 against 9), as in the
 consolidation's runs. Not measured: the stress runners (a dispatch with
-`shared_cache = false`, TODO.md).
+`shared_cache = false`, TODO.md; measured since, 38467907779, B1).
 
 ### NM_FILTER (C2, kappa)
 
@@ -449,7 +456,8 @@ upstream-zig run of rzig build, tier 2 and pkg-parity in CI.
   runs before R is built); it ran here on linux-64 only.
 - linux-aarch64 and osx-64 on a host (CI's legs).
 - A stress dispatch on the five runners (the shared runner decision and
-  the g1 run-time compiles, TODO.md).
+  the g1 run-time compiles, TODO.md). The shared-runner dispatch ran
+  since (38467907779, B1).
 
 ## Open decisions (for the user)
 
@@ -478,7 +486,8 @@ In feat-standalone-toolchain TODO.md unless named:
 
 - The shared tier-1 build runner: a stress dispatch with
   `shared_cache = false` on the five runners decides it [stress-S1,
-  records-REC-4].
+  records-REC-4]. Done: dispatch 38467907779 decided it, and
+  feat-shared-build-runner shares the runner (B1).
 - A g1 dispatch with trace (Rcpp's cppFunction, rstan's stan_model):
   run-time compilation; the smoke's result is the evidence [stress-S6].
 - Tier 2's own compile flags (an optional `cflags` in rpkg's
@@ -524,5 +533,5 @@ In feat-standalone-toolchain TODO.md unless named:
     pixi run rzig-test dist/slim/R-4.6.1-zig    # also smoke-test.sh on that tree (linux)
     pixi run pkg-parity                         # the tarball twice, I-C1, ZIG_LOCAL_CACHE_DIR, the base with no make
     pixi run verify-package                     # scenario 2 (Windows too), scenario 3's OpenMP packages
-    Rscript stress/stress.R --trace --no-shared-cache Rcpp   # with the compile tree's R; per-install cache
+    Rscript stress/stress.R --trace --no-shared-cache Rcpp   # with the compile tree's R; rzig build's default cache (per install here; the shared tier-1 runner since feat-shared-build-runner)
     gh workflow run stress.yaml -f packages='g3 g4' -f trace=true -f shared_cache=false

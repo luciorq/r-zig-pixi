@@ -2620,7 +2620,9 @@ conditionals and an include [stress-S8], and Rhdf5lib through its
 configure script's CMake [stress-S9]; it adds no evidence on B24,
 whose dlltool/as follow-up PR stands [stress-S2];
 the shared tier-1 runner stays open, since the dispatch shared one
-cache and did not measure the per-install cost [stress-S1]). `rzig` /
+cache and did not measure the per-install cost [stress-S1]; done since
+by feat-shared-build-runner, its PLAN.md, after dispatch 38467907779
+measured that cost at 3.3 to 12.8 s per tier-1 install). `rzig` /
 `rzig.exe` is one more name in `rzig_names()` (the hook's name for
 `rzig build` and `rzig def`), and `R_HOME/share/zig/rpkg/` holds the zig
 build roots. No build-number bump: phase 4's (8 to 9) publishes both.
@@ -2642,7 +2644,9 @@ src/build.zig (install.R runs the Makefile with make, so the preflight
 asks for the build tools); verify-bundle scenario 2 runs on
 Windows too (pfC and pfM) and scenario 3 builds the OpenMP packages
 through rzig build there; verify-bundle and contract use the
-per-install zig build cache a user's install gets. The records above
+per-install zig build cache a user's install gets (since
+feat-shared-build-runner: for tier 1 the shared build runner in rzig's
+cache, contract's in build/rzig-cache). The records above
 and TODO.md's phase 4, 7 and later items are corrected from the
 review's B items.
 

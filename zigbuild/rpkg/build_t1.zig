@@ -5,7 +5,12 @@
 //! the words make would have passed; no flag is derived here. Installed
 //! to R_HOME/share/zig/rpkg by the repo's build.zig; rzig runs
 //!   zig build --build-file <this file> -Dplan=<plan.zon> --prefix <dir> --cache-dir <cache>
-//! and finds <dir>/<libs_dir>/<output>.
+//! and finds <dir>/<libs_dir>/<output>; by default <cache> is a directory
+//! of rzig's cache, and <this file> its copy there. The steps write their
+//! objects and the library into the build root, the plan's directory,
+//! never into <cache>: it then holds this file's build runner alone, one
+//! per content of this file and zig, which every tier-1 install shares
+//! (zigbuild/tools/rzig/pkgbuild.zig's sharedRunner).
 const std = @import("std");
 const builtin = @import("builtin");
 const windows = builtin.os.tag == .windows;
@@ -42,6 +47,9 @@ pub const Plan = struct {
     def: bool = false,
     /// Windows: the package's own <pkg>-win.def in srcdir, linked instead
     win_def: []const u8 = "",
+    /// The build root, the plan's own directory, where the steps write
+    /// (outputFile). Not in plan.zon: readPlan sets it.
+    root: []const u8 = "",
 };
 
 pub fn readPlan(b: *std.Build) *const Plan {
@@ -51,6 +59,10 @@ pub fn readPlan(b: *std.Build) *const Plan {
     const plan = b.allocator.create(Plan) catch @panic("OOM");
     @setEvalBranchQuota(20_000); // std.zon.parse's per-field inline switch grows with Plan's fields
     plan.* = std.zon.parse.fromSliceAlloc(Plan, b.allocator, z, null, .{}) catch @panic("cannot parse the plan");
+    // absolute: the steps run in srcdir and name their outputs on their
+    // command lines. rzig passes it so, with `/` (pkgbuild.zig).
+    const root = std.fs.path.dirname(plan_path) orelse ".";
+    plan.root = if (std.fs.path.isAbsolute(root)) root else b.pathResolve(&.{ b.graph.cache.cwd, root });
     return plan;
 }
 
@@ -69,16 +81,41 @@ fn applyEnv(run: *std.Build.Step.Run, plan: *const Plan) void {
     }
 }
 
+/// The file `run` writes at `path`, in the build root, named on its
+/// command line where addOutputFileArg would name one in zig build's
+/// cache, o/<hash of the step's inputs>/, with a manifest in h/: the
+/// inputs hash the whole environment, R_SESSION_TMPDIR included, so a
+/// cache shared across installs gained an entry per step per install,
+/// never reused (feat-zig-pkg-build N3, fact 9). The step always runs, as
+/// it did with a cache of its own per install, and writes nothing into
+/// the cache. expectExitCode gives it the stdio a step with an output
+/// file has: stdin and stdout ignored, stderr piped and shown as the
+/// step's diagnostic. Without it a step with no output file inherits
+/// stdio and holds zig build's stderr lock while it runs, one compile at
+/// a time whatever -j says.
+fn outputFile(b: *std.Build, run: *std.Build.Step.Run, path: []const u8) std.Build.LazyPath {
+    run.has_side_effects = true;
+    run.expectExitCode(0);
+    run.addArg(path);
+    const file = b.allocator.create(std.Build.GeneratedFile) catch @panic("OOM");
+    file.* = .{ .step = &run.step, .path = path };
+    return .{ .generated = .{ .file = file } };
+}
+
 /// One object per source, in the plan's order. Each compile runs in
 /// srcdir and names its source relative to it, `-c one.c`, as make does
 /// from src/: zig cc keys its object cache (zig's global cache) on the
 /// source path as given, so the absolute path under install.R's new
 /// R.INSTALL directory added one entry per source on every tarball
 /// install, never reused, where make's entries are [tests-T1]. The file
-/// stays an input of the step (addFileInput).
+/// stays an input of the step (addFileInput). The object goes to
+/// <root>/obj/<n>/<its file name>, a directory per source as zig build's
+/// cache had one per step: OBJECTS may name two files of one name
+/// (util.o, sub/util.o) or one outside src/ (../x.o), and rpkg names a
+/// tier-2 source's object by its stem.
 pub fn compileAll(b: *std.Build, plan: *const Plan) []std.Build.LazyPath {
     var objs = std.ArrayList(std.Build.LazyPath).empty;
-    for (plan.sources) |s| {
+    for (plan.sources, 0..) |s, n| {
         const d = driverFor(plan, s.lang);
         const run = b.addSystemCommand(&.{b.pathJoin(&.{ plan.toolchain, d.tool })});
         run.setName(b.fmt("{s} {s}", .{ d.tool, s.path }));
@@ -89,7 +126,9 @@ pub fn compileAll(b: *std.Build, plan: *const Plan) []std.Build.LazyPath {
         run.addArg(s.path);
         run.addFileInput(.{ .cwd_relative = b.pathJoin(&.{ plan.srcdir, s.path }) });
         run.addArg("-o");
-        objs.append(b.allocator, run.addOutputFileArg(std.fs.path.basename(s.obj))) catch @panic("OOM");
+        const dir = b.fmt("{s}/obj/{d}", .{ plan.root, n });
+        std.Io.Dir.cwd().createDirPath(b.graph.io, dir) catch @panic("cannot create the build root's obj/");
+        objs.append(b.allocator, outputFile(b, run, b.fmt("{s}/{s}", .{ dir, std.fs.path.basename(s.obj) }))) catch @panic("OOM");
     }
     return objs.items;
 }
@@ -103,7 +142,7 @@ pub fn link(b: *std.Build, plan: *const Plan, objs: []const std.Build.LazyPath) 
     applyEnv(run, plan);
     run.addArgs(plan.link);
     run.addArg("-o");
-    const out = run.addOutputFileArg(plan.output);
+    const out = outputFile(b, run, b.fmt("{s}/{s}", .{ plan.root, plan.output }));
     if (plan.win_def.len > 0) {
         // relative to srcdir too, as winshlib.mk names it (compileAll)
         run.addArg(plan.win_def);
@@ -112,7 +151,7 @@ pub fn link(b: *std.Build, plan: *const Plan, objs: []const std.Build.LazyPath) 
         // winshlib.mk's tmp.def, from the objects' symbol tables
         const def = b.addSystemCommand(&.{ plan.rzig, "def", "-o" });
         def.setName(b.fmt("def {s}", .{plan.output}));
-        const def_file = def.addOutputFileArg(b.fmt("{s}.def", .{std.fs.path.stem(plan.output)}));
+        const def_file = outputFile(b, def, b.fmt("{s}/{s}.def", .{ plan.root, std.fs.path.stem(plan.output) }));
         for (objs) |o| def.addFileArg(o);
         run.addFileArg(def_file);
     }
