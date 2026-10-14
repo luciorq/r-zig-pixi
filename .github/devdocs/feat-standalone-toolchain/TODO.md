@@ -644,28 +644,31 @@ Needs (answered): B14 (a), with B37 (a).
       group is for"). Left: route `R CMD SHLIB` through rzig build (it
       would also clear pkgbuild's has_compiler probe, and so pak, which
       today refuses every compiled package on base + compilers), or give
-      it a preflight; revisit 0010 for pkgbuild's probe; a shared tier-1
-      build runner (the per-install zig build cache rebuilds it each
-      install) only if the per-install cost asks for it. Not decided
-      yet [stress-S1, records-REC-4, phase3-P3-8]: the stress dispatch
-      of 2026-10-12 shared one zig build cache (stress.R pointed
-      ZIG_LOCAL_CACHE_DIR at its run), so its times do not show that
-      cost; on ubuntu-latest its tier-1 rows ran at about the same ratio
-      to the 548da1a make reference as its make rows (0.67 against
-      0.65, runner variance), sys carrying the one runner compile (5 to
-      15 s, about 35 s on macos-15-intel). The estimates: about 3.1 s
-      warm per tier-1 install on linux-64 (fact 9; 2026-10-13: 2 to 2.9
-      s with conda-forge zig, 1.1 to 1.3 s with upstream zig), the
-      whole make install time of the smallest rows; 6 to 10 s on omicron
-      and 11 to 20 s on kappa in the consolidation's pkg-parity. Decide
-      with a dispatch with `shared_cache = false` (stress.R
-      `--no-shared-cache`) on the five runners (feat-zig-pkg-build's
-      PLAN.md, "Stress dispatch"; fix-zig-pkg-build-review's PLAN.md,
-      "Measurements"). verify-bundle
+      it a preflight; revisit 0010 for pkgbuild's probe. The shared
+      tier-1 build runner is done by feat-shared-build-runner's PR (its
+      PLAN.md) [stress-S1, records-REC-4, phase3-P3-8]: stress dispatch
+      38467907779 (`shared_cache = false`, main ea7e6ee) measured the
+      per-install runner at +3.3 s (ubuntu-latest), +11.1 s
+      (ubuntu-24.04-arm), +9.6 s (macos-latest), +11.9 s
+      (macos-15-intel) and +12.8 s (windows-latest) per tier-1 install,
+      where make installs a small package in 1 to 2 s; rzig build now
+      keeps one runner per content of R's build_t1.zig and zig in rzig's
+      cache, `build-runner-<key>/`, and removes one no install has used
+      for a week (pkgbuild.zig's `zigBuildDirs` and `sharedRunner`); each
+      install's objects and library stay in its build root. With the
+      runner warm, a small tier-1 package installs within 0.2 s of make
+      on linux-64 and osx-arm64 and 0.4 to 0.8 s faster on win-64 (its
+      PLAN.md, "Measurements"). verify-bundle
       scenario 2's new assertions (the tier-1 install with the compilers
       alone, the Makevars-rule stop; on unix also the configure-only and
       no-flang stops; Windows since the review follow-up
       [phase3-P3-9]) are the gate for the group's scope
+- [ ] A stress dispatch of g3 g4 with trace and `shared_cache = false`
+      on main after feat-shared-build-runner merges: rzig build's
+      default cache, as a user's install has it, should bring the small
+      tier-1 rows back to about 38317654371's shared-cache times on the
+      five runners, the first tier-1 row of each leg carrying the one
+      runner compile (feat-shared-build-runner's PLAN.md, "CI")
 - [ ] A stress dispatch of g1 with trace (Rcpp's cppFunction, rstan's
       stan_model): run-time compilation, `R CMD SHLIB`, which the g3 g4
       dispatch of 2026-10-12 did not exercise (no smoke compiled)

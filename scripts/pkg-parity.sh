@@ -32,21 +32,29 @@
 #     `-Wl,-install_name,<pkg>.so` only rzig passes (make's linker derives
 #     the same name from -o), on Windows the .def file's name (`tmp.def`
 #     from nm | sed, `<pkg>.def` from `rzig def`), and the directories of
-#     the paths (the zig path's objects and output are in its cache;
-#     Windows: rzig's `--out-implib=<output>.rzig.lib`, absolute there);
+#     the paths (the zig path's objects and output are in its build root,
+#     obj/<n>/ and <root>/<output>; Windows: rzig's
+#     `--out-implib=<output>.rzig.lib`, absolute there) [tests-3];
 #     the `ZIG_LIB_DIR=<mirror>` word rzig prints first where it gives
 #     conda-forge's zig the libc++ mirror (every macOS env) is stripped,
 #     and the make path's `--version` probes are left out;
 #   - a smoke script loads and exercises the packages from each library
 #     and prints the same values;
-#   - the caches (N3): an install leaves no `zig-build` under rzig's cache
-#     (the zig build cache is per install, in the build root, gone with
-#     it; the shared part is zig's global cache), and a second install of
-#     the cli tarball, which R unpacks into a new directory each time as
-#     install.packages does, adds no entry to that global cache: rzig
-#     build's compiles are keyed as make's are [tests-T1]; with
-#     ZIG_LOCAL_CACHE_DIR set, rzig build's cache is there, and the build
-#     root still goes [preflight-PF-8].
+#   - the caches: every tier-1 install shares one zig build cache,
+#     build-runner-<key> in rzig's cache, which holds build_t1.zig's copy
+#     and its build runner alone (pkgbuild.zig's sharedRunner; stress
+#     dispatch 38467907779): the first install compiles it, every later
+#     one leaves it as it was, no object or library of an install in it;
+#     a kept build root (RZIG_KEEP_ROOT=1) holds the plan, the objects and
+#     the library and no zig build cache (N3); a second install of the
+#     cli tarball, which R unpacks into a new directory each time as
+#     install.packages does, adds no entry to zig's global cache: rzig
+#     build's compiles are keyed as make's are [tests-T1], and its time
+#     is printed against make's;
+#     with ZIG_LOCAL_CACHE_DIR set, rzig build's cache is there, and the
+#     build root still goes [preflight-PF-8]; two tier-1 packages
+#     installed at once by install.packages(Ncpus = 2), from a cold rzig
+#     cache, both build, with one build runner between them.
 # Then the tier-2 fixture (.github/devdocs/feat-zig-pkg-build/proto/
 # zighello, a zig package: `rzig build: tier 2`, `hello(21L)` is 42), its
 # twin with a URL dependency in src/build.zig.zon (refused: tier 2 builds
@@ -103,9 +111,9 @@ cd "$WORK"
 # all); unchanged elsewhere.
 wpath() { if [ "$OS" = windows ]; then cygpath -w "$1"; else printf '%s\n' "$1"; fi; }
 # Nothing of the caller's selects a path, a compiler or a cache: rzig
-# build's cache is its default, the build root's (ZIG_LOCAL_CACHE_DIR
-# would name another place); rzig's own cache under $WORK/cache, where
-# the zig-build check below can see it.
+# build's cache is its default, the build runner's directory in rzig's
+# own cache (ZIG_LOCAL_CACHE_DIR would name another place), here under
+# $WORK/cache, emptied above, where the checks below can see it.
 unset R_ZIG_PKG_BUILDER MAKEFLAGS ZIG_LOCAL_CACHE_DIR
 export R_MAKEVARS_USER="$(wpath "$WORK/no-such-makevars")"
 export RZIG_TRACE=1
@@ -156,8 +164,27 @@ abs_sources() {
 }
 # Entries in zig's global cache's o/ (the objects zig cc keeps), a count.
 global_entries() { ls "$ZIG_GLOBAL_CACHE_DIR/o" 2> /dev/null | wc -l | tr -d ' '; }
-no_zig_build_left() {
-  test ! -e "$RZIG_CACHE/zig-build" || fail "$1: rzig's cache has a zig-build directory ($RZIG_CACHE/zig-build): the zig build cache must be per install, in the build root"
+# rzig build's zig build cache for tier 1 (pkgbuild.zig's sharedRunner):
+# build-runner-<key of build_t1.zig's content and the zig> in rzig's
+# cache, one per R's build_t1.zig and zig.
+runner_dirs() { ls -d "$RZIG_CACHE"/build-runner-* 2> /dev/null || true; }
+# runner_same <what>: one such directory, holding the files the first
+# tier-1 install left there (logs/runner-first, which this makes): the
+# runner was reused, and the install added nothing of its own. The first
+# install's library and objects (its sources' names) are not among them:
+# they are written in the build root.
+runner_same() {
+  local o
+  [ "$(runner_dirs | wc -l | tr -d ' ')" = 1 ] || fail "$1: not one build-runner directory in rzig's cache ($RZIG_CACHE): '$(runner_dirs | tr '\n' ' ')'"
+  (cd "$(runner_dirs)" && find . -type f | LC_ALL=C sort) > "$WORK/logs/runner-now"
+  if [ ! -f "$WORK/logs/runner-first" ]; then
+    for o in "$p.$SO" $(objects_of "$p"); do
+      if grep -q "/$o\$" "$WORK/logs/runner-now"; then fail "$1: $o is in rzig build's shared cache ($(runner_dirs)): an install's objects and library belong in its build root"; fi
+    done
+    cp "$WORK/logs/runner-now" "$WORK/logs/runner-first"
+  fi
+  cmp -s "$WORK/logs/runner-first" "$WORK/logs/runner-now" ||
+    { diff "$WORK/logs/runner-first" "$WORK/logs/runner-now" | head -10 >&2; fail "$1: the install changed rzig build's shared cache ($(runner_dirs)): the runner must be reused, nothing of an install added"; }
 }
 
 # --- the fixtures, from CRAN once -------------------------------------------
@@ -177,6 +204,8 @@ if [ "$have_all" = 0 ]; then
     }' || fail "fetching the fixtures failed"
 fi
 tarball_of() { ls "$SRC/${1}_"*.tar.gz | head -1; }
+# The objects make would name for a package's top-level sources in src/.
+objects_of() { tar -tzf "$(tarball_of "$1")" | sed -n -E "s#^$1/src/([^/]+)\.(c|cc|cpp|f|f90|f95)\$#\1.o#p"; }
 
 # --- tier 1: both paths, compared, on the compile tree ----------------------
 echo "== tier 1: R CMD INSTALL through rzig build, and through make ($OS/$FLAVOR, the compile tree)"
@@ -186,7 +215,9 @@ for p in $PKGS; do
   grep -q "rzig build: tier 1" "$WORK/logs/$p-zig.log" || fail "$p: the zig path did not report 'rzig build: tier 1' (logs/$p-zig.log)"
   [ -z "$(make_recipes "$WORK/logs/$p-zig.log")" ] || fail "$p: a recipe make echoed in the zig path's log"
   grep -q '^using C compiler\|^using C++ compiler\|^using Fortran compiler' "$WORK/logs/$p-zig.log" || fail "$p: no 'using ... compiler' line in the zig path's log"
-  no_zig_build_left "$p"
+  # the first install compiles the build runner, the others reuse it
+  if [ -f "$WORK/logs/runner-first" ]; then runner=""; else runner=" (and the build runner)"; fi
+  runner_same "$p"
   tm=$(R_ZIG_PKG_BUILDER=make install_pkg "$WORK/lib-make" "$t" "$p-make") || { tail -20 "$WORK/logs/$p-make.log" >&2; fail "$p: the make path failed"; }
   grep -q "rzig build:" "$WORK/logs/$p-make.log" && fail "$p: R_ZIG_PKG_BUILDER=make still ran rzig build"
   [ -n "$(make_recipes "$WORK/logs/$p-make.log")" ] || fail "$p: no compile make echoed in the make path's log"
@@ -201,7 +232,8 @@ for p in $PKGS; do
   [ "$a" -gt 1 ] || fail "$p: no rzig command lines in the zig path's log (RZIG_TRACE)"
   cmp -s "$WORK/logs/$p-argv-zig" "$WORK/logs/$p-argv-make" || { diff "$WORK/logs/$p-argv-zig" "$WORK/logs/$p-argv-make" | head -20 >&2; fail "$p: rzig's command lines differ between the zig and the make path"; }
   [ -z "$(abs_sources "$WORK/logs/$p-zig.log")" ] || { abs_sources "$WORK/logs/$p-zig.log" | head -3 >&2; fail "$p: rzig build compiled a source by its absolute path (logs/$p-zig.log): compiles must name it relative to src/, as make does"; }
-  printf '   %-9s zig %3ss, make %3ss: %s exports and %s rzig command lines identical\n' "$p" "$tz" "$tm" "$n" "$a"
+  printf '   %-9s zig %3ss%s, make %3ss: %s exports and %s rzig command lines identical\n' "$p" "$tz" "$runner" "$tm" "$n" "$a"
+  [ "$p" != cli ] || cli_make=$tm
 done
 
 cat > "$WORK/work/smoke.R" <<'EOF'
@@ -226,7 +258,7 @@ cmp -s "$WORK/logs/smoke-zig.out" "$WORK/logs/smoke-make.out" || { diff "$WORK/l
 echo "   smoke: $(grep -c . "$WORK/logs/smoke-zig.out") lines identical on both libraries"
 
 # --- the caches: nothing per install outlives it ----------------------------
-echo "== caches: no zig-build in rzig's cache; a second install of a tarball adds nothing to zig's global cache; ZIG_LOCAL_CACHE_DIR"
+echo "== caches: one build runner for every tier-1 install; a kept build root; a second install of a tarball adds nothing to zig's global cache; ZIG_LOCAL_CACHE_DIR; two installs at once"
 # From the tarball, as install.packages installs: R unpacks it into a new
 # R.INSTALL directory each time, so a compile keyed on the source's
 # absolute path would add one entry per source per install, which make's
@@ -234,20 +266,34 @@ echo "== caches: no zig-build in rzig's cache; a second install of a tarball add
 rm -rf "$WORK/work/lib-again"; mkdir -p "$WORK/work/lib-again"
 install_pkg "$WORK/work/lib-again" "$(tarball_of cli)" "again-1" > /dev/null || { tail -20 "$WORK/logs/again-1.log" >&2; fail "cli (its tarball) failed to install"; }
 g1=$(global_entries)
-install_pkg "$WORK/work/lib-again" "$(tarball_of cli)" "again-2" > /dev/null || { tail -20 "$WORK/logs/again-2.log" >&2; fail "cli (its tarball, again) failed to install"; }
+t2=$(install_pkg "$WORK/work/lib-again" "$(tarball_of cli)" "again-2") || { tail -20 "$WORK/logs/again-2.log" >&2; fail "cli (its tarball, again) failed to install"; }
 g2=$(global_entries)
 grep -q "rzig build: tier 1" "$WORK/logs/again-2.log" || fail "the second install of cli did not go through rzig build"
 [ "$g1" = "$g2" ] || fail "a second install of the cli tarball added $((g2 - g1)) entries to zig's global cache ($ZIG_GLOBAL_CACHE_DIR/o: $g1, then $g2): rzig build's compiles must be keyed as make's, by the source's path relative to src/"
-no_zig_build_left "cli's tarball, twice"
+runner_same "cli's tarball, twice"
 # and why: each compile named its source relative to src/ (the count holds
 # only while R's temp dir has no build.zig above it, where zig cc would
 # cache in that directory's .zig-cache instead) [tests-T1, tests-T7]
 [ -z "$(abs_sources "$WORK/logs/again-2.log")" ] || { abs_sources "$WORK/logs/again-2.log" | head -3 >&2; fail "rzig build compiled a source by its absolute path (logs/again-2.log): compiles must name it relative to src/, as make does"; }
-echo "   cli's tarball twice: $g1 entries in zig's global cache before and after, every source named relative to src/; no zig-build under $RZIG_CACHE"
+echo "   cli's tarball twice: $g1 entries in zig's global cache before and after, every source named relative to src/, the build runner reused; the second install ${t2}s (make ${cli_make}s)"
+# A kept build root holds what the install's steps wrote, the plan, the
+# objects (obj/) and the library, and no zig build cache: that is the
+# build runner's, shared (pkgbuild.zig's sharedRunner).
+rm -rf "$WORK/work/kept"; mkdir -p "$WORK/work/kept"
+tar -xzf "$(tarball_of digest)" -C "$WORK/work/kept"
+RZIG_KEEP_ROOT=1 install_pkg "$WORK/work/lib-again" "$WORK/work/kept/digest" "kept" > /dev/null || { tail -20 "$WORK/logs/kept.log" >&2; fail "digest (from its directory, RZIG_KEEP_ROOT=1) failed to install"; }
+kr="$WORK/work/kept/digest/src/.rzig"
+test -f "$kr/plan.zon" && test -f "$kr/digest.$SO" || fail "digest's kept build root ($kr) lacks plan.zon or digest.$SO"
+[ -n "$(find "$kr/obj" -name '*.o' 2> /dev/null)" ] || fail "no object in digest's kept build root ($kr/obj)"
+test ! -e "$kr/zig-cache" || fail "digest's kept build root has a zig build cache ($kr/zig-cache): tier 1's is the shared build runner's"
+runner_same "digest (its build root kept)"
+rm -rf "$WORK/work/kept"
+echo "   digest's kept build root: plan.zon, obj/, digest.$SO and no zig-cache; the build runner reused"
 # ZIG_LOCAL_CACHE_DIR, when set, is rzig build's --cache-dir in place of
-# the build root's own (pkgbuild.zig), and the root still goes with the
-# install: from a directory, where the root is the package's src/.rzig
-# [preflight-PF-8].
+# its default (tier 1: the build runner's directory in rzig's cache;
+# pkgbuild.zig's zigBuildDirs), and the root still goes with the install:
+# from a directory, where the root is the package's src/.rzig
+# [preflight-PF-8, tests-3].
 rm -rf "$WORK/work/again" "$WORK/work/zlc"; mkdir -p "$WORK/work/again"
 tar -xzf "$(tarball_of cli)" -C "$WORK/work/again"
 ZIG_LOCAL_CACHE_DIR="$(wpath "$WORK/work/zlc")" install_pkg "$WORK/work/lib-again" "$WORK/work/again/cli" "again-zlc" > /dev/null || { tail -20 "$WORK/logs/again-zlc.log" >&2; fail "cli (from its directory, ZIG_LOCAL_CACHE_DIR set) failed to install"; }
@@ -258,8 +304,36 @@ grep -q "rzig build: tier 1" "$WORK/logs/again-zlc.log" || fail "cli with ZIG_LO
 grep -q -E -- '--cache-dir [^ ]*zlc( |$)' "$WORK/logs/again-zlc.log" || fail "with ZIG_LOCAL_CACHE_DIR set, zig build did not run with --cache-dir <it> (logs/again-zlc.log)"
 [ -n "$(ls "$WORK/work/zlc/o" 2> /dev/null)" ] || fail "with ZIG_LOCAL_CACHE_DIR=$WORK/work/zlc, nothing of rzig build's cache is there"
 test ! -e "$WORK/work/again/cli/src/.rzig" || fail "the build root was left in cli's src/ (ZIG_LOCAL_CACHE_DIR set)"
-no_zig_build_left "cli with ZIG_LOCAL_CACHE_DIR"
+runner_same "cli with ZIG_LOCAL_CACHE_DIR"
 echo "   cli with ZIG_LOCAL_CACHE_DIR: rzig build's cache there, no build root left in src/"
+# Two tier-1 packages at once from a cold rzig cache, as install.packages
+# installs them with Ncpus = 2 (make -j2 over R CMD INSTALL; the build
+# tools' make first on PATH, as R CMD has it): the first zig build to need
+# the build runner compiles it, holding zig's lock on its manifest, and
+# the other waits and takes it. "begin installing" is the parallel path's
+# make echoing its targets.
+rm -rf "$WORK/work/repo" "$WORK/work/lib-par" "$WORK/work/cache-par" "$WORK/logs/par"
+mkdir -p "$WORK/work/repo" "$WORK/work/lib-par" "$WORK/logs/par"
+cp "$(tarball_of cli)" "$(tarball_of digest)" "$WORK/work/repo/"
+s=$(date +%s)
+PATH="$RH/bin/toolchain/usr/bin:$PATH" XDG_CACHE_HOME="$(wpath "$WORK/work/cache-par")" PKG_PARITY_REPO="$(wpath "$WORK/work/repo")" \
+  PKG_PARITY_LIB="$(wpath "$WORK/work/lib-par")" PKG_PARITY_OUT="$(wpath "$WORK/logs/par")" "$RSCRIPT" --vanilla -e '
+    repo <- normalizePath(Sys.getenv("PKG_PARITY_REPO"), "/")
+    tools::write_PACKAGES(repo, type = "source")
+    install.packages(c("cli", "digest"), lib = Sys.getenv("PKG_PARITY_LIB"), contriburl = paste0("file:///", sub("^/", "", repo)),
+                     type = "source", Ncpus = 2, keep_outputs = Sys.getenv("PKG_PARITY_OUT"))' > "$WORK/logs/par.log" 2>&1 ||
+  { tail -20 "$WORK/logs/par.log" >&2; fail "install.packages(c('cli', 'digest'), Ncpus = 2) failed"; }
+e=$(date +%s)
+grep -q "begin installing package" "$WORK/logs/par.log" || { tail -20 "$WORK/logs/par.log" >&2; fail "install.packages(Ncpus = 2) did not install in parallel (no make's 'begin installing package' in logs/par.log)"; }
+for q in cli digest; do
+  test -f "$WORK/work/lib-par/$q/$LIBSUB/$q.$SO" || { tail -20 "$WORK/logs/par/$q.out" >&2 || true; fail "$q, installed with Ncpus = 2 from a cold rzig cache, has no $q.$SO"; }
+  grep -q "rzig build: tier 1" "$WORK/logs/par/$q.out" || fail "$q, installed with Ncpus = 2, did not go through rzig build (logs/par/$q.out)"
+done
+# ls fails with no such directory: guarded, so that fail says so under
+# set -e and pipefail [tests-2]
+n=$( (ls -d "$WORK/work/cache-par/r-zig"/build-runner-* 2> /dev/null || true) | wc -l | tr -d ' ')
+[ "$n" = 1 ] || fail "two installs at once from a cold rzig cache left $n build-runner directories, not one"
+echo "   cli and digest at once (install.packages, Ncpus = 2) from a cold rzig cache: both built, one build runner, $((e - s))s"
 
 # --- tier 2: a zig package --------------------------------------------------
 echo "== tier 2: zighello"
@@ -275,7 +349,9 @@ v=$("$RSCRIPT" --vanilla -e '.libPaths(c(commandArgs(TRUE)[1], .libPaths())); li
 exports_of "$WORK/lib-zig/zighello/$LIBSUB/zighello.$SO" | grep -q "R_init_zighello" || fail "zighello: R_init_zighello is not exported"
 test -e "$WORK/work/zighello/src/.rzig" && fail "zighello: the build root was left in src/"
 test -e "$WORK/work/zighello/src/.zig-cache" && fail "zighello: a .zig-cache was left in src/"
-no_zig_build_left zighello
+# tier 2 keeps its zig build cache in the build root: its runner imports
+# the package's build.zig from this install's path, new every install
+runner_same zighello
 echo "   zighello: tier 2, ${tz}s with the test load, hello(21L) = 42, R_init_zighello exported, zig build with --system"
 # a URL dependency in the package's own manifest: refused before zig runs
 rm -rf "$WORK/work/zigurl"; cp -R "$ZIGHELLO" "$WORK/work/zigurl"

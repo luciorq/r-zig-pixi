@@ -34,10 +34,12 @@
 #   --trace       RZIG_TRACE=1: rzig prints its commands into the logs, and
 #                 `rzig build` (patch 0013) its tier; R_ZIG_PKG_BUILDER=make
 #                 in the environment makes every install take the make path
-#   --no-shared-cache  leave ZIG_LOCAL_CACHE_DIR unset: each install through
-#                 `rzig build` has its own zig build cache in its build root
-#                 and compiles its build runner, as a user's install does
-#                 (zig's global cache stays in the run directory)
+#   --no-shared-cache  leave ZIG_LOCAL_CACHE_DIR unset: `rzig build` takes
+#                 its default zig build cache, as a user's install does: for
+#                 tier 1 the build runner's directory in rzig's cache, its
+#                 runner compiled once and shared, the rest in each build
+#                 root; tier 2's in each build root (zig's global cache
+#                 stays in the run directory)
 #   --list        print the install plan and stop
 #   --sysdeps     print the sysdeps of the rows the run installs on this OS
 #                 (the selected ones and their dependencies' rows) and stop
@@ -324,16 +326,22 @@ if (win) Sys.setenv(TMP = tmp, TEMP = tmp)
 # zig caches every object it compiles: in the run directory, whatever the
 # caller set (as scripts/env.sh does for the build). --resume reuses it.
 # By default rzig build takes it too (ZIG_LOCAL_CACHE_DIR), so its build
-# runner compiles once per run; --no-shared-cache leaves each install its
-# own, in its build root, as a user gets (N3), to measure that cost
-# [stress-S1, I-B1].
+# runner compiles once per run; --no-shared-cache leaves rzig build its
+# default, as a user gets: tier 1's runner in rzig's cache, compiled once
+# and shared. Its build-runner-<key> directory goes at the run's end when
+# the run made it, with what else the run added there; one an earlier
+# install made stays, as any older entry, and the run used it as it was
+# (one runner per directory: pkgbuild.zig's sharedRunner). Dispatch
+# 38467907779 measured the per-install runner this replaced [stress-S1,
+# I-B1, tests-4].
 shared_cache <- !flag("no-shared-cache")
 Sys.setenv(ZIG_GLOBAL_CACHE_DIR = file.path(out, "zig-cache"))
 if (shared_cache) Sys.setenv(ZIG_LOCAL_CACHE_DIR = file.path(out, "zig-cache")) else Sys.unsetenv("ZIG_LOCAL_CACHE_DIR")
 # rzig's own cache is outside the run directory, where cache.zig puts it
 # (an empty variable counts as unset). The run removes at its end what it
 # added there (V8's archive copy on macOS, a libc++ mirror per zig, linux's
-# dso-fini object, Windows' cfguard stub), never an older entry.
+# dso-fini object, Windows' cfguard stub, with --no-shared-cache tier 1's
+# build runner), never an older entry.
 cache_home <- c(Sys.getenv("XDG_CACHE_HOME"), if (win) Sys.getenv("LOCALAPPDATA"),
                 if (nzchar(Sys.getenv("HOME"))) file.path(Sys.getenv("HOME"), ".cache"), "/tmp/.cache")
 rzig_cache <- file.path(chartr("\\", "/", cache_home[nzchar(cache_home)][1]), "r-zig")
@@ -396,7 +404,8 @@ write_report <- function(final = FALSE) {
           sprintf("zig %s; CC `%s`; libraries env `%s`%s.", info$zig, info$cc, sysroot,
                   if (dist == "conda") sprintf(" (%s from %s)", info$r_zig, info$channel) else ""),
           sprintf("Builder %s (R_ZIG_PKG_BUILDER); zig build cache %s.", builder,
-                  if (shared_cache) "shared by the run (ZIG_LOCAL_CACHE_DIR)" else "per install (--no-shared-cache)"),
+                  if (shared_cache) "shared by the run (ZIG_LOCAL_CACHE_DIR)" else
+                    "rzig's default (--no-shared-cache: tier 1's build runner in rzig's cache, the rest per install)"),
           if (length(sysdeps_missing)) sprintf("Sysdeps missing from the env: %s.", info$sysdeps_missing),
           if (nzchar(info$rzig_cache_removed)) sprintf("The run added to rzig's cache `%s`, and removed at its end: %s.",
                                                        info$rzig_cache, info$rzig_cache_removed),

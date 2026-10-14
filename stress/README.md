@@ -80,10 +80,13 @@ Useful options (`--help` lists them all):
   like, and `rzig build` the tier it built a package with.
 - `--no-shared-cache`: no zig build cache shared by the run. By default
   `rzig build` uses the run's zig cache (`ZIG_LOCAL_CACHE_DIR`), so its
-  build runner compiles once per run. With this option each install
-  through `rzig build` has its own cache in its build root and compiles its
-  build runner, as a user's install does: the per-install cost. zig's
-  global cache stays in the run directory either way.
+  build runner compiles once per run. With this option `rzig build` takes
+  its default, as a user's install does: for a tier-1 package the build
+  runner's directory in rzig's cache (`build-runner-<key>/`, below), where
+  the first install compiles the runner and the others reuse it, with each
+  install's objects and library in its build root; for a tier-2 package a
+  cache in its build root. zig's global cache stays in the run directory
+  either way.
 - `--keep-path`: keep your PATH and, on macOS, skip the runner's CMake
   toolchain file. By default the runner narrows PATH and, on macOS,
   leaves Homebrew out of CMake's searches. A tree that ships its own
@@ -157,10 +160,13 @@ nothing else on the machine:
   symlinks) per zig. Since build 7 it also keeps a copy of each archive
   linked under a name without an extension (V8 on macOS:
   `archive-<key>/v8_monolith.a`, 161 MB), on linux the `dso-fini-<key>/`
-  object and on Windows the `cfguard-<key>/` stub. The runner lists the
-  cache's entries when it starts, and at its end removes the ones the run
-  added; report.md names them. It never removes an older entry, so what a
-  killed run left stays.
+  object and on Windows the `cfguard-<key>/` stub. With
+  `--no-shared-cache`, `rzig build` keeps tier 1's build runner there too
+  (`build-runner-<key>/`, one per R's `build_t1.zig` and zig, about 45 MB
+  on linux-64), and removes one no install has used for a week. The runner
+  lists the cache's entries when it starts, and at its end removes the
+  ones the run added; report.md names them. It never removes an older
+  entry, so what a killed run left stays.
   Another build that uses the cache during the run loses what it added
   there; rzig makes it again when it needs it.
 - A narrow PATH. On Linux and macOS: `<env>/bin:/usr/bin:/bin`, the rule
@@ -198,11 +204,11 @@ working (the harness test); no row has timed out on macOS or Windows yet.
 
 `report.md` starts with the run: date, R, commit, minutes, jobs, zig, the
 `CC` from Makeconf, the libraries env, the builder (`R_ZIG_PKG_BUILDER`,
-auto when unset), whether the run shared one zig build cache
-(`--no-shared-cache`), and what the run removed from rzig's cache. The
-commit is `GITHUB_SHA` when it is set, else the checkout's
-`git rev-parse HEAD`, plus "(modified)" when tracked files have changes; a
-copy without `.git` says "unknown". Then one line per target:
+auto when unset), whether the run shared one zig build cache or left
+`rzig build` its default (`--no-shared-cache`), and what the run removed
+from rzig's cache. The commit is `GITHUB_SHA` when it is set, else the
+checkout's `git rev-parse HEAD`, plus "(modified)" when tracked files have
+changes; a copy without `.git` says "unknown". Then one line per target:
 
 | column | meaning |
 |---|---|

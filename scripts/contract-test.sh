@@ -56,11 +56,21 @@ test -x "$R_BIN" || { echo "error: $R_BIN not built yet — run 'pixi run build'
 
 LIB="$BUILD_DIR/testlib-$VARIANT"
 mkdir -p "$LIB"
-# rzig build's cache as a user's install has it: per install, in the build
-# root, gone with it (N3). env.sh's ZIG_LOCAL_CACHE_DIR would be its cache
-# instead, one that only grows [phase3-P3-6]; zig cc keeps its objects in
-# env.sh's global cache.
+# rzig build's cache as a user's install has it: for tier 1 build_t1.zig's
+# build runner in rzig's cache, shared, with each install's objects and
+# library in its build root, gone with it (pkgbuild.zig's sharedRunner).
+# env.sh's ZIG_LOCAL_CACHE_DIR would be its cache instead [phase3-P3-6];
+# zig cc keeps its objects in env.sh's global cache. rzig's cache itself
+# stays in the workspace, as env.sh's zig caches do, not under $HOME,
+# where every worktree and zig that runs this would leave a runner of
+# about 45 MB [code-contract-home-cache]: XDG_CACHE_HOME names it on
+# every OS (cache.zig's root reads it first).
 unset ZIG_LOCAL_CACHE_DIR
+if [ "$OS" = windows ]; then
+  export XDG_CACHE_HOME="$(cygpath -w "$BUILD_DIR/rzig-cache")"
+else
+  export XDG_CACHE_HOME="$BUILD_DIR/rzig-cache"
+fi
 
 echo "Contract test (variant: $VARIANT, os: $OS)"
 echo "Compiling Rcpp + data.table + minqa + quadprog + pak + ps from source..."

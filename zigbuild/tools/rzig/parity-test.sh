@@ -804,6 +804,45 @@ check "rzig build: no zig, 127, the compilers group, and the build root is gone"
     [ -d '$W/out/p1' ] && [ ! -e '$W/out/p1/.rzig' ]"
 check "rzig build: RZIG_KEEP_ROOT=1 keeps it" \
   bash -c "$pc pkg_build p1 PATH='$W/nothing' RZIG_KEEP_ROOT=1; [ \$? = 127 ] && [ -f '$W/out/p1/.rzig/plan.zon' ]"
+# rzig build for real (the real zig, the repo's rpkg): a tier-1 package
+# three times, each from a new directory as install.R unpacks every
+# install, the third with another R's rpkg (a copy elsewhere, the same
+# build_t1.zig). The steps write the objects and the library into the
+# build root (kept here), and zig build's cache, build-runner-<key> in
+# rzig's cache, holds build_t1.zig's copy, which zig builds from, and its
+# build runner alone: the later builds add no file there, whichever R
+# they come from (pkgbuild.zig's sharedRunner; stress dispatch
+# 38467907779) [code-runner-growth, tests-1].
+if [ -n "$real_zig" ]; then
+  tree rbtree
+  rb=$W/rbtree/lib/R
+  mkdir -p "$rb/etc" "$rb/share/make" "$W/pkgs/pb/src"
+  grep -v '^LIBR' "$rh/etc/Makeconf" > "$rb/etc/Makeconf"   # no libR to link here
+  cp "$rh/share/make/shlib.mk" "$rb/share/make/"
+  printf 'Package: pb\n' > "$W/pkgs/pb/DESCRIPTION"; printf 'int pb(void) { return 1; }\n' > "$W/pkgs/pb/src/a.c"
+  rm -rf "$W/rpkg2"; cp -R "$here/../../rpkg" "$W/rpkg2"
+  rb_build() { # <n> [<rpkg dir>]: pb copied to $W/rb/<n>/pb, built into $W/rb/<n>/out, the root kept
+    rm -rf "$W/rb/$1"; mkdir -p "$W/rb/$1"; cp -R "$W/pkgs/pb" "$W/rb/$1/"
+    env -i R_HOME="$rb" HOME="$W/rbhome" XDG_CACHE_HOME="$W/rbcache" ZIG_BIN="$real_zig" ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-$W/zig-global}" \
+      PATH="$W/nothing" RZIG_KEEP_ROOT=1 RZIG_TRACE=1 "$RZIG" build --pkg "$W/rb/$1/pb" --out "$W/rb/$1/out" --rpkg-dir "${2:-$here/../../rpkg}" > "$W/check.out" 2> "$W/check.err"
+  }
+  # the files in rzig's cache's build-runner directories (their names
+  # included); pb's object or library is not among them (the runner's own
+  # names differ)
+  runner_files() { (cd "$W/rbcache/r-zig" && find . -path './build-runner-*' -type f | LC_ALL=C sort); }
+  pc="$pc rb='$rb'; real_zig='$real_zig'; $(declare -f rb_build runner_files);"
+  check "rzig build: tier 1, the objects and the library in the build root, zig build's cache in rzig's, from build_t1.zig's copy there" \
+    bash -c "$pc rb_build 1 && [ -f '$W/rb/1/out/libs/pb.so' ] && [ -f '$W/rb/1/out/.rzig/obj/0/a.o' ] && [ -f '$W/rb/1/out/.rzig/pb.so' ] &&
+      [ ! -e '$W/rb/1/out/.rzig/zig-cache' ] && [ \$(ls -d '$W/rbcache/r-zig'/build-runner-* | wc -l) = 1 ] &&
+      grep -qE -- ' --build-file $W/rbcache/r-zig/build-runner-[0-9a-f]{32}/build_t1.zig --cache-dir $W/rbcache/r-zig/build-runner-[0-9a-f]{32} ' '$W/check.err' &&
+      runner_files > '$W/rb/state1'"
+  check "rzig build: neither pb's object nor its library in zig build's cache" \
+    bash -c "[ -s '$W/rb/state1' ] && [ -z \"\$(find '$W/rbcache/r-zig' -name a.o -o -name pb.so)\" ]"
+  check "rzig build: tier 1 again from another directory, the same build runner, no file added to it" \
+    bash -c "$pc rb_build 2 && [ -f '$W/rb/2/out/libs/pb.so' ] && runner_files > '$W/rb/state2' && cmp -s '$W/rb/state1' '$W/rb/state2'"
+  check "rzig build: tier 1 from another R with the same build_t1.zig, the same build runner, no file added to it" \
+    bash -c "$pc rb_build 3 '$W/rpkg2' && [ -f '$W/rb/3/out/libs/pb.so' ] && runner_files > '$W/rb/state3' && cmp -s '$W/rb/state1' '$W/rb/state3'"
+fi
 check "--rzig-check=other: usage, 2" \
   bash -c "env -i '$tc/zig-cc' --rzig-check=other 2> /dev/null; [ \$? = 2 ]"
 check "a compile with no zig: 127, the compilers group" \

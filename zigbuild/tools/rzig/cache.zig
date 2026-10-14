@@ -7,7 +7,12 @@
 //! directory named by a key of what it is made from, and is safe under
 //! parallel make: a file appears complete or not at all (written under a
 //! temporary name, then renamed into place), and two jobs making the same
-//! entry write the same bytes.
+//! entry write the same bytes. `rzig build` also gives zig build a
+//! directory here for tier 1's build runner, build-runner-<key of
+//! build_t1.zig's content and the zig>, with a copy of build_t1.zig in it
+//! (pkgbuild.zig's sharedRunner); zig fills it and locks what it writes
+//! there itself. Those are the only entries rzig removes: one no install
+//! has used for a week, at a later tier-1 build.
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;

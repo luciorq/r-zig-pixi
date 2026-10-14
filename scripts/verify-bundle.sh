@@ -31,14 +31,15 @@
 #      preflight's other branches (zig from ZIG_BIN, no make, no flang;
 #      feat-zig-pkg-build M4; Windows too [phase3-P3-9]): a C package
 #      with no Makevars builds through `rzig build` (patch 0013) with no
-#      make, in its own per-install cache, leaves no build root, and
-#      loads; one whose Makevars has a rule stops with rzig's reason and
-#      the build tools' text; unix also an R-only package with a
-#      configure script, with "a configure script R runs" and the same
-#      text, and a Fortran one with no flang and the compilers' text
-#      (C26); the C compiler compiles for the arch's baseline CPU, not
-#      this machine's, also when told -mtune=native (LLVM IR's
-#      target-cpu); packages compiled with the tree build and load.
+#      make, its build runner in rzig's cache under the run's HOME,
+#      leaves no build root, and loads; one whose Makevars has a rule
+#      stops with rzig's reason and the build tools' text; unix also an
+#      R-only package with a configure script, with "a configure script
+#      R runs" and the same text, and a Fortran one with no flang and
+#      the compilers' text (C26); the C compiler compiles for the arch's
+#      baseline CPU, not this machine's, also when told -mtune=native
+#      (LLVM IR's target-cpu); packages compiled with the tree build and
+#      load.
 #      unix, under env -i: C++, Fortran, USE_FC_TO_LINK, $(FLIBS)
 #      without flang (or make), zig-fc with no flang, OpenMP (C, and
 #      Fortran with `use omp_lib`) with the group's openmp/ where the base
@@ -318,9 +319,11 @@ else
   # env's zig from PATH and test conda-forge's zig after an upstream zig's
   # build), with the global cache env.sh keeps for that zig. Not its
   # ZIG_LOCAL_CACHE_DIR: rzig build would take that as its cache, and the
-  # installs here are to use the per-install cache in the build root that
-  # a user's install gets (N3) [phase3-P3-6]; zig cc then keeps its
-  # objects in the global cache.
+  # installs here are to use the one a user's install gets [phase3-P3-6]:
+  # build_t1.zig's build runner in rzig's cache, under the fresh HOME
+  # (Windows: LOCALAPPDATA), with each install's objects and library in
+  # its build root, gone with it (pkgbuild.zig's sharedRunner); zig cc keeps
+  # its objects in the global cache.
   zig_bin="$ZIG"
   zig_env=(ZIG_BIN="$zig_bin" ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR")
 fi
@@ -554,17 +557,20 @@ fi
 # hook (patch 0013): a package with C code and no Makevars (pfC) passes
 # the compilers' check, needs no make, and the hook builds it through
 # rzig build (RZIG_TRACE=1: `rzig build: tier 1`, no recipe make echoed)
-# with the per-install cache in its build root, which goes with the
-# install (zig_env has no ZIG_LOCAL_CACHE_DIR) [phase3-P3-6], and it
-# loads; one whose Makevars has a rule (pfM, mkpkg's lib: a static library
-# through $(AR)) needs make and stops at the build tools' check with
-# rzig's reason and their text. unix also: one with a Fortran source,
-# src/a.f (pfF), stops at the compilers' with no flang and their text; an
-# R-only package with a configure script (pfG, configure_marker) stops at
-# the build tools' with "a configure script R runs", its configure not
-# run. The preflight's own ERROR line tells its stop from the one
-# install.R's R CMD config (patch 0010) would make later, before the
-# configure (that call needs make too), which the marker alone could not.
+# with zig build's cache where a user's install has it (zig_env has no
+# ZIG_LOCAL_CACHE_DIR) [phase3-P3-6]: build_t1.zig's build runner in a
+# build-runner-<key> directory of rzig's cache under this HOME, holding
+# nothing of pfC, whose build root goes with the install (pkgbuild.zig's
+# sharedRunner), and it loads; one whose Makevars has a rule (pfM, mkpkg's
+# lib: a static library through $(AR)) needs make and stops at the build
+# tools' check with rzig's reason and their text. unix also: one with a
+# Fortran source, src/a.f (pfF), stops at the compilers' with no flang
+# and their text; an R-only package with a configure script (pfG,
+# configure_marker) stops at the build tools' with "a configure script R
+# runs", its configure not run. The preflight's own ERROR line tells its
+# stop from the one install.R's R CMD config (patch 0010) would make
+# later, before the configure (that call needs make too), which the
+# marker alone could not.
 # None but pfC installs. (Scenario 3 runs the preflight with no zig.)
 if [ -n "$ZIG" ]; then
   pf="$VERIFY_DIR/preflight"
@@ -613,20 +619,28 @@ if [ -n "$ZIG" ]; then
   if [ -n "$(make_recipes "$pf/pfC.log")" ]; then
     cat "$pf/pfC.log" >&2; echo "error: a recipe make echoed in pfC's install log" >&2; exit 1
   fi
-  # the traced zig build command names the cache: the build root's (grep
-  # reads to the end, no -q: grep -q's early exit could kill tr with
-  # SIGPIPE and fail the pipeline, pipefail [tests-SIGPIPE-1])
-  tr -d '\r' < "$pf/pfC.log" | grep -E -- '--cache-dir [^ ]*[\\/]\.rzig[\\/]zig-cache( |$)' > /dev/null ||
-    { cat "$pf/pfC.log" >&2; echo "error: pfC's zig build did not run with the per-install cache, <build root>/zig-cache (ZIG_LOCAL_CACHE_DIR leaked in?)" >&2; exit 1; }
+  # the traced zig build command names the cache: the build runner's
+  # directory in rzig's cache (grep reads to the end, no -q: grep -q's
+  # early exit could kill tr with SIGPIPE and fail the pipeline, pipefail
+  # [tests-SIGPIPE-1]); it is under this HOME's rzig cache, one, and holds
+  # none of pfC's objects (f.o, val.o) or its library
+  tr -d '\r' < "$pf/pfC.log" | grep -E -- '--cache-dir [^ ]*[\\/]r-zig[\\/]build-runner-[0-9a-f]{32}( |$)' > /dev/null ||
+    { cat "$pf/pfC.log" >&2; echo "error: pfC's zig build did not run with the build runner's cache in rzig's cache, <rzig cache>/build-runner-<key> (ZIG_LOCAL_CACHE_DIR leaked in?)" >&2; exit 1; }
+  if [ "$OS" = windows ]; then pf_cache="$home/r-zig"; else pf_cache="$home/.cache/r-zig"; fi
+  pf_runner="$(ls -d "$pf_cache"/build-runner-* 2> /dev/null || true)"
+  [ -n "$pf_runner" ] && [ "$(printf '%s\n' "$pf_runner" | wc -l | tr -d ' ')" = 1 ] ||
+    { echo "error: after pfC's install, not one build-runner directory in $pf_cache: '$pf_runner'" >&2; exit 1; }
+  [ -z "$(find "$pf_runner" -name f.o -o -name val.o -o -name pfC.so -o -name pfC.dll)" ] ||
+    { echo "error: pfC's objects or library are in rzig build's shared cache, $pf_runner: they belong in its build root" >&2; exit 1; }
   test ! -e "$pf/pk/pfC/src/.rzig" ||
     { echo "error: pfC's install left its build root, $pf/pk/pfC/src/.rzig" >&2; exit 1; }
   (cd "$pf" && env -i "${base_env[@]}" \
     "${pf_load[@]}" -e 'stopifnot(getExportedValue(loadNamespace("pfC", lib.loc = "lib"), "f")() == 1L)') ||
     { echo "error: pfC, built through rzig build, did not load" >&2; exit 1; }
   if [ "$OS" = windows ]; then
-    echo "== the install preflight with zig and no build tools (PATH = bin\\x64 + System32): a C package builds through rzig build (its own cache, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text"
+    echo "== the install preflight with zig and no build tools (PATH = bin\\x64 + System32): a C package builds through rzig build (the build runner in rzig's cache under HOME, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text"
   else
-    echo "== the install preflight with zig and no build tools: a C package builds through rzig build (its own cache, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text, an R-only package with a configure script with 'a configure script R runs' and that text (its configure not run), a Fortran one with no flang and the compilers' text"
+    echo "== the install preflight with zig and no build tools: a C package builds through rzig build (the build runner in rzig's cache under HOME, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text, an R-only package with a configure script with 'a configure script R runs' and that text (its configure not run), a Fortran one with no flang and the compilers' text"
   fi
 fi
 
@@ -797,12 +811,14 @@ if [ "$OS" != windows ]; then
     # (PATH $shape_path, $pkg_path unless set; shape_env adds variables)
     # plus RZIG_TRACE=1, requires `rzig build: tier 1` in its log and no
     # recipe make echoed, and sets shape_so to its library. RZIG_KEEP_ROOT=1
-    # keeps rzig build's build root, src/.rzig, whose per-install cache
-    # holds the objects it compiled: each source's object is there and at
-    # or below the macOS floor, which only the objects show for a compiler
-    # that ignored it (the SHLIB runs check theirs) [tests-T8]; then the
-    # root goes, as rzig build removes it. shape_load <name> <R code> loads
-    # the installed package with PATH=/usr/bin:/bin.
+    # keeps rzig build's build root, src/.rzig, whose obj/ holds the
+    # objects it compiled (and no zig build cache: that is the build
+    # runner's, shared, pkgbuild.zig's sharedRunner): each source's object is
+    # there and at or below the macOS floor, which only the objects show
+    # for a compiler that ignored it (the SHLIB runs check theirs)
+    # [tests-T8]; then the root goes, as rzig build removes it.
+    # shape_load <name> <R code> loads the installed package with
+    # PATH=/usr/bin:/bin.
     shapes="$pkg_dir/pkgs"
     mkdir -p "$shapes/lib"
     shape_path=""
@@ -824,9 +840,10 @@ if [ "$OS" != windows ]; then
       if [ -n "$(make_recipes "$shapes/$name.log")" ]; then
         cat "$shapes/$name.log" >&2; echo "error: a recipe make echoed in $name's install log" >&2; exit 1
       fi
+      test ! -e "$d/src/.rzig/zig-cache" || { echo "error: $name's build root has a zig build cache, $d/src/.rzig/zig-cache: tier 1's is the build runner's, in rzig's cache" >&2; exit 1; }
       for f in $objs; do
-        o="$(find "$d/src/.rzig/zig-cache/o" -name "$f" 2> /dev/null | head -1 || true)"
-        [ -n "$o" ] || { echo "error: no $f in $name's build root, $d/src/.rzig/zig-cache/o (RZIG_KEEP_ROOT=1): not compiled with the per-install cache?" >&2; exit 1; }
+        o="$(find "$d/src/.rzig/obj" -name "$f" 2> /dev/null | head -1 || true)"
+        [ -n "$o" ] || { echo "error: no $f in $name's build root, $d/src/.rzig/obj (RZIG_KEEP_ROOT=1)" >&2; exit 1; }
         check_minos "$o"
       done
       rm -rf "$d/src/.rzig"

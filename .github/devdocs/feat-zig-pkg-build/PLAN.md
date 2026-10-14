@@ -199,6 +199,18 @@ CONSENSUS D's "keyed by target, bounded" (`consolidation/CONSENSUS.md`)
 was wrong until the follow-up, because zig cc keyed the objects on the
 absolute source path; the copy is left as it was agreed (R2).
 
+Changed again for tier 1 by feat-shared-build-runner (2026-10-13, its
+PLAN.md): stress dispatch 38467907779 measured the per-install runner
+at +3.3 s to +12.8 s per tier-1 install. Tier 1 shares the build runner
+again, in `<rzig cache>/build-runner-<key>/` (the key: build_t1.zig's
+content, the zig command and `zig version`), built from a copy of
+build_t1.zig there, one runner per directory; build_t1.zig's steps
+write their objects and library into the build root (`outputFile`), so
+no install leaves anything in it, and a directory no install has used
+for a week is removed (pkgbuild.zig's `zigBuildDirs`, `sharedRunner`,
+`sweepRunners`). Tier 2 keeps `<build root>/zig-cache`.
+`ZIG_LOCAL_CACHE_DIR` and `--cache-dir` still override the default.
+
 ### What must remain on the R side (small)
 
 - the hook before `run_shlib` (exit 3 falls through to make);
@@ -703,7 +715,7 @@ and asked for one follow-up PR on the new main:
 | M8 | (a) merge origin/main, no rebase |
 | N1 | (a) every install-based test asserts its builder, and each package shape keeps one make run |
 | N2 | (a) the build-tools scope is written as below; routing `R CMD SHLIB` through rzig is a later item |
-| N3 | (a) a per-install zig build cache, removed with the install |
+| N3 | (a) a per-install zig build cache, removed with the install (tier 1 changed by feat-shared-build-runner, 2026-10-13: one shared build runner per content of build_t1.zig and zig, the steps writing into the build root; "Cache and cleanliness") |
 | N4 | (a) a variable assignment in MAKEFLAGS makes the package need make, with that reason |
 | N5 | (a) no build-number bump in this PR; phase 4's bump (8 to 9) publishes both packages |
 | N6 | (a) tier 2 means vendored or path dependencies only: a URL dependency is refused, zig build runs with `--system` |
@@ -779,7 +791,9 @@ tarball, 2026-10-13).
 9. **The zig build cache grew without bound** [channels-C5]: measured,
    two new `o/` entries per install, never reused (FINDINGS.md's
    channels-C5 verifier note; CONSENSUS.md's fact 9 says only that
-   nothing removes them [records-REC-10]). Per install now (N3). zig's
+   nothing removes them [records-REC-10]). Per install now (N3; tier 1
+   shares its runner again since feat-shared-build-runner, with no
+   install's step in the cache: "Cache and cleanliness"). zig's
    global cache grew per tarball install too, through zig cc's absolute
    source paths (the same verifier note); fixed only in the follow-up
    [tests-T1, records-REC-2].
@@ -837,7 +851,9 @@ always carries them).
     reason (N4), unit-tested.
   - The per-install cache (N3): `--cache-dir` defaults to `<build
     root>/zig-cache`, or `ZIG_LOCAL_CACHE_DIR` when set (stress.R points
-    it at the run directory); `--cache-dir` wins over both.
+    it at the run directory); `--cache-dir` wins over both. (Since
+    feat-shared-build-runner tier 1's default is the build runner's
+    directory in rzig's cache, the build root's only as a fallback.)
   - Tier 2 offline (N6): `urlDependency` scans the package's own
     src/build.zig.zon; a dependency with `.url` is "src/build.zig.zon:
     dependency <name> is a URL; tier 2 builds offline, vendor it as a
@@ -1022,7 +1038,9 @@ shared tier-1 build runner, still open: the stress dispatch shared one
 zig build cache, so it did not measure the per-install runner cost,
 and a dispatch with `shared_cache = false` decides it (CONSENSUS H;
 "Stress dispatch" below; fix-zig-pkg-build-review's PLAN.md)
-[stress-S1, records-REC-4]; a g1 dispatch with trace (Rcpp, rstan),
+[stress-S1, records-REC-4] (done since: dispatch 38467907779 decided
+it, and feat-shared-build-runner shares the runner, its PLAN.md); a g1
+dispatch with trace (Rcpp, rstan),
 whose smokes compile at run time [stress-S6].
 
 ### The couplings to R's tree (from HANDOFF.md, updated for the merge)
@@ -1102,12 +1120,13 @@ rzig command lines and smoke output:
 
 The per-install cache (N3): the build runner compiles per install
 (quadprog's 6 s against make's 2 s is that cost, about 3 to 4 s; the
-larger packages hide it in the compiles). cli twice from one
-directory: zig's global cache's `o/` unchanged (270 entries), no
-`zig-build` under rzig's cache, no build root left in src/. (One
-directory is the one case where zig cc's keys, the absolute source
-paths, coincide: from its tarball, as install.packages installs, each
-install added 26 entries until the follow-up [tests-T1,
+larger packages hide it in the compiles; shared again for tier 1 since
+feat-shared-build-runner, whose PLAN.md has the cold and warm times).
+cli twice from one directory: zig's global cache's `o/` unchanged (270
+entries), no `zig-build` under rzig's cache, no build root left in
+src/. (One directory is the one case where zig cc's keys, the absolute
+source paths, coincide: from its tarball, as install.packages
+installs, each install added 26 entries until the follow-up [tests-T1,
 records-REC-2].) Tier 2 (zighello): 47 s the first time (zig's global
 cache cold for the package target: std, translate-c of R's headers),
 then 5 s per install (the second and third installs; `--no-test-load`
@@ -1317,7 +1336,9 @@ make install time of the smallest rows (0.02 min); on the hosts, rzig
 build against make in the consolidation's pkg-parity, 6 to 10 s more on
 omicron and 11 to 20 s on kappa. Decide with a dispatch with
 `shared_cache = false` (stress.R `--no-shared-cache`) on the five
-runners. Not measured by this dispatch: `builder = make` on the legs
+runners. (Decided since: dispatch 38467907779 measured 3.3 to 12.8 s
+per tier-1 install, and feat-shared-build-runner shares the runner; its
+PLAN.md.) Not measured by this dispatch: `builder = make` on the legs
 without a reference, the
 preflight (fact 11: stress runs skip 0009), the per-install cache's
 cost (the run shared one cache), and run-time compilation (no g3 g4
@@ -1365,7 +1386,7 @@ Also removed then: the M2 oracle line and the M1 prototype block of
     pixi run pkg-parity        # M4 and the consolidation: the five fixtures on the compile tree, tier 2, tier 3, the caches, the base with no make
     pixi run rzig-test         # rzig's unit tests and the shim parity, with --rzig-check=package's cases
     pixi run rzig-test dist/slim/R-4.6.1-zig   # also smoke-test.sh on that tree (linux): packages through its R CMD INSTALL, rzig build
-    gh workflow run stress.yaml -f packages='g3 g4' -f trace=true -f shared_cache=false   # the per-install runner cost (stress.R --no-shared-cache)
+    gh workflow run stress.yaml -f packages='g3 g4' -f trace=true -f shared_cache=false   # rzig build's default cache, as a user's install (stress.R --no-shared-cache): the per-install runner cost until feat-shared-build-runner, its shared tier-1 runner since
 
 M3 and M5, with a dist of this branch (`pixi run build`) and the pixi
 env's zig and flang on PATH (any OS; `R` is the dist's `bin/R`, on

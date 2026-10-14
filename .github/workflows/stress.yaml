@@ -52,7 +52,7 @@ on:
         options: [auto, make]
         default: auto
       shared_cache:
-        description: 'true: rzig build shares the run''s zig cache (its build runner compiles once per run); false: stress.R --no-shared-cache, each install has its own cache in its build root, as a user''s does (the per-install cost)'
+        description: 'true: rzig build shares the run''s zig cache (its build runner compiles once per run); false: stress.R --no-shared-cache, rzig build takes its default cache as a user''s install does (tier 1: the build runner in rzig''s cache, compiled once and shared; the rest per install)'
         type: boolean
         default: true
 
