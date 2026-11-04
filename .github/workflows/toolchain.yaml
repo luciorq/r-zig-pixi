@@ -9,11 +9,13 @@ name: toolchain
 # need. The toolchain tree, dist/toolchain/R-<ver>-zig, holds the
 # groups' third-party files copied unchanged from the env, each directory
 # with SOURCES and LICENSES/ (zigbuild/toolchain/build.zig): openmp/
-# (compilers), unix usr/bin/make and Windows binutils/ (build-tools), and
+# (compilers), unix usr/bin/make and Windows binutils/ (build-tools),
 # from phase 5 the compilers group's zig/, upstream zig from PyPI's
 # ziglang wheel (B4), which the toolchain build fetches on every leg
 # (scripts/zig-toolchain.sh runs fetch-zig; on the upstream legs the
-# "Upstream zig (ZIG_BIN)" step has already filled the same directory).
+# "Upstream zig (ZIG_BIN)" step has already filled the same directory),
+# and from phase 6 its flang/, copied from the env's flang-zig and
+# flang-rt-zig (B9 a).
 # It needs no R source, so this job builds no R. No concurrency group
 # here, as build-r.yaml: the callers keep their own.
 on:
@@ -67,9 +69,9 @@ jobs:
         run: pixi run toolchain-test
       # package-toolchain depends on toolchain: it installs the toolchain
       # tree, then archives its two groups (B17),
-      # dist/R-<ver>-<platform>-compilers.tar.gz and -build-tools.tar.gz
-      # (Windows .zip), each with its .sha256 and the top directory
-      # R-<ver>-zig/ (B36).
+      # dist/R-<ver>-<platform>-compilers.tar.xz (every platform, phase 6,
+      # B13) and -build-tools.tar.gz (Windows .zip), each with its .sha256
+      # and the top directory R-<ver>-zig/ (B36).
       - name: Build + archive the toolchain tree (compilers, build-tools)
         run: pixi run package-toolchain
       # After the archives, not before: package-toolchain installs the
@@ -83,8 +85,10 @@ jobs:
       # are CI's, not a release (B12), but the legs of the same run
       # download them, and GitHub lets failed jobs be re-run for 30 days
       # without re-running this job when it passed: kept those 30 days,
-      # still short of a release. The compilers archive is 84-100 MB with
-      # zig (phase 5); the default compression stays (PHASE5 open point T).
+      # still short of a release. The compilers archive, with zig and
+      # flang, is .tar.xz since phase 6 (B13, PHASE6 open point L): 95 MB
+      # on linux-64, where gzip made 151 MB; the upload's own compression
+      # stays the default (PHASE5 open point T).
       - name: Upload the group archives
         uses: actions/upload-artifact@v7
         with:

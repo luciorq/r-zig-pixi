@@ -121,7 +121,7 @@ pixi run build         # zig build, no autoconf/make/gnuwin32
 pixi run verify-tree   # static checks of the installed tree (Makeconf, rpaths, floors)
 pixi run smoke         # quick sanity check
 pixi run check         # R's own regression suite
-pixi run toolchain     # the toolchain tree: the groups' files (zig, OpenMP headers, make; Windows binutils)
+pixi run toolchain     # the toolchain tree: the groups' files (zig, flang, OpenMP headers, make; Windows binutils)
 pixi run contract      # CRAN packages compiled with the tree and the groups (Rcpp, data.table, minqa)
 ```
 
@@ -135,7 +135,7 @@ zig from PyPI's `ziglang` wheel into its `zig/`, each directory with its
 For that `zig/`, `toolchain` downloads the wheel once per platform (about
 100 MB, `pixi run fetch-zig`; kept unpacked in `build/zig-upstream/`),
 even for the tasks that use only the compile tree, which leaves `zig/`
-out; an offline machine needs that directory.
+and `flang/` out; an offline machine needs that directory.
 `contract` compiles packages in a copy of the installed tree with the
 groups added, `build/compile-tree/<flavor>/R-<ver>-zig/`, as a user who
 extracted all three archives has it (see Standalone archives). The
@@ -151,7 +151,8 @@ Three variants are available as pixi environments: `default` (slim —
 headless, no X11/tcltk/NLS), `full` (adds tcltk, readline, NLS, jpeg
 and tiff devices), and `minimal` (smaller than slim: also no cairo/png,
 ICU, OpenMP or libdeflate; linux/macOS only). `minimal` is the variant
-the Python wheel wraps.
+the Python wheel wraps. minimal has no OpenMP: a Fortran `use omp_lib`
+compiles but does not link.
 
 ### Build with upstream zig
 
@@ -229,8 +230,9 @@ Details: `.github/devdocs/feat-wheel-minimal/PLAN.md`.
 ### Standalone archives
 
 R also comes as plain archives that need nothing installed first: no
-conda, pixi or Python. Three kinds, `.tar.gz` (Windows `.zip`), each with
-a `.sha256` beside it:
+conda, pixi or Python. Three kinds, `.tar.gz` (Windows `.zip`) but the
+compilers group, `.tar.xz` on every platform, each with a `.sha256`
+beside it:
 
 - **The base**, one per flavor and platform:
   `R-<ver>-<flavor>-<platform>.tar.gz`, for example
@@ -240,12 +242,17 @@ a `.sha256` beside it:
   Makeconf names. Windows slim has full's content (Tcl/Tk, JPEG, TIFF,
   NLS): R's Windows build has no switches to leave them out.
 - **The compilers group**, one per platform:
-  `R-<ver>-<platform>-compilers.tar.gz`, about 85-100 MB. It holds zig
-  0.16 (PyPI's `ziglang` build, which is the ziglang.org release) and
-  OpenMP's headers (Windows also `libomp.lib`), which the `minimal`
-  flavor, built without OpenMP, leaves alone. flang joins it later; until
-  then rzig takes LLVM `flang` from `PATH`. `ZIG_BIN` still overrides the
-  group's zig.
+  `R-<ver>-<platform>-compilers.tar.xz`, about 95 MB (linux-64). It
+  holds zig 0.16 (PyPI's `ziglang` build, which is the ziglang.org
+  release), flang 23.1.1 (flang-pixi's flang-zig and flang-rt-zig, the
+  compiler R's own Fortran was built with: the driver, its runtime and
+  the intrinsic modules) and OpenMP's headers (Windows also
+  `libomp.lib`), which the `minimal` flavor, built without OpenMP, leaves
+  alone. `ZIG_BIN` still overrides the group's zig. Run Fortran through
+  zig-fc (`R CMD config FC`): the bare `toolchain/flang/bin/flang` needs
+  `-fintrinsic-modules-path` with the target's directory under
+  `toolchain/flang/lib/clang/23/finclude/flang/` (Windows has two, with
+  the same files).
 - **The build-tools group**, one per platform:
   `R-<ver>-<platform>-build-tools.tar.gz`. GNU make on linux and macOS,
   which R puts first on its `PATH`; on Windows the MinGW binutils R's
@@ -254,7 +261,8 @@ a `.sha256` beside it:
 
 Every archive has the same top directory, `R-<ver>-zig/`, and a group
 archive's files sit under its `R_HOME/bin/toolchain/`, each directory
-with `SOURCES` (the package each file comes from, a conda-forge package
+with `SOURCES` (the package each file comes from, a conda-forge package,
+for `flang/` flang-pixi's packages on prefix.dev's `universe` channel,
 or, for `zig/`, PyPI's `ziglang` wheel, its sha256, and where its source
 is) and `LICENSES/`. Extract the ones you need into one directory; no
 file is in two of them:
@@ -262,16 +270,26 @@ file is in two of them:
 ```bash
 sha256sum -c R-4.6.1-slim-linux-64.tar.gz.sha256
 tar -xzf R-4.6.1-slim-linux-64.tar.gz           # R-4.6.1-zig/
-tar -xzf R-4.6.1-linux-64-compilers.tar.gz      # + R-4.6.1-zig/lib/R/bin/toolchain/zig/ and openmp/
+tar -xJf R-4.6.1-linux-64-compilers.tar.xz      # + R-4.6.1-zig/lib/R/bin/toolchain/zig/, flang/ and openmp/
 tar -xzf R-4.6.1-linux-64-build-tools.tar.gz    # + R-4.6.1-zig/lib/R/bin/toolchain/usr/bin/make
 R-4.6.1-zig/bin/Rscript -e 'R.version.string'
 ```
 
-On Windows, `tar -xf` extracts the `.zip` files the same way, and R is
-`R-4.6.1-zig\Library\lib\R\bin\x64\Rscript.exe`. Use one directory per
-flavor: the bases share the top directory, and the groups serve every
-flavor of their platform. When a compile misses a group, rzig's message
-says which archive to extract or what to put on `PATH`.
+On macOS, `tar -xf` extracts all three, the `.tar.xz` too. On Windows,
+`tar -xf` extracts the `.zip` files the same way, and R is
+`R-4.6.1-zig\Library\lib\R\bin\x64\Rscript.exe`. Once the base is
+extracted, R's own reader extracts the compilers `.tar.xz`; run it where
+you extracted R:
+
+```bat
+R-4.6.1-zig\Library\lib\R\bin\x64\Rscript.exe -e "untar('R-4.6.1-win-64-compilers.tar.xz', exdir = '.', tar = 'internal')"
+```
+
+System32's `tar -xf` extracts it too where `tar --version` lists liblzma
+(Windows 11's current builds; Windows 10's `tar.exe` has none). Use one
+directory per flavor: the bases share the top directory, and the groups
+serve every flavor of their platform. When a compile misses a group,
+rzig's message says which archive to extract or what to put on `PATH`.
 
 `pixi run package` makes the base archive of the environment's flavor
 and `pixi run package-toolchain` the group archives, in `dist/`; CI keeps

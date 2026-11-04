@@ -42,6 +42,9 @@ pub const Record = struct {
         /// Set when conda rewrites the file at install, replacing the build
         /// prefix with the env's: the env's file is then not the package's.
         prefix_placeholder: ?[]const u8 = null,
+        /// What the entry is: `hardlink` (a regular file), `softlink` or
+        /// `directory`. Only `under` reads it (PHASE6 open point A).
+        path_type: []const u8 = "",
     };
 };
 
@@ -175,6 +178,41 @@ pub fn owner(records: []const Record, path: []const u8) ?*const Record {
         }
     }
     return null;
+}
+
+/// The regular files (`hardlink` entries) of `package`'s record whose path
+/// starts with `dir` (relative to the env, `/`-separated, ending in `/`),
+/// with every `\` read as `/`, in byte order: a directory a group copies
+/// file by file as its package has it (flang/'s modules and runtime, B9 a;
+/// PHASE6 open point A). A softlink entry, such as linux's
+/// `x86_64-unknown-linux-gnu` twin of the module directory, is not one, so
+/// it stays out with no rule. None (no such record, or nothing under `dir`)
+/// is an empty list: the caller says why that stops its build. `arena`
+/// owns the result.
+pub fn under(arena: mem.Allocator, records: []const Record, package: []const u8, dir: []const u8) ![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (records) |r| {
+        if (!mem.eql(u8, r.name, package)) continue;
+        for (r.paths_data.paths) |p| {
+            if (!mem.eql(u8, p.path_type, "hardlink")) continue;
+            const path = try mem.replaceOwned(u8, arena, p._path, "\\", "/");
+            if (mem.startsWith(u8, path, dir)) try out.append(arena, path);
+        }
+    }
+    mem.sort([]const u8, out.items, {}, lessThan);
+    return out.items;
+}
+
+fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+    return mem.lessThan(u8, a, b);
+}
+
+/// A file's path in a group directory: its path in the env less win-64's
+/// leading `Library/`, so that flang/ has one layout on every OS (PHASE6
+/// open point A).
+pub fn inDir(path: []const u8) []const u8 {
+    const lib = "Library/";
+    return if (mem.startsWith(u8, path, lib)) path[lib.len..] else path;
 }
 
 /// One file a group directory copies from the env, as SOURCES records it.
@@ -519,4 +557,98 @@ test "SOURCES: a path with a blank is refused" {
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
     try std.testing.expectError(error.BlankInPath, writeSources(std.testing.allocator, &aw.writer, &.{c}));
+}
+
+// flang-rt-zig's record, trimmed to the shapes `under` meets (linux-64's
+// `_10`: the module directory, its softlinked twin, the runtime, the
+// lib/ softlink; a compiler-rt object elsewhere), and win-64's with
+// conda-meta's `\` and both module directories.
+const flang_rt_json =
+    \\{
+    \\  "build": "zig_3054d59_10", "name": "flang-rt-zig", "version": "23.1.1",
+    \\  "files": ["lib/clang/23/finclude/flang/x86_64-conda-linux-gnu/omp_lib.mod",
+    \\    "lib/clang/23/finclude/flang/x86_64-conda-linux-gnu/iso_c_binding.mod",
+    \\    "lib/clang/23/finclude/flang/x86_64-unknown-linux-gnu",
+    \\    "lib/clang/23/lib/x86_64-unknown-linux-gnu/libflang_rt.runtime.a",
+    \\    "lib/clang/23/lib/x86_64-unknown-linux-gnu/clang_rt.crtbegin.o",
+    \\    "lib/libflang_rt.runtime.a"],
+    \\  "paths_data": {"paths": [
+    \\    {"_path": "lib/clang/23/finclude/flang/x86_64-conda-linux-gnu/omp_lib.mod", "path_type": "hardlink", "sha256": "0b01"},
+    \\    {"_path": "lib/clang/23/finclude/flang/x86_64-conda-linux-gnu/iso_c_binding.mod", "path_type": "hardlink", "sha256": "0b02"},
+    \\    {"_path": "lib/clang/23/finclude/flang/x86_64-unknown-linux-gnu", "path_type": "softlink", "sha256": "0b03"},
+    \\    {"_path": "lib/clang/23/lib/x86_64-unknown-linux-gnu/libflang_rt.runtime.a", "path_type": "hardlink", "sha256": "0b04"},
+    \\    {"_path": "lib/clang/23/lib/x86_64-unknown-linux-gnu/clang_rt.crtbegin.o", "path_type": "hardlink", "sha256": "0b05"},
+    \\    {"_path": "lib/libflang_rt.runtime.a", "path_type": "softlink", "sha256": "0b04"}
+    \\  ]}
+    \\}
+;
+
+const flang_rt_win_json =
+    \\{
+    \\  "build": "zig_3054d59_10", "name": "flang-rt-zig", "version": "23.1.1",
+    \\  "files": ["Library\\lib\\clang\\23\\finclude\\flang\\x86_64-w64-windows-gnu\\iso_c_binding.mod",
+    \\    "Library\\lib\\clang\\23\\finclude\\flang\\x86_64-w64-mingw32\\iso_c_binding.mod",
+    \\    "Library\\lib\\clang\\23\\lib\\x86_64-w64-windows-gnu\\libflang_rt.runtime.a"],
+    \\  "paths_data": {"paths": [
+    \\    {"_path": "Library\\lib\\clang\\23\\finclude\\flang\\x86_64-w64-windows-gnu\\iso_c_binding.mod", "path_type": "hardlink", "sha256": "0c01"},
+    \\    {"_path": "Library\\lib\\clang\\23\\finclude\\flang\\x86_64-w64-mingw32\\iso_c_binding.mod", "path_type": "hardlink", "sha256": "0c02"},
+    \\    {"_path": "Library\\lib\\clang\\23\\lib\\x86_64-w64-windows-gnu\\libflang_rt.runtime.a", "path_type": "hardlink", "sha256": "0c03"}
+    \\  ]}
+    \\}
+;
+
+test "under: the record's regular files under a directory, softlinks and other directories left out" {
+    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const rs = [_]Record{ try parse(arena, make_json), try parse(arena, flang_rt_json) };
+    const mods = try under(arena, &rs, "flang-rt-zig", "lib/clang/23/finclude/flang/");
+    try std.testing.expectEqual(@as(usize, 2), mods.len);
+    try std.testing.expectEqualStrings("lib/clang/23/finclude/flang/x86_64-conda-linux-gnu/iso_c_binding.mod", mods[0]);
+    try std.testing.expectEqualStrings("lib/clang/23/finclude/flang/x86_64-conda-linux-gnu/omp_lib.mod", mods[1]);
+    // the runtime's directory: the archive and the object, not lib/'s softlink
+    const rt = try under(arena, &rs, "flang-rt-zig", "lib/clang/23/lib/");
+    try std.testing.expectEqual(@as(usize, 2), rt.len);
+    try std.testing.expectEqualStrings("lib/clang/23/lib/x86_64-unknown-linux-gnu/clang_rt.crtbegin.o", rt[0]);
+    // each one found by `find`, with its sha256
+    const c = try find(&rs, mods[0], inDir(mods[0]));
+    try std.testing.expectEqualStrings("flang-rt-zig", c.record.name);
+    try std.testing.expectEqualStrings("0b02", c.sha256);
+    // another package's record, or no such package: nothing
+    try std.testing.expectEqual(@as(usize, 0), (try under(arena, &rs, "make", "lib/clang/23/finclude/flang/")).len);
+    try std.testing.expectEqual(@as(usize, 0), (try under(arena, &rs, "flang-rt", "lib/")).len);
+    // a prefix of a directory name is not that directory
+    try std.testing.expectEqual(@as(usize, 0), (try under(arena, &rs, "flang-rt-zig", "lib/clang/23/finclude/fl/")).len);
+}
+
+test "under: win-64's `\\` paths read as `/`, both module directories, Library/ dropped from the path here" {
+    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const rs = [_]Record{try parse(arena, flang_rt_win_json)};
+    const mods = try under(arena, &rs, "flang-rt-zig", "Library/lib/clang/23/finclude/flang/");
+    try std.testing.expectEqual(@as(usize, 2), mods.len);
+    try std.testing.expectEqualStrings("Library/lib/clang/23/finclude/flang/x86_64-w64-mingw32/iso_c_binding.mod", mods[0]);
+    try std.testing.expectEqualStrings("Library/lib/clang/23/finclude/flang/x86_64-w64-windows-gnu/iso_c_binding.mod", mods[1]);
+    try std.testing.expectEqualStrings("lib/clang/23/finclude/flang/x86_64-w64-mingw32/iso_c_binding.mod", inDir(mods[0]));
+    try std.testing.expectEqualStrings("bin/make", inDir("bin/make"));
+    const c = try find(&rs, mods[1], inDir(mods[1]));
+    try std.testing.expectEqualStrings("0c01", c.sha256);
+}
+
+test "find: a tree's file a second package also lists is a clobber" {
+    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    // conda-forge's flang-rt beside flang-rt-zig, holding the same module
+    const other = try parse(arena,
+        \\{"name": "flang-rt_linux-64", "version": "23.1.3", "build": "0",
+        \\ "files": ["lib/clang/23/finclude/flang/x86_64-conda-linux-gnu/iso_c_binding.mod"],
+        \\ "paths_data": {"paths": [{"_path": "lib/clang/23/finclude/flang/x86_64-conda-linux-gnu/iso_c_binding.mod", "path_type": "hardlink", "sha256": "0d01"}]}}
+    );
+    const rs = [_]Record{ try parse(arena, flang_rt_json), other };
+    const mods = try under(arena, &rs, "flang-rt-zig", "lib/clang/23/finclude/flang/");
+    try std.testing.expectEqual(@as(usize, 2), mods.len);
+    try std.testing.expectError(error.TwoOwners, find(&rs, mods[0], mods[0]));
+    _ = try find(&rs, mods[1], mods[1]);
 }

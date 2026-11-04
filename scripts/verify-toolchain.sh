@@ -3,8 +3,9 @@
 # point 3, B21), dist/toolchain/R-<ver>-zig: zig-toolchain.sh installs it
 # (zigbuild/toolchain/build.zig), package-standalone.sh's toolchain mode
 # archives it, one archive per group. Every file in it is a third-party
-# file copied unchanged from a conda package or, in zig/, from PyPI's
-# ziglang wheel (B4, phase 5), or that package's record:
+# file copied unchanged from a conda package (flang/: flang-pixi's
+# flang-zig and flang-rt-zig, from universe, B9 a, phase 6) or, in zig/,
+# from PyPI's ziglang wheel (B4, phase 5), or that package's record:
 #   - layout: group directories under R_HOME/bin/toolchain only (env.sh's
 #     group_dirs), and no file directly in it;
 #   - records: each directory has SOURCES, each package block of it with
@@ -17,9 +18,11 @@
 #   - build paths: SOURCES and LICENSES name none of the checkout, the
 #     tree's own place, zig's caches, the env or $HOME (verify-tree.sh's
 #     list). A copy that names one is listed, not failed: the copies are
-#     third-party bytes as their packages ship them, and conda-forge's
-#     macOS make names its build path, /Users/runner/..., which is under
-#     $HOME on GitHub's macOS runners (PHASE3 C18);
+#     third-party bytes as their packages ship them. conda-forge's macOS
+#     make names its build path, /Users/runner/..., which is under $HOME on
+#     GitHub's macOS runners (PHASE3 C18), and every OS's flang driver and
+#     the darwin and Windows runtimes name flang-pixi's build paths, under
+#     $HOME on omicron and kappa, its build hosts (PHASE6 Cg10);
 #   - closures: a copy loads only the system's libraries or files beside
 #     it (B21; none of today's needs the base's runtime): linux, glibc's
 #     libraries, at most GLIBC 2.28 (conda-forge's baseline: these run
@@ -30,7 +33,9 @@
 #   - OpenMP (the compilers group, B22): openmp/include/omp.h; Windows
 #     also openmp/lib/libomp.lib;
 #   - zig (the compilers group, B4): zig/zig runs and prints the version
-#     SOURCES records for ziglang.
+#     SOURCES records for ziglang;
+#   - flang (the compilers group, B9 a): flang/bin/flang runs and says the
+#     flang-zig version SOURCES records.
 # Nothing here asks a copy to be stripped or changed: they are conda's
 # binaries as conda ships them (C24). A separate script from
 # verify-tree.sh, which checks the R trees (the base).
@@ -205,15 +210,18 @@ fi
 # the candidates come from one grep of the magic number at a line start
 # (guarded as the scan above), and today's exact four-byte test runs on
 # those only: a static archive of ELF objects matches the grep, not the
-# test (PHASE5 open point D). Windows tells them by name. When zig/ is in
-# the tree (the compilers group's zig, phase 5), its zig must be among
-# them, so a grep that misses on BSD or MSYS cannot skip the closures
-# silently (PHASE5 Cg8).
+# test (PHASE5 open point D). Windows tells them by name. When zig/ or
+# flang/ is in the tree (the compilers group, phases 5 and 6), its zig or
+# flang must be among them, so a grep that misses on BSD or MSYS cannot
+# skip the closures silently (PHASE5 Cg8). flang/'s runtime archive is
+# not a binary to these checks.
 bad=""
 n_bin=0
 zig_exe="$TREE/$tc/zig/zig"
-[ "$OS" = windows ] && zig_exe="$zig_exe.exe"
+flang_exe="$TREE/$tc/flang/bin/flang"
+if [ "$OS" = windows ]; then zig_exe="$zig_exe.exe"; flang_exe="$flang_exe.exe"; fi
 zig_seen=""
+flang_seen=""
 candidates() {
   [ -s "$WORK/copies.txt" ] && tr '\n' '\0' < "$WORK/copies.txt" | LC_ALL=C xargs -0 grep -l "$1" || true
 }
@@ -228,6 +236,7 @@ case "$OS" in
       head -c4 "$f" | od -An -tx1 | grep -q "7f 45 4c 46" || continue
       n_bin=$((n_bin + 1))
       [ "$f" != "$zig_exe" ] || zig_seen=1
+      [ "$f" != "$flang_exe" ] || flang_seen=1
       rel="${f#"$TREE"/}"
       for dep in $(needed_of "$f"); do
         case "$dep" in
@@ -258,6 +267,7 @@ case "$OS" in
       head -c4 "$f" | od -An -tx1 | grep -q "cf fa ed fe" || continue
       n_bin=$((n_bin + 1))
       [ "$f" != "$zig_exe" ] || zig_seen=1
+      [ "$f" != "$flang_exe" ] || flang_seen=1
       rel="${f#"$TREE"/}"
       if m="$(minos_over_floor "$f")"; then bad="$bad
   $rel: minos $m > $MACOS_MIN"; fi
@@ -279,6 +289,7 @@ case "$OS" in
       case "$f" in *.[Ee][Xx][Ee]|*.[Dd][Ll][Ll]) ;; *) continue ;; esac
       n_bin=$((n_bin + 1))
       [ "$f" != "$zig_exe" ] || zig_seen=1
+      [ "$f" != "$flang_exe" ] || flang_seen=1
       for dep in $(needed_of "$f"); do
         [ -f "${f%/*}/$dep" ] || win_system_dll "$dep" || bad="$bad
   ${f#"$TREE"/}: imports $dep (neither beside it nor the system's)"
@@ -289,6 +300,8 @@ case "$OS" in
 esac
 if [ -d "$TREE/$tc/zig" ] && [ -z "$zig_seen" ]; then bad="$bad
   the binary detection missed ${zig_exe#"$TREE"/} (zig/ is in the tree)"; fi
+if [ -d "$TREE/$tc/flang" ] && [ -z "$flang_seen" ]; then bad="$bad
+  the binary detection missed ${flang_exe#"$TREE"/} (flang/ is in the tree)"; fi
 if [ -n "$bad" ]; then
   echo "error: the toolchain's binaries load or need what the tree does not hold:$bad" >&2
   exit 1
@@ -314,4 +327,15 @@ got="$("$zig_exe" version 2>&1 | tr -d '\r')" || true
 [ -n "$want" ] && [ "$got" = "$want" ] ||
   { echo "error: ${zig_exe#"$TREE"/} says '$got', SOURCES records ziglang '${want:-(none)}'" >&2; exit 1; }
 echo "== zig verified: ${zig_exe#"$TREE"/} $got, the ziglang version SOURCES records"
+
+# The compilers group's flang (B9 a, phase 6): flang-zig's driver as
+# flang/bin/flang; it runs, and says the version SOURCES records for
+# flang-zig (PHASE6 open point I). Its modules and runtime are copies like
+# any other, checked above. Standalone only, as zig/.
+[ -x "$flang_exe" ] || { echo "error: ${flang_exe#"$TREE"/} is missing (the compilers group's flang)" >&2; exit 1; }
+want="$(awk '{ sub(/\r$/, "") } $1 == "package:" { p = $2 } p == "flang-zig" && $1 == "version:" && v == "" { v = $2 } END { print v }' "$TREE/$tc/flang/SOURCES")"
+got="$("$flang_exe" --version 2>&1 | tr -d '\r' | sed -n '1s/^flang version //p')" || true
+[ -n "$want" ] && [ "$got" = "$want" ] ||
+  { echo "error: ${flang_exe#"$TREE"/} says '$got', SOURCES records flang-zig '${want:-(none)}'" >&2; exit 1; }
+echo "== flang verified: ${flang_exe#"$TREE"/} $got, the flang-zig version SOURCES records"
 echo "== toolchain tree verified ($OS)"

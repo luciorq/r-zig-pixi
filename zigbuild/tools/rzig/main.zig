@@ -6,9 +6,12 @@
 //!
 //!   zig-cc, gcc       zig cc   with the shims' argument rewriting
 //!   zig-cxx, g++      zig c++  likewise
-//!   zig-fc            flang    (macOS: the floor); a shared link of
-//!                              objects: zig cc as zig-cc, plus the
-//!                              static Fortran runtime (F3c, fortran.zig)
+//!   zig-fc            flang for compiles (macOS: the floor; the
+//!                              modules path); every link through zig cc
+//!                              as zig-cc, with the static Fortran
+//!                              runtime; sources and a link: a flang
+//!                              compile each, then that link (F3c,
+//!                              fortran.zig)
 //!   zig-ar, gcc-ar,   zig ar   (macOS: seeds a missing archive)
 //!     ar
 //!   zig-ranlib,       zig ranlib
@@ -38,7 +41,9 @@
 //! zig-ranlib.exe, its AR and RANLIB, gcc-ar.exe and gcc-ranlib.exe, and
 //! ar.exe and ranlib.exe for CMake).
 //! On unix rzig replaces itself with the program it runs, zig or flang
-//! (execve); on Windows it runs it and exits with its exit code.
+//! (execve); on Windows it runs it and exits with its exit code. A
+//! command of several steps (zig-fc's split) is run step by step on every
+//! OS, rzig waiting for each, so it can remove the steps' objects after.
 //!
 //! The compilers own the compile environment (F3b): zig-cc and zig-cxx
 //! add the include/ and lib/ (and, for a conda env on unix, an rpath into
@@ -68,7 +73,10 @@
 //! Test hooks (not for builds):
 //!   RZIG_PRINT_ARGV=1  print what would run instead of running it: the
 //!                      child's ZIG_LIB_DIR as `ZIG_LIB_DIR=<value>` when
-//!                      it has one, then the argv, one per line. Side
+//!                      it has one, then the argv, one per line; for a
+//!                      command of several steps each step's so, a line
+//!                      `&&` between two, ZIG_LIB_DIR before the first
+//!                      zig step's (the only ones it applies to). Side
 //!                      effects of preparing the call still happen (the
 //!                      libc++ mirror, ar's archive seed, asking flang and
 //!                      xcrun, compiling a linux shared library's
@@ -95,6 +103,7 @@ const pkgbuild = @import("pkgbuild.zig");
 const def = @import("def.zig");
 const check = @import("check.zig");
 const groups = @import("groups.zig");
+const testutil = @import("testutil.zig");
 
 const Tool = enum {
     cc,
@@ -202,6 +211,7 @@ pub fn main(init: std.process.Init) !u8 {
         .name = t.shimName(),
         .self_exe = selfExe(io, arena, arg0),
     };
+    ctx.dry_run = dry_run;
     if (dry_run) {
         if (env.get("RZIG_OS")) |v| ctx.os = std.meta.stringToEnum(Ctx.Os, v) orelse {
             std.debug.print("rzig: RZIG_OS must be linux, macos or windows, not '{s}'\n", .{v});
@@ -238,30 +248,50 @@ pub fn main(init: std.process.Init) !u8 {
     };
     // zig, when the command is zig's: for a compile or link with the
     // libc++ mirror prepared (a flang command needs neither)
+    var blocks: std.ArrayList(Block) = .empty;
+    switch (cmd) {
+        .program => |p| try blocks.append(arena, .{ .argv = p, .zig = false }),
+        .zig => |z| try blocks.append(arena, .{ .argv = z, .zig = true }),
+        .steps => |st| for (st.steps) |step| try blocks.append(arena, switch (step) {
+            .program => |p| .{ .argv = p, .zig = false },
+            .zig => |z| .{ .argv = z, .zig = true },
+        }),
+    }
     var env_changed = false;
-    const argv = switch (cmd) {
-        .program => |p| p,
-        .zig => |zig_args| zig: {
-            // no zig: 127, as a shell gives for a command it cannot find
-            const zig = ctx.zig orelse {
-                try groups.report(&ctx, groups.no_zig, .compilers);
-                return 127;
-            };
-            if ((t == .cc or t == .cxx or t == .fc) and ctx.os != .windows) env_changed = try libcxx_mirror.apply(&ctx, zig[0]);
-            break :zig try mem.concat(arena, []const u8, &.{ zig, zig_args });
-        },
-    };
+    var mirrored = false;
+    for (blocks.items) |*b| {
+        if (!b.zig) continue;
+        // no zig: 127, as a shell gives for a command it cannot find,
+        // before any step runs
+        const zig = ctx.zig orelse {
+            try groups.report(&ctx, groups.no_zig, .compilers);
+            return 127;
+        };
+        if (!mirrored and (t == .cc or t == .cxx or t == .fc) and ctx.os != .windows) env_changed = try libcxx_mirror.apply(&ctx, zig[0]);
+        mirrored = true;
+        b.argv = try mem.concat(arena, []const u8, &.{ zig, b.argv });
+    }
 
-    if (dry_run) return printArgv(io, .stdout(), env, argv);
+    if (dry_run) return printArgv(io, .stdout(), env, blocks.items);
     if (isSet(env, "RZIG_TRACE")) {
         // what the environment rule saw: this binary's path, and the
         // environments it chose (environment.zig)
         ctx.warn("self {s}", .{ctx.self_exe orelse "(unknown)"});
         for (try environment.list(&ctx)) |e| ctx.warn("environment {s}{s}", .{ e.dir, if (e.conda) " (conda)" else "" });
-        ctx.warn("{s}{f}", .{ if (env_changed) try ctx.fmt("ZIG_LIB_DIR={f} ", .{shellQuoted(env.get("ZIG_LIB_DIR") orelse "")}) else "", shellCommand(argv) });
+        for (blocks.items) |b| {
+            const lib_dir = if (env_changed and b.zig) try ctx.fmt("ZIG_LIB_DIR={f} ", .{shellQuoted(env.get("ZIG_LIB_DIR") orelse "")}) else "";
+            ctx.warn("{s}{f}", .{ lib_dir, shellCommand(b.argv) });
+        }
     }
-    return run(&ctx, argv, if (env_changed) env else null);
+    return switch (cmd) {
+        .steps => |st| runSteps(&ctx, blocks.items, st.tmp, if (env_changed) env else null),
+        else => run(&ctx, blocks.items[0].argv, if (env_changed) env else null),
+    };
 }
+
+/// One command rzig runs or prints: its argv, and whether it is zig's,
+/// the only kind the libc++ mirror's ZIG_LIB_DIR is for.
+const Block = struct { argv: []const []const u8, zig: bool };
 
 /// A switch in the environment: set, not empty, not "0".
 fn isSet(env: *const std.process.Environ.Map, name: []const u8) bool {
@@ -340,12 +370,24 @@ fn longPathName(arena: mem.Allocator, p: []const u8) ?[]const u8 {
 /// follow-ups). On Windows that write also left the shared handle's file
 /// pointer after the argv, so later output to the same redirect
 /// overwrote what followed (kappa, 2026-10-08).
-fn printArgv(io: Io, out_file: Io.File, env: *const std.process.Environ.Map, argv: []const []const u8) !u8 {
+/// Each block's argv, one per line, a line `&&` between two blocks (the
+/// shell's "then", which no argument rzig prints alone can be).
+/// `ZIG_LIB_DIR=<value>`, when the environment has one, goes before the
+/// first block that is zig's, else on top: on top for a single command,
+/// as before; after flang's blocks in a split, so its first line is still
+/// flang's (phase 6, Cc6).
+fn printArgv(io: Io, out_file: Io.File, env: *const std.process.Environ.Map, blocks: []const Block) !u8 {
     var buf: [4096]u8 = undefined;
     var w = out_file.writerStreaming(io, &buf);
     const out = &w.interface;
-    if (env.get("ZIG_LIB_DIR")) |v| try out.print("ZIG_LIB_DIR={s}\n", .{v});
-    for (argv) |x| try out.print("{s}\n", .{x});
+    const first_zig = for (blocks, 0..) |b, i| {
+        if (b.zig) break i;
+    } else 0;
+    for (blocks, 0..) |b, i| {
+        if (i > 0) try out.writeAll("&&\n");
+        if (i == first_zig) if (env.get("ZIG_LIB_DIR")) |v| try out.print("ZIG_LIB_DIR={s}\n", .{v});
+        for (b.argv) |x| try out.print("{s}\n", .{x});
+    }
     try out.flush();
     return 0;
 }
@@ -380,6 +422,37 @@ fn run(ctx: *Ctx, argv: []const []const u8, env: ?*const std.process.Environ.Map
     }
     const err = std.process.replace(ctx.io, .{ .argv = argv, .environ_map = env });
     return cannotRun(ctx, argv[0], err);
+}
+
+/// A command of several steps (zig-fc's split): `tmp` created, then each
+/// step spawned and waited for, on unix too (exec would leave no one to
+/// remove the objects), until one fails; then `tmp` and ctx.discard
+/// removed, whatever happened. The exit code is the failing step's: its
+/// own, 128+n for one killed by signal n on unix (the shell's, and what a
+/// single exec'd command gives; Cc15), 1 for another end on Windows, as
+/// run has it; cannotRun's for a step that would not start. `env` is for
+/// zig's steps only (the libc++ mirror's ZIG_LIB_DIR).
+fn runSteps(ctx: *Ctx, blocks: []const Block, tmp: []const u8, env: ?*const std.process.Environ.Map) u8 {
+    defer for (ctx.discard.items) |p| Io.Dir.cwd().deleteFile(ctx.io, p) catch {};
+    Io.Dir.cwd().createDirPath(ctx.io, tmp) catch |err| {
+        ctx.warn("cannot create {s}: {t}", .{ tmp, err });
+        return 1;
+    };
+    defer Io.Dir.cwd().deleteTree(ctx.io, tmp) catch |err| ctx.warn("cannot remove {s}: {t}", .{ tmp, err });
+    for (blocks) |b| {
+        var child = std.process.spawn(ctx.io, .{ .argv = b.argv, .environ_map = if (b.zig) env else null }) catch |err| return cannotRun(ctx, b.argv[0], err);
+        const term = child.wait(ctx.io) catch |err| {
+            ctx.warn("waiting for {s}: {t}", .{ b.argv[0], err });
+            return 1;
+        };
+        const code: u8 = switch (term) {
+            .exited => |c| c,
+            .signal => |sig| if (builtin.os.tag == .windows) 1 else 128 +| @as(u8, @truncate(@intFromEnum(sig))),
+            else => 1,
+        };
+        if (code != 0) return code;
+    }
+    return 0;
 }
 
 fn cannotRun(ctx: *Ctx, cmd: []const u8, err: anyerror) u8 {
@@ -434,13 +507,73 @@ test printArgv {
     defer file.close(io);
     var w = file.writerStreaming(io, &.{});
     try w.interface.writeAll("first\n");
-    try std.testing.expectEqual(0, try printArgv(io, file, &env, &.{ "/z/zig", "cc", "-c", "a.c" }));
-    try std.testing.expectEqual(0, try printArgv(io, file, &env, &.{"ranlib"}));
+    try std.testing.expectEqual(0, try printArgv(io, file, &env, &.{.{ .argv = &.{ "/z/zig", "cc", "-c", "a.c" }, .zig = true }}));
+    try std.testing.expectEqual(0, try printArgv(io, file, &env, &.{.{ .argv = &.{"ranlib"}, .zig = false }}));
     const got = try tmp.dir.readFileAlloc(io, "out", arena.allocator(), .limited(4096));
     try std.testing.expectEqualStrings(
         "first\nZIG_LIB_DIR=/cache/r-zig/zig-lib-1/lib/zig\n/z/zig\ncc\n-c\na.c\nZIG_LIB_DIR=/cache/r-zig/zig-lib-1/lib/zig\nranlib\n",
         got,
     );
+}
+
+test "printArgv: a split's steps, `&&` between them, ZIG_LIB_DIR before zig's block only (Cc6)" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var env: std.process.Environ.Map = .init(arena.allocator());
+    const blocks = [_]Block{
+        .{ .argv = &.{ "/tc/flang/bin/flang", "-c", "a.f90", "-o", "/t/rzig-fc-dryrun/0-a.o" }, .zig = false },
+        .{ .argv = &.{ "/tc/flang/bin/flang", "-c", "b.f90", "-o", "/t/rzig-fc-dryrun/1-b.o" }, .zig = false },
+        .{ .argv = &.{ "/z/zig", "cc", "-o", "p", "/t/rzig-fc-dryrun/0-a.o", "/t/rzig-fc-dryrun/1-b.o" }, .zig = true },
+    };
+    {
+        const file = try tmp.dir.createFile(io, "plain", .{});
+        defer file.close(io);
+        _ = try printArgv(io, file, &env, &blocks);
+    }
+    try env.put("ZIG_LIB_DIR", "/m/lib/zig");
+    {
+        const file = try tmp.dir.createFile(io, "mirror", .{});
+        defer file.close(io);
+        _ = try printArgv(io, file, &env, &blocks);
+    }
+    const flang_part = "/tc/flang/bin/flang\n-c\na.f90\n-o\n/t/rzig-fc-dryrun/0-a.o\n&&\n/tc/flang/bin/flang\n-c\nb.f90\n-o\n/t/rzig-fc-dryrun/1-b.o\n&&\n";
+    const zig_part = "/z/zig\ncc\n-o\np\n/t/rzig-fc-dryrun/0-a.o\n/t/rzig-fc-dryrun/1-b.o\n";
+    try std.testing.expectEqualStrings(flang_part ++ zig_part, try tmp.dir.readFileAlloc(io, "plain", arena.allocator(), .limited(4096)));
+    try std.testing.expectEqualStrings(flang_part ++ "ZIG_LIB_DIR=/m/lib/zig\n" ++ zig_part, try tmp.dir.readFileAlloc(io, "mirror", arena.allocator(), .limited(4096)));
+}
+
+test "runSteps: the first failing step's code, 128+n for a signal, no later step, tmp removed" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // /bin/sh stand-ins
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const later = f.path("later-ran");
+    const touch_later: Block = .{ .argv = &.{ "/bin/sh", "-c", f.fmt(": > '{s}'", .{later}) }, .zig = false };
+    const cases = [_]struct { first: Block, code: u8 }{
+        .{ .first = .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .zig = false }, .code = 0 },
+        .{ .first = .{ .argv = &.{ "/bin/sh", "-c", "exit 3" }, .zig = false }, .code = 3 },
+        .{ .first = .{ .argv = &.{ "/bin/sh", "-c", "kill -TERM $$" }, .zig = false }, .code = 143 },
+        .{ .first = .{ .argv = &.{f.path("no-such-program")}, .zig = false }, .code = 127 },
+    };
+    for (cases) |case| {
+        const tmp = f.path("t/rzig-fc-x");
+        // the step sees its directory, and leaves an object in it
+        const in_tmp: Block = .{ .argv = &.{ "/bin/sh", "-c", f.fmt("test -d '{s}' && : > '{s}/0-a.o'", .{ tmp, tmp }) }, .zig = false };
+        try std.testing.expectEqual(case.code, runSteps(c, &.{ in_tmp, case.first, touch_later }, tmp, null));
+        try std.testing.expect(!c.exists(tmp));
+        try std.testing.expectEqual(case.code == 0, c.exists(later));
+        Io.Dir.cwd().deleteFile(c.io, later) catch {};
+    }
+    _ = f.takeWarnings();
+    // ctx.discard is removed after the steps too
+    try f.touch("x.rzig.lib");
+    try c.discard.append(c.arena, f.path("x.rzig.lib"));
+    try std.testing.expectEqual(0, runSteps(c, &.{touch_later}, f.path("t/rzig-fc-y"), null));
+    try std.testing.expect(!c.exists(f.path("x.rzig.lib")));
 }
 
 test shellCommand {

@@ -12,11 +12,17 @@
 //! toolchain-test).
 //!
 //! What it installs, today's third-party files (phase 3's table, zig/ from
-//! phase 5):
+//! phase 5, flang/ from phase 6):
 //!   zig/       compilers    upstream zig, PyPI's ziglang wheel as
 //!                           fetch-zig pins it (B4, phase 5): zig and
 //!                           lib/, LICENSES/ziglang/ from the wheel's
 //!                           dist-info, SOURCES from its RECORD
+//!   flang/     compilers    flang's compile set from the env (B9 a):
+//!                           flang-zig's driver as bin/flang (once),
+//!                           flang-rt-zig's intrinsic and OpenMP
+//!                           modules and its static runtime, by their
+//!                           conda-meta records; no cfg, no lld, no
+//!                           ISO_Fortran_binding.h (PHASE6 open point V)
 //!   openmp/    compilers    llvm-openmp's omp.h and the headers beside it
 //!                           (B22); Windows also libomp.lib
 //!   usr/       build-tools  unix: conda-forge's GNU make as usr/bin/make
@@ -24,7 +30,7 @@
 //!   binutils/  build-tools  Windows: conda-forge's MinGW nm, dlltool, as,
 //!                           strip, windres and objdump (B24, B43), with
 //!                           the conda DLLs they load
-//! flang/ (compilers) comes in phase 6, Windows' usr/bin in phase 7.
+//! Windows' usr/bin comes in phase 7.
 //! Which group holds which directory: scripts/env.sh's group_dirs.
 //!
 //! Each file's package is the conda-meta record whose `files` lists its
@@ -47,10 +53,11 @@
 //! itself, with R_TOOLCHAIN_PREFIX=$PREFIX: there conda's own packages
 //! provide every file where it is looked for, except Windows' binutils,
 //! which Makeconf.win names by path under R_HOME (B24): only those are
-//! installed, with their records (B41). No zig/ there: conda keeps
-//! conda-forge's zig, through r-zig-compilers (B30), and the conda build
-//! fetches nothing (PHASE5 open point J; zig-toolchain.sh skips fetch-zig
-//! by the same test as prefix_is_env below).
+//! installed, with their records (B41). No zig/ and no flang/ there: conda
+//! keeps conda-forge's zig and flang-pixi's flang-zig, through
+//! r-zig-compilers (B30), and the conda build fetches nothing (PHASE5 open
+//! point J; zig-toolchain.sh skips fetch-zig by the same test as
+//! prefix_is_env below).
 const std = @import("std");
 const mem = std.mem;
 const conda = @import("conda.zig");
@@ -68,10 +75,25 @@ const Copy = struct {
     in_conda: bool = false,
 };
 
-/// A group directory under R_HOME/bin/toolchain and what it copies.
+/// Every regular file of `package`'s record under `from` (relative to
+/// the env), installed at the same path less a leading `Library/`
+/// (win-64): flang-rt-zig's modules and runtime, whose triple directory
+/// differs per platform and whose module set follows LLVM (B9 a; PHASE6
+/// open point A). None stops the build. Never installed into the env (the
+/// conda build), as a copy that is not `in_conda` (PHASE6 Cc4).
+const Tree = struct {
+    package: []const u8,
+    from: []const u8,
+    /// Only the files of this base name.
+    name: ?[]const u8 = null,
+};
+
+/// A group directory under R_HOME/bin/toolchain and what it copies: its
+/// copies first, then its trees.
 const Dir = struct {
     name: []const u8,
     copies: []const Copy,
+    trees: []const Tree = &.{},
 };
 
 /// llvm-openmp's headers: omp.h, which makes rzig add -lomp to a -fopenmp
@@ -88,7 +110,30 @@ fn ompHeaders(comptime include: []const u8) [4]Copy {
     };
 }
 
+/// flang-zig's LLVM major, which names flang-rt-zig's directories
+/// (lib/clang/<major>/). It is the pin's (pixi.toml: flang-zig 23.1.1): a
+/// new major moves the pin, this constant and SOURCES together. R's
+/// build.zig (findFlangRt) and rzig (flang_rt.modulesDir) scan
+/// lib/clang/* instead, because they must find whatever flang the env or
+/// PATH has; this build copies what the pin says (PHASE6 open point A2).
+const llvm_major = "23";
+
+/// flang/ (B9 a; PHASE6 open points A, B, C): flang-zig's driver as
+/// bin/flang (`driver`, the real file, not its flang softlink), and
+/// flang-rt-zig's every module directory (linux and macOS one, win-64's
+/// two twins) and its static runtime, under `prefix` (win-64's
+/// `Library/`). No cfg: zig-fc passes the modules path; no lld: zig links.
+fn flangDir(comptime prefix: []const u8, comptime driver: []const u8) Dir {
+    const exe = if (mem.endsWith(u8, driver, ".exe")) ".exe" else "";
+    const clang = prefix ++ "lib/clang/" ++ llvm_major ++ "/";
+    return .{ .name = "flang", .copies = &.{.{ .from = driver, .to = "bin/flang" ++ exe }}, .trees = &.{
+        .{ .package = "flang-rt-zig", .from = clang ++ "finclude/flang/" },
+        .{ .package = "flang-rt-zig", .from = clang ++ "lib/", .name = "libflang_rt.runtime.a" },
+    } };
+}
+
 const unix_dirs = [_]Dir{
+    flangDir("", "bin/flang-" ++ llvm_major),
     .{ .name = "openmp", .copies = &ompHeaders("include/") },
     .{ .name = "usr", .copies = &.{.{ .from = "bin/make", .to = "bin/make" }} },
 };
@@ -101,6 +146,7 @@ fn mingwTool(comptime t: []const u8) Copy {
 }
 
 const windows_dirs = [_]Dir{
+    flangDir("Library/", "Library/bin/flang.exe"),
     .{ .name = "openmp", .copies = &(ompHeaders("Library/include/") ++ [_]Copy{
         .{ .from = "Library/lib/libomp.lib", .to = "lib/libomp.lib" },
     }) },
@@ -160,17 +206,27 @@ pub fn build(b: *std.Build) !void {
                 if (!c.required) continue;
                 return fail("{s} is missing from the env {s}: the toolchain tree's {s}/ copies it", .{ c.from, env, d.name });
             }
-            const copy = conda.find(records, c.from, c.to) catch |err| {
-                const name = if (conda.owner(records, c.from)) |r| r.name else "";
-                return switch (err) {
-                    error.NoOwner => fail("{s}: no package of the env lists it in conda-meta, so its source and licence are unknown", .{c.from}),
-                    error.TwoOwners => fail("{s}: two packages of the env list it (a clobber), so which one installed it is unknown", .{c.from}),
-                    error.NotInPathsData, error.NoSha256 => fail("{s}: {s}'s conda-meta record has no sha256 for it (paths_data)", .{ c.from, name }),
-                    error.PrefixPlaceholder => fail("{s}: conda rewrote it at install ({s} has a prefix placeholder in it), so the env's file names the env and is not the package's", .{ c.from, name }),
-                };
-            };
-            try copies.append(arena, copy);
-            b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = src }, dest, c.to).step);
+            try copies.append(arena, try copyOf(b, records, src, c.from, c.to, dest));
+        }
+        // Trees are the standalone tree's only: skipped when the prefix is
+        // the env, as a copy that is not in_conda is, before their files are
+        // listed or an empty one stops the build (PHASE6 Cc4).
+        for (d.trees) |t| {
+            if (prefix_is_env) continue;
+            var n: usize = 0;
+            for (try conda.under(arena, records, t.package, t.from)) |from| {
+                if (t.name) |name| {
+                    if (!mem.eql(u8, from[mem.lastIndexOfScalar(u8, from, '/').? + 1 ..], name)) continue;
+                }
+                const src = b.fmt("{s}/{s}", .{ env, from });
+                if (!pathExists(io, src))
+                    return fail("{s} is missing from the env {s}, though {s}'s record lists it: the toolchain tree's {s}/ copies it", .{ from, env, t.package, d.name });
+                try copies.append(arena, try copyOf(b, records, src, from, conda.inDir(from), dest));
+                n += 1;
+            }
+            if (n == 0) return fail("{s}'s record lists no {s} under {s} in the env {s}: the toolchain tree's {s}/ copies {s}", .{
+                t.package, t.name orelse "file", t.from, env, d.name, if (t.name == null) "every file there" else "it",
+            });
         }
         if (copies.items.len == 0) continue;
         for (records) |*r| {
@@ -215,6 +271,23 @@ pub fn build(b: *std.Build) !void {
         if (summary.items.len == 0) "nothing to install" else summary.items,
         if (prefix_is_env) " (the prefix is the env)" else "",
     });
+}
+
+/// The env's file `src`, `from` in its package, installed as `to` in the
+/// directory `dest`: its owner and sha256 by path (conda.find), or the
+/// reason it cannot be copied, which stops the build.
+fn copyOf(b: *std.Build, records: []const conda.Record, src: []const u8, from: []const u8, to: []const u8, dest: std.Build.InstallDir) !conda.Copy {
+    const copy = conda.find(records, from, to) catch |err| {
+        const name = if (conda.owner(records, from)) |r| r.name else "";
+        return switch (err) {
+            error.NoOwner => fail("{s}: no package of the env lists it in conda-meta, so its source and licence are unknown", .{from}),
+            error.TwoOwners => fail("{s}: two packages of the env list it (a clobber), so which one installed it is unknown", .{from}),
+            error.NotInPathsData, error.NoSha256 => fail("{s}: {s}'s conda-meta record has no sha256 for it (paths_data)", .{ from, name }),
+            error.PrefixPlaceholder => fail("{s}: conda rewrote it at install ({s} has a prefix placeholder in it), so the env's file names the env and is not the package's", .{ from, name }),
+        };
+    };
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = src }, dest, to).step);
+    return copy;
 }
 
 /// zig/ from the wheel fetch-zig unpacked into `dir` (B4; PHASE5 open
@@ -338,8 +411,13 @@ fn fail(comptime fmt: []const u8, args: anytype) error{ToolchainBuild} {
 
 /// The env's conda-meta records that may own a file the directories copy:
 /// those whose JSON has one of the files' names, quoted, at the end of a
-/// path. Reading only those keeps the configure step quick (zig's own
-/// record alone lists 19,546 files); conda.find then matches whole paths.
+/// path, or for a tree its `name` so, else the last component of its
+/// `from` anywhere (`flang`: every record listing a file under it). No
+/// needle holds a separator, so they match Windows' `\` paths and any
+/// JSON spacing, and every record that lists a tree's file is read, so
+/// conda.find sees a second owner of it (PHASE6 open point W, Cc10).
+/// Reading only those keeps the configure step quick (zig's own record
+/// alone lists 19,546 files); conda.find then matches whole paths.
 fn readRecords(b: *std.Build, io: std.Io, env: []const u8, dirs: []const Dir) ![]conda.Record {
     const arena = b.allocator;
     var needles: std.ArrayList([]const u8) = .empty;
@@ -347,6 +425,14 @@ fn readRecords(b: *std.Build, io: std.Io, env: []const u8, dirs: []const Dir) ![
         for (d.copies) |c| {
             const base = c.from[if (mem.lastIndexOfScalar(u8, c.from, '/')) |i| i + 1 else 0..];
             try needles.append(arena, b.fmt("{s}\"", .{base}));
+        }
+        for (d.trees) |t| {
+            if (t.name) |name| {
+                try needles.append(arena, b.fmt("{s}\"", .{name}));
+            } else {
+                const from = mem.trimEnd(u8, t.from, "/");
+                try needles.append(arena, from[if (mem.lastIndexOfScalar(u8, from, '/')) |i| i + 1 else 0..]);
+            }
         }
     }
     const meta = b.fmt("{s}/conda-meta", .{env});

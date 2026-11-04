@@ -24,15 +24,25 @@
 #      R puts the build-tools group's usr/bin first on PATH (B25, C27);
 #      rzig's check mode exits 127 for each group with what is missing
 #      and the group's text (B26, B35); R CMD SHLIB stops with the
-#      compilers' text, and of a Makevars rule with both groups' texts,
-#      the compilers' first (feat-shlib-rzig-build); hermetic-check.sh's
-#      tier 0/1 on the extracted tree, where the install preflight stops a
-#      compiled package with the compilers' text; TLS trust with the
-#      shipped CA bundle and nothing from the build env (unix).
-#   2. + compilers: rzig's check mode finds the pass's zig (below) and
-#      flang on PATH; the first C++ compile, a shared library, timed with
-#      zig's cache as the pass has it; every compiler runs the pass's zig
-#      (RZIG_PRINT_ARGV's first word, every OS); the
+#      compilers' text, whose standalone line names the compilers archive
+#      extracted here (groups.zig and env.sh agree on its extension, B17),
+#      and of a Makevars rule with both groups' texts, the compilers'
+#      first (feat-shlib-rzig-build); hermetic-check.sh's tier 0/1 on the
+#      extracted tree, where the install preflight stops a compiled
+#      package with the compilers' text; TLS trust with the shipped CA
+#      bundle and nothing from the build env (unix).
+#   2. + compilers: the group holds flang, TC/flang (phase 6, B9), and
+#      nothing else reaches it: no .cfg anywhere in the extracted tree and
+#      no flang on the check mode's PATH; rzig's check mode finds the
+#      pass's zig (below) and TC/flang; the first C++ compile, a shared
+#      library, and the first Fortran compile, a derived-type module
+#      through R CMD SHLIB, timed with zig's cache as the pass has it;
+#      every compiler runs the pass's zig and zig-fc TC/flang
+#      (RZIG_PRINT_ARGV's first word, every OS), compiling with the
+#      intrinsic modules path into TC/flang (physical, no `..`) and
+#      linking through zig with TC/flang's runtime; #include "omp_lib.h"
+#      through $FC -E; the derived-type module as a package through rzig
+#      build; the
 #      preflight's other branches (zig, no make, no flang;
 #      feat-zig-pkg-build M4; Windows too [phase3-P3-9]): a C package
 #      with no Makevars builds through `rzig build` (patch 0013) with no
@@ -40,8 +50,9 @@
 #      leaves no build root, and loads; one whose Makevars has a rule
 #      stops with rzig's reason and the build tools' text; unix also an
 #      R-only package with a configure script, with "a configure script
-#      R runs" and the same text, and a Fortran one with no flang and
-#      the compilers' text (C26); R CMD SHLIB with no make, every OS
+#      R runs" and the same text, and a Fortran one with TC/flang's
+#      driver moved aside and the compilers' text (C26, PHASE6 open
+#      point N); R CMD SHLIB with no make, every OS
 #      (feat-shlib-rzig-build, patch 0013's one hook): pkgbuild's probe,
 #      Rcpp's sourceCpp, Fortran, cpp11's and TMB's shapes, the dry run
 #      Rcpp's macOS OpenMP plugin parses and an OpenMP library build
@@ -50,11 +61,16 @@
 #      arch's baseline CPU, not this machine's, also when told
 #      -mtune=native (LLVM IR's target-cpu); packages compiled with the
 #      tree build and load.
-#      unix, under env -i: C++, Fortran, USE_FC_TO_LINK, $(FLIBS)
-#      without flang (or make), zig-fc with no flang, OpenMP (C, and
-#      Fortran with `use omp_lib`) with the group's openmp/ where the base
-#      has libomp and openmp/ left alone on minimal (B40), decoy
-#      CONDA_PREFIX runs (the C++ and, where offered, the OpenMP shape):
+#      unix, under env -i: C++, Fortran (with the env's flang and .cfg
+#      first on PATH), and with no flang on PATH and no .cfg
+#      USE_FC_TO_LINK, a configure that compiles, links and runs a
+#      program with $FC and Fortran OpenMP; $(FLIBS) without flang (or
+#      make), zig-fc with no flang (TC/flang's driver moved aside for
+#      both), OpenMP (C, and Fortran with `use omp_lib`) with the
+#      group's openmp/ where the base has libomp and openmp/ left alone
+#      on minimal (B40; there `use omp_lib` compiles and its link
+#      fails, B40's Fortran limit), decoy CONDA_PREFIX runs (the C++
+#      and, where offered, the OpenMP shape):
 #      each shape through R CMD SHLIB, make by R_ZIG_PKG_BUILDER=make (R
 #      CMD SHLIB's default is rzig build since patch 0013's one hook,
 #      feat-shlib-rzig-build), and as a package through R CMD INSTALL
@@ -62,8 +78,10 @@
 #      libraries, and on rzig build's objects, kept in its build root,
 #      the macOS floor.
 #      Windows, where make is a build tool: rzig's dry runs (-L from
-#      where the tree now is, the group's openmp/, CONDA_PREFIX ignored),
-#      an OpenMP DLL compiled and linked by gcc.exe alone, loaded
+#      where the tree now is, the group's openmp/, CONDA_PREFIX ignored,
+#      zig-fc.exe's link with TC/flang's runtime and no -lc++), a
+#      program compiled, linked and run with $FC alone, an OpenMP DLL
+#      compiled and linked by gcc.exe alone, loaded
 #      with only bin\x64 and System32 on PATH, and a package linking
 #      -lsynchronization (Rust's std's import, D6) through rzig build,
 #      loaded the same way.
@@ -79,9 +97,10 @@
 #      runs each of the binutils (C10, C11), CMake's ar and ranlib beside
 #      CC are rzig, and the OpenMP C and Fortran packages (through R CMD
 #      SHLIB, make by R_ZIG_PKG_BUILDER=make, and as packages through rzig
-#      build [phase3-P3-1]), the static-library package and a package
-#      with a .rc file (make) and a plain C one (rzig build) build and
-#      load with only bin\x64 and System32 on PATH; LTO is recorded, not
+#      build [phase3-P3-1]), the static-library package, a package
+#      whose configure.win compiles, links and runs a program with $FC,
+#      a package with a .rc file (make) and a plain C one (rzig build)
+#      build and load with only bin\x64 and System32 on PATH; LTO is recorded, not
 #      checked (B43-2, C9), with a tier-1 twin that MAKEFLAGS' assignment
 #      sends to make (N4). Every OS, with no zig (TC/zig's binary moved
 #      aside): a package with a configure script stops in the preflight
@@ -98,11 +117,15 @@
 # conda-forge's zig keeps its coverage on the default legs (the mixed
 # case, then conda-forge's zig). The build pass skips the base alone and
 # the no-zig check, which pass no zig and would test the same thing again
-# (S). pass_zig is the zig the pass's assertions name.
-# What phase 5 leaves to later phases (PLAN.md): the compilers group has
-# no flang (phase 6), so scenario 2 takes flang from the env; Windows'
-# build-tools group has no usr/bin (phase 7), so scenario 3 takes sh and
-# make from the env's Library/usr/bin.
+# (S). pass_zig is the zig the pass's assertions name. Both passes take
+# flang from TC/flang (PHASE6 open point O): rzig has no flang override,
+# and TC/flang holds the env's flang bytes (B9), so the build pass varies
+# the zig only; the env's flang with its cfg keeps its coverage in
+# contract, pkg-parity and the conda tests. pass_flang is TC/flang's
+# driver as rzig names it.
+# What phase 6 leaves to later phases (PLAN.md): Windows' build-tools
+# group has no usr/bin (phase 7), so scenario 3 takes sh and make from
+# the env's Library/usr/bin.
 # The static checks of the trees (Makeconf, the compilers are rzig, the CA
 # bundle, rpaths, the glibc ceiling, the C++ runtime of R's binaries, the
 # macOS floor and load commands, minimal's excluded libraries, Windows'
@@ -128,7 +151,7 @@ case "$pass" in
   *) echo "usage: verify-bundle.sh [toolchain|build]" >&2; exit 1 ;;
 esac
 echo "== the $pass pass: zig from $pass_what"
-# zig's file name in TC/zig
+# zig's and flang's file names in TC/zig/ and TC/flang/bin/
 exe=""
 [ "$OS" != windows ] || exe=.exe
 
@@ -140,7 +163,7 @@ base="$ROOT/dist/R-$R_VERSION-$FLAVOR-$PLAT.$ARCHIVE_EXT"
 test -f "$base" || { echo "error: $base not found — run 'pixi run package' first" >&2; exit 1; }
 archives=("$base")
 for group in $TOOLCHAIN_GROUPS; do
-  a="$ROOT/dist/R-$R_VERSION-$PLAT-$group.$ARCHIVE_EXT"
+  a="$ROOT/dist/R-$R_VERSION-$PLAT-$group.$(group_ext "$group")"
   test -f "$a" ||
     { echo "error: $a not found: run 'pixi run package-toolchain' (or download the toolchain job's artifact into dist/)" >&2; exit 1; }
   archives+=("$a")
@@ -151,7 +174,15 @@ for a in "${archives[@]}"; do
 done
 
 VERIFY_DIR="$(mktemp -d)"
-trap 'rm -rf "$VERIFY_DIR"' EXIT
+# flang_aside, flang_back: the no-flang checks of scenario 2 move
+# TC/flang's driver out of the tree and back (PHASE6 open point N a, as
+# scenario 3 moves TC/zig's binary aside): the driver is what rzig looks
+# for (flang_rt.zig's flang), so without it the tree is one with no
+# flang. The EXIT trap puts it back too, so it is back on every exit
+# path, a failing check's included.
+flang_aside() { mv "$TC/flang/bin/flang$exe" "$VERIFY_DIR/flang.aside"; }
+flang_back() { [ ! -e "$VERIFY_DIR/flang.aside" ] || mv "$VERIFY_DIR/flang.aside" "$TC/flang/bin/flang$exe"; }
+trap 'flang_back; rm -rf "$VERIFY_DIR"' EXIT
 # The archives' top directory, R-<ver>-zig/ (feat-standalone-toolchain
 # B36): package-standalone.sh archives only trees of that name.
 BUNDLE_DIR="$VERIFY_DIR/$TOP"
@@ -209,7 +240,7 @@ fi
 # the three archives.
 group_lists=()
 for group in $TOOLCHAIN_GROUPS; do
-  a="$ROOT/dist/R-$R_VERSION-$PLAT-$group.$ARCHIVE_EXT"
+  a="$ROOT/dist/R-$R_VERSION-$PLAT-$group.$(group_ext "$group")"
   archive_files "$a" | LC_ALL=C sort > "$lists/$group"
   group_lists+=("$lists/$group")
   dirs_re="$(group_dirs "$group" | tr ' ' '|')"
@@ -274,6 +305,44 @@ FORTRAN
   printf '%s\n' 'PKG_FFLAGS = $(SHLIB_OPENMP_FFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$1/fomp/Makevars"
   printf '%s\n' 'USE_FC_TO_LINK =' 'PKG_FFLAGS = $(SHLIB_OPENMP_FFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_FFLAGS)' > "$1/fompfc/Makevars"
 }
+# fdt_src <dir>: the derived-type module scenario 2 builds (PLAN.md phase
+# 6): m.f90, a module with a type and a function on it, and u.f90, fdtv,
+# which uses it, builds the type and returns its area, 42. m.f90 is
+# compiled first (u.f90 needs its .mod): R CMD SHLIB is given it first,
+# and rzig build compiles a package's Fortran in OBJECTS order.
+fdt_src() {
+  mkdir -p "$1"
+  cat > "$1/m.f90" <<'FORTRAN'
+module m
+  implicit none
+  type :: pt
+    real(8) :: x, y
+  end type pt
+contains
+  pure function area(p) result(a)
+    type(pt), intent(in) :: p
+    real(8) :: a
+    a = p%x * p%y
+  end function area
+end module m
+FORTRAN
+  cat > "$1/u.f90" <<'FORTRAN'
+subroutine fdtv(v)
+  use m
+  implicit none
+  real(8), intent(out) :: v
+  type(pt) :: p
+  p = pt(6d0, 7d0)
+  v = area(p)
+end subroutine fdtv
+FORTRAN
+}
+# conftest_f <dir>: the program a configure script compiles, links and
+# runs with $FC (PHASE6 open point P's shape): it prints ok.
+conftest_f() {
+  mkdir -p "$1"
+  printf '%s\n' '      program t' "      print '(a)', 'ok'" '      end' > "$1/conftest.f"
+}
 FOMP_R='for (d in c("fomp", "fompfc")) {
   dyn.load(file.path(d, paste0(d, .Platform$dynlib.ext)))
   r <- .Fortran("fompn", n = 0L, t = 0L, s = 0L, PACKAGE = d)
@@ -306,6 +375,39 @@ mkpkg() {
   printf 'int %s_val(void) { return %s; }\n' "$2" "$3" > "$d/src/$v"
 }
 
+# fcconf_pkg <dir>: the package fcconf, whose configure (and
+# configure.win, the same script) checks R's Fortran compiler as
+# autoconf's Fortran checks do (PLAN.md phase 6): R CMD config FC, then
+# conftest.f compiled, linked and run with $FC (it must print ok), then
+# linked again with -v (the FLIBS probe's call), then src/Makevars
+# written. Its install log holds "fcconf: <FC> compiles, links and runs a
+# program" when the configure ran; f() returns src/f.f90's 5.
+fcconf_pkg() {
+  local d="$1/fcconf" f
+  mkdir -p "$d/R" "$d/src"
+  printf 'Package: fcconf\nVersion: 0.1\nTitle: Verify Bundle\nDescription: A configure script that runs $FC.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' > "$d/DESCRIPTION"
+  printf 'useDynLib(fcconf)\nexport(f)\n' > "$d/NAMESPACE"
+  printf 'f <- function() .Fortran("fcv", n = 0L, PACKAGE = "fcconf")$n\n' > "$d/R/f.R"
+  printf '%s\n' 'subroutine fcv(n)' '  integer, intent(out) :: n' '  n = 5' 'end subroutine fcv' > "$d/src/f.f90"
+  conftest_f "$d"
+  for f in configure configure.win; do
+    cat > "$d/$f" <<'CONFIGURE'
+#!/bin/sh
+case `uname -s` in MINGW*|MSYS*|CYGWIN*) x=.exe ;; *) x= ;; esac
+FC=`"${R_HOME}/bin/R$x" CMD config FC | tr -d '\r'`
+rm -f conftest$x
+$FC -o conftest$x conftest.f || { echo "fcconf: $FC could not compile and link conftest.f"; exit 1; }
+out=`./conftest$x | tr -d '\r'`
+test "$out" = ok || { echo "fcconf: conftest$x printed '$out', not ok"; exit 1; }
+$FC -v -o conftest$x conftest.f > conftest.log 2>&1 || { cat conftest.log; echo "fcconf: $FC -v -o conftest$x conftest.f failed"; exit 1; }
+echo "fcconf: $FC compiles, links and runs a program"
+rm -f conftest$x conftest.log
+echo 'PKG_FCFLAGS = -O2' > src/Makevars
+CONFIGURE
+    chmod +x "$d/$f"
+  done
+}
+
 # rzig's texts for a missing group, as it prints them (its name, zig-cc
 # for gcc.exe too, then what is missing; then the group's first line:
 # zigbuild/tools/rzig/check.zig and groups.zig, B35). starts_line <file>
@@ -315,6 +417,10 @@ no_flang_line="zig-cc: no flang (R_HOME/bin/toolchain/flang/bin, the environment
 no_make_line="zig-cc: no make on PATH"
 compilers_head="Compiling needs the r-zig compilers for R $R_VERSION on $PLAT: "
 build_tools_head="Building packages needs the r-zig build tools for R $R_VERSION on $PLAT: "
+# The compilers text's standalone line names the archive this script
+# extracts: groups.zig's archiveExt and env.sh's group_ext agree (B17,
+# B35; PHASE6 open point L).
+compilers_standalone="  standalone:  extract ${archives[1]##*/} where you extracted R ("
 # 0009's own stop (pkgerrmsg), for compiled code and for a configure script
 # R runs alike [tests-T11]
 preflight_stop="ERROR: this package needs the r-zig toolchain (compiled code or a configure script), which is incomplete (see above)"
@@ -524,6 +630,7 @@ RCODE
     comp="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "$compilers_head" | cut -d: -f1 || true)"
     bad=""
     [ "$rc" != 0 ] && [ -n "$comp" ] || bad=1
+    starts_line "$s1/$d.log" "$compilers_standalone" || bad=1
     [ -z "$(cd "$s1/$d" && ls ./*.o ./*."$SO" 2> /dev/null)" ] || bad=1
     if [ "$d" = rule ]; then
       why="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "x.$SO needs make: Makevars has a rule or target line" | cut -d: -f1 || true)"
@@ -532,13 +639,13 @@ RCODE
     fi
     if [ -n "$bad" ]; then
       cat "$s1/$d.log" >&2
-      want="the compilers' text"
-      [ "$d" = probe ] || want="the compilers' text, rzig's reason and the build tools' text, in that order"
+      want="the compilers' text naming ${archives[1]##*/}"
+      [ "$d" = probe ] || want="the compilers' text naming ${archives[1]##*/}, rzig's reason and the build tools' text, in that order"
       echo "error: R CMD SHLIB $src with the base alone (PATH=$s1_path): exit $rc, or not $want, or something built" >&2
       exit 1
     fi
   done
-  echo "== R CMD SHLIB with the base alone: stops with the compilers' text, nothing built; with a Makevars rule, the compilers' text, rzig's reason and the build tools' text, in that order"
+  echo "== R CMD SHLIB with the base alone: stops with the compilers' text (naming ${archives[1]##*/}), nothing built; with a Makevars rule, the compilers' text, rzig's reason and the build tools' text, in that order"
 
   # TLS trust (unix): the bundle must verify HTTPS without the build env's
   # trust anchors. conda-forge's libcurl/OpenSSL carry $CONDA/ssl compiled
@@ -609,14 +716,42 @@ fi
 # --- Scenario 2: base + compilers -------------------------------------------
 extract "${archives[1]}" "$lists/compilers"
 echo "== scenario 2: base + compilers"
-# flang: the env's (phase 6 puts it in the compilers group); its directory
-# decides whether the Fortran checks run.
-fc_dir="$(dirname "$(command -v flang 2>/dev/null || echo /nonexistent/flang)")"
 mk="$RHD/etc/Makeconf"
 [ "$OS" != windows ] || mk="$RHD/etc/x64/Makeconf"
 # The PATH of the check mode and of the compiles below that need nothing
 # but the compilers: unix /usr/bin:/bin, Windows bin\x64 and System32.
 if [ "$OS" = windows ]; then chk_path="$R_BINDIR:$sys32"; else chk_path=/usr/bin:/bin; fi
+
+# flang: the compilers group's, TC/flang (feat-standalone-toolchain phase
+# 6, B9), in both passes (PHASE6 open point O). pass_flang is its driver
+# as rzig names it, as pass_zig below: unix its own path with symlinks
+# resolved (macOS' /var is /private/var); Windows the long form with `/`,
+# compared case-insensitively. tc_phys is TC spelled the same way, for
+# the paths rzig derives from flang's (the intrinsic modules, the
+# runtime: Cc3).
+test -x "$TC/flang/bin/flang$exe" ||
+  { echo "error: ${archives[1]##*/} has no flang/bin/flang$exe: the compilers group holds flang since phase 6 (B9; pixi run toolchain, package-toolchain)" >&2; exit 1; }
+if [ "$OS" = windows ]; then
+  tc_phys="$(cygpath -m -l "$TC")"
+else
+  tc_phys="$(cd "$TC" && pwd -P)"
+fi
+pass_flang="$tc_phys/flang/bin/flang$exe"
+# Nothing reaches TC/flang but zig-fc's own flags: no .cfg anywhere in the
+# extracted tree (flang reads one beside its driver, and the toolchain
+# build copies none, B9), and no flang on the check mode's PATH. A host's
+# own flang in /usr/bin is noted: the RZIG_PRINT_ARGV checks below still
+# show which flang runs.
+cfgs="$(find "$BUNDLE_DIR" -name '*.cfg')"
+[ -z "$cfgs" ] ||
+  { echo "error: .cfg files in the extracted tree (flang would read one beside its driver; TC/flang has none, B9):" >&2; printf '%s\n' "$cfgs" | sed 's/^/  /' >&2; exit 1; }
+host_flang="$(PATH="$chk_path"; command -v flang 2> /dev/null || true)"
+if [ -n "$host_flang" ]; then
+  echo "   note: this host has a flang on PATH=$chk_path, $host_flang: zig-fc must still run TC/flang's (checked below)"
+  echo "== TC/flang: $pass_flang; no .cfg in the extracted tree"
+else
+  echo "== TC/flang: $pass_flang; no .cfg in the extracted tree, no flang on PATH=$chk_path"
+fi
 
 # pass_zig, the zig the pass's compiles run and its assertions name: in
 # the toolchain pass the compilers group's, as rzig spells it (unix: its
@@ -643,26 +778,20 @@ if [ "$pass" = toolchain ] && [ -n "$ZIG" ] && ! cmp -s "$ZIG" "$TC/zig/zig$exe"
 
 # rzig's check mode with the compilers there: the pass's zig (TC/zig's,
 # or ZIG_BIN's in the build pass), exit 0, and the line names it (Windows:
-# with `/` only, check.zig's display; PHASE5 open point Q); zig-fc's, with
-# the env's flang on PATH, names that flang too.
+# with `/` only, check.zig's display; PHASE5 open point Q); zig-fc's
+# names TC/flang's driver too, with no flang on PATH.
 if [ -n "$pass_zig" ]; then
   out="$(env -i "${base_env[@]}" "${zig_env[@]}" PATH="$chk_path" "$cc" --rzig-check | tr -d '\r')" ||
     { echo "error: ${cc##*/} --rzig-check failed with zig from $pass_what" >&2; exit 1; }
   printf '%s\n' "$out" | grep -qiF -- " at $pass_zig" ||
     { printf '%s\n' "$out" >&2; echo "error: ${cc##*/} --rzig-check does not name the $pass pass's zig, $pass_zig" >&2; exit 1; }
   echo "   $out"
-  checked="zig from $pass_what"
-  if [ -x "$fc_dir/flang" ]; then
-    fc_shown="$fc_dir/flang"
-    [ "$OS" != windows ] || fc_shown="$(cygpath -m "$fc_dir")/flang"
-    out="$(env -i "${base_env[@]}" "${zig_env[@]}" PATH="$fc_dir:$chk_path" "$fc" --rzig-check | tr -d '\r')" ||
-      { echo "error: ${fc##*/} --rzig-check failed with zig from $pass_what and $fc_dir on PATH" >&2; exit 1; }
-    printf '%s\n' "$out" | grep -qiF -- "flang at $fc_shown" ||
-      { printf '%s\n' "$out" >&2; echo "error: ${fc##*/} --rzig-check does not name the flang on PATH, $fc_shown" >&2; exit 1; }
-    echo "   $out"
-    checked="$checked, flang from PATH"
-  fi
-  echo "== check mode with the compilers: exit 0, $checked"
+  out="$(env -i "${base_env[@]}" "${zig_env[@]}" PATH="$chk_path" "$fc" --rzig-check | tr -d '\r')" ||
+    { echo "error: ${fc##*/} --rzig-check failed with zig from $pass_what and TC/flang" >&2; exit 1; }
+  printf '%s\n' "$out" | grep -qiF -- "flang at $pass_flang" ||
+    { printf '%s\n' "$out" >&2; echo "error: ${fc##*/} --rzig-check does not name TC/flang's driver, $pass_flang" >&2; exit 1; }
+  echo "   $out"
+  echo "== check mode with the compilers: exit 0, zig from $pass_what, flang from TC/flang"
 fi
 
 # The first C++ compile (PHASE5 open point G, (Cc11)): a shared library
@@ -734,6 +863,138 @@ CPP
   echo "== the bundle's compilers run the $pass pass's zig, $pass_zig"
 fi
 
+# The first Fortran compile (feat-standalone-toolchain phase 6, the
+# measurement PLAN.md asks for): R CMD SHLIB of the derived-type module
+# (fdt_src) through rzig build with no make (patch 0013's one hook; PATH
+# unix the tree's bin alone, Windows bin\x64 and System32: no flang on
+# it), in a HOME of its own, so that rzig's cache has no build runner yet
+# and, in the toolchain pass, zig's cache is empty: what a user waits for
+# a first Fortran library (the first C++ compile filled the other HOME's
+# caches). In the build pass zig's cache is env.sh's: for comparison.
+# The same call again gives the warm time; the library loads and
+# returns the area.
+if [ -n "$pass_zig" ]; then
+  fx="$VERIFY_DIR/first-fortran"
+  fhome="$VERIFY_DIR/fhome"
+  mkdir -p "$fhome"
+  fdt_src "$fx"
+  conftest_f "$fx"
+  if [ "$OS" = windows ]; then
+    fx_r="$R_EXE"; fx_path="$R_BINDIR:$sys32"; fx_load=(PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla)
+    fx_home=(USERPROFILE="$(w "$fhome")" HOME="$(w "$fhome")" LOCALAPPDATA="$(w "$fhome")"); fx_cache="$fhome/zig"
+  else
+    fx_r="$R_BIN"; fx_path="$BUNDLE_DIR/bin"; fx_load=(PATH=/usr/bin:/bin "$R_BIN" --vanilla --no-echo)
+    fx_home=(HOME="$fhome"); fx_cache="$fhome/.cache/zig"
+  fi
+  fx_first=""; fx_warm=""
+  for run in first warm; do
+    rm -f "$fx/fmod.$SO" "$fx"/*.mod
+    t0=$SECONDS
+    (cd "$fx" && env -i "${base_env[@]}" "${fx_home[@]}" "${zig_env[@]}" PATH="$fx_path" RZIG_TRACE=1 \
+      "$fx_r" CMD SHLIB -o "fmod.$SO" m.f90 u.f90) > "$fx/$run.log" 2>&1 ||
+      { cat "$fx/$run.log" >&2; echo "error: R CMD SHLIB of a derived-type module (m.f90, u.f90; the $run call) failed with TC/flang, zig from $pass_what and no make" >&2; exit 1; }
+    if [ "$run" = first ]; then fx_first=$((SECONDS - t0)); else fx_warm=$((SECONDS - t0)); fi
+    starts_line "$fx/$run.log" "rzig build: R CMD SHLIB, tier 1" ||
+      { cat "$fx/$run.log" >&2; echo "error: R CMD SHLIB of the derived-type module did not build through rzig build (no 'rzig build: R CMD SHLIB, tier 1')" >&2; exit 1; }
+  done
+  (cd "$fx" && env -i "${base_env[@]}" "${fx_load[@]}" -e "dyn.load('fmod.$SO'); stopifnot(.Fortran('fdtv', v = 0)\$v == 42)") ||
+    { echo "error: fmod.$SO (the derived-type module through R CMD SHLIB) did not load or return 42" >&2; exit 1; }
+  if [ "$pass" = toolchain ]; then
+    test -d "$fx_cache" ||
+      { echo "error: after the first Fortran compile, zig's cache is not at $fx_cache (a zig cache variable reached the toolchain pass?)" >&2; exit 1; }
+    fx_which="an empty cache, zig's cache then $(find "$fx_cache" -type f -exec ls -ln {} + | awk '{ s += $5 } END { printf "%d", s / 1048576 }') MB"
+  else
+    fx_which="env.sh's cache, for comparison"
+  fi
+  echo "== the first Fortran compile (TC/flang, zig from $pass_what, $fx_which): $fx_first s, warm $fx_warm s; R CMD SHLIB of a derived-type module through rzig build, no make, loads (42)"
+
+  # zig-fc's command lines (RZIG_PRINT_ARGV, a dry run; PATH as the check
+  # mode's), every OS. A compile is TC/flang's driver with
+  # -fintrinsic-modules-path at TC/flang's module directory, a physical
+  # path with no `..` (Cc3: flang_rt.zig's modulesDir; omicron's TMPDIR
+  # is /private/var/... physically). A program's link is two blocks:
+  # TC/flang compiling the source, a line `&&`, then the pass's zig
+  # linking with TC/flang's static runtime (decision E: every link
+  # through zig). The ZIG_LIB_DIR= line rzig prints before zig's block
+  # where it mirrors conda-forge zig's libc++ (macOS) is skipped wherever
+  # it stands (Cc6). Windows: `\` read as `/` and every path compared in
+  # lower case (NTFS ignores case; open point Q). lc_win <text>: that
+  # case rule for a path compared with fc_argv's lines.
+  lc_win() { if [ "$OS" = windows ]; then printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]'; else printf '%s\n' "$1"; fi; }
+  fc_argv() {
+    (cd "$fx" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$chk_path" RZIG_PRINT_ARGV=1 "$fc" "$@") |
+      tr -d '\r' | grep -v '^ZIG_LIB_DIR=' | tr '\\' / | { if [ "$OS" = windows ]; then tr '[:upper:]' '[:lower:]'; else cat; fi; }
+  }
+  lc_flang="$(lc_win "$pass_flang")"; lc_zig="$(lc_win "$pass_zig")"; lc_tc="$(lc_win "$tc_phys")"
+  argv="$(fc_argv -c m.f90 -o m.o)" || true
+  first="$(printf '%s\n' "$argv" | sed -n 1p)"
+  [ "$first" = "$lc_flang" ] ||
+    { printf '%s\n' "$argv" >&2; echo "error: zig-fc -c m.f90 runs '$first', not TC/flang's driver $pass_flang" >&2; exit 1; }
+  mods="$(printf '%s\n' "$argv" | grep -A1 -xF -- -fintrinsic-modules-path | sed -n 2p)"
+  mods_dir="$mods"; [ "$OS" != windows ] || [ -z "$mods" ] || mods_dir="$(cygpath -u "$mods")"
+  case "$mods" in
+    *..*) mods_ok="" ;;
+    "$lc_tc/flang/lib/clang/"*/finclude/flang/*) mods_ok=1 ;;
+    *) mods_ok="" ;;
+  esac
+  [ -n "$mods_ok" ] && test -d "$mods_dir" ||
+    { printf '%s\n' "$argv" >&2; echo "error: zig-fc -c m.f90's -fintrinsic-modules-path is '$mods', not a directory under $tc_phys/flang/lib/clang/<major>/finclude/flang/ with no '..' (Cc3)" >&2; exit 1; }
+  argv="$(fc_argv -o "conftest$exe" conftest.f)" || true
+  b1="$(printf '%s\n' "$argv" | awk '$0 == "&&" { exit } { print }')"
+  b2="$(printf '%s\n' "$argv" | awk 'f { print } $0 == "&&" { f = 1 }')"
+  rt=""
+  while IFS= read -r l; do
+    case "$l" in "$lc_tc/flang/lib/clang/"*/lib/*/libflang_rt.runtime.a) rt="$l" ;; esac
+  done <<< "$b2"
+  if [ "$(printf '%s\n' "$argv" | grep -cxF '&&')" != 1 ] || [ "$(printf '%s\n' "$b1" | sed -n 1p)" != "$lc_flang" ] ||
+     ! printf '%s\n' "$b1" | grep -qxF -- -c || [ "$(printf '%s\n' "$b2" | sed -n 1p)" != "$lc_zig" ] || [ -z "$rt" ]; then
+    printf '%s\n' "$argv" >&2
+    echo "error: zig-fc -o conftest$exe conftest.f is not TC/flang compiling (-c), '&&', then the $pass pass's zig $pass_zig linking with TC/flang's lib/clang/<major>/lib/<dir>/libflang_rt.runtime.a (decision E)" >&2
+    exit 1
+  fi
+  echo "== zig-fc's commands: TC/flang compiles with -fintrinsic-modules-path ${mods#"$lc_tc/"} (physical, no '..'); a program is TC/flang's compile, then the $pass pass's zig linking ${rt#"$lc_tc/"}"
+
+  # omp_lib.h (Cc9): a cpp #include "omp_lib.h" in a .F source is
+  # expanded by $FC -E from TC/flang's module directory, the one the flag
+  # names (on macOS the bare driver's default has none, CP2); a Fortran
+  # INCLUDE 'omp_lib.h', which flang's -E leaves in place for the
+  # compile (phase 6 step 3's measurement), compiles. Every flavor:
+  # omp_lib.h is in the one module directory (B40's Fortran limit, U).
+  printf '%s\n' '      subroutine ic(n)' '      implicit none' '#include "omp_lib.h"' '      integer n' '      n = omp_get_max_threads()' '      end' > "$fx/inc_cpp.F"
+  printf '%s\n' 'subroutine io(n)' '  implicit none' "  include 'omp_lib.h'" '  integer, intent(out) :: n' '  n = omp_get_max_threads()' 'end subroutine io' > "$fx/inc_omp.f90"
+  (cd "$fx" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$chk_path" "$fc" -E inc_cpp.F > inc_cpp.i 2> inc.log &&
+    env -i "${base_env[@]}" "${zig_env[@]}" PATH="$chk_path" "$fc" -c inc_omp.f90 -o inc_omp.o >> inc.log 2>&1) ||
+    { cat "$fx/inc.log" >&2; echo "error: \$FC -E of a #include \"omp_lib.h\" source, or \$FC -c of an INCLUDE 'omp_lib.h' one, failed" >&2; exit 1; }
+  inc="$(tr -d '\r' < "$fx/inc_cpp.i" | sed -n 's/^#line "\(.*omp_lib\.h\)".*/\1/p' | sed -n 1p | tr -s '\\' /)"
+  [ "$(lc_win "$inc")" = "$mods/omp_lib.h" ] ||
+    { echo "error: \$FC -E expanded #include \"omp_lib.h\" from '${inc:-(nowhere)}', not from $mods/omp_lib.h (Cc9)" >&2; exit 1; }
+  echo "== omp_lib.h: \$FC -E expands #include \"omp_lib.h\" from TC/flang's module directory; INCLUDE 'omp_lib.h' compiles"
+
+  # The derived-type module as a package, fdt: src/m.f90 and src/u.f90
+  # (fdt_src) and src/init.c registering fdtv, no Makevars, so R CMD
+  # INSTALL builds it through rzig build's tier 1 with no make
+  # (RZIG_TRACE=1: `rzig build: tier 1`), m.f90's .mod before u.f90; it
+  # loads with nothing but the tree and returns the area. PATH as above.
+  fd="$VERIFY_DIR/fdt"
+  fdt_src "$fd/fdt/src"
+  mkdir -p "$fd/fdt/R" "$fd/lib"
+  printf 'Package: fdt\nVersion: 0.1\nTitle: Verify Bundle\nDescription: A Fortran module with a derived type, through rzig build.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' > "$fd/fdt/DESCRIPTION"
+  printf 'useDynLib(fdt)\nexport(f)\n' > "$fd/fdt/NAMESPACE"
+  printf 'f <- function() .Fortran("fdtv", v = 0, PACKAGE = "fdt")$v\n' > "$fd/fdt/R/f.R"
+  printf '%s\n' '#include <R.h>' '#include <R_ext/Rdynload.h>' 'void F77_NAME(fdtv)(double *v);' \
+    'static const R_FortranMethodDef fdt_f[] = {{"fdtv", (DL_FUNC) &F77_NAME(fdtv), 1, NULL}, {NULL, NULL, 0, NULL}};' \
+    'void R_init_fdt(DllInfo *dll) { R_registerRoutines(dll, NULL, NULL, fdt_f, NULL); R_useDynamicSymbols(dll, FALSE); }' > "$fd/fdt/src/init.c"
+  (cd "$fd" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$fx_path" RZIG_TRACE=1 \
+    "$fx_r" CMD INSTALL -l lib fdt) > "$fd/install.log" 2>&1 ||
+    { cat "$fd/install.log" >&2; echo "error: fdt (a derived-type module, two Fortran files and a C init) did not install with TC/flang and no make" >&2; exit 1; }
+  starts_line "$fd/install.log" "rzig build: tier 1" ||
+    { cat "$fd/install.log" >&2; echo "error: fdt did not build through rzig build (no 'rzig build: tier 1' line)" >&2; exit 1; }
+  (cd "$fd" && env -i "${base_env[@]}" "${fx_load[@]}" \
+    -e 'stopifnot(getExportedValue(loadNamespace("fdt", lib.loc = "lib"), "f")() == 42)') ||
+    { echo "error: fdt, built through rzig build, did not load or return 42" >&2; exit 1; }
+  echo "== the derived-type module as a package: fdt builds through rzig build (tier 1, no make), loads and returns 42"
+fi
+
 # The install preflight's other branches (B26, C26; feat-zig-pkg-build
 # M4): the pass's zig, and no make (the build-tools group is not
 # extracted yet) and no flang on PATH: unix the tree's bin alone, Windows
@@ -750,7 +1011,8 @@ fi
 # lib: a static library through $(AR)) needs make and stops at the build
 # tools' check with rzig's reason and their text. unix also: one with a
 # Fortran source, src/a.f (pfF), stops at the compilers' with no flang
-# and their text; an R-only package with a configure script (pfG,
+# (TC/flang's driver moved aside, open point N) and their text; an
+# R-only package with a configure script (pfG,
 # configure_marker) stops at the build tools' with "a configure script R
 # runs", its configure not run. The preflight's own ERROR line tells its
 # stop from the one install.R's R CMD config (patch 0010) would make
@@ -793,7 +1055,9 @@ if [ -n "$pass_zig" ]; then
   }
   preflight_stops pfM "zig-cc: pfM needs make: src/Makevars has a rule or target line: '\$(SHLIB): lib/libval.a'; no make on PATH" "$build_tools_head"
   if [ "$OS" != windows ]; then
+    flang_aside
     preflight_stops pfF "$no_flang_line" "$compilers_head"
+    flang_back
     preflight_stops pfG "zig-cc: pfG needs make: a configure script R runs; no make on PATH" "$build_tools_head"
   fi
   (cd "$pf" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$pf_path" RZIG_TRACE=1 \
@@ -825,7 +1089,7 @@ if [ -n "$pass_zig" ]; then
   if [ "$OS" = windows ]; then
     echo "== the install preflight with zig and no build tools (PATH = bin\\x64 + System32): a C package builds through rzig build (the build runner in rzig's cache under HOME, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text"
   else
-    echo "== the install preflight with zig and no build tools: a C package builds through rzig build (the build runner in rzig's cache under HOME, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text, an R-only package with a configure script with 'a configure script R runs' and that text (its configure not run), a Fortran one with no flang and the compilers' text"
+    echo "== the install preflight with zig and no build tools: a C package builds through rzig build (the build runner in rzig's cache under HOME, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text, an R-only package with a configure script with 'a configure script R runs' and that text (its configure not run), a Fortran one with no flang (TC/flang's driver moved aside) and the compilers' text"
   fi
 fi
 
@@ -848,10 +1112,8 @@ check_minos() {
 # compiler probe, which R CMD SHLIB now builds through rzig build (patch
 # 0013's one hook in .shlib_internal; rzig build --shlib), with the
 # pass's zig and the build tools not extracted: PATH unix the tree's bin
-# alone, Windows bin\x64 and System32; for Fortran also a directory
-# holding the env's flang alone (Windows: copies of flang.exe,
-# flang-new.exe and their .cfg files, as pkg-parity's no-make install
-# has them, and flang's runtime archive where the copy looks for it).
+# alone, Windows bin\x64 and System32; Fortran's flang is TC/flang's,
+# which zig-fc finds beside it (phase 6).
 # RZIG_TRACE=1: each log says `rzig build: R CMD SHLIB, tier
 # 1` and holds no recipe make echoed. The shapes: pkgbuild's probe (foo.c
 # beside an invalid junk.c, no -o), Rcpp's sourceCpp (-o
@@ -869,23 +1131,13 @@ check_minos() {
 # (.rzig.*) beside its sources.
 if [ -n "$pass_zig" ]; then
   sn="$VERIFY_DIR/shlib-nomake"
-  mkdir -p "$sn/fc"
+  mkdir -p "$sn"
   if [ "$OS" = windows ]; then
     sn_r="$R_EXE"; sn_path="$R_BINDIR:$sys32"; sn_load=(PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla)
-    for f in flang.exe flang-new.exe flang.cfg flang-compile.cfg; do
-      [ ! -f "$fc_dir/$f" ] || cp "$fc_dir/$f" "$sn/fc/"
-    done
-    # and flang's runtime where the copy's -print-resource-dir names it
-    # (<bin>/../lib/clang/<major>/lib/<triple>/), which rzig links
-    # (flang_rt.zig); without it rzig drops -lflang_rt.runtime and a
-    # Fortran I/O statement is an undefined symbol at the link
-    rt="$(cd "$fc_dir/.." && ls lib/clang/*/lib/*/libflang_rt.runtime.a 2> /dev/null | head -1 || true)"
-    if [ -n "$rt" ]; then mkdir -p "$sn/${rt%/*}"; cp "$fc_dir/../$rt" "$sn/$rt"; fi
     # a path R reads: C:/... on Windows
     mp() { cygpath -m "$1"; }
   else
     sn_r="$R_BIN"; sn_path="$BUNDLE_DIR/bin"; sn_load=(PATH=/usr/bin:/bin "$R_BIN" --vanilla --no-echo)
-    [ ! -x "$fc_dir/flang" ] || ln -s "$fc_dir/flang" "$sn/fc/flang"
     mp() { printf '%s\n' "$1"; }
   fi
   # sn_run <dir> <log> [VAR=value...] -- <program and arguments>: in
@@ -960,8 +1212,8 @@ CPP
   sn_shapes="$sn_shapes, sourceCpp"
 
   # inline's and knitr's Fortran, where FLIBS names the static flang
-  # runtime (minimal has none)
-  if grep -q '^FLIBS = .*flang_rt' "$mk" && [ -n "$(ls "$sn/fc")" ]; then
+  # runtime (every flavor's Makeconf), with TC/flang and no flang on PATH
+  if grep -q '^FLIBS = .*flang_rt' "$mk"; then
     mkdir -p "$sn/fortran"
     cat > "$sn/fortran/fs.f" <<'FORTRAN'
       subroutine fsum(n, x, s)
@@ -979,10 +1231,8 @@ CPP
       read(buf,'(i12)') r
       end
 FORTRAN
-    sn_path="$sn/fc:$sn_path"
     sn_run "$sn/fortran" "$sn/fortran.log" -- "$sn_r" CMD SHLIB -o "fs.$SO" fs.f ||
-      { cat "$sn/fortran.log" >&2; echo "error: R CMD SHLIB of a Fortran file failed with the compilers, flang and no make" >&2; exit 1; }
-    sn_path="${sn_path#"$sn/fc:"}"
+      { cat "$sn/fortran.log" >&2; echo "error: R CMD SHLIB of a Fortran file failed with the compilers (TC/flang) and no make" >&2; exit 1; }
     sn_built fortran "$sn/fortran.log" "$sn/fortran"
     f_dep="$(needed_of "$sn/fortran/fs.$SO" | grep flang_rt || true)"
     [ -z "$f_dep" ] || { echo "error: fs.$SO (R CMD SHLIB through rzig build) needs a shared flang runtime: $f_dep" >&2; exit 1; }
@@ -1150,18 +1400,34 @@ if [ "$OS" = windows ]; then
     echo "== OpenMP from the compilers group (dry run): -idirafter and -L into R_HOME/bin/toolchain/openmp"
   fi
   # zig-fc.exe (F3c): a shared link of objects (USE_FC_TO_LINK) goes
-  # through zig as gcc.exe's does, with the static runtime of the flang on
-  # PATH and libc++ appended.
-  if command -v flang > /dev/null 2>&1; then
-    argv="$(RZIG_PRINT_ARGV=1 "$fc" -shared -o x.dll a.o)"
-    if ! printf '%s\n' "$argv" | grep -qi -- '/libflang_rt\.runtime\.a$' ||
-       ! printf '%s\n' "$argv" | grep -qxF -- '-lc++' ||
-       ! printf '%s\n' "$argv" | grep -qi -- "^-L.*/$TOP/Library/lib\$"; then
-      printf '%s\n' "$argv" >&2
-      echo "error: zig-fc.exe's shared link lacks the static flang runtime, -lc++ or -L<prefix>/Library/lib" >&2
-      exit 1
-    fi
-    echo "== zig-fc.exe verified (dry run): a shared link goes through zig with the static flang runtime and -lc++"
+  # through zig as gcc.exe's does, with TC/flang's static runtime and no
+  # -lc++ (flang-rt-zig 10's runtime needs no C++ runtime,
+  # feat-standalone-toolchain phase 6, open point K).
+  argv="$(RZIG_PRINT_ARGV=1 "$fc" -shared -o x.dll a.o | tr -d '\r' | tr '\\' /)"
+  if ! printf '%s\n' "$argv" | grep -qiF -- "$tc_phys/flang/lib/clang/" ||
+     ! printf '%s\n' "$argv" | grep -qi -- '/libflang_rt\.runtime\.a$' ||
+     printf '%s\n' "$argv" | grep -qxF -- '-lc++' ||
+     ! printf '%s\n' "$argv" | grep -qi -- "^-L.*/$TOP/Library/lib\$"; then
+    printf '%s\n' "$argv" >&2
+    echo "error: zig-fc.exe's shared link lacks TC/flang's static runtime ($tc_phys/flang/lib/clang/.../libflang_rt.runtime.a) or -L<prefix>/Library/lib, or has -lc++" >&2
+    exit 1
+  fi
+  echo "== zig-fc.exe verified (dry run): a shared link goes through zig with TC/flang's static runtime, no -lc++"
+
+  # A program with $FC alone, as a configure script makes one (PLAN.md
+  # phase 6; scenario 3 installs fcconf, whose configure.win does it with
+  # the build tools): conftest.f compiled by TC/flang, linked by the
+  # pass's zig and run, printing ok, then linked again with -v, with only
+  # bin\x64 and System32 on PATH.
+  if [ -n "$pass_zig" ]; then
+    fw="$VERIFY_DIR/fc-direct"
+    conftest_f "$fw"
+    (cd "$fw" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$R_BINDIR:$sys32" "$fc" -o conftest.exe conftest.f &&
+      env -i "${base_env[@]}" PATH="$R_BINDIR:$sys32" ./conftest.exe > out &&
+      env -i "${base_env[@]}" "${zig_env[@]}" PATH="$R_BINDIR:$sys32" "$fc" -v -o conftest.exe conftest.f) > "$fw/log" 2>&1 &&
+      [ "$(tr -d '\r' < "$fw/out")" = ok ] ||
+      { cat "$fw/log" >&2; echo "error: zig-fc.exe -o conftest.exe conftest.f, the program's run (it must print ok), or the link with -v failed with PATH = bin\\x64 + System32" >&2; exit 1; }
+    echo "== a program with \$FC alone: zig-fc.exe compiles (TC/flang), links (zig) and the program runs, with PATH = bin\\x64 + System32; -v links too"
   fi
 
   # An OpenMP DLL from gcc.exe alone, no make (a build tool): omp.h from
@@ -1227,32 +1493,44 @@ fi
 # a user machine.
 if [ "$OS" != windows ]; then
   # What a compile needs under env -i, as on a user machine: the pass's
-  # zig (TC/zig's, or ZIG_BIN's through zig_env), make and flang from
-  # PATH, their own directories (the env's bin); flang's decides whether
-  # the Fortran checks run. Every env -i that compiles takes $pkg_path
-  # and zig_env. The env's make, not the build-tools group's, which is
+  # zig (TC/zig's, or ZIG_BIN's through zig_env), TC/flang (phase 6), and
+  # make from PATH, its own directory (the env's bin). Every env -i that
+  # compiles takes $pkg_path and zig_env. The env's make, not the build-tools group's, which is
   # not extracted yet: PLAN.md's Verification has scenario 2 use the
   # host's make from /usr/bin, and any make that is not the group's
   # stands in for it (PHASE3 C17); the env's is on every machine this
   # runs on, where a host may have none (CI's containers) or Apple's 3.81
   # (omicron). Scenario 3 checks the group's.
-  pkg_path="$(dirname "$(command -v make 2>/dev/null || echo /nonexistent/make)"):$fc_dir:/usr/bin:/bin"
+  pkg_path="$(dirname "$(command -v make 2>/dev/null || echo /nonexistent/make)"):/usr/bin:/bin"
   if [ -n "$pass_zig" ] && [ -x "$pass_zig" ]; then
     pkg_dir="$VERIFY_DIR/shlib"
     mkdir -p "$pkg_dir"
     # The compiles below run with $pkg_path, whose first entry is the
     # env's bin, where conda-forge's zig is (every leg's default env, the
-    # upstream legs' too), so the toolchain pass's compiles have a zig on
-    # PATH that is not the pass's. The dry run above, under /usr/bin:/bin,
-    # cannot see that; this one, under $pkg_path, checks that the compiles
-    # below still run the pass's zig (find_zig's order: ZIG_BIN, then
-    # TC/zig, before PATH; B4): the command's first word, after the
-    # ZIG_LIB_DIR= line.
+    # upstream legs' too), and the env's flang with its flang.cfg, so the
+    # toolchain pass's compiles have a zig and a flang on PATH that are
+    # not the pass's. The dry runs above, under /usr/bin:/bin, cannot see
+    # that; these, under $pkg_path, check that the compiles below still
+    # run the pass's zig (find_zig's order: ZIG_BIN, then TC/zig, before
+    # PATH; B4) and TC/flang (flang_rt.zig's order: TC/flang before
+    # PATH): each command's first word, after the ZIG_LIB_DIR= line.
     rz="$(cd "$pkg_dir" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" RZIG_PRINT_ARGV=1 \
       "$cc" -c a.c | grep -v '^ZIG_LIB_DIR=' | sed -n 1p)" || true
     [ "$rz" = "$pass_zig" ] ||
       { echo "error: with the env's bin on PATH (conda-forge's zig there), the bundle's ${cc##*/} runs '$rz', not the $pass pass's zig $pass_zig" >&2; exit 1; }
-    echo "== with the env's bin on PATH too, the bundle's compilers run the $pass pass's zig"
+    rf="$(cd "$pkg_dir" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" RZIG_PRINT_ARGV=1 \
+      "$fc" -c a.f90 | grep -v '^ZIG_LIB_DIR=' | sed -n 1p)" || true
+    [ "$rf" = "$pass_flang" ] ||
+      { echo "error: with the env's bin on PATH (its flang there), the bundle's ${fc##*/} runs '$rf', not TC/flang's $pass_flang" >&2; exit 1; }
+    echo "== with the env's bin on PATH too, the bundle's compilers run the $pass pass's zig and TC/flang"
+    # The Fortran builds after the first (fl, fcconf, fomp, fompfc) run
+    # with no flang on PATH and no .cfg (PLAN.md phase 6): $fc_path holds
+    # the env's make alone, linked, then /usr/bin:/bin, as cf's below.
+    # fs keeps $pkg_path: a real build with the env's flang and its .cfg
+    # first on PATH, which TC/flang must win over (rf above).
+    mkdir -p "$pkg_dir/nofl/bin"
+    ln -sf "$(command -v make)" "$pkg_dir/nofl/bin/make"
+    fc_path="$pkg_dir/nofl/bin:/usr/bin:/bin"
 
     # Each shape below is built twice: through R CMD SHLIB, which is make
     # here by R_ZIG_PKG_BUILDER=make, the make reference (R CMD SHLIB's
@@ -1354,9 +1632,9 @@ CPP
     # Fortran package needs no shared runtime and no rpath into the build
     # env. Checked here, on the relocated tree, because the contract suite
     # runs before staging, while libR still carries build-env rpaths that
-    # hid the shared runtime once (2026-09-30, macOS slim). minimal empties
-    # FLIBS (no Fortran compiler with the wheel), so it is skipped there.
-    if grep -q '^FLIBS = .*flang_rt' "$mk" && [ -x "$fc_dir/flang" ]; then
+    # hid the shared runtime once (2026-09-30, macOS slim). A Makeconf
+    # whose FLIBS names no flang runtime skips it.
+    if grep -q '^FLIBS = .*flang_rt' "$mk"; then
       # fw needs the runtime (internal formatted I/O: _FortranAio*), so a
       # dropped -lflang_rt.runtime fails the dyn.load; fsum alone would not.
       cat > "$pkg_dir/fs.f" <<'FORTRAN'
@@ -1395,13 +1673,13 @@ FORTRAN
 
       # USE_FC_TO_LINK (F3c): R links with SHLIB_FCLD = $(FC), rzig's
       # zig-fc, and takes $(FLIBS) off the line. zig-fc links objects
-      # through zig, as zig-cc does, with the static runtime of the flang on
-      # PATH (flang's own driver: "cannot find -lflang_rt.runtime"): no
+      # through zig, as zig-cc does, with TC/flang's static runtime
+      # (flang's own driver: "cannot find -lflang_rt.runtime"): no
       # shared runtime, no rpath, the macOS floor, and it loads.
       mkdir -p "$pkg_dir/fl"
       cp "$pkg_dir/fs.f" "$pkg_dir/fl/fl.f"
       echo 'USE_FC_TO_LINK =' > "$pkg_dir/fl/Makevars"
-      (cd "$pkg_dir/fl" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
+      (cd "$pkg_dir/fl" && env -i "${base_env[@]}" PATH="$fc_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
         "$R_BIN" CMD SHLIB -o fl.so fl.f > shlib.log 2>&1) || { cat "$pkg_dir/fl/shlib.log" >&2; echo "error: a USE_FC_TO_LINK Fortran package failed to link with the bundle" >&2; exit 1; }
       grep -Eq 'toolchain/zig-fc (-shared|-dynamiclib) .*-o fl\.so' "$pkg_dir/fl/shlib.log" || { cat "$pkg_dir/fl/shlib.log" >&2; echo "error: the USE_FC_TO_LINK link did not run zig-fc" >&2; exit 1; }
       check_minos "$pkg_dir/fl/fl.o" "$pkg_dir/fl/fl.so"
@@ -1414,7 +1692,9 @@ FORTRAN
       (cd "$pkg_dir/fl" && env -i "${base_env[@]}" PATH=/usr/bin:/bin \
         "$R_BIN" --vanilla --no-echo -e 'dyn.load("fl.so"); stopifnot(.Fortran("fsum", 3L, c(1, 2, 3), s = 0)$s == 6, .Fortran("fw", 42L, r = 0L)$r == 42L)')
       echo "== compiled package verified: USE_FC_TO_LINK links through zig-fc, static flang runtime, no rpath, loads (Fortran; R CMD SHLIB, make)"
+      shape_path="$fc_path"
       shape_pkg fl "$pkg_dir/fl/fl.f" -- 'USE_FC_TO_LINK ='
+      shape_path=""
       # the link rzig ran (RZIG_TRACE: `zig-fc: <zig> cc ... -o <out>/fl.so`)
       grep -Eq '^zig-fc: .* -o [^ ]*fl\.so' "$shapes/fl.log" || { cat "$shapes/fl.log" >&2; echo "error: the USE_FC_TO_LINK package's link through rzig build did not run zig-fc" >&2; exit 1; }
       check_minos "$shape_so"
@@ -1428,11 +1708,29 @@ FORTRAN
       echo "== compiled package verified: USE_FC_TO_LINK links through zig-fc, static flang runtime, no rpath, loads (Fortran; R CMD INSTALL, rzig build)"
     fi
 
+    # A configure script that runs $FC as autoconf's Fortran checks do
+    # (fcconf_pkg: compile, link and run a program, then link with -v),
+    # in a package R CMD INSTALL builds with the env's make (a configure
+    # script R runs needs make); it loads with nothing but the tree.
+    fcconf_pkg "$shapes"
+    (cd "$shapes" && env -i "${base_env[@]}" PATH="$fc_path" "${zig_env[@]}" \
+      "$R_BIN" CMD INSTALL -l lib fcconf) > "$shapes/fcconf.log" 2>&1 ||
+      { cat "$shapes/fcconf.log" >&2; echo "error: fcconf (a configure script that compiles, links and runs a program with \$FC) did not install" >&2; exit 1; }
+    grep -q '^fcconf: .*/zig-fc compiles, links and runs a program$' "$shapes/fcconf.log" ||
+      { cat "$shapes/fcconf.log" >&2; echo "error: fcconf's configure did not say that \$FC compiles, links and runs a program" >&2; exit 1; }
+    shape_load fcconf 'stopifnot(getExportedValue(asNamespace("fcconf"), "f")() == 5L)'
+    echo "== a configure script with \$FC: fcconf's configure compiles, links and runs a program with zig-fc (TC/flang, zig), links with -v; the package installs and loads"
+
+    # The no-flang checks below move TC/flang's driver aside (open point
+    # N a) and put it back after them.
+    flang_aside
+
     # FC names zig-fc whether or not a flang is installed: with none (not
     # in the toolchain's flang/, the tree's bin or PATH), a Fortran compile
     # stops at once with exit 127 and the compilers group's text, which
     # names flang (feat-standalone-toolchain B35; rzig never reads
-    # R_ZIG_TOOLCHAIN_HINT).
+    # R_ZIG_TOOLCHAIN_HINT). A host's own flang in /usr/bin or /bin is one
+    # rzig rightly finds: then this is skipped.
     if ! [ -x /usr/bin/flang ] && ! [ -x /bin/flang ]; then
       printf '      end\n' > "$pkg_dir/nofc.f"
       rc=0
@@ -1448,7 +1746,8 @@ FORTRAN
     fi
 
     # $(FLIBS) on a C package's link (CRAN's usual PKG_LIBS = $(LAPACK_LIBS)
-    # $(BLAS_LIBS) $(FLIBS)) with no flang on PATH, as with the wheel: the
+    # $(BLAS_LIBS) $(FLIBS)) with no flang (TC/flang's driver aside, none
+    # on PATH), as with the wheel: the
     # compilers (rzig) drop -lflang_rt.runtime: nothing was compiled by flang.
     # PATH: the env's make alone (above: the group's comes in scenario 3), no flang.
     mkdir -p "$pkg_dir/cf/bin"
@@ -1468,6 +1767,7 @@ FORTRAN
     shape_path=""
     shape_load cf 'stopifnot(.C("cfl", n = 0L, PACKAGE = "cf")$n == 7L)'
     echo "== compiled package verified: \$(FLIBS) links with no Fortran compiler (C; R CMD INSTALL, rzig build, PATH the tree's bin alone: no flang, no make)"
+    flang_back
 
     # OpenMP's compile-time files are the compilers group's openmp/
     # (feat-standalone-toolchain B22), which rzig counts as one more
@@ -1550,19 +1850,25 @@ FORTRAN
     fi
 
     # Fortran OpenMP, wherever Makeconf offers it (slim, full): `use
-    # omp_lib` compiles against the omp_lib.mod of the flang on PATH
-    # (flang-rt-zig's, LLVM 23, the release of the llvm-openmp pixi.toml
-    # pins), and the package links the tree's libomp through rzig, as the C
+    # omp_lib` compiles against TC/flang's omp_lib.mod (flang-rt-zig's,
+    # LLVM 23, the release of the llvm-openmp pixi.toml pins; zig-fc's
+    # modules flag), and the package links the tree's libomp through rzig, as the C
     # one does (and, as there, must record it itself). R-exts' two forms:
     # $(SHLIB_OPENMP_FFLAGS) on the compile and $(SHLIB_OPENMP_CFLAGS) on
     # the link, which the C compiler does (fomp); and USE_FC_TO_LINK with
     # $(SHLIB_OPENMP_FFLAGS) on both, zig-fc linking (fompfc). FOMP_R
-    # checks that a parallel region ran on two of libomp's threads. flang
-    # is on PATH for the compile only: the load runs with /usr/bin:/bin.
-    if grep -q '^SHLIB_OPENMP_FFLAGS = *-' "$mk" && [ -x "$fc_dir/flang" ]; then
+    # checks that a parallel region ran on two of libomp's threads; the
+    # load runs with /usr/bin:/bin.
+    # Where Makeconf offers none (minimal, B40), B40's Fortran limit
+    # instead (PHASE6 open point U, Cg1): omp_lib.mod is in TC/flang's one
+    # module directory, so `use omp_lib` compiles, and a program's link
+    # with -fopenmp fails on an undefined omp_ or __kmpc_ symbol, there
+    # being no libomp in the base (no new rzig message: the link's own
+    # error is the record).
+    if grep -q '^SHLIB_OPENMP_FFLAGS = *-' "$mk"; then
       fomp_src "$pkg_dir"
       for d in fomp fompfc; do
-        (cd "$pkg_dir/$d" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
+        (cd "$pkg_dir/$d" && env -i "${base_env[@]}" PATH="$fc_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
           "$R_BIN" CMD SHLIB -o "$d.so" "$d.f" > shlib.log 2>&1) || { cat "$pkg_dir/$d/shlib.log" >&2; echo "error: the Fortran OpenMP package $d failed to build with the bundle" >&2; exit 1; }
         check_minos "$pkg_dir/$d/$d.o" "$pkg_dir/$d/$d.so"
         f_dep="$(needed_of "$pkg_dir/$d/$d.so" | grep flang_rt || true)"
@@ -1577,9 +1883,11 @@ FORTRAN
       (cd "$pkg_dir" && env -i "${base_env[@]}" PATH=/usr/bin:/bin \
         "$R_BIN" --vanilla --no-echo -e "$FOMP_R")
       echo "== compiled package verified: Fortran OpenMP (use omp_lib, a parallel region on two threads; SHLIB_OPENMP_FFLAGS, linked by the C compiler and by zig-fc) links the tree's libomp, no rpath, loads (R CMD SHLIB, make)"
+      shape_path="$fc_path"
       shape_pkg fomp "$pkg_dir/fomp/fomp.f" -- 'PKG_FFLAGS = $(SHLIB_OPENMP_FFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)'
       fomp_pkg_so="$shape_so"
       shape_pkg fompfc "$pkg_dir/fompfc/fompfc.f" -- 'USE_FC_TO_LINK =' 'PKG_FFLAGS = $(SHLIB_OPENMP_FFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_FFLAGS)'
+      shape_path=""
       grep -Eq '^zig-fc: .* -o [^ ]*fompfc\.so' "$shapes/fompfc.log" || { cat "$shapes/fompfc.log" >&2; echo "error: the USE_FC_TO_LINK link of the fompfc package through rzig build did not run zig-fc" >&2; exit 1; }
       for so in "$fomp_pkg_so" "$shape_so"; do
         check_minos "$so"
@@ -1593,6 +1901,18 @@ FORTRAN
       done
       shape_load fomp 'loadNamespace("fompfc", lib.loc = "lib"); for (d in c("fomp", "fompfc")) { r <- .Fortran("fompn", n = 0L, t = 0L, s = 0L, PACKAGE = d); stopifnot(r$n >= 1L, r$t == 2L, r$s == 5050L); cat(d, ": omp_get_max_threads() =", r$n, "; a num_threads(2) region ran on", r$t, "threads\n") }'
       echo "== compiled package verified: Fortran OpenMP, linked by the C compiler and by zig-fc, links the tree's libomp, no rpath, loads (R CMD INSTALL, rzig build)"
+    else
+      printf '%s\n' 'program ompf' '  use omp_lib' '  implicit none' '  print *, omp_get_max_threads()' 'end program ompf' > "$pkg_dir/ompf.f90"
+      (cd "$pkg_dir" && env -i "${base_env[@]}" "${zig_env[@]}" PATH=/usr/bin:/bin "$fc" -fopenmp -c ompf.f90 -o ompf.o) > "$pkg_dir/ompf.log" 2>&1 ||
+        { cat "$pkg_dir/ompf.log" >&2; echo "error: $FLAVOR: \$FC -fopenmp -c of a 'use omp_lib' program failed: omp_lib.mod is in TC/flang's module directory on every flavor (B40, open point U)" >&2; exit 1; }
+      rc=0
+      (cd "$pkg_dir" && env -i "${base_env[@]}" "${zig_env[@]}" PATH=/usr/bin:/bin "$fc" -fopenmp -o ompf ompf.f90) > "$pkg_dir/ompf.log" 2>&1 || rc=$?
+      if [ "$rc" = 0 ] || ! grep -Eq 'undefined.*(omp_|__kmpc_)' "$pkg_dir/ompf.log"; then
+        cat "$pkg_dir/ompf.log" >&2
+        echo "error: $FLAVOR offers no OpenMP, but \$FC -fopenmp -o ompf ompf.f90 (use omp_lib) exited $rc without naming an undefined omp_ or __kmpc_ symbol (B40's Fortran limit, open point U)" >&2
+        exit 1
+      fi
+      echo "== B40's Fortran limit: use omp_lib compiles, the link fails without libomp (as decided): $(grep -Em1 'undefined.*(omp_|__kmpc_)' "$pkg_dir/ompf.log")"
     fi
 
     # rzig never reads CONDA_PREFIX (F3b): an activated env R is not
@@ -1941,12 +2261,10 @@ RCODE
   # flagless omp.h probe (data.table's configure), PKG_LIBS = -lomp alone
   # (rzig's windows.libs resolves it to openmp/lib/libomp.lib), and where
   # Makeconf offers Fortran OpenMP the fomp/fompfc packages (`use
-  # omp_lib`). They build through make with no environment but the
-  # tree's: R_ZIG_EXTRA_ENV unset and the poisoned decoy as CONDA_PREFIX;
-  # PATH as above, and for fomp and fompfc flang's own directory last
-  # (the env's Library/bin until phase 6 puts flang in the group; last, so
-  # that its tools come after everything else, and Makeconf.win names
-  # each binutils tool by its path). Each but the probe must import
+  # omp_lib`, TC/flang's omp_lib.mod). They build through make with no
+  # environment but the tree's: R_ZIG_EXTRA_ENV unset and the poisoned
+  # decoy as CONDA_PREFIX; PATH as above (no flang on it: zig-fc runs
+  # TC/flang). Each but the probe must import
   # libomp.dll (PE resolves every symbol at link time, so that is
   # openmp/lib/libomp.lib). Then they load in an R whose environment holds
   # only what Windows needs and whose PATH is bin\x64 and System32
@@ -1961,15 +2279,15 @@ RCODE
     printf '%s\n' 'PKG_LIBS = -lomp' > "$ow/lomp/Makevars"
     printf '%s\n' 'dyn.load("omp/omp.dll"); dyn.load("lomp/lomp.dll")' 'n <- c(.C("ompn", n = 0L)$n, .C("lompn", n = 0L)$n)' 'stopifnot(n >= 1L)' 'cat("omp, lomp: omp_get_max_threads() =", n, "\n")' > "$ow/load.R"
     pkgs="omp lomp"
-    if grep -Eq '^SHLIB_OPENMP_FFLAGS = *-' "$mk" && [ -x "$fc_dir/flang" ]; then
+    if grep -Eq '^SHLIB_OPENMP_FFLAGS = *-' "$mk"; then
       fomp_src "$ow"
       printf '%s\n' "$FOMP_R" >> "$ow/load.R"
       pkgs="omp lomp fomp fompfc"
     fi
     for d in probe $pkgs; do
-      src="$d.c"; p="$bt_path"
-      if [ ! -f "$ow/$d/$src" ]; then src="$d.f"; p="$bt_path:$fc_dir"; fi
-      (cd "$ow/$d" && env -i "${base_env[@]}" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make CONDA_PREFIX="$(cygpath -w "$decoy")" PATH="$p" \
+      src="$d.c"
+      [ -f "$ow/$d/$src" ] || src="$d.f"
+      (cd "$ow/$d" && env -i "${base_env[@]}" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make CONDA_PREFIX="$(cygpath -w "$decoy")" PATH="$bt_path" \
         "$R_EXE" CMD SHLIB -o "$d.dll" "$src" > shlib.log 2>&1) || { cat "$ow/$d/shlib.log" >&2; echo "error: the OpenMP package $d failed to build with the base and the groups" >&2; exit 1; }
       [ "$d" = probe ] && continue
       needed_of "$ow/$d/$d.dll" | grep -qix 'libomp\.dll' || { needed_of "$ow/$d/$d.dll" >&2; echo "error: $d.dll does not import libomp.dll" >&2; exit 1; }
@@ -2016,10 +2334,10 @@ RCODE
       mkdir -p "$owp/$d/src"
       printf 'Package: %s\nVersion: 0.1\nTitle: Verify Bundle\nDescription: An OpenMP shape R CMD INSTALL builds through rzig build.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' "$d" > "$owp/$d/DESCRIPTION"
       printf 'useDynLib(%s)\n' "$d" > "$owp/$d/NAMESPACE"
-      src="$d.c"; p="$bt_path"
-      if [ ! -f "$ow/$d/$src" ]; then src="$d.f"; p="$bt_path:$fc_dir"; fi
+      src="$d.c"
+      [ -f "$ow/$d/$src" ] || src="$d.f"
       cp "$ow/$d/$src" "$ow/$d/Makevars" "$owp/$d/src/"
-      (cd "$owp" && env -i "${base_env[@]}" "${zig_env[@]}" CONDA_PREFIX="$(cygpath -w "$decoy")" PATH="$p" RZIG_TRACE=1 \
+      (cd "$owp" && env -i "${base_env[@]}" "${zig_env[@]}" CONDA_PREFIX="$(cygpath -w "$decoy")" PATH="$bt_path" RZIG_TRACE=1 \
         "$R_EXE" CMD INSTALL -l lib "$d") > "$owp/$d.log" 2>&1 ||
         { cat "$owp/$d.log" >&2; echo "error: R CMD INSTALL of the OpenMP package $d failed with the base and the groups" >&2; exit 1; }
       starts_line "$owp/$d.log" "rzig build: tier 1" ||
@@ -2055,6 +2373,24 @@ RCODE
     "$TC/binutils/objdump.exe" -h "$rc_dll" | grep -q 'rsrc' ||
       { echo "error: btRc.dll has no .rsrc section: its .rc file did not reach the link" >&2; exit 1; }
     echo "== packages built under the default builder, install.packages with Ncpus = 2: btA through rzig build, btLib and btRc through make (a static library through rzig's zig-ar.exe and zig-ranlib.exe; a .rc file through \$(RESCOMP), its resources in btRc.dll), each from its log; load with PATH = bin\\x64 + System32"
+
+    # fcconf (fcconf_pkg): a configure.win that compiles, links and runs a
+    # program with $FC (zig-fc.exe: TC/flang, zig) and links with -v,
+    # run by the build tools' sh, then make builds the package; it loads
+    # with PATH = bin\x64 + System32.
+    fcw="$VERIFY_DIR/fcconf"
+    fcconf_pkg "$fcw"
+    mkdir -p "$fcw/lib"
+    (cd "$fcw" && env -i "${base_env[@]}" "${zig_env[@]}" CONDA_PREFIX="$(cygpath -w "$decoy")" PATH="$bt_path" \
+      "$R_EXE" CMD INSTALL -l lib fcconf) > "$fcw/install.log" 2>&1 ||
+      { cat "$fcw/install.log" >&2; echo "error: fcconf (a configure.win that compiles, links and runs a program with \$FC) did not install with the base and the groups" >&2; exit 1; }
+    # (grep reads to the end, no -q [tests-SIGPIPE-1])
+    tr -d '\r' < "$fcw/install.log" | grep '^fcconf: .*/zig-fc compiles, links and runs a program$' > /dev/null ||
+      { cat "$fcw/install.log" >&2; echo "error: fcconf's configure.win did not say that \$FC compiles, links and runs a program" >&2; exit 1; }
+    (cd "$fcw" && env -i "${base_env[@]}" PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla \
+      -e 'stopifnot(getExportedValue(loadNamespace("fcconf", lib.loc = "lib"), "f")() == 5L)') ||
+      { echo "error: fcconf did not load with PATH = bin\\x64 + System32" >&2; exit 1; }
+    echo "== a configure.win with \$FC: fcconf's compiles, links and runs a program with zig-fc.exe (TC/flang, zig), links with -v; the package installs and loads with PATH = bin\\x64 + System32"
 
     # LTO, recorded, not checked (B43-2, C9). Makeconf.win's LTO block
     # (AR, NM and RANLIB as gcc-ar, gcc-nm and gcc-ranlib) is read only

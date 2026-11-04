@@ -168,11 +168,12 @@ cat > "$LIB/contract.R" <<'RCODE'
   # quadprog: a *pure-Fortran* package (no C/C++ sources at all) — the one
   # shape minqa cannot cover, since its C++ sends the link through
   # SHLIB_CXXLD. rzig build compiles every file with $(FC), the zig-fc of
-  # rzig (F3c: the flang on PATH, on every platform since Phase 2), and
+  # rzig (F3c: the env's flang here, on every platform since Phase 2), and
   # links through SHLIB_LD, the zig-cc of rzig (gcc.exe on Windows), with
   # $(FLIBS) appended — -lflang_rt.runtime, which rzig resolves to the
-  # static runtime archive, and on Windows libc++: the words make would
-  # have run (pkg-parity asserts they are identical). (R only links via
+  # static runtime archive (no libc++ on any OS since feat-standalone-
+  # toolchain phase 6, open point K): the words make would have run
+  # (pkg-parity asserts they are identical). (R only links via
   # $(FC) itself when a package opts in with USE_FC_TO_LINK in Makevars;
   # verify-bundle.sh and the recipe test build such a package.)
   # minimize (1/2) t(x) D x - t(d) x subject to x >= 0, with D = 2I and

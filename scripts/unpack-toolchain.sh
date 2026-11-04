@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # The toolchain tree again, $TOOLCHAIN_PREFIX (dist/toolchain/R-<ver>-zig,
 # B36), from the group archives package-standalone.sh made
-# (dist/R-<ver>-<platform>-<group>.<ext>, B17): in CI, the toolchain
-# job's artifact, built once per platform (B31). Each archive's sha256 is
-# checked, and its members must lie under its own group's directories, so
-# the archives fill the tree without touching each other. Then the tree is
-# removed (env.sh's own only, as zig-toolchain.sh does) and both archives
-# are extracted into its parent.
+# (dist/R-<ver>-<platform>-<group>.<ext>, B17, <ext> env.sh's
+# group_ext): in CI, the toolchain job's artifact, built once per platform
+# (B31). Each archive's sha256 is checked, and its members must lie under
+# its own group's directories, so the archives fill the tree without
+# touching each other. Then the tree is removed (env.sh's own only, as
+# zig-toolchain.sh does) and both archives are extracted into its parent.
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
 # Windows: an override may be C:\...; basename and dirname want /c/... form.
@@ -17,7 +17,7 @@ command -v cygpath > /dev/null 2>&1 && TOOLCHAIN_PREFIX="$(cygpath -u "$TOOLCHAI
 tc="$TOP/$RH/bin/toolchain"
 archives=()
 for group in $TOOLCHAIN_GROUPS; do
-  a="$ROOT/dist/R-$R_VERSION-$PLAT-$group.$ARCHIVE_EXT"
+  a="$ROOT/dist/R-$R_VERSION-$PLAT-$group.$(group_ext "$group")"
   test -f "$a" ||
     { echo "error: $a not found: run 'pixi run package-toolchain' (or download the toolchain job's artifact into dist/)" >&2; exit 1; }
   (cd "$ROOT/dist" && sha256sum -c --quiet "${a##*/}.sha256") ||

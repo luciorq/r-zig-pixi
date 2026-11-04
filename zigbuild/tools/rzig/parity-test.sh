@@ -567,10 +567,10 @@ CASE_DELIBERATE="\$a -L$win_tc_omp/lib
 \$a $win_tc_omp/lib/libomp.lib"
 run_case "the toolchain's openmp/ (libomp.dll beside R.dll): -L, -idirafter, libomp.lib" windows g++ -shared -fopenmp -o pkg.dll a.o
 CASE_PATH="$W/flang-win"
-run_case "FLIBS: Windows flang's answer, then -lc++" windows gcc -shared -o pkg.dll a.o -L"$W/win/d1" -lflang_rt.runtime -lc++ -lflang_rt.runtime -lc++
+run_case "FLIBS: Windows flang's answer, twice" windows gcc -shared -o pkg.dll a.o -L"$W/win/d1" -lflang_rt.runtime -lflang_rt.runtime
 # a gfortran on PATH (Rtools'), which neither asks any more
 CASE_PATH="$W/flang-win:$W/gf"
-run_case "-lgfortran -lquadmath: flang's runtime, not gfortran's" windows gcc -shared -o pkg.dll a.o -lgfortran -lquadmath -lm -lflang_rt.runtime -lc++
+run_case "-lgfortran -lquadmath: flang's runtime, not gfortran's" windows gcc -shared -o pkg.dll a.o -lgfortran -lquadmath -lm -lflang_rt.runtime
 CASE_PATH="$W/gf"
 run_case "-lgfortran without flang: dropped" windows gcc -shared -o pkg.dll a.o -lgfortran
 run_case "-lsynchronization: the API set's import library" windows gcc -shared -o pkg.dll a.o -L"$W/win/d1" -lws2_32 -lsynchronization -lntdll
@@ -613,7 +613,7 @@ if [ -n "$real_zig" ]; then
   check "--rzig-check=fortran: no flang, 127, the compilers group" \
     bash -c "env -i ZIG_BIN='$real_zig' PATH='$W/nothing' '$tc/zig-cc' --rzig-check=fortran > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
       grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err' &&
-      grep -q '^  standalone:  extract R-[^ ]*-compilers\.tar\.gz where you extracted R (zig [0-9.]* and the OpenMP files), and put LLVM flang on PATH\$' '$W/check.err'"
+      grep -q '^  standalone:  extract R-[^ ]*-compilers\.tar\.xz where you extracted R (zig [0-9.]*, flang and the OpenMP files)\$' '$W/check.err'"
   check "zig-fc --rzig-check checks flang too" \
     bash -c "cp '$RZIG' '$tc/zig-fc' && env -i ZIG_BIN='$real_zig' PATH='$W/flang' '$tc/zig-fc' --rzig-check | grep -qF '; flang at $W/flang/flang'"
 fi

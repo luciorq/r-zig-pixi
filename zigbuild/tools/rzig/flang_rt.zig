@@ -108,10 +108,65 @@ fn find(ctx: *Ctx) !?[]const u8 {
     return null;
 }
 
+/// The directory of flang's intrinsic modules, for zig-fc's
+/// `-fintrinsic-modules-path` (fortran.zig): the `.mod` files of
+/// ISO_C_BINDING, IEEE_ARITHMETIC, OMP_LIB and the others, and
+/// omp_lib.h, which flang-rt installs for each target under
+/// `<tree>/lib/clang/<v>/finclude/flang/<t>/`, `<tree>` being the LLVM
+/// tree whose `bin/` holds flang. Found from flang's own place, as a
+/// string: its real path (symlinks resolved, so a PATH flang linked into
+/// an LLVM tree finds that tree; conda's bin/flang -> flang-23 stays in
+/// bin/), `\` turned into `/`, less its last two components (the file,
+/// then bin/), so the result has no `..` (feat-standalone-toolchain phase
+/// 6, Cc3). Then:
+/// - `<v>`: the first entry of lib/clang/ in byte order that holds
+///   finclude/flang/ (an environment can hold another LLVM's
+///   lib/clang/<v> without Fortran modules, Cc8);
+/// - `<t>`: the first directory named for the CPU rzig was built for
+///   (`x86_64-`; `aarch64-` or `arm64-`, macOS's conda triple being
+///   arm64-apple-darwin20.0.0), else the first in byte order: an LLVM
+///   with several targets' modules sorts aarch64-* first, and the `.mod`
+///   bytes differ per CPU (Cc8, Cg8). flang-rt-zig's trees have one CPU's
+///   directories each, so there the rule is byte order, which picks the
+///   directory flang-zig's flang.cfg names (x86_64-conda-linux-gnu before
+///   the x86_64-unknown-linux-gnu symlink; x86_64-w64-mingw32 before
+///   x86_64-w64-windows-gnu): beside a conda env's cfg the flag repeats
+///   its path, which flang takes (phase 6's PP probe).
+/// null when there is none. No process runs, so a Fortran compile pays
+/// three directory reads, not a second flang (`-print-resource-dir`); and
+/// no triple or LLVM major is built into rzig, which would tie it to
+/// conda's triple names and one LLVM (FLANG_PIXI_HANDOFF.md §1).
+pub fn modulesDir(ctx: *Ctx, fc: []const u8) !?[]const u8 {
+    const real: []const u8 = Io.Dir.cwd().realPathFileAlloc(ctx.io, fc, ctx.arena) catch fc;
+    const path = try mem.replaceOwned(u8, ctx.arena, real, "\\", "/");
+    const bin = mem.findScalarLast(u8, path, '/') orelse return null;
+    const tree_end = mem.findScalarLast(u8, path[0..bin], '/') orelse return null;
+    const clang = try ctx.fmt("{s}/lib/clang", .{path[0..tree_end]});
+    const finclude = for (try globDirs(ctx, clang)) |v| {
+        const d = try ctx.fmt("{s}/{s}/finclude/flang", .{ clang, v });
+        if (ctx.isDir(d)) break d;
+    } else return null;
+    var first: ?[]const u8 = null;
+    for (try globDirs(ctx, finclude)) |t| {
+        const d = try ctx.fmt("{s}/{s}", .{ finclude, t });
+        if (!ctx.isDir(d)) continue;
+        for (cpu_prefixes) |c| if (mem.startsWith(u8, t, c)) return d;
+        if (first == null) first = d;
+    }
+    return first;
+}
+
+/// The names a module directory for rzig's own CPU starts with.
+const cpu_prefixes: []const []const u8 = switch (@import("builtin").cpu.arch) {
+    .x86_64 => &.{"x86_64-"},
+    .aarch64 => &.{ "aarch64-", "arm64-" },
+    else => &.{},
+};
+
 /// What `<dir>/*` expands to, as names: not hidden, in byte order (the
 /// shell's under LC_ALL=C; any order picks the same archive when there is
 /// one triple directory, as every LLVM layout has).
-fn globDirs(ctx: *Ctx, dir_path: []const u8) ![]const []const u8 {
+pub fn globDirs(ctx: *Ctx, dir_path: []const u8) ![]const []const u8 {
     var names: std.ArrayList([]const u8) = .empty;
     var dir = Io.Dir.cwd().openDir(ctx.io, dir_path, .{ .iterate = true }) catch return names.items;
     defer dir.close(ctx.io);
@@ -233,7 +288,7 @@ test "-lgfortran and -lquadmath: the same runtime, once, in place of the first o
             &.{ "a.o", a, "-lm", "-lm" },
             try resolve(&f.ctx, &.{ "a.o", "-lquadmath", "-lm", "-lflang_rt.runtime", "-lgfortran", "-lm" }),
         );
-        try expectArgs(&.{ "a.o", a, "-lc++" }, try resolve(&f.ctx, &.{ "a.o", "-lflang_rt.runtime", "-lc++", "-lgfortran" }));
+        try expectArgs(&.{ "a.o", a }, try resolve(&f.ctx, &.{ "a.o", "-lflang_rt.runtime", "-lgfortran" }));
     }
     // other names, the two-argument form and a flag inside another
     // argument are no flags (the last asks flang, as before)
@@ -266,4 +321,61 @@ test "flang that fails or says nothing: dropped without looking further" {
     try f.write("bin/flang", "#!/bin/sh\n", .fromMode(0o755));
     try expectArgs(&.{"x.o"}, try resolve(&f.ctx, &.{ "x.o", "-lflang_rt.runtime" }));
     try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "modulesDir: from flang's own tree, no `..`, the CPU's directory, the lib/clang/<v> that has modules" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const tc = "tree/lib/R/bin/toolchain/flang";
+    const fc = try f.touchProgram(tc ++ "/bin/flang");
+    // none: no lib/clang, or no finclude/flang under it
+    try testing.expect(try modulesDir(c, fc) == null);
+    try f.tmp.dir.createDirPath(testing.io, tc ++ "/lib/clang/23/lib");
+    try testing.expect(try modulesDir(c, fc) == null);
+    // the one directory, as a plain path: `/` only and no `..` (Cc3)
+    try f.tmp.dir.createDirPath(testing.io, tc ++ "/lib/clang/23/finclude/flang/x86_64-conda-linux-gnu");
+    const want = f.path(tc ++ "/lib/clang/23/finclude/flang/x86_64-conda-linux-gnu");
+    const got = (try modulesDir(c, fc)).?;
+    try testing.expectEqualStrings(want, got);
+    try testing.expect(mem.find(u8, got, "..") == null and mem.findScalar(u8, got, '\\') == null);
+    // lib/clang/21 sorts first but holds no finclude/flang: 23's (Cc8)
+    try f.tmp.dir.createDirPath(testing.io, tc ++ "/lib/clang/21/include");
+    try testing.expectEqualStrings(want, (try modulesDir(c, fc)).?);
+    // a file in finclude/flang/ is no module directory
+    try f.touch(tc ++ "/lib/clang/23/finclude/flang/a-file");
+    try testing.expectEqualStrings(want, (try modulesDir(c, fc)).?);
+}
+
+test "modulesDir: linux's and Windows' twins give the cfg's directory; another CPU's comes second" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // symlinks
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    // linux: the conda triple's directory and the unknown triple's symlink to it
+    const fc = try f.touchProgram("lx/bin/flang");
+    try f.tmp.dir.createDirPath(testing.io, "lx/lib/clang/23/finclude/flang/x86_64-conda-linux-gnu");
+    try f.tmp.dir.symLink(testing.io, "x86_64-conda-linux-gnu", "lx/lib/clang/23/finclude/flang/x86_64-unknown-linux-gnu", .{ .is_directory = true });
+    try testing.expectEqualStrings(f.path("lx/lib/clang/23/finclude/flang/x86_64-conda-linux-gnu"), (try modulesDir(c, fc)).?);
+    // win-64: two directories, the first
+    const wfc = try f.touchProgram("win/bin/flang");
+    for ([_][]const u8{ "x86_64-w64-windows-gnu", "x86_64-w64-mingw32" }) |t| try f.tmp.dir.createDirPath(testing.io, f.fmt("win/lib/clang/23/finclude/flang/{s}", .{t}));
+    try testing.expectEqualStrings(f.path("win/lib/clang/23/finclude/flang/x86_64-w64-mingw32"), (try modulesDir(c, wfc)).?);
+    // an LLVM with two CPUs' modules: the one rzig was built for (Cc8, Cg8)
+    const mfc = try f.touchProgram("multi/bin/flang");
+    for ([_][]const u8{ "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu" }) |t| try f.tmp.dir.createDirPath(testing.io, f.fmt("multi/lib/clang/23/finclude/flang/{s}", .{t}));
+    const mine = if (builtin.cpu.arch == .aarch64) "aarch64-unknown-linux-gnu" else "x86_64-unknown-linux-gnu";
+    try testing.expectEqualStrings(f.path(f.fmt("multi/lib/clang/23/finclude/flang/{s}", .{mine})), (try modulesDir(c, mfc)).?);
+    // conda's bin/flang -> flang-23 stays in bin/; a flang linked from
+    // elsewhere into an LLVM tree finds that tree's modules, never `..`
+    try f.touchExe("lx/bin/flang-23");
+    try f.tmp.dir.symLink(testing.io, "flang-23", "lx/bin/flang-new", .{});
+    try testing.expectEqualStrings(f.path("lx/lib/clang/23/finclude/flang/x86_64-conda-linux-gnu"), (try modulesDir(c, f.path("lx/bin/flang-new"))).?);
+    try f.tmp.dir.createDirPath(testing.io, "user/bin");
+    try f.tmp.dir.symLink(testing.io, f.path("lx/bin/flang-23"), "user/bin/flang", .{});
+    try testing.expectEqualStrings(f.path("lx/lib/clang/23/finclude/flang/x86_64-conda-linux-gnu"), (try modulesDir(c, f.path("user/bin/flang"))).?);
+    // a relative flang path is resolved too
+    try testing.expect(mem.find(u8, (try modulesDir(c, f.path("lx/bin/../bin/flang"))).?, "..") == null);
 }

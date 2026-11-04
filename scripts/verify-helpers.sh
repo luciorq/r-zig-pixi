@@ -12,10 +12,14 @@
 # (R-<ver>-zig/...): not its directories, which every archive of a tree
 # repeats (zip stores them as members of their own). The lists of archives
 # extracted into one directory compare on these (PHASE3 C6), in
-# unpack-toolchain.sh and verify-bundle.sh.
+# unpack-toolchain.sh and verify-bundle.sh. A .tar.xz (the compilers
+# group's since phase 6, env.sh's group_ext) is read through the env's
+# xz on every OS, so neither GNU tar's -J nor MSYS tar's lookup of an xz
+# program plays a part (PHASE6 open point L).
 archive_files() {
   case "$1" in
     *.zip) unzip -Z1 "$1" ;;
+    *.tar.xz) xz -dc "$1" | tar -tf - ;;
     *) tar -tzf "$1" ;;
   esac | awk '!/\/$/'
 }
@@ -76,9 +80,11 @@ make_recipes() {
 # Extract archive $1 into directory $2. unzip -n: an archive extracted
 # beside another never overwrites its files, and never stops to ask
 # (unzip's overwrite prompt waits on stdin, which hangs a CI leg; C6).
+# A .tar.xz through the env's xz, as archive_files reads it.
 extract_archive() {
   case "$1" in
     *.zip) unzip -q -n "$1" -d "$2" ;;
+    *.tar.xz) xz -dc "$1" | tar -xf - -C "$2" ;;
     *) tar -xzf "$1" -C "$2" ;;
   esac
 }

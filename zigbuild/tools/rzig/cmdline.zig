@@ -57,7 +57,13 @@ pub fn libDirs(gpa: mem.Allocator, args: Args) !std.ArrayList([]const u8) {
 }
 
 /// Options that read the next argument as their value (clang's separate
-/// forms seen on compile and link lines): a `-o` there is no output flag.
+/// forms seen on compile and link lines, and flang's): a `-o` there is no
+/// output flag, and no input file. zig-fc's split builds its commands
+/// from `inputs` (fortran.zig), so a value read as an input would be
+/// compiled or linked on its own and leave its option dangling: `-J mods`
+/// (gfortran's module directory, which flang takes too), `-undefined
+/// dynamic_lookup` on macOS's SHLIB line (feat-standalone-toolchain phase
+/// 6, Cc2).
 const takes_value = std.StaticStringMap(void).initComptime(.{
     .{"-Xlinker"},         .{"-Xclang"},                .{"-Xpreprocessor"},         .{"-Xassembler"},
     .{"-Xanalyzer"},       .{"-Xopenmp-target"},        .{"-x"},                     .{"-MF"},
@@ -71,8 +77,14 @@ const takes_value = std.StaticStringMap(void).initComptime(.{
     .{"-T"},               .{"-e"},                     .{"-rpath"},                 .{"-install_name"},
     .{"-current_version"}, .{"-compatibility_version"}, .{"-exported_symbols_list"}, .{"-unexported_symbols_list"},
     .{"-bundle_loader"},   .{"-mllvm"},                 .{"--param"},                .{"--sysroot"},
-    .{"-dependency-file"},
+    .{"-dependency-file"}, .{"-undefined"},             .{"-force_load"},            .{"-multiply_defined"},
+    .{"-Xflang"},          .{"-J"},                     .{"-module-dir"},            .{"-fintrinsic-modules-path"},
 });
+
+/// Whether `x` reads the next argument as its value (`takes_value`).
+pub fn takesValue(x: []const u8) bool {
+    return takes_value.has(x);
+}
 
 /// Where the first standalone `-o` is: one that is not the value of
 /// another option (`-Xlinker -o`, `-MF -o`). null when there is none (a
@@ -120,8 +132,14 @@ pub fn isSource(x: []const u8) bool {
     return source_ext.has(x[dot + 1 ..]);
 }
 
+const fortran_ext = std.StaticStringMap(void).initComptime(.{
+    // flang's driver's
+    .{"f"}, .{"for"}, .{"ftn"}, .{"fpp"}, .{"f77"}, .{"f90"}, .{"f95"}, .{"f03"}, .{"f08"}, .{"cuf"},
+    .{"F"}, .{"FOR"}, .{"FTN"}, .{"FPP"}, .{"F77"}, .{"F90"}, .{"F95"}, .{"F03"}, .{"F08"}, .{"CUF"},
+});
+
 const source_ext = std.StaticStringMap(void).initComptime(.{
-    // Fortran (flang's driver)
+    // Fortran (flang's driver; fortran_ext)
     .{"f"},   .{"for"}, .{"ftn"}, .{"fpp"}, .{"f77"}, .{"f90"}, .{"f95"}, .{"f03"}, .{"f08"}, .{"cuf"},
     .{"F"},   .{"FOR"}, .{"FTN"}, .{"FPP"}, .{"F77"}, .{"F90"}, .{"F95"}, .{"F03"}, .{"F08"}, .{"CUF"},
     // the C family, assembler, LLVM IR (clang's)
@@ -129,6 +147,42 @@ const source_ext = std.StaticStringMap(void).initComptime(.{
     .{"CXX"}, .{"ii"},  .{"m"},   .{"mi"},  .{"mm"},  .{"mii"}, .{"M"},   .{"s"},   .{"S"},   .{"sx"},
     .{"cu"},  .{"ll"},  .{"bc"},
 });
+
+/// A Fortran source, by its extension (flang's driver's).
+pub fn isFortran(x: []const u8) bool {
+    if (!isSource(x)) return false;
+    const ext = x[mem.findScalarLast(u8, x, '.').? + 1 ..];
+    return fortran_ext.has(ext);
+}
+
+/// The language the `-x` in force at args[i] names (`-x f95` or
+/// `-xf95`, until `-x none`), or null: none in force, the input's
+/// extension decides, as in gcc's, clang's and flang's drivers.
+pub fn xLang(args: Args, i: usize) ?[]const u8 {
+    const end = @min(i, args.len);
+    var lang: ?[]const u8 = null;
+    var j: usize = 0;
+    while (j < end) : (j += 1) {
+        const x = args[j];
+        const v = if (mem.eql(u8, x, "-x")) blk: {
+            j += 1;
+            if (j >= end) break;
+            break :blk args[j];
+        } else if (mem.startsWith(u8, x, "-x")) x[2..] else {
+            if (takes_value.has(x)) j += 1;
+            continue;
+        };
+        lang = if (mem.eql(u8, v, "none")) null else v;
+    }
+    return lang;
+}
+
+/// A Fortran language for `-x`: flang's `f95` and `f95-cpp-input`, and
+/// gfortran's `f77` and `f77-cpp-input` (which flang refuses, loudly).
+pub fn isFortranLang(lang: []const u8) bool {
+    for ([_][]const u8{ "f95", "f95-cpp-input", "f77", "f77-cpp-input" }) |l| if (mem.eql(u8, lang, l)) return true;
+    return false;
+}
 
 /// The base name of a path, after its last `/` or `\`.
 pub fn baseName(x: []const u8) []const u8 {
@@ -193,4 +247,34 @@ test libDirs {
     try testing.expectEqualStrings("/b", dirs.items[1]);
     try testing.expectEqualStrings("m", flagValue("-lm", "-l").?);
     try testing.expect(flagValue("-l", "-l") == null);
+}
+
+test "inputs: Fortran's and the link's options that take a value (Cc2)" {
+    var it = inputs(&.{ "-J", "mods", "-module-dir", "m2", "-fintrinsic-modules-path", "/i", "-o", "p", "a.f90", "-Xflang", "-fno-automatic", "b.f" });
+    for ([_]usize{ 8, 11 }) |want| try testing.expectEqual(@as(?usize, want), it.next());
+    try testing.expectEqual(@as(?usize, null), it.next());
+    // a macOS SHLIB-style line: only the source
+    const mac: Args = &.{ "-dynamiclib", "-undefined", "dynamic_lookup", "-force_load", "l.a", "-multiply_defined", "suppress", "-framework", "Accelerate", "-o", "x.so", "a.f90" };
+    var it2 = inputs(mac);
+    try testing.expectEqual(@as(?usize, 11), it2.next());
+    try testing.expectEqual(@as(?usize, null), it2.next());
+    try testing.expect(takesValue("-J") and !takesValue("-Jmods"));
+}
+
+test isFortran {
+    for ([_][]const u8{ "a.f", "a.F90", "d/x.f95", "C:\\s\\a.f08", "a.FOR" }) |x| try testing.expect(isFortran(x));
+    for ([_][]const u8{ "a.c", "a.cpp", "a.o", "a", "a.mod", "-fa.f", "dir.f/a" }) |x| try testing.expect(!isFortran(x));
+}
+
+test xLang {
+    const a: Args = &.{ "-x", "f95", "a", "-x", "none", "b.o" };
+    try testing.expectEqualStrings("f95", xLang(a, 2).?);
+    try testing.expect(xLang(a, 5) == null);
+    const b: Args = &.{ "-o", "p", "-x", "f95-cpp-input", "a", "-xc", "g", "-Xlinker", "-xnone", "h" };
+    try testing.expect(xLang(b, 1) == null);
+    try testing.expectEqualStrings("f95-cpp-input", xLang(b, 4).?);
+    try testing.expectEqualStrings("c", xLang(b, 6).?);
+    // -Xlinker's value is no -x
+    try testing.expectEqualStrings("c", xLang(b, 9).?);
+    try testing.expect(isFortranLang("f95-cpp-input") and isFortranLang("f77") and !isFortranLang("c") and !isFortranLang("fortran"));
 }
