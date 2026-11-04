@@ -12,7 +12,7 @@
 //! toolchain-test).
 //!
 //! What it installs, today's third-party files (phase 3's table, zig/ from
-//! phase 5, flang/ from phase 6):
+//! phase 5, flang/ from phase 6, Windows' usr/ and etc/ from phase 7):
 //!   zig/       compilers    upstream zig, PyPI's ziglang wheel as
 //!                           fetch-zig pins it (B4, phase 5): zig and
 //!                           lib/, LICENSES/ziglang/ from the wheel's
@@ -26,11 +26,18 @@
 //!   openmp/    compilers    llvm-openmp's omp.h and the headers beside it
 //!                           (B22); Windows also libomp.lib
 //!   usr/       build-tools  unix: conda-forge's GNU make as usr/bin/make
-//!                           (B7, B23)
+//!                           (B7, B23); Windows: B39's tools in usr/bin/,
+//!                           every file of conda-forge's m2 packages'
+//!                           usr/bin/ (MSYS2's bash, make, coreutils, sed,
+//!                           grep, gawk, which, findutils) with the MSYS
+//!                           DLLs they import, and conda-forge's native
+//!                           pkg-config with the DLLs it loads (B11;
+//!                           PHASE7 open points A-C)
+//!   etc/       build-tools  Windows: fstab, r-zig's own MSYS mount table,
+//!                           written here, not copied (PHASE7 open point D)
 //!   binutils/  build-tools  Windows: conda-forge's MinGW nm, dlltool, as,
 //!                           strip, windres and objdump (B24, B43), with
 //!                           the conda DLLs they load
-//! Windows' usr/bin comes in phase 7.
 //! Which group holds which directory: scripts/env.sh's group_dirs.
 //!
 //! Each file's package is the conda-meta record whose `files` lists its
@@ -39,9 +46,14 @@
 //! that built it, and each file with the package's sha256 of it;
 //! LICENSES/<package>/ is the package's info/licenses/. Both come from the
 //! package cache the env was installed from (the record's
-//! extracted_package_dir). A file no record lists, one with a prefix
-//! placeholder (conda rewrote it), a package with no licence files, or a
-//! GPL one whose recipe lists no source stops this build and names it.
+//! extracted_package_dir). The m2 packages ship no licence files: theirs
+//! are the texts r-zig took by hand from their MSYS2 source archives into
+//! m2-licenses/<package>/ beside this file, for the version and build its
+//! VERSION names (PHASE7 open point E a; its README says how). A file no
+//! record lists, one with a prefix placeholder (conda rewrote it), a
+//! package with no licence files (an m2 one: none here either, or for
+//! another version), or a GPL one whose recipe lists no source stops this
+//! build and names it.
 //! R's own build (build.zig) never reads the package cache. zig/'s files
 //! are the wheel's, each with the wheel's own sha256 of it (its RECORD,
 //! the counterpart of paths_data), in a SOURCES block of the same shape
@@ -53,11 +65,13 @@
 //! itself, with R_TOOLCHAIN_PREFIX=$PREFIX: there conda's own packages
 //! provide every file where it is looked for, except Windows' binutils,
 //! which Makeconf.win names by path under R_HOME (B24): only those are
-//! installed, with their records (B41). No zig/ and no flang/ there: conda
-//! keeps conda-forge's zig and flang-pixi's flang-zig, through
-//! r-zig-compilers (B30), and the conda build fetches nothing (PHASE5 open
-//! point J; zig-toolchain.sh skips fetch-zig by the same test as
-//! prefix_is_env below).
+//! installed, with their records (B41). No usr/, etc/, zig/ or flang/
+//! there: the env's MSYS tools and pkg-config are its own m2 and
+//! pkg-config packages (Library/usr/bin, Library/bin), and conda keeps
+//! conda-forge's zig and flang-pixi's flang-zig, through r-zig-compilers
+//! (B30); the conda build fetches nothing (PHASE5 open point J;
+//! zig-toolchain.sh skips fetch-zig by the same test as prefix_is_env
+//! below).
 const std = @import("std");
 const mem = std.mem;
 const conda = @import("conda.zig");
@@ -76,16 +90,20 @@ const Copy = struct {
 };
 
 /// Every regular file of `package`'s record under `from` (relative to
-/// the env), installed at the same path less a leading `Library/`
-/// (win-64): flang-rt-zig's modules and runtime, whose triple directory
-/// differs per platform and whose module set follows LLVM (B9 a; PHASE6
-/// open point A). None stops the build. Never installed into the env (the
-/// conda build), as a copy that is not `in_conda` (PHASE6 Cc4).
+/// the env), installed at the same path less a leading `strip`:
+/// flang-rt-zig's modules and runtime, whose triple directory differs per
+/// platform and whose module set follows LLVM (B9 a; PHASE6 open point A),
+/// and an m2 package's usr/bin/ (PHASE7 open point C a). None stops the
+/// build. Never installed into the env (the conda build), as a copy that
+/// is not `in_conda` (PHASE6 Cc4).
 const Tree = struct {
     package: []const u8,
     from: []const u8,
     /// Only the files of this base name.
     name: ?[]const u8 = null,
+    /// What the copy's path loses: win-64's `Library/` (flang/'s trees),
+    /// or `Library/usr/` (usr/'s: their files sit in bin/).
+    strip: []const u8 = "Library/",
 };
 
 /// A group directory under R_HOME/bin/toolchain and what it copies: its
@@ -145,6 +163,16 @@ fn mingwTool(comptime t: []const u8) Copy {
     return .{ .from = "Library/bin/x86_64-w64-mingw32-" ++ t ++ ".exe", .to = t ++ ".exe", .in_conda = true };
 }
 
+/// A file of the env's Library/usr/bin/ or Library/bin/ in usr/bin/.
+fn usrBin(comptime from: []const u8) Copy {
+    return .{ .from = from, .to = "bin/" ++ comptime from[mem.lastIndexOfScalar(u8, from, '/').? + 1 ..] };
+}
+
+/// Every file of an m2 tool package's usr/bin/ (PHASE7 open point C a).
+fn m2Tool(comptime package: []const u8) Tree {
+    return .{ .package = package, .from = "Library/usr/bin/", .strip = "Library/usr/" };
+}
+
 const windows_dirs = [_]Dir{
     flangDir("Library/", "Library/bin/flang.exe"),
     .{ .name = "openmp", .copies = &(ompHeaders("Library/include/") ++ [_]Copy{
@@ -170,7 +198,61 @@ const windows_dirs = [_]Dir{
             .{ .from = "Library/bin/vcruntime140.dll", .to = "vcruntime140.dll" },
         },
     },
+    .{
+        // B39's tools (B11; PHASE7 open points A-C, G): MSYS2's, from
+        // conda-forge's m2 packages, every file of each tool package's
+        // usr/bin/, unchanged.
+        .name = "usr",
+        // The DLLs those import, one package each (PHASE7's package
+        // survey; every other import is the system's): msys-2.0.dll makes
+        // R_HOME/bin/toolchain the MSYS root, which reads etc/fstab.
+        // verify-toolchain.sh checks the closure.
+        .copies = &[_]Copy{
+            usrBin("Library/usr/bin/msys-2.0.dll"),
+            usrBin("Library/usr/bin/msys-intl-8.dll"),
+            usrBin("Library/usr/bin/msys-iconv-2.dll"),
+            usrBin("Library/usr/bin/msys-pcre-1.dll"),
+            usrBin("Library/usr/bin/msys-gmp-10.dll"),
+            usrBin("Library/usr/bin/msys-mpfr-6.dll"),
+            usrBin("Library/usr/bin/msys-readline8.dll"),
+            usrBin("Library/usr/bin/msys-ncursesw6.dll"),
+            usrBin("Library/usr/bin/msys-gcc_s-seh-1.dll"),
+            // pkg-config (B43): conda-forge's native build (MSVC) with its
+            // glib closure. No pkgconf name yet: a later change builds
+            // pkgconf from source as one exe answering both names (PHASE7
+            // user decision D0 a, 2026-10-21).
+            usrBin("Library/bin/pkg-config.exe"),
+            usrBin("Library/bin/glib-2.0-0.dll"),
+            usrBin("Library/bin/iconv.dll"),
+            usrBin("Library/bin/charset.dll"),
+            usrBin("Library/bin/intl-8.dll"),
+            usrBin("Library/bin/pcre2-8.dll"),
+            usrBin("Library/bin/vcruntime140.dll"),
+        },
+        .trees = &[_]Tree{
+            m2Tool("m2-bash"),
+            m2Tool("m2-make"),
+            m2Tool("m2-coreutils"),
+            m2Tool("m2-sed"),
+            m2Tool("m2-grep"),
+            m2Tool("m2-gawk"),
+            m2Tool("m2-which"),
+            m2Tool("m2-findutils"),
+        },
+    },
 };
+
+/// MSYS's mount table (PHASE7 open point D a): msys-2.0.dll in usr/bin/
+/// makes R_HOME/bin/toolchain the MSYS root, which reads etc/fstab. The
+/// lines are MSYS2's (m2-filesystem's, less its build-env /conda_bin line,
+/// which conda rewrites at install): drives at /c, no POSIX ACLs on
+/// created files, /tmp Windows' temporary directory (usertemp: TMP, else
+/// TEMP), so a read-only R install works. Not a copy: etc/SOURCES says so,
+/// with the file's sha256, and etc/ has no LICENSES/. verify-toolchain.sh
+/// checks these exact lines.
+const fstab =
+    "none / cygdrive binary,posix=0,noacl,user 0 0\n" ++
+    "none /tmp usertemp binary,posix=0 0 0\n";
 
 pub fn build(b: *std.Build) !void {
     const arena = b.allocator;
@@ -221,7 +303,7 @@ pub fn build(b: *std.Build) !void {
                 const src = b.fmt("{s}/{s}", .{ env, from });
                 if (!pathExists(io, src))
                     return fail("{s} is missing from the env {s}, though {s}'s record lists it: the toolchain tree's {s}/ copies it", .{ from, env, t.package, d.name });
-                try copies.append(arena, try copyOf(b, records, src, from, conda.inDir(from), dest));
+                try copies.append(arena, try copyOf(b, records, src, from, conda.inDir(from, t.strip), dest));
                 n += 1;
             }
             if (n == 0) return fail("{s}'s record lists no {s} under {s} in the env {s}: the toolchain tree's {s}/ copies {s}", .{
@@ -254,6 +336,17 @@ pub fn build(b: *std.Build) !void {
             try packages.append(arena, c.record);
         }
         try summary.appendSlice(arena, ")");
+    }
+    // Windows' etc/ (PHASE7 open point D a): written, never into the env.
+    if (os == .windows and !prefix_is_env) {
+        const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/etc", .{tc}) };
+        var sha: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(fstab, &sha, .{});
+        const wf = b.addWriteFiles();
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(wf.add("fstab", fstab), dest, "fstab").step);
+        const sources = b.fmt("written: r-zig's toolchain build (zigbuild/toolchain/build.zig), MSYS's mount table for usr/bin's tools\nfile: fstab -> fstab {s}\n", .{&std.fmt.bytesToHex(sha, .lower)});
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(wf.add("SOURCES", sources), dest, "SOURCES").step);
+        try summary.print(arena, "{s}etc/ (r-zig's fstab)", .{if (summary.items.len == 0) "" else ", "});
     }
     // The compilers group's zig/ (B4): never into the env (B30, open point
     // J). A failing step, not a configure error, when the wheel is not
@@ -460,9 +553,12 @@ const cache_how = "the toolchain tree copies the licence files and sources from 
 /// Where the package's program comes from, as SOURCES says it (P3-C):
 /// its recipe's sources, from the rendered recipe in the package cache
 /// (rattler-build's info/recipe/rendered_recipe.yaml, else conda-build's
-/// info/recipe/meta.yaml), and its feedstock, from info/about.json. A GPL
-/// package (GPL, LGPL, AGPL) whose recipe lists no source stops the
-/// build: its binaries ship only with a pointer to their source.
+/// info/recipe/meta.yaml), and its feedstock, from info/about.json. A
+/// rattler-build output built from a staging output has its sources under
+/// finalized_cache_sources, its finalized_sources empty (libglib, which
+/// pkg-config loads: PHASE7 user decision D0 a). A GPL package (GPL, LGPL,
+/// AGPL) whose recipe lists no source stops the build: its binaries ship
+/// only with a pointer to their source.
 fn readUpstream(b: *std.Build, io: std.Io, r: *const conda.Record) !conda.Upstream {
     const arena = b.allocator;
     if (r.extracted_package_dir.len == 0)
@@ -473,29 +569,87 @@ fn readUpstream(b: *std.Build, io: std.Io, r: *const conda.Record) !conda.Upstre
         return fail("{s}: cannot read {s} ({t}); {s}", .{ r.name, about_path, err, cache_how });
     var u = conda.parseAbout(arena, about) catch |err|
         return fail("{s}: {s} is not an about.json ({t})", .{ r.name, about_path, err });
-    for ([_][2][]const u8{ .{ "rendered_recipe.yaml", "finalized_sources" }, .{ "meta.yaml", "source" } }) |f| {
-        const yaml = std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/recipe/{s}", .{ info, f[0] }), arena, .limited(64 * 1024 * 1024)) catch |err| switch (err) {
+    for ([_][]const u8{ "rendered_recipe.yaml", "meta.yaml" }) |f| {
+        const yaml = std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/recipe/{s}", .{ info, f }), arena, .limited(64 * 1024 * 1024)) catch |err| switch (err) {
             error.FileNotFound => continue,
-            else => return fail("{s}: cannot read {s}/recipe/{s} ({t})", .{ r.name, info, f[0], err }),
+            else => return fail("{s}: cannot read {s}/recipe/{s} ({t})", .{ r.name, info, f, err }),
         };
-        u.sources = try conda.recipeSources(arena, yaml, f[1]);
+        if (mem.eql(u8, f, "meta.yaml")) {
+            u.sources = try conda.recipeSources(arena, yaml, "source");
+        } else {
+            u.sources = try conda.recipeSources(arena, yaml, "finalized_sources");
+            if (u.sources.len == 0) u.sources = try conda.recipeSources(arena, yaml, "finalized_cache_sources");
+        }
         break;
     }
     if (u.sources.len == 0 and mem.indexOf(u8, r.license, "GPL") != null)
         return fail("{s} ({s}): its recipe in {s}/recipe lists no source, and SOURCES must name the source of a GPL package's binaries", .{ r.name, r.license, info });
+    if (mem.startsWith(u8, r.name, "m2-") and !try hasLicenseFiles(b, io, r))
+        u.licenses_from = try m2Licenses(b, io, r);
     return u;
+}
+
+/// Whether the package's info/licenses/ in the package cache holds a file.
+fn hasLicenseFiles(b: *std.Build, io: std.Io, r: *const conda.Record) !bool {
+    const src = b.fmt("{s}/info/licenses", .{r.extracted_package_dir});
+    var dir = std.Io.Dir.cwd().openDir(io, src, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return fail("{s}: cannot read {s} ({t}); {s}", .{ r.name, src, err, cache_how }),
+    };
+    defer dir.close(io);
+    var walker = try dir.walk(b.allocator);
+    defer walker.deinit();
+    while (try walker.next(io)) |e| {
+        if (e.kind != .directory) return true;
+    }
+    return false;
+}
+
+/// An m2 package's licence texts, r-zig's (PHASE7 open point E a):
+/// m2-licenses/<name>/ beside this file, taken by hand from the package's
+/// MSYS2 source archive for the version and build its VERSION names.
+/// Returns the archive's URL, ORIGIN's `source:`, which SOURCES names as
+/// where the texts come from. No such directory, or one for another
+/// version or build (a re-lock moved the pin), stops the build.
+fn m2Licenses(b: *std.Build, io: std.Io, r: *const conda.Record) ![]const u8 {
+    const arena = b.allocator;
+    const dir = m2LicensesDir(b, r);
+    const how = "its README says how to take them from the package's MSYS2 source archive";
+    const version = std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/VERSION", .{dir}), arena, .limited(4096)) catch
+        return fail("{s} {s} {s} ships no licence file, and zigbuild/toolchain/m2-licenses/{s}/ does not hold its texts ({s})", .{ r.name, r.version, r.build, r.name, how });
+    const want = b.fmt("{s} {s}", .{ r.version, r.build });
+    const got = mem.trim(u8, version, " \t\r\n");
+    if (!mem.eql(u8, got, want))
+        return fail("{s} {s} {s} ships no licence file, and zigbuild/toolchain/m2-licenses/{s}/ does not hold its texts: its VERSION is {s} ({s})", .{ r.name, r.version, r.build, r.name, got, how });
+    const origin = std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/ORIGIN", .{dir}), arena, .limited(64 * 1024)) catch |err|
+        return fail("{s}: cannot read zigbuild/toolchain/m2-licenses/{s}/ORIGIN ({t}); {s}", .{ r.name, r.name, err, how });
+    var lines = mem.splitScalar(u8, origin, '\n');
+    while (lines.next()) |raw| {
+        const l = mem.trimEnd(u8, raw, " \r");
+        if (!mem.startsWith(u8, l, "source: ")) continue;
+        var words = mem.tokenizeScalar(u8, l["source: ".len..], ' ');
+        if (words.next()) |url| return url;
+    }
+    return fail("{s}: zigbuild/toolchain/m2-licenses/{s}/ORIGIN has no source: line; {s}", .{ r.name, r.name, how });
+}
+
+fn m2LicensesDir(b: *std.Build, r: *const conda.Record) []const u8 {
+    return mem.replaceOwned(u8, b.allocator, b.pathFromRoot(b.fmt("m2-licenses/{s}", .{r.name})), "\\", "/") catch @panic("OOM");
 }
 
 /// LICENSES/<package>/: every file of the package's info/licenses/ in the
 /// package cache, subdirectories kept (a link to a file arrives as that
-/// file). None stops the build: pixi keeps the cache, but an env restored
+/// file), or for an m2 package r-zig's texts of it (readUpstream set
+/// licenses_from): every file of m2-licenses/<name>/ but its VERSION and
+/// ORIGIN. None stops the build: pixi keeps the cache, but an env restored
 /// from a CI cache (setup-pixi's `cache: true`) has a record whose
 /// directory does not exist (PHASE3 C33, risk 2).
 fn installLicenses(b: *std.Build, io: std.Io, r: *const conda.Record, dest: std.Build.InstallDir) !void {
     const arena = b.allocator;
     if (r.extracted_package_dir.len == 0)
         return fail("{s}: its conda-meta record names no extracted_package_dir; {s}", .{ r.name, cache_how });
-    const src = b.fmt("{s}/info/licenses", .{r.extracted_package_dir});
+    const m2 = if (r.upstream) |u| u.licenses_from != null else false;
+    const src = if (m2) m2LicensesDir(b, r) else b.fmt("{s}/info/licenses", .{r.extracted_package_dir});
     var dir = std.Io.Dir.cwd().openDir(io, src, .{ .iterate = true }) catch |err|
         return fail("{s}: cannot read {s} ({t}); {s}", .{ r.name, src, err, cache_how });
     defer dir.close(io);
@@ -513,6 +667,7 @@ fn installLicenses(b: *std.Build, io: std.Io, r: *const conda.Record, dest: std.
             else => continue,
         }
         const rel = try mem.replaceOwned(u8, arena, e.path, "\\", "/");
+        if (m2 and (mem.eql(u8, rel, "VERSION") or mem.eql(u8, rel, "ORIGIN"))) continue;
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = from }, dest, b.fmt("LICENSES/{s}/{s}", .{ r.name, rel })).step);
         n += 1;
     }

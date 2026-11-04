@@ -1,0 +1,7 @@
+package: m2-libintl 0.22.5.1 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/gettext-0.22.5-1.src.tar.zst sha256:e07a0b3e6716aae86dc0edd2dcdc8864731d56051345592b53659a3840ccfbd8
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/gettext-0.22.5-1.src.tar.zst
+file: gettext-runtime/intl/COPYING.LIB 3fe5361f24b7c49ba12911c08f5a33f9cb18871d95d9fb881f5b8a4793e04288 <- gettext/gettext-0.22.5.tar.gz:gettext-0.22.5/gettext-runtime/intl/COPYING.LIB
+file: COPYING e79e9c8a0c85d735ff98185918ec94ed7d175efc377012787aebcf3b80f0d90b <- gettext/gettext-0.22.5.tar.gz:gettext-0.22.5/COPYING
+note: the texts differ from conda-meta's license: msys-intl-8.dll is gettext's libintl, LGPL-2.1-or-later (gettext-runtime/intl/COPYING.LIB); GPL-3.0-or-later (COPYING) covers gettext's programs

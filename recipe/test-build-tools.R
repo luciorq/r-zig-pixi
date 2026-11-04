@@ -1,10 +1,11 @@
 ## r-zig-slim + r-zig-build-tools (feat-standalone-toolchain B28, phase
 ## 4): rzig's check finds make (Windows: also sh and the binutils), names
 ## r-zig-compilers for what is missing, and says when make is installed
-## in this env but not on PATH; R CMD config reads Makeconf through make.
-## On Windows the package's own files: the MinGW binutils, with the
-## records of where they come from (B24, B41), which load the env's
-## zstd.dll (E2).
+## in this env but not on PATH (on Windows R CMD then finds them itself,
+## PHASE7 F2 b); R CMD config reads Makeconf through make. On Windows the
+## package's own files: the MinGW binutils, with the records of where they
+## come from (B24, B41), which load the env's zstd.dll (E2); and B39's
+## tools and pkg-config from this env (B11, B43).
 windows <- .Platform$OS.type == "windows"
 d <- tempfile("rzig-"); dir.create(d)
 ## the caller's settings (pixi run, conda run, wheel-test; rattler-build's
@@ -76,7 +77,11 @@ cat("build tools: no zig, the check names r-zig-compilers: OK\n")
 ## installed in this env but not on PATH (an env used without activation:
 ## an IDE pointed at its R; win-64's R.bat adds nothing to PATH): the
 ## check says so, naming this env's make (Windows: m2's, in
-## Library/usr/bin), then the text (PHASE4 open point I a, Cg2)
+## Library/usr/bin), then the text (PHASE4 open point I a, Cg2). On
+## Windows only outside R: under R CMD (Rcmd_environ) and in sessions
+## (Rprofile.windows) R puts this env's Library/usr/bin on PATH itself,
+## after the group's usr/bin, so the same PATH (with this env's
+## Library/bin, for R's DLLs) finds m2's make and sh there (PHASE7 F2 b)
 empty <- file.path(d, "empty"); dir.create(empty)
 Sys.setenv(PATH = paste(c(empty, if (windows) file.path(Sys.getenv("SystemRoot"), "System32")), collapse = .Platform$path.sep))
 r <- run_to(cc, "--rzig-check=build-tools"); cat(r$out, sep = "\n")
@@ -88,6 +93,16 @@ stopifnot(r$status == 127L, length(line) == 1L, endsWith(line, not_on_path),
                     paste0(make_dir, if (windows) "/make.exe" else "/make")),
           any(startsWith(r$out, "Building packages needs the r-zig build tools for R ")))
 cat("build tools: make off PATH is named as installed in this env: OK\n")
+if (windows) {
+    Sys.setenv(PATH = paste(c(empty, env_bin, file.path(Sys.getenv("SystemRoot"), "System32")), collapse = ";"))
+    r <- run_to(file.path(R.home("bin"), "Rcmd.exe"), c(shortPathName(cc), "--rzig-check=build-tools"))
+    cat(r$out, sep = "\n")
+    narrow(usr_bin = TRUE)
+    at <- function(name) shown(dirname(sub(paste0("^.*", name, " at ([^;]*).*$"), "\\1", r$out[1L])))
+    stopifnot(r$status == 0L, startsWith(r$out[1L], "zig-cc: build-tools ok: make at "),
+              same_path(at("make"), make_dir), same_path(at("sh"), make_dir))
+    cat("build tools: with the same PATH, under R CMD the check finds this env's make and sh: OK\n")
+}
 
 ## R CMD config passes patch 0010's check, and make reads Makeconf: CC is
 ## rzig's name, with -std=gnu23 after it on unix and $(M_ARCH) on Windows
@@ -116,8 +131,26 @@ if (windows) {
     r <- run_to(file.path(bu, "nm.exe"), "--version")
     narrow(usr_bin = TRUE)
     stopifnot(r$status == 0L, grepl("GNU nm", r$out[1L], fixed = TRUE))
-    ## Makeconf.win names a bare pkg-config (B43)
+    ## Makeconf.win names a bare pkg-config (B43): this env's
     r <- run_to("pkg-config", "--version")
     stopifnot(r$status == 0L, length(r$out) > 0L)
     cat("build tools: binutils/ has its SOURCES and LICENSES, nm runs with this env's zstd.dll, pkg-config", r$out[1L], ": OK\n")
+
+    ## B39's tools from this env (B11): m2's, in Library/usr/bin. R's
+    ## Sys.which looks in System32 before PATH, so a name System32 has too
+    ## (find, sort, ...: PHASE7 amendment Am6) is checked by its file, the
+    ## rest through Sys.which, the paths compared normalised (8.3 names)
+    usr_bin <- shown(file.path(env_bin, "..", "usr", "bin"))
+    names <- c("sh", "bash", "make", "sed", "grep", "gawk", "awk", "which", "find", "xargs",
+               "basename", "rm", "cp", "mv", "mkdir", "cat", "tr", "sort", "uname", "chmod", "ln",
+               "ls", "expr", "touch", "head", "tail", "wc", "env", "printf", "mktemp", "test")
+    shadow <- file.exists(file.path(Sys.getenv("SystemRoot"), "System32", paste0(names, ".exe")))
+    for (n in names[shadow])
+        if (!file.exists(file.path(usr_bin, paste0(n, ".exe")))) stop(n, ".exe is not in ", usr_bin)
+    for (n in names[!shadow]) {
+        w <- Sys.which(n)
+        if (!nzchar(w) || !same_path(shown(dirname(w)), usr_bin)) stop("Sys.which(\"", n, "\") is '", w, "', not in ", usr_bin)
+    }
+    cat("build tools: B39's tools are this env's m2 tools (", sum(shadow), "by file, System32 has them:",
+        paste(names[shadow], collapse = " "), "): OK\n")
 }

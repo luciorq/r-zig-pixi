@@ -1,0 +1,5 @@
+package: m2-grep 1!3.0.7 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/grep-1.3.0-7.src.tar.zst sha256:acba43b9b2c3eb393f9a75d02a1eca34fa23d959541150a7ac4ffbafce3cae4e
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/grep-1.3.0-7.src.tar.zst
+file: COPYING ca372a7d92560b1fa9f6d832b440e8bcd62d9adfa8870c98287deab66d98310e <- grep/grep-3.0.tar.xz:grep-3.0/COPYING

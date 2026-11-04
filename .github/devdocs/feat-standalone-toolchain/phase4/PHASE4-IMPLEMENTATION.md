@@ -743,7 +743,10 @@ r-zig-slim + r-zig-compilers: verify-bundle's scenario 2 on conda.
   give status 127 and "Building packages needs the r-zig build tools for
   R " (0010).
   - Windows: rcmdfn.c runs `sh config.sh` first, so `R CMD config`
-    without sh is phase 7's item.
+    without sh is phase 7's item. Amended by PHASE7 (J a), 2026-10-21:
+    patch 0010's rcmdfn.c hunk runs rzig's check before sh, so Windows
+    gives the same 127 and text, with no "is not recognized"
+    (test-preflight.R and test-compilers.R assert it).
 
 ### recipe/test-build-tools.R (new, step 1)
 
@@ -773,7 +776,12 @@ r-zig-slim + r-zig-build-tools.
     naming the env's make (Windows: make.exe under Library/usr/bin);
   - the build-tools text.
 
-  Restore PATH afterwards with `narrow(usr_bin = TRUE)`.
+  Restore PATH afterwards with `narrow(usr_bin = TRUE)`. Amended by
+  PHASE7 F2 (b) (2026-10-21): on Windows the same PATH (with the env's
+  `Library/bin` for R's DLLs) under R CMD (`Rcmd.exe <CC's rzig>
+  --rzig-check=build-tools`) must give exit 0 and make and sh in the
+  env's `Library/usr/bin`, which Rcmd_environ now puts on PATH after the
+  group's usr/bin.
 - **Windows only:**
   - `SOURCES` names binutils_impl_win-64 with a sha256, and
     `LICENSES/binutils_impl_win-64/` is not empty. These move from
@@ -1449,9 +1457,9 @@ The same on all three channels; only which line applies differs.
 | compilers present, no build tools; tier 3 (a configure script, src/Makefile, a Makevars rule, `$(shell)`, ...) or a configure script R runs | stop (127): "<pkg> needs make: <reason>; no make on PATH", build-tools text | unix: a host make on PATH satisfies the check, and the package builds with it (B25: make from PATH; standalone, conda and pip alike) |
 | tier 1 with Fortran sources, no flang | stop (127): no flang, compilers text | pip always (B29: "zig only: PyPI has no Fortran compiler"); conda: flang comes with r-zig-compilers; standalone: LLVM flang on PATH until phase 6 |
 | a tier-2 package whose plan needs make | stop (other): exit 1, I-C1's line and "the r-zig toolchain is complete: ..." (code-6), then "this package cannot be built (see above)" (J a) (Cg5) | no group would help |
-| `R CMD config` with no build tools | — | 0010: rzig's build-tools text, exit 127; no hint line (B b) (Cg4). Windows without sh: rcmdfn.c's own error (phase 7) |
+| `R CMD config` with no build tools | — | 0010: rzig's build-tools text, exit 127; no hint line (B b) (Cg4). Changed by PHASE7 (J a), 2026-10-21: Windows the same (patch 0010's rcmdfn.c hunk runs rzig's check before sh), no "is not recognized" |
 | `R CMD SHLIB`, pak/pkgbuild's probe, Rcpp::sourceCpp | — | make not found, no rzig text. The README's recommendation, and rzig's "r-zig-toolchain installs every group" (H a), point to the full set. Routing SHLIB through rzig build is a later item |
-| conda env used without activation (unix: `<env>/bin` not on PATH; win-64: R.bat adds nothing to PATH, so m2's `Library/usr/bin` is missing too, SC §6) (Cc19) | zig and flang are found in the env's bin (B34). make (Windows: make and sh) is not; with I (a) the stop's first line says it is installed in R's environment and to activate it (Cg2) | B34's note: finding make stays PATH's |
+| conda env used without activation (unix: `<env>/bin` not on PATH; win-64: R.bat adds nothing to PATH, so m2's `Library/usr/bin` is missing too, SC §6) (Cc19) | zig and flang are found in the env's bin (B34). make (Windows: make and sh) is not; with I (a) the stop's first line says it is installed in R's environment and to activate it (Cg2). Changed by PHASE7 F2 (b), 2026-10-21: on win-64 Rcmd_environ (`R_HOME/../../usr/bin`) and base's Rprofile (the same directory without "..") put `<env>/Library/usr/bin` on PATH after the group's usr/bin, so under R CMD and in sessions make and sh are found; I (a)'s line stays for unix and for a check run outside R | B34's note: finding make stays PATH's |
 
 ## 7. The upgrade from universe's `_8`
 
@@ -1575,7 +1583,7 @@ and `CONDA_PUBLISH`, with that bump's number for `_9`):
 | package contents | `package_contents` per output: rzig and rpkg in r-zig-slim, no group directory; no `lib/R` in the group packages; win-64 r-zig-build-tools' binutils, SOURCES and LICENSES (Cc12) | — | the file-list checks |
 | base alone | test-preflight.R: rzig and rpkg present, no group directory, no hint writer; R-only installs; compiled stops with `zig-cc: no zig (` naming r-zig-compilers; a configure script stops with both texts (H); the user's hint | the same test-preflight.R, run with the venv's Rscript (Cg10) | scenario 1 |
 | base + compilers | test-compilers.R: no make on PATH; the check finds the env's zig and flang; C and plain-FLIBS Fortran tier 1 through rzig build (Cc10); a Makevars rule stops naming r-zig-build-tools; unix R CMD config names the build tools | + r-zig-compilers: tier 1 through the console script, the bundled bin/R and `python3 -m ziglang`; zig-fc no-flang; the Makevars rule stops | scenario 2 |
-| base + build tools | test-build-tools.R: build-tools check ok; compilers check names r-zig-compilers; R CMD config CC (Cc1); I's "installed but not on PATH" line; win binutils records; nm with the env's zstd | (+ r-zig-build-tools after compilers: make on PATH, the Makevars rule builds) | — |
+| base + build tools | test-build-tools.R: build-tools check ok; compilers check names r-zig-compilers; R CMD config CC (Cc1); I's "installed but not on PATH" line (rzig run directly); on win-64, since PHASE7 F2 (b), the same PATH under R CMD finds the env's make and sh; win binutils records; nm with the env's zstd | (+ r-zig-build-tools after compilers: make on PATH, the Makevars rule builds) | — |
 | everything | test-toolchain.R, with PATH narrowed to the env (Cg9) | + r-zig-toolchain; the metapackage alone in a second venv, `--no-index` (Cc5, Cc14) | scenario 3 |
 | groups removed | — (removal is the package manager's; the upgrade test covers moved files) (Cg8) | uninstall: rzig stays and R is whole; then, with ziglang gone, test-preflight.R again | — |
 

@@ -258,11 +258,10 @@ stopifnot(r$status != 0L,
 cat("compilers: R CMD SHLIB of a Makevars rule stops, naming r-zig-build-tools: OK\n")
 
 ## R CMD config evaluates Makeconf through make: patch 0010 stops first
-## with rzig's text. Windows: rcmdfn.c runs `sh config.sh`, so with no sh
-## R CMD config is phase 7's item
-if (!windows) {
-    r <- run_to(file.path(R.home("bin"), "R"), c("CMD", "config", "CC")); cat(r$out, sep = "\n")
-    stopifnot(r$status == 127L,
-              any(startsWith(r$out, "Building packages needs the r-zig build tools for R ")))
-    cat("compilers: R CMD config names the build tools: OK\n")
-}
+## with rzig's text (Windows: rcmdfn.c runs the check before config.sh's
+## sh, PHASE7 open point J a)
+r <- run_to(file.path(R.home("bin"), "R"), c("CMD", "config", "CC")); cat(r$out, sep = "\n")
+stopifnot(r$status == 127L,
+          any(startsWith(r$out, "Building packages needs the r-zig build tools for R ")),
+          !any(grepl("is not recognized", r$out, fixed = TRUE)))
+cat("compilers: R CMD config names the build tools: OK\n")

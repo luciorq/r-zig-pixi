@@ -1,0 +1,46 @@
+Rprofile.windows: the build tools first on PATH in R sessions
+
+etc/Rcmd_environ (r-zig's lines, build.zig rcmdEnviron) puts the
+build-tools group's R_HOME/bin/toolchain/usr/bin first on PATH under R
+CMD, then a conda env's MSYS dir, R_HOME/../../usr/bin, or
+R_CUSTOM_TOOLS_PATH when it is set. R sessions did not: unix's
+etc/Renviron sets the same PATH for every R process, and R's own
+installer build turns on the Rtools block of this file, but r-zig's
+Windows sessions saw only the caller's PATH. install.packages() asks
+Sys.which("make") before it takes its parallel make, and whether it may
+compile from source; system("sh ...") and Sys.which("pkg-config") in R
+code asked the caller's PATH too. The same rule in the session, with an
+empty R_CUSTOM_TOOLS_PATH read as unset as Rcmd_environ's ":-" reads it.
+A missing directory (no build-tools group extracted; the standalone
+tree's Library/usr/bin) is harmless. The env's dir is spelled without
+"..": R's own command search (run.c's expandcmd, Sys.which) rejects a
+match in a PATH entry whose ".." segments shorten it by more than ten
+characters (SearchPath's second call, given the first call's size plus
+ten, reports that it does not fit: kappa 2026-10-21), so in a session
+this entry comes before Rcmd_environ's ${R_HOME}/../../usr/bin, which
+only programs that resolve ".." themselves then reach. R's disabled
+Rtools block is left as it is. feat-standalone-toolchain B25, PHASE7
+open point I a, amendment Am4, F2 b.
+
+--- a/src/library/profile/Rprofile.windows
++++ b/src/library/profile/Rprofile.windows
+@@ -85,3 +85,19 @@
+         Sys.setenv(PATH = paste0(path, ";", Sys.getenv("PATH")))
+     }
+ })
++
++## r-zig: the build-tools group's usr/bin first on PATH in R sessions, as
++## etc/Rcmd_environ puts it under R CMD (feat-standalone-toolchain B25,
++## PHASE7 open point I): R's installer line above, with
++## R_HOME/bin/toolchain/usr/bin in Rtools' place, then a conda env's MSYS
++## dir (R_HOME is <env>/Library/lib/R: Library/usr/bin, m2's), so that
++## its tools answer whatever PATH has first (PHASE7 F2 b), spelled
++## without "..", which R's own command search rejects; an empty
++## R_CUSTOM_TOOLS_PATH read as unset, as Rcmd_environ's ":-" reads it. A
++## missing directory (no build-tools group) is harmless.
++local({
++    path <- Sys.getenv("R_CUSTOM_TOOLS_PATH")
++    if (!nzchar(path)) path <- paste(file.path(R.home(), "bin", "toolchain", "usr", "bin"),
++                                     file.path(dirname(dirname(R.home())), "usr", "bin"), sep = ";")
++    Sys.setenv(PATH = paste0(path, ";", Sys.getenv("PATH")))
++})

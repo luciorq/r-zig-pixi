@@ -1,0 +1,5 @@
+package: m2-which 2.23.4 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/which-2.23-4.src.tar.zst sha256:8d63c3d19b860fed1fd63c70b91455d7039b4a66a8d256aa3f32749eeab0ee36
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/which-2.23-4.src.tar.zst
+file: COPYING 8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903 <- which/which-2.23.tar.gz:which-2.23/COPYING

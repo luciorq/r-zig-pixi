@@ -1,0 +1,5 @@
+package: m2-sed 4.9.1 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/sed-4.9-1.src.tar.zst sha256:a9686da7c1f3cb2ba7ae5f20f30d9ef38f7bba993f9c777b43bd13c7fbd7cc58
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/sed-4.9-1.src.tar.zst
+file: COPYING 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986 <- sed/sed-4.9.tar.xz:sed-4.9/COPYING

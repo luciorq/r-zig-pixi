@@ -2,11 +2,14 @@
 # The compile tree (PHASE3 open point B (a)), env.sh's COMPILE_TREE,
 # build/compile-tree/<flavor>/R-<ver>-zig: a fresh copy of the flavor's R
 # tree ($PREFIX) with the toolchain tree's group directories in its
-# R_HOME/bin/toolchain, every one but zig/ and flang/ (C12): in phase 3
-# openmp/, and unix usr/ or Windows binutils/. contract, pkg-parity and
-# stress compile packages with it (their pixi tasks depend on
-# compile-tree) [phase3-P3-5], as a user who extracted the base and both
-# group archives into one directory does.
+# R_HOME/bin/toolchain, every one but zig/ and flang/ (C12): openmp/, and
+# the build-tools group's directories (unix usr/; Windows usr/, etc/ and
+# binutils/, phase 7). contract, pkg-parity and stress compile packages
+# with it (their pixi tasks depend on compile-tree) [phase3-P3-5], as a
+# user who extracted the base and both group archives into one directory
+# does. On Windows they then run the group's usr/bin first, under R CMD
+# and in their R sessions, and the env's Library/usr/bin after it (PHASE7
+# risk 8).
 # It stops when the R tree is missing, when the toolchain tree has no
 # build-tools directory, and when it has no openmp/ where the R tree has
 # the libomp runtime.

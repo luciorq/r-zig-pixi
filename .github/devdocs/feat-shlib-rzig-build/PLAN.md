@@ -640,7 +640,11 @@ CXX17` still needs the build tools, H); RcppArmadillo's and
 RcppParallel's configure-time `R CMD SHLIB` probes give the same
 builders and results as main's run; no row that passed on main fails.
 Then TODO.md's g1 dispatch item is ticked. (The build number is not
-checked: open decision 2 is answered, no bump.)
+checked: open decision 2 is answered, no bump.) Correction (2026-10-20,
+feat-standalone-toolchain PHASE7's stress survey): 38569895172 ran g3
+and g4, not g1 and g2, so it is no baseline for these rows; g1 and g2's
+baseline is another main run, to be named when the dispatch is read
+(recorded, not re-run).
 
 ## Not tested
 

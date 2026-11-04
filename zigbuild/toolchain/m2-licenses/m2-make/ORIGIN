@@ -1,0 +1,5 @@
+package: m2-make 4.4.1.2 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/make-4.4.1-2.src.tar.zst sha256:9576ed00450801c5f91406311a82775fe8e33bcb26284d7b4ac3b5a0cfcfa0ae
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/make-4.4.1-2.src.tar.zst
+file: COPYING e79e9c8a0c85d735ff98185918ec94ed7d175efc377012787aebcf3b80f0d90b <- make/make-4.4.1.tar.gz:make-4.4.1/COPYING

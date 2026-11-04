@@ -345,11 +345,12 @@ outputs:
       # everything but the groups' directories under R_HOME/bin/toolchain
       # (feat-standalone-toolchain B20, B28): rzig's names stay here. Of
       # these, the conda build makes only win-64's binutils/, which
-      # r-zig-build-tools owns
+      # r-zig-build-tools owns; usr/ and etc/ are the standalone tree's
+      # only on win-64 (PHASE7 Cr5)
       files:
         exclude:
-          - lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
-          - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
+          - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
+          - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
     requirements:
       run:
         # R's own shared libraries (libR, base packages like stats/utils via
@@ -493,8 +494,8 @@ outputs:
                   - lib/R/bin/toolchain/zig-cc
                   - lib/R/share/zig/rpkg/build_t1.zig
             not_exists:
-              - lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
-              - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
+              - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
+              - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
     # Windows builds R with full's content, under the name slim on every
     # channel (feat-standalone-toolchain B42 a); a Windows slim that is
     # really slim is a later aim.
@@ -589,13 +590,17 @@ outputs:
       run:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
         # B28 (a): unix make. On win-64, m2-make is the make R runs (it
-        # comes first on PATH), so no native make there (PHASE4 Cg7);
-        # phase 7 chooses native or m2 (B11)
+        # comes first on PATH), so no native make there (PHASE4 Cg7;
+        # PHASE7 open point B a)
         - if: unix
           then:
             - make >=4.4
-        # win-64's interim set until phase 7 chooses one for both channels
-        # (B11, B39)
+        # win-64: the build-tools group's set on both channels (B11; PHASE7
+        # open points A-C): MSYS2's userland from conda-forge's m2 packages
+        # and the native pkg-config; the standalone tree copies the same
+        # packages' files into R_HOME/bin/toolchain/usr/bin. R puts this
+        # env's Library/usr/bin on PATH itself, after the group's usr/bin,
+        # in R and under R CMD (PHASE7 F2 b)
         - if: win
           then:
             # bash.exe: packages' own configure scripts and make's recipe
@@ -630,7 +635,8 @@ outputs:
             - m2-which
             - m2-findutils
             # B43: Makeconf.win names a bare pkg-config (pkg-config only:
-            # phase 7 adds the pkgconf name, PHASE4 open point F a)
+            # the pkgconf name comes with a pkgconf built from source, a
+            # later change after phase 7, PHASE4 open point F a)
             - pkg-config
             # E2: the six binutils import zstd.dll
             - zstd

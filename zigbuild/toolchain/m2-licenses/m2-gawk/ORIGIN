@@ -1,0 +1,5 @@
+package: m2-gawk 5.3.2.1 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/gawk-5.3.2-1.src.tar.zst sha256:0b62bc9cc7c1d1371b8ada968449e5dcd0088a66ce57b11bd4affefbb7c69bdf
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/gawk-5.3.2-1.src.tar.zst
+file: COPYING 8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903 <- gawk/gawk-5.3.2.tar.gz:gawk-5.3.2/COPYING

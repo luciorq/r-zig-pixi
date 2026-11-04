@@ -241,9 +241,12 @@ fn buildToolsFound(ctx: *Ctx) !Found {
 /// point I a): unix <dir>/bin (conda-forge's make), Windows m2's
 /// <dir>/usr/bin (make and sh; <dir> is <root>/Library there). That is an
 /// environment used without activation: an IDE pointed at <env>/bin/R, or
-/// win-64's R.bat, which adds nothing to PATH. Finding the tool stays
-/// PATH's (B34's note); this only says why it was not found. The
-/// standalone tree and the wheel have none there.
+/// win-64's R.bat, which adds nothing to PATH. On Windows R itself puts
+/// <dir>/usr/bin on PATH, after the group's usr/bin, under R CMD and in
+/// sessions (PHASE7 F2 b), so there this line comes only from a check run
+/// outside R. Finding the tool stays PATH's (B34's note); this only says
+/// why it was not found. The standalone tree and the wheel have none
+/// there.
 fn notOnPath(ctx: *Ctx, what: []const u8, name: []const u8) ![]const u8 {
     const e = (try environment.own(ctx)) orelse return what;
     const bin = try ctx.fmt("{s}/{s}", .{ e.dir, if (ctx.os == .windows) "usr/bin" else "bin" });

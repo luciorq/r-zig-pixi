@@ -166,6 +166,18 @@ stopifnot(r$status != 0L, length(comp) == 1L, length(bt) == 1L, comp < bt,
           !dir.exists(file.path(lib, "rzigconf")))
 cat("base: a configure script stops in the preflight with both groups' texts, and does not run: OK\n")
 
+## Windows: R CMD config with no build tools in this env names them, as
+## on unix (test-compilers.R), and exits with rzig's 127: rcmdfn.c runs
+## rzig's check before config.sh's sh, so cmd.exe has no sh to miss
+## (patch 0010; PHASE7 open point J a)
+if (windows) {
+    r <- run_to(file.path(R.home("bin"), "R"), c("CMD", "config", "CC")); cat(r$out, sep = "\n")
+    stopifnot(r$status == 127L,
+              any(startsWith(r$out, "Building packages needs the r-zig build tools for R ")),
+              !any(grepl("is not recognized", r$out, fixed = TRUE)))
+    cat("base: R CMD config names the build tools, exit 127: OK\n")
+}
+
 ## a user's own R_ZIG_TOOLCHAIN_HINT: shown after rzig's text on a 127
 ## (PHASE3 C8; PHASE4 open point B b, Cg4)
 Sys.setenv(R_ZIG_TOOLCHAIN_HINT = "r-zig-test-hint")

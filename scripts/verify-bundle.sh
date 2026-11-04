@@ -91,7 +91,11 @@
 #      Ncpus = 2 builds two packages, a mixed run under the default
 #      builder: btA (plain C) through rzig build, btLib (a static library
 #      made by $(AR) and $(RANLIB): rzig, B43) through the group's make,
-#      each asserted from its kept log. Windows: every
+#      each asserted from its kept log. Windows: the group's usr/bin with
+#      PATH = bin\x64 + System32 (R CMD's Rcmd_environ and the session's
+#      Rprofile put it first; PHASE7 open point I): rzig's check mode
+#      under R CMD names its make and sh, Sys.which("make") in a session
+#      is its make.exe, every
 #      tool Makeconf.win names is the group's binutils or rzig (B24,
 #      B43), R CMD check's DLL check runs the group's objdump, a tools.mk
 #      runs each of the binutils (C10, C11), CMake's ar and ranlib beside
@@ -102,7 +106,14 @@
 #      a package with a .rc file (make) and a plain C one (rzig build)
 #      build and load with only bin\x64 and System32 on PATH; LTO is recorded, not
 #      checked (B43-2, C9), with a tier-1 twin that MAKEFLAGS' assignment
-#      sends to make (N4). Every OS, with no zig (TC/zig's binary moved
+#      sends to make (N4); B39's tools through a configure.win, a
+#      cleanup.win and a Makevars rule (btTools), pkg-config (0.29.2,
+#      B43) through a configure.win and a .pc file under a path with a
+#      space (btPc), R
+#      CMD check's nm (UserNM, PHASE7 open point H), and, where Git for
+#      Windows' MSYS is installed, the same with its usr\bin first on PATH
+#      (with a configure.win that runs its diff and cygpath through TC's
+#      sh) and after it (PHASE7 open point M, amendment Am4). Every OS, with no zig (TC/zig's binary moved
 #      aside): a package with a configure script stops in the preflight
 #      with the compilers' text, and with R_ZIG_NO_PREFLIGHT=1 gets past
 #      it, runs its configure and fails in the compile (C26).
@@ -123,9 +134,6 @@
 # the zig only; the env's flang with its cfg keeps its coverage in
 # contract, pkg-parity and the conda tests. pass_flang is TC/flang's
 # driver as rzig names it.
-# What phase 6 leaves to later phases (PLAN.md): Windows' build-tools
-# group has no usr/bin (phase 7), so scenario 3 takes sh and make from
-# the env's Library/usr/bin.
 # The static checks of the trees (Makeconf, the compilers are rzig, the CA
 # bundle, rpaths, the glibc ceiling, the C++ runtime of R's binaries, the
 # macOS floor and load commands, minimal's excluded libraries, Windows'
@@ -529,29 +537,54 @@ cat('bundle OK\n')
   # and bin/Rcmd sources (patch 0008), so PATH starts with
   # <R_HOME>/bin/toolchain/usr/bin in R and under R CMD. Windows: under R
   # CMD, Rcmd_environ's line, whose default R's reader expands only as a
-  # whole ${...} term (hence R_ZIG_TOOLS_PATH): the entry after bin\x64,
-  # which R CMD puts first, is the expanded path, with no ${ left, or
-  # R_CUSTOM_TOOLS_PATH's value when that is set (R's installer line).
+  # whole ${...} term (hence R_ZIG_TOOLS_PATH): the entries after bin\x64,
+  # which R CMD puts first, are the expanded paths, with no ${ left, the
+  # group's usr/bin, then R_HOME/../../usr/bin (a conda env's MSYS dir;
+  # here none: PHASE7 F2 b), or R_CUSTOM_TOOLS_PATH's value when that is
+  # set (R's installer line).
   if [ "$OS" = windows ]; then
     cat > "$VERIFY_DIR/path.R" <<'RCODE'
 p <- strsplit(Sys.getenv("PATH"), ";", fixed = TRUE)[[1L]]
 slash <- function(x) tolower(chartr("\\", "/", x))
 i <- match(TRUE, endsWith(slash(p), "/bin/x64"))
-got <- if (is.na(i) || i == length(p)) "" else p[[i + 1L]]
 custom <- Sys.getenv("R_CUSTOM_TOOLS_PATH")
-want <- if (nzchar(custom)) custom else paste0(R.home(), "/bin/toolchain/usr/bin")
-if (grepl("${", got, fixed = TRUE) || slash(got) != slash(want))
-    stop("the PATH entry after bin/x64 is '", got, "', not '", want, "'; PATH: ", Sys.getenv("PATH"))
-cat("the PATH entry after bin/x64:", got, "\n")
+want <- if (nzchar(custom)) custom else paste0(R.home(), c("/bin/toolchain/usr/bin", "/../../usr/bin"))
+got <- if (is.na(i)) "" else p[i + seq_along(want)]
+if (anyNA(got) || any(grepl("${", got, fixed = TRUE)) || any(slash(got) != slash(want)))
+    stop("the PATH entries after bin/x64 are '", paste(got, collapse = ";"), "', not '",
+         paste(want, collapse = ";"), "'; PATH: ", Sys.getenv("PATH"))
+cat("the PATH entries after bin/x64:", got, "\n")
 RCODE
-    for custom in "" "C:/r-zig-custom-tools"; do
+    # In an R session, base's Rprofile (patch 0014; PHASE7 open point I,
+    # amendment Am4, F2 b): the first entries, R_HOME/bin/toolchain/usr/bin
+    # and R_HOME's grandparent's usr/bin, spelled without "..", which R's
+    # own command search rejects, or R_CUSTOM_TOOLS_PATH's value; one set
+    # to empty is unset, as R CMD reads it. --vanilla skips the site and
+    # user profiles, not base's.
+    cat > "$VERIFY_DIR/session-path.R" <<'RCODE'
+p <- strsplit(Sys.getenv("PATH"), ";", fixed = TRUE)[[1L]]
+slash <- function(x) tolower(chartr("\\", "/", x))
+custom <- Sys.getenv("R_CUSTOM_TOOLS_PATH")
+want <- if (nzchar(custom)) custom else
+    c(file.path(R.home(), "bin", "toolchain", "usr", "bin"), file.path(dirname(dirname(R.home())), "usr", "bin"))
+got <- p[seq_along(want)]
+if (anyNA(got) || any(slash(got) != slash(want)))
+    stop("the session's first PATH entries are '", paste(got, collapse = ";"), "', not '",
+         paste(want, collapse = ";"), "'; PATH: ", Sys.getenv("PATH"))
+cat("the session's first PATH entries:", got,
+    if (is.na(Sys.getenv("R_CUSTOM_TOOLS_PATH", NA))) "" else paste0("(R_CUSTOM_TOOLS_PATH='", custom, "')"), "\n")
+RCODE
+    for custom in unset "" "C:/r-zig-custom-tools"; do
       custom_env=()
-      [ -z "$custom" ] || custom_env=(R_CUSTOM_TOOLS_PATH="$custom")
+      [ "$custom" = unset ] || custom_env=(R_CUSTOM_TOOLS_PATH="$custom")
       (cd "$VERIFY_DIR" && env -i "${base_env[@]}" "${custom_env[@]}" PATH="$R_BINDIR:$sys32" \
         "$R_EXE" CMD Rscript.exe --vanilla path.R) ||
-        { echo "error: under R CMD, the PATH entry after bin\\x64 is not ${custom:-R_HOME/bin/toolchain/usr/bin, expanded} (etc/Rcmd_environ, B25)" >&2; exit 1; }
+        { echo "error: under R CMD, the PATH entries after bin\\x64 are not ${custom_env[*]:-R_HOME/bin/toolchain/usr/bin and R_HOME/../../usr/bin, expanded} (etc/Rcmd_environ, B25)" >&2; exit 1; }
+      (cd "$VERIFY_DIR" && env -i "${base_env[@]}" "${custom_env[@]}" PATH="$R_BINDIR:$sys32" \
+        "$RSCRIPT" --vanilla session-path.R) ||
+        { echo "error: in an R session, the first PATH entries are not ${custom_env[*]:-R_HOME/bin/toolchain/usr/bin and R_HOME's grandparent's usr/bin} (base's Rprofile, patch 0014)" >&2; exit 1; }
     done
-    echo "== R CMD's PATH: bin\\x64, then R_HOME/bin/toolchain/usr/bin (or R_CUSTOM_TOOLS_PATH)"
+    echo "== R CMD's PATH: bin\\x64, then R_HOME/bin/toolchain/usr/bin and R_HOME/../../usr/bin (or R_CUSTOM_TOOLS_PATH; empty is unset); an R session's starts with the same two, the second without .."
   else
     tools_dir="$(cd "$RHD" && pwd -P)/bin/toolchain/usr/bin"
     in_r="$(env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" --vanilla --no-echo -e 'cat(Sys.getenv("PATH"))')"
@@ -2003,20 +2036,23 @@ for p in $bt_pkgs; do
   printf 'Package: %s\nVersion: 0.1\n\n' "$p" >> "$bt/repo/src/contrib/PACKAGES"
 done
 cat > "$bt/bt.R" <<'RCODE'
-## verify-bundle.sh, scenario 3: on unix the make R runs is the build-tools
-## group's (Sys.which, and its --version: the version its SOURCES records,
-## the first argument); then the packages, two at a time.
+## verify-bundle.sh, scenario 3: the make R runs is the build-tools
+## group's (Sys.which; on unix also its --version, the version its SOURCES
+## records, the first argument; on Windows the session finds it through
+## base's Rprofile, patch 0014, and verify-toolchain.sh checks its
+## version, PHASE7 amendment Am10); then the packages, two at a time.
 windows <- .Platform$OS.type == "windows"
+make <- Sys.which("make")
+group <- file.path(R.home(), "bin", "toolchain", "usr", "bin", if (windows) "make.exe" else "make")
+same <- function(a, b) if (windows) tolower(normalizePath(a, "/")) == tolower(normalizePath(b, "/")) else normalizePath(a) == normalizePath(b)
+if (!nzchar(make) || !same(make, group))
+    stop("Sys.which(\"make\") is '", make, "', not the build-tools group's ", group)
 if (!windows) {
-    make <- Sys.which("make")
-    group <- file.path(R.home(), "bin", "toolchain", "usr", "bin", "make")
-    if (!nzchar(make) || normalizePath(make) != normalizePath(group))
-        stop("Sys.which(\"make\") is '", make, "', not the build-tools group's ", group)
     v <- system2("make", "--version", stdout = TRUE)[1L]
     want <- paste("GNU Make", commandArgs(trailingOnly = TRUE)[1L])
     if (!identical(v, want)) stop("make --version says '", v, "', not '", want, "'")
     cat("make:", make, "-", v, "\n")
-}
+} else cat("make:", make, "\n")
 pkgs <- c("btA", "btLib", if (windows) "btRc")
 lib <- normalizePath("lib", "/")
 install.packages(pkgs, lib = lib, repos = paste0("file:", normalizePath("repo", "/")),
@@ -2099,18 +2135,17 @@ if [ "$OS" != windows ]; then
     echo "== package builds skipped (no zig: ZIG_BIN unset, none on PATH)"
   fi
 else
-  # Windows. sh and make: the env's Library/usr/bin (m2-bash, m2-make)
-  # until the group has its usr/bin (phase 7). Library/bin is not on PATH,
-  # so none of the env's other tools (its binutils, zig, pkg-config) can
-  # stand in for what Makeconf.win names; zig is the pass's (TC/zig's, or
-  # ZIG_BIN's in the build pass).
-  [ -n "${CONDA_PREFIX:-}" ] ||
-    { echo "error: CONDA_PREFIX is not set: run this through pixi (scenario 3 takes sh and make from the env's Library/usr/bin until phase 7)" >&2; exit 1; }
-  usr_bin="$(cygpath -u "$CONDA_PREFIX")/Library/usr/bin"
+  # Windows. sh, make and the rest: the group's usr/bin (phase 7), which
+  # R CMD (Rcmd_environ) and an R session (base's Rprofile, patch 0014)
+  # put first on PATH: PATH here is bin\x64 and System32 alone, so no
+  # tool of the env's (its MSYS, binutils, zig, pkg-config) can stand in
+  # for the group's; zig is the pass's (TC/zig's, or ZIG_BIN's in the
+  # build pass).
+  usr_bin="$TC/usr/bin"
   for t in make sh; do
-    [ -x "$usr_bin/$t" ] || { echo "error: no $t in $usr_bin (m2-make, m2-bash)" >&2; exit 1; }
+    [ -f "$usr_bin/$t.exe" ] || { echo "error: no $t.exe in $usr_bin (the build-tools group's usr/bin)" >&2; exit 1; }
   done
-  bt_path="$R_BINDIR:$usr_bin:$sys32"
+  bt_path="$R_BINDIR:$sys32"
   mk_m="$(cygpath -m "$mk")"
   tc_m="$(cygpath -m -l "$TC")"
   lower() { tr '[:upper:]' '[:lower:]'; }
@@ -2201,8 +2236,7 @@ RCODE
   out="$(cd "$VERIFY_DIR" && env -i "${base_env[@]}" PATH="$bt_path" \
     "$R_EXE" CMD "$(cygpath -w -s "$cc")" --rzig-check=build-tools | tr -d '\r')" ||
     { echo "error: R CMD gcc.exe --rzig-check=build-tools failed with the build-tools group extracted" >&2; exit 1; }
-  usr_m="$(cygpath -m -l "$usr_bin")"
-  for want in "make at $usr_m/make" "sh at $usr_m/sh" "binutils at $tc_m/binutils"; do
+  for want in "make at $tc_m/usr/bin/make" "sh at $tc_m/usr/bin/sh" "binutils at $tc_m/binutils"; do
     printf '%s\n' "$out" | grep -qiF -- "$want" ||
       { echo "error: R CMD gcc.exe --rzig-check=build-tools says '$out', which lacks '$want'" >&2; exit 1; }
   done
@@ -2444,6 +2478,218 @@ RCODE
         *) echo "   ltotier1 (no Makevars; MAKEFLAGS sets LTO_OPT, so make, not rzig build): $r" ;;
       esac
     done
+
+    # btTools (B39; PHASE7 step 4): a configure.win that runs, through the
+    # group's sh, the tools R's makefiles and configure scripts call
+    # (coreutils, sed, grep, gawk, awk, expr, find and xargs, which), each
+    # step checked, and writes src/Makevars.win with the count as
+    # BTTOOLS and a rule of its own, so make builds it; its cleanup.win
+    # (find | xargs rm, which R CMD INSTALL --preclean runs first) removes
+    # a stale object. f() returns the count; it loads with PATH = bin\x64
+    # + System32.
+    tools_pkg() {
+      local d="$1/btTools"
+      mkpkg "$1" btTools 0
+      printf '%s\n' 'int btTools_val(void) { return BTTOOLS; }' > "$d/src/val.c"
+      : > "$d/src/stale.o"
+      cat > "$d/configure.win" <<'CONFIGURE'
+#!/bin/sh
+n=0
+ok() { n=`expr $n + 1`; }
+no() { echo "btTools: configure.win: $1 failed"; exit 1; }
+test "`echo 'a b c' | awk '{ print $2 }'`" = b && ok || no awk
+test "`echo 'a b c' | gawk '{ print $3 }'`" = c && ok || no gawk
+test "`printf 'l1\nl2\n' | sed -n 2p`" = l2 && ok || no sed
+echo abc | grep -E 'a.c' > /dev/null && ok || no grep
+test "`expr 2 + 3`" = 5 && ok || no expr
+test "`echo abc | tr a-c A-C`" = ABC && ok || no tr
+test "`printf 'b\na\n' | sort | head -n 1`" = a && ok || no sort/head
+test "`printf 'a\na\nb\n' | uniq | wc -l | tr -d ' '`" = 2 && ok || no uniq/wc
+test "`echo a:b | cut -d: -f2`" = b && ok || no cut
+test "`printf '1\n2\n3\n' | tail -n 1`" = 3 && ok || no tail
+test "`basename src/f.c .c`" = f && ok || no basename
+test "`dirname src/f.c`" = src && ok || no dirname
+uname -s > /dev/null && ok || no uname
+t=`mktemp` && test -f "$t" && rm -f "$t" && ok || no mktemp
+mkdir -p tt/a/b && ok || no mkdir
+cat DESCRIPTION > tt/a/b/d && cp tt/a/b/d tt/c && mv tt/c tt/e && ok || no cat/cp/mv
+ln -s d tt/a/b/l && test -f tt/a/b/l && ok || no ln
+chmod +x tt/e && touch tt/t && ls tt > /dev/null && ok || no chmod/touch/ls
+test "`find . -name '*.c' | xargs grep -l BTTOOLS | wc -l | tr -d ' '`" = 1 && ok || no find/xargs
+which sh > /dev/null && ok || no which
+printf '%s\n' x > /dev/null && env > /dev/null && ok || no printf/env
+rm -rf tt
+echo "btTools: configure.win: all tools ran ($n steps)"
+printf 'PKG_CPPFLAGS = -DBTTOOLS=%s\nall: $(SHLIB) stamp\nstamp: ; @touch $@ && rm -f $@\n' "$n" > src/Makevars.win
+CONFIGURE
+      cat > "$d/cleanup.win" <<'CLEANUP'
+#!/bin/sh
+find src -name '*.o' | xargs rm -f
+rm -f src/Makevars.win
+echo "btTools: cleanup.win ran"
+CLEANUP
+      chmod +x "$d/configure.win" "$d/cleanup.win"
+    }
+    # btPc (PHASE7 amendment Am9, less its pkgconf parts: user decision D0
+    # a): a configure.win that asks the group's pkg-config (0.29.2, B43)
+    # about btpc.pc, under a directory whose name has a space: --libs has
+    # the public libraries (0.29.2 adds the private ones too, without
+    # --static: printed, not asserted; PHASE7 KN d), --static the private
+    # too, the prefix is the .pc file's (Windows' prefix redefinition),
+    # --cflags escapes the space; the package compiles with those --cflags
+    # through make and sh and f() returns BTPC, 7.
+    pc_dir="$VERIFY_DIR/pc dir"
+    mkdir -p "$pc_dir/lib/pkgconfig" "$pc_dir/include"
+    printf '%s\n' '#define BTPC_HEADER 1' > "$pc_dir/include/btpc.h"
+    printf '%s\n' 'prefix=/nonexistent' 'Name: btpc' 'Description: verify-bundle' 'Version: 1.0' \
+      'Libs: -lbtpc_pub' 'Libs.private: -lbtpc_priv' 'Cflags: -I${prefix}/include -DBTPC=7' > "$pc_dir/lib/pkgconfig/btpc.pc"
+    pc_pkg() {
+      local d="$1/btPc"
+      mkpkg "$1" btPc 0
+      printf '%s\n' '#include <btpc.h>' 'int btPc_val(void) { return BTPC_HEADER ? BTPC : 0; }' > "$d/src/val.c"
+      cat > "$d/configure.win" <<'CONFIGURE'
+#!/bin/sh
+libs=`pkg-config --libs btpc | tr -d '\r'` || { echo "btPc: pkg-config --libs btpc failed"; exit 1; }
+echo "btPc: pkg-config --libs: $libs"
+case " $libs " in *" -lbtpc_pub "*) ;; *) echo "btPc: --libs has no -lbtpc_pub"; exit 1 ;; esac
+slibs=`pkg-config --static --libs btpc | tr -d '\r'`
+echo "btPc: pkg-config --static --libs: $slibs"
+case " $slibs " in *" -lbtpc_priv "*) ;; *) echo "btPc: --static --libs has no -lbtpc_priv"; exit 1 ;; esac
+echo "btPc: prefix: `pkg-config --variable=prefix btpc | tr -d '\r'`"
+cflags=`pkg-config --cflags btpc | tr -d '\r'`
+echo "btPc: pkg-config --cflags: $cflags"
+echo "btPc: pkg-config answers"
+printf 'PKG_CPPFLAGS = %s\n' "$cflags" > src/Makevars.win
+CONFIGURE
+      chmod +x "$d/configure.win"
+    }
+    # The two installs, with PATH $1 and the extra environment after it.
+    # Their logs: $2/btTools.log, $2/btPc.log.
+    tools_pc_install() {
+      local p="$1" wd="$2"; shift 2
+      rm -rf "$wd"; mkdir -p "$wd/lib"
+      tools_pkg "$wd"
+      pc_pkg "$wd"
+      (cd "$wd" && env -i "${base_env[@]}" "${zig_env[@]}" "$@" PATH="$p" RZIG_TRACE=1 \
+        "$R_EXE" CMD INSTALL --preclean -l lib btTools) > "$wd/btTools.log" 2>&1 ||
+        { cat "$wd/btTools.log" >&2; echo "error: btTools (B39's tools through a configure.win, a cleanup.win and a Makevars rule) did not install" >&2; exit 1; }
+      tr -d '\r' < "$wd/btTools.log" | grep -q '^btTools: cleanup.win ran$' && test ! -e "$wd/btTools/src/stale.o" ||
+        { cat "$wd/btTools.log" >&2; echo "error: btTools' cleanup.win did not run under --preclean (src/stale.o left)" >&2; exit 1; }
+      n="$(tr -d '\r' < "$wd/btTools.log" | sed -n 's/^btTools: configure.win: all tools ran (\([0-9]*\) steps)$/\1/p')"
+      [ -n "$n" ] || { cat "$wd/btTools.log" >&2; echo "error: btTools' configure.win did not say that all tools ran" >&2; exit 1; }
+      grep -q 'rzig build: btTools needs make: ' "$wd/btTools.log" ||
+        { cat "$wd/btTools.log" >&2; echo "error: btTools did not go to make (its Makevars rule)" >&2; exit 1; }
+      (cd "$wd" && env -i "${base_env[@]}" "${zig_env[@]}" "$@" PATH="$p" PKG_CONFIG_PATH="$(w "$pc_dir/lib/pkgconfig")" RZIG_TRACE=1 \
+        "$R_EXE" CMD INSTALL -l lib btPc) > "$wd/btPc.log" 2>&1 ||
+        { cat "$wd/btPc.log" >&2; echo "error: btPc (pkg-config through a configure.win, a .pc file under a path with a space) did not install" >&2; exit 1; }
+      tr -d '\r' < "$wd/btPc.log" | grep -q '^btPc: pkg-config answers$' ||
+        { cat "$wd/btPc.log" >&2; echo "error: btPc's configure.win did not get its answers from pkg-config" >&2; exit 1; }
+      # (pkg-config escapes the space here too: compared without the \)
+      pfx="$(tr -d '\r' < "$wd/btPc.log" | sed -n 's/^btPc: prefix: //p' | tr -d '\\' | tr '[:upper:]' '[:lower:]')"
+      [ "$pfx" = "$(cygpath -m "$pc_dir" | tr '[:upper:]' '[:lower:]')" ] ||
+        { cat "$wd/btPc.log" >&2; echo "error: pkg-config's prefix for btpc is '$pfx', not the .pc file's, $(cygpath -m "$pc_dir")" >&2; exit 1; }
+      tr -d '\r' < "$wd/btPc.log" | grep -qF 'pc\ dir/include' ||
+        { cat "$wd/btPc.log" >&2; echo "error: pkg-config --cflags did not escape the space in '$pc_dir'" >&2; exit 1; }
+      (cd "$wd" && env -i "${base_env[@]}" PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla \
+        -e "stopifnot(getExportedValue(loadNamespace('btTools', lib.loc = 'lib'), 'f')() == $n, getExportedValue(loadNamespace('btPc', lib.loc = 'lib'), 'f')() == 7L)") ||
+        { echo "error: btTools (f() == $n) or btPc (f() == 7) did not load with PATH = bin\\x64 + System32" >&2; exit 1; }
+    }
+    tools_pc_install "$bt_path" "$VERIFY_DIR/tools-pc"
+    echo "== B39's tools: btTools' configure.win ran $n steps through the group's sh (awk, gawk, sed, grep, expr, tr, sort, uniq, cut, head, tail, basename, dirname, uname, mktemp, mkdir, cat, cp, mv, ln, chmod, touch, ls, find | xargs, which, printf, env), its cleanup.win under --preclean, its Makevars rule through make; loads, f() = $n"
+    echo "   btPc: $(tr -d '\r' < "$VERIFY_DIR/tools-pc/btPc.log" | grep '^btPc: pkg-config --\(libs\|static\|cflags\)' | sed 's/^btPc: //' | tr '\n' ';')"
+    echo "== pkg-config (the group's, 0.29.2): btPc's configure.win under a path with a space: the public libraries, the private ones with --static, the prefix the .pc file's, --cflags escaped and compiled through make and sh; loads, f() = 7"
+
+    # R CMD check's nm (PHASE7 open point H a): sotools.R reads an object's
+    # symbols with UserNM, else an nm on PATH, which has none: under R
+    # CMD, Rcmd_environ's UserNM is the group's binutils/nm.exe, and it
+    # reads tools.mk's t.o; one set by the user is kept.
+    cat > "$tw/nm.R" <<'RCODE'
+want <- commandArgs(trailingOnly = TRUE)[1L]
+nm <- Sys.getenv("UserNM")
+if (want == "group") {
+    want <- file.path(R.home(), "bin", "toolchain", "binutils", "nm.exe")
+    if (tolower(normalizePath(nm, "/", mustWork = FALSE)) != tolower(normalizePath(want, "/")))
+        stop("UserNM is '", nm, "', not ", want)
+    s <- tools:::read_symbols_from_object_file("t.o")
+    if (!any(s[, "name"] == "tools_sym")) stop("read_symbols_from_object_file(t.o) found no tools_sym")
+    cat("   R CMD check's nm: UserNM =", nm, "-", nrow(s), "symbols of t.o\n")
+} else if (nm != want) stop("UserNM is '", nm, "', not the user's ", want)
+RCODE
+    (cd "$tw" && env -i "${base_env[@]}" PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla nm.R group) ||
+      { echo "error: under R CMD, UserNM is not the group's binutils/nm.exe, or R CMD check's symbol table of an object is not read with it" >&2; exit 1; }
+    (cd "$tw" && env -i "${base_env[@]}" UserNM=C:/r-zig-user/nm.exe PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla nm.R C:/r-zig-user/nm.exe) ||
+      { echo "error: under R CMD, a UserNM the user set is not kept (Rcmd_environ's \${UserNM-...})" >&2; exit 1; }
+    echo "== R CMD check's nm: UserNM is binutils/nm.exe under R CMD (a user's is kept), and tools:::read_symbols_from_object_file reads t.o with it"
+
+    # The clash with Git for Windows' MSYS (PHASE7 open point M a,
+    # amendment Am4), where it is installed (every windows-latest image):
+    # its usr\bin first on the caller's PATH, with Git Bash's
+    # MSYSTEM=MINGW64, then after System32. For every name the group has,
+    # R CMD and the session put the group's usr/bin first whatever the
+    # caller's order, so Sys.which and the check mode name the group's;
+    # Git first, the packages build again, and btMix's configure.win runs
+    # Git's own diff and cygpath through the group's sh: two msys-2.0.dll
+    # in one process tree (PHASE7 risk 1).
+    git_usr="/c/Program Files/Git/usr/bin"
+    if [ -f "$git_usr/msys-2.0.dll" ]; then
+      cat > "$tw/which.R" <<'RCODE'
+tc <- tolower(normalizePath(file.path(R.home(), "bin", "toolchain", "usr", "bin"), "/"))
+for (n in c("sh", "make", "sed", "pkg-config")) {
+    w <- Sys.which(n)
+    if (!nzchar(w) || tolower(dirname(normalizePath(w, "/"))) != tc)
+        stop(commandArgs(trailingOnly = TRUE)[1L], ": Sys.which(\"", n, "\") is '", w, "', not in ", tc)
+}
+RCODE
+      mixw="$VERIFY_DIR/mix"
+      mkpkg "$mixw/pk" btMix 9
+      cat > "$mixw/pk/btMix/configure.win" <<'CONFIGURE'
+#!/bin/sh
+printf 'a\n' > m1; printf 'b\n' > m2
+d=`diff m1 m2 | tr -d '\r' | tr '\n' ' '`
+echo "btMix: diff: $d"
+case "$d" in *"< a"*"> b"*) ;; *) echo "btMix: diff did not compare the files"; exit 1 ;; esac
+echo "btMix: which diff: `which diff`; cygpath -m /: `cygpath -m / | tr -d '\r'`; uname -s: `uname -s`"
+rm -f m1 m2
+CONFIGURE
+      chmod +x "$mixw/pk/btMix/configure.win"
+      mkdir -p "$mixw/lib"
+      git_ver="$(env -i "${base_env[@]}" PATH="$git_usr:$sys32" "$git_usr/uname.exe" -r 2>&1 | tr -d '\r' || true)"
+      for order in first after; do
+        if [ "$order" = first ]; then cp="$git_usr:$R_BINDIR:$sys32"; mix_env=(MSYSTEM=MINGW64); else cp="$R_BINDIR:$sys32:$git_usr"; mix_env=(); fi
+        (cd "$tw" && env -i "${base_env[@]}" "${mix_env[@]}" PATH="$cp" "$R_EXE" CMD Rscript.exe --vanilla which.R "Git $order, under R CMD") &&
+          (cd "$tw" && env -i "${base_env[@]}" "${mix_env[@]}" PATH="$cp" "$RSCRIPT" --vanilla which.R "Git $order, in a session") ||
+          { echo "error: with Git for Windows' usr\\bin $order on PATH, sh, make, sed or pkg-config is not the group's" >&2; exit 1; }
+        out="$(cd "$VERIFY_DIR" && env -i "${base_env[@]}" "${mix_env[@]}" PATH="$cp" \
+          "$R_EXE" CMD "$(cygpath -w -s "$cc")" --rzig-check=build-tools | tr -d '\r')" ||
+          { echo "error: R CMD gcc.exe --rzig-check=build-tools failed with Git for Windows' usr\\bin $order on PATH" >&2; exit 1; }
+        for want in "make at $tc_m/usr/bin/make" "sh at $tc_m/usr/bin/sh"; do
+          printf '%s\n' "$out" | grep -qiF -- "$want" ||
+            { echo "error: with Git for Windows' usr\\bin $order on PATH, the check says '$out', which lacks '$want'" >&2; exit 1; }
+        done
+        [ "$order" = first ] || continue
+        s0=$SECONDS
+        (cd "$bt" && rm -rf lib && mkdir lib && env -i "${base_env[@]}" "${zig_env[@]}" "${mix_env[@]}" PATH="$cp" RZIG_TRACE=1 \
+          "$RSCRIPT" --vanilla bt.R) > "$bt/bt-git.log" 2>&1 ||
+          { cat "$bt/bt-git.log" >&2; echo "error: with Git for Windows' usr\\bin first on PATH, the packages ($bt_pkgs) did not build" >&2; exit 1; }
+        tools_pc_install "$cp" "$VERIFY_DIR/tools-pc-git" "${mix_env[@]}"
+        (cd "$fcw" && rm -rf lib && mkdir lib && env -i "${base_env[@]}" "${zig_env[@]}" "${mix_env[@]}" CONDA_PREFIX="$(cygpath -w "$decoy")" PATH="$cp" \
+          "$R_EXE" CMD INSTALL -l lib fcconf) > "$fcw/install-git.log" 2>&1 ||
+          { cat "$fcw/install-git.log" >&2; echo "error: with Git for Windows' usr\\bin first on PATH, fcconf did not install" >&2; exit 1; }
+        (cd "$mixw" && env -i "${base_env[@]}" "${zig_env[@]}" "${mix_env[@]}" PATH="$cp" \
+          "$R_EXE" CMD INSTALL -l lib pk/btMix) > "$mixw/install.log" 2>&1 ||
+          { cat "$mixw/install.log" >&2; echo "error: btMix (Git's diff and cygpath from the group's sh) did not install" >&2; exit 1; }
+        if grep -qiE 'cygheap|fork: retry|\*\*\* fatal error' "$bt/bt-git.log" "$VERIFY_DIR"/tools-pc-git/*.log "$fcw/install-git.log" "$mixw/install.log"; then
+          grep -iE 'cygheap|fork: retry|\*\*\* fatal error' "$bt/bt-git.log" "$VERIFY_DIR"/tools-pc-git/*.log "$fcw/install-git.log" "$mixw/install.log" >&2
+          echo "error: with Git for Windows' usr\\bin first on PATH, MSYS failed (two msys-2.0.dll in one process tree)" >&2; exit 1
+        fi
+        mix="$(tr -d '\r' < "$mixw/install.log" | grep '^btMix: which diff' | sed 's/^btMix: //')"
+        uname_s="$(cd "$VERIFY_DIR" && env -i "${base_env[@]}" "${mix_env[@]}" PATH="$cp" "$R_EXE" CMD sh -c "uname -s" | tr -d '\r' || true)"
+        echo "   Git first (MSYSTEM=MINGW64), $((SECONDS - s0)) s: btA, btLib, btRc, btTools, btPc, fcconf and btMix built and installed; R CMD sh's uname -s: $uname_s; btMix: $mix"
+      done
+      echo "== the clash with Git for Windows' MSYS (its msys-2.0.dll $git_ver): first (MSYSTEM=MINGW64) and after on PATH, Sys.which (R CMD and session) and the check name the group's sh, make, sed and pkg-config; Git first, the packages build, Git's diff and cygpath run from the group's sh, no MSYS failure"
+    else
+      cannot_check "no Git for Windows MSYS ($git_usr/msys-2.0.dll): the clash (PHASE7 open point M) is not checked"
+    fi
   else
     echo "== package builds skipped (no zig: ZIG_BIN unset, none on PATH)"
   fi

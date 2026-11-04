@@ -11,6 +11,14 @@ rzig ships with R on every channel (the base archive, r-zig-slim, the
 r-zig wheel), so there is no other branch. feat-no-host-paths PLAN.md,
 phase T; feat-standalone-toolchain PLAN.md, B26 and phase 4.
 
+On Windows rcmdfn.c starts config.sh with `sh`, so without the build
+tools cmd.exe answered "'sh' is not recognized as an internal or
+external command" and R CMD config exited 1. rcmdfn.c now runs the same
+check first, gcc.exe --rzig-check=build-tools with its stdout to NUL, and
+returns its status (127, the build-tools group's text on stderr) when it
+fails; config.sh's check then runs a second time, so the script stays one
+for every OS. feat-standalone-toolchain PHASE7 open point J a.
+
 --- a/src/scripts/config
 +++ b/src/scripts/config
 @@ -175,6 +175,19 @@
@@ -33,3 +41,29 @@ phase T; feat-standalone-toolchain PLAN.md, B26 and phase 4.
  makefiles="-f ${R_HOME}/etc${R_ARCH}/Makeconf -f ${R_SHARE_DIR}/make/config.mk"
  ## avoid passing down -jN
  MAKEFLAGS=
+--- a/src/gnuwin32/front-ends/rcmdfn.c
++++ b/src/gnuwin32/front-ends/rcmdfn.c
+@@ -529,9 +529,21 @@
+     } else {
+ 	/* not one of those handled internally */
+ 	p = argv[cmdarg];
+-	if (!strcmp(p, "config"))
++	if (!strcmp(p, "config")) {
++	    /* r-zig: the build tools, by rzig's check mode (feat-standalone-
++	       toolchain B26), before sh runs config.sh: with no sh, cmd.exe
++	       would only say that sh is not a command. rzig finds make and
++	       sh on this PATH (etc/Rcmd_environ's) and the binutils, or
++	       names the build-tools group on stderr and exits 127, which is
++	       then R CMD config's status. Its ok line goes to NUL: stdout is
++	       the value R CMD config prints. config.sh runs the same check
++	       again (patch 0010's other hunk, one script for every OS). */
++	    snprintf(cmd, CMD_LEN,
++		     "\"\"%s/bin/toolchain/gcc.exe\" --rzig-check=build-tools > NUL\"", RHome);
++	    int status = system(cmd);
++	    if (status) { freeRHOME(RHome); return status; }
+ 	    snprintf(cmd, CMD_LEN, "\"sh \"%s/bin/config.sh\"", RHome);
+-	else if (!strcmp(p, "open"))
++	} else if (!strcmp(p, "open"))
+ 	    snprintf(cmd, CMD_LEN, "\"\"%s/%s/open.exe\"", RHome, BINDIR);
+ 	else {
+ 	    /* RHOME/BINDIR is first in the path, so looks there first */
