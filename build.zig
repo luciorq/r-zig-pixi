@@ -1375,7 +1375,11 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     rscript_mod.linkLibrary(libR);
     rscript_mod.linkLibrary(rgraphapp);
     rscript_mod.linkSystemLibrary("shlwapi", .{ .use_pkg_config = .no });
-    const rscript = b.addExecutable(.{ .name = "Rscript", .root_module = rscript_mod });
+    const rscript = b.addExecutable(.{
+        .name = "Rscript",
+        .root_module = rscript_mod,
+        .win32_manifest = winManifest(ctx, "Rscript64.exe.manifest"),
+    });
 
     // ------------------------------------------------------------------
     // Rterm.exe — NOT a droppable GUI front-end (F6.0's original read on
@@ -1392,8 +1396,8 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // Rterm.exe"` and directly re-execs it). Same gnuwin32 Makefile
     // (front-ends/Makefile) builds it from graphappmain.c (WinMain, calls
     // GA_startgraphapp then AppMain) + rterm.c (defines AppMain — the
-    // console-mode R engine loop); no icon resource (not needed for our
-    // CLI-only build).
+    // console-mode R engine loop); R's manifest (winManifest), no icon
+    // resource (not needed for our CLI-only build).
     const rterm_mod = newCMod(ctx);
     rterm_mod.addIncludePath(ctx.geninc);
     rterm_mod.addIncludePath(ctx.path("src/include"));
@@ -1408,7 +1412,11 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     rterm_mod.linkLibrary(libR);
     rterm_mod.linkLibrary(rgraphapp);
     rterm_mod.linkSystemLibrary("shlwapi", .{ .use_pkg_config = .no });
-    const rterm = b.addExecutable(.{ .name = "Rterm", .root_module = rterm_mod });
+    const rterm = b.addExecutable(.{
+        .name = "Rterm",
+        .root_module = rterm_mod,
+        .win32_manifest = winManifest(ctx, "Rterm64.manifest"),
+    });
     // Rterm-LINKFLAGS in front-ends/Makefile: a much larger default stack
     // than MinGW's 2MB default, for R's own deep-recursion interpreter loop.
     rterm.stack_size = 0x4000000;
@@ -1431,13 +1439,13 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // logic (INSTALL/SHLIB/REMOVE/build/check/Rprof/Rdiff/...) from
     // scratch, compile the REAL gnuwin32 sources — R.exe's own real
     // recipe (front-ends/Makefile: `R.exe: R.o ../rhome.o ../shext.o
-    // rcico.o rcmdfn.o Renviron.o`), minus rcico.o (icon/manifest
-    // resource — cosmetic, same "no icon resource" precedent as Rterm.exe
-    // above). Every subcommand rcmdfn.c dispatches to is itself just a
-    // templated `Rterm.exe -e tools:::.foo() ... --args ...` string it
-    // re-execs (verified by reading rcmdfn.c directly) — the real logic
-    // lives in R code this build already has, not in C we'd be
-    // duplicating.
+    // rcico.o rcmdfn.o Renviron.o`), with rcico.o's manifest but not its
+    // icon and version resource (cosmetic, same "no icon resource"
+    // precedent as Rterm.exe above). Every subcommand rcmdfn.c dispatches
+    // to is itself just a templated `Rterm.exe -e tools:::.foo() ...
+    // --args ...` string it re-execs (verified by reading rcmdfn.c
+    // directly) — the real logic lives in R code this build already has,
+    // not in C we'd be duplicating.
     //
     // Rcmd.exe (front-ends/Makefile: `Rcmd.exe: rcmd.o ../rhome.o
     // ../shext.o rcico.o rcmdfn.o Renviron.o`, the exact same recipe with
@@ -2438,11 +2446,32 @@ fn newCMod(ctx: *const Ctx) *std.Build.Module {
     return m;
 }
 
+/// R's application manifest for a Windows front-end, the source tree's
+/// own file. gnuwin32 embeds one in every program it builds from
+/// front-ends/: each .rc there names its manifest as resource 1 of type
+/// RT_MANIFEST (CREATEPROCESS_MANIFEST_RESOURCE_ID), and with WIN=64
+/// front-ends/Makefile picks rtico.o: Rterm64.manifest, rsico.o:
+/// Rscript64.exe.manifest and rcico.o: Rcmd64.exe.manifest, which R.exe,
+/// Rcmd.exe and Rfe.exe (bin/R.exe, bin/Rscript.exe) link. All three say
+/// activeCodePage UTF-8 (R >= 4.2), longPathAware and SegmentHeap; Rterm's
+/// and Rscript's also name common controls 6 and supportedOS. The code
+/// page is what matters: without it a process's ANSI code page is the
+/// system's (1252 on kappa), R's char file names are in it, and under a
+/// path with a character outside it (kappa: C:\...\r ü中\) Rterm and
+/// Rscript stop with "Fatal error: unable to open the base package"
+/// (phase 7a's non-ASCII twin of the space path). zig embeds the file as
+/// that same resource (Compile's win32_manifest), so no .rc is compiled
+/// and the .rc files' icon and version resource stay out (cosmetic).
+/// The 64 files' amd64 is the only Windows target's, x86_64.
+fn winManifest(ctx: *const Ctx, name: []const u8) std.Build.LazyPath {
+    return ctx.path(ctx.b.fmt("src/gnuwin32/front-ends/{s}", .{name}));
+}
+
 /// A "CMD dispatcher" front-end (R.exe or Rcmd.exe): both share the exact
 /// same real gnuwin32 recipe (front-ends/Makefile: `<name>.o ../rhome.o
-/// ../shext.o rcico.o rcmdfn.o Renviron.o`, minus the icon/manifest
-/// resource) — only the top-level `main()` differs (`front_c`: "R.c" reads
-/// -h/--help/looks-for-a-"CMD"-token before falling into rcmdfn.c's
+/// ../shext.o rcico.o rcmdfn.o Renviron.o`, rcico.o's manifest only, see
+/// winManifest) — only the top-level `main()` differs (`front_c`: "R.c"
+/// reads -h/--help/looks-for-a-"CMD"-token before falling into rcmdfn.c's
 /// dispatch; "rcmd.c" is a one-liner that always dispatches straight in).
 /// rhome.c/shext.c are NOT recompiled here — see the caller's own comment
 /// on why (duplicate-symbol against libR's own exports).
@@ -2467,14 +2496,18 @@ fn winCmdFrontend(ctx: *Ctx, libR: *std.Build.Step.Compile, rgraphapp: *std.Buil
     mod.linkLibrary(libR);
     mod.linkLibrary(rgraphapp);
     mod.linkSystemLibrary("shlwapi", .{ .use_pkg_config = .no });
-    return b.addExecutable(.{ .name = name, .root_module = mod });
+    return b.addExecutable(.{
+        .name = name,
+        .root_module = mod,
+        .win32_manifest = winManifest(ctx, "Rcmd64.exe.manifest"),
+    });
 }
 
 /// Rfe.exe, installed as R_HOME/bin/R.exe and R_HOME/bin/Rscript.exe
 /// (gnuwin32's front-ends/Makefile: `Rfe.exe: Rfe.o ../rhome.o ../shext.o
-/// rcico.o rcmdfn.o Renviron.o`, `Rfe-LIBS = -lole32 -luuid`; no icon
-/// resource, as above). It runs bin\x64\Rscript.exe when its own name ends
-/// in Rscript.exe or Rscript, else bin\x64\R.exe, with its arguments
+/// rcico.o rcmdfn.o Renviron.o`, `Rfe-LIBS = -lole32 -luuid`; rcico.o's
+/// manifest only, as above). It runs bin\x64\Rscript.exe when its own name
+/// ends in Rscript.exe or Rscript, else bin\x64\R.exe, with its arguments
 /// (R_ARCH or --arch picks another arch directory). Unlike R.exe and
 /// Rcmd.exe it does not link R.dll, which is in bin/x64, where the loader
 /// does not look for a program in bin. So rhome.c and shext.c are compiled
@@ -2499,7 +2532,11 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
     for ([_][]const u8{ "advapi32", "shell32", "user32", "ole32", "uuid" }) |l| {
         mod.linkSystemLibrary(l, .{ .use_pkg_config = .no });
     }
-    return b.addExecutable(.{ .name = "Rfe", .root_module = mod });
+    return b.addExecutable(.{
+        .name = "Rfe",
+        .root_module = mod,
+        .win32_manifest = winManifest(ctx, "Rcmd64.exe.manifest"),
+    });
 }
 
 /// etc/Rcmd_environ on Windows: gnuwin32's file, then r-zig's lines. R
