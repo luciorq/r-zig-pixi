@@ -37,6 +37,31 @@ pub fn libs(ctx: *Ctx, args: Args) !Args {
     return out.items;
 }
 
+/// A DLL link's default system library, after the caller's: -lws2_32
+/// (feat-win-link-fixes item 2). MinGW gcc links its LIB_SPEC set by
+/// default (mingw32.h: advapi32, shell32, user32, kernel32), which zig
+/// links too without an -l; neither has Winsock. CRAN's R adds none
+/// (Makeconf), and a package that calls Winsock names -lws2_32 itself
+/// (whether Rtools' static .pc chain may supply it: UNVERIFIED). ragg's
+/// Makevars.win does in its rwinlib branch only: with the env's libraries
+/// through pkg-config its link stopped at
+/// `undefined symbol: __declspec(dllimport) htons` (AggDevice16.h
+/// includes winsock.h; KN's cause e). An import library adds a DLL import
+/// only for a symbol the link takes from it: with and without it a DLL's
+/// import table is the same, with both zigs (kappa and gamma,
+/// 2026-10-21), and ws2_32's 197 names share none with kernel32,
+/// user32, advapi32, shell32, ntdll or the CRT's. Only for a link that
+/// gets gcc's LIB_SPEC: -shared as a word, no -c/-S/-E/-M/-MM, no
+/// -nostdlib or -nodefaultlibs (-nostartfiles still gets it). Executables
+/// (configure's conftests, helper programs) are left as they were. zig's
+/// own import library: after windows.libs, which would resolve it in the
+/// caller's -L directories.
+pub fn defaultLibs(ctx: *Ctx, args: Args) !Args {
+    if (cmdline.compileOnly(args) or !cmdline.anyWord(args, "-shared")) return args;
+    for (args) |x| if (mem.eql(u8, x, "-nostdlib") or mem.eql(u8, x, "-nodefaultlibs")) return args;
+    return mem.concat(ctx.arena, []const u8, &.{ args, &.{"-lws2_32"} });
+}
+
 /// MinGW library names upstream zig has no import library for, and the
 /// name it has one under. zig makes the import library for -l<n> from
 /// <n>.def in its lib/libc/mingw, and upstream zig ships no .def under
@@ -181,6 +206,30 @@ test "import libraries GNU ld would find; zig's own names left to zig; -mwindows
     }, try libs(&f.ctx, &.{ l1, l2, "-ldlla", "-lziglib", "-lmsvc", "-lstop", "-lnowhere", "-lonly2", "-L", "/x", "-l", "x", "-mwindows" }));
     // -mwindows as a word only
     try expectArgs(&.{"-mwindowsx"}, try libs(&f.ctx, &.{"-mwindowsx"}));
+}
+
+test "defaultLibs: -lws2_32 last on a DLL link, as gcc's LIB_SPEC applies; nothing elsewhere" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    // winshlib.mk's link, R CMD SHLIB's, a CMake-style one with -nostartfiles
+    for ([_]Args{
+        &.{ "-shared", "-s", "-static-libgcc", "-o", "ragg.dll", "tmp.def", "a.o", "-lfreetype", "-LC:/R/bin/x64", "-lR" },
+        &.{ "-shared", "-o", "p.dll", "@C:/t/.rzig/objects.rsp" },
+        &.{ "-O2", "-shared -s", "-nostartfiles", "-o", "x.dll", "x.o", "-lws2_32" },
+    }) |args| try expectArgs(try std.mem.concat(c.arena, []const u8, &.{ args, &.{"-lws2_32"} }), try defaultLibs(c, args));
+    // executables, compiles, -nostdlib and -nodefaultlibs, -shared inside
+    // another word: unchanged
+    for ([_]Args{
+        &.{ "-o", "conftest.exe", "conftest.c" },
+        &.{ "-c", "-shared", "a.c" },
+        &.{ "-E", "-shared", "a.c" },
+        &.{ "-shared", "-nostdlib", "-o", "x.dll", "x.o" },
+        &.{ "-shared", "-nodefaultlibs", "-o", "x.dll", "x.o" },
+        &.{ "-Wl,-shared", "-o", "x.dll", "x.o" },
+        &.{ "-sharedx", "-o", "x.dll", "x.o" },
+    }) |args| try expectArgs(args, try defaultLibs(c, args));
 }
 
 test "-lsynchronization: the API set's name, which both zigs have an import library for" {

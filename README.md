@@ -74,6 +74,11 @@ the environment (`pixi shell`, `conda activate`) or start R with
   still find `find`, `sort`, `expand`, `hostname`, `timeout`, `whoami`,
   `tar` and `bash` (WSL's) in System32, as with R's own installer and
   Rtools; sh, make and configure scripts get the build tools'.
+- On Windows, a package DLL links Winsock (`ws2_32`) by default, after
+  the package's own libraries: a package that calls `htons` without
+  naming `-lws2_32` (ragg with a conda environment's libraries) links
+  (whether Rtools' libraries bring it for CRAN is not verified). A DLL
+  imports from it only what it calls.
 - On Windows, `pkg-config` is conda-forge's pkg-config 0.29.2 (the
   standalone tree's `R_HOME/bin/toolchain/usr/bin`; a conda
   environment's own). It prints `Libs.private` without `--static`, and
@@ -278,7 +283,7 @@ beside it:
   18 MB). GNU make on linux and macOS, which R puts first on its `PATH`;
   on Windows sh, make and the tools R's makefiles and `configure.win`
   scripts run (MSYS2's, from conda-forge's m2 packages: bash, make,
-  coreutils, sed, grep, gawk, which, findutils) and pkg-config
+  coreutils, sed, grep, gawk, which, findutils, patch) and pkg-config
   (conda-forge's native build), with the DLLs they load, in `usr/bin`,
   MSYS's mount table in `etc/fstab`, and the MinGW binutils R's Makeconf
   names (nm, dlltool, as, strip, windres, objdump). R puts `usr/bin` first on

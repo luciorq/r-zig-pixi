@@ -33,7 +33,7 @@ pub const Lang = enum { c, cxx };
 ///          import library>]
 ///          <caller's, rewritten, no -mtune= (Windows links: no -flto)>
 ///          [<environments' -L/-rpath>] <environments' headers> [-lomp]
-///          [-L<SDK>/usr/lib]
+///          [Windows DLL link: -lws2_32] [-L<SDK>/usr/lib]
 pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     const a = ctx.arena;
     var before: Args = &.{};
@@ -86,6 +86,7 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     var implib: Args = &.{};
     if (ctx.os == .windows) {
         args = try windows.libs(ctx, args);
+        args = try windows.defaultLibs(ctx, args);
         args = try windows.exeSuffix(ctx, args);
         // after exeSuffix: the import library is named after the output
         if (cfguard.wanted(args)) {
@@ -559,12 +560,12 @@ test "Windows: -idirafter, no rpath, -lz and -lomp through the environment's -L"
     const z = f.path("env/Library/lib/libz.dll.a");
     try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-c", "z.c", "-o", "z.o", "-idirafter", inc }, try argv(c, .c, &.{ "-c", "z.c", "-o", "z.o" }));
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", z, l, "-idirafter", inc, omp },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", z, l, "-idirafter", inc, omp, "-lws2_32" },
         try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz" }),
     );
     // the caller's -lomp, resolved the same way; none added
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lomp" }),
     );
 }
@@ -615,10 +616,10 @@ test "Windows: the toolchain's openmp/: -idirafter, -L openmp/lib and libomp.lib
     const oinc = f.path("env/Library/lib/R/bin/toolchain/openmp/include");
     const omp = f.path("env/Library/lib/R/bin/toolchain/openmp/lib/libomp.lib");
     // no libomp.dll beside R.dll: nothing from openmp/
-    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, implib, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l } }), try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o" }));
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, implib, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l, "-lws2_32" } }), try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o" }));
     try f.touch("env/Library/lib/R/bin/x64/libomp.dll");
     try expectArgs(
-        try mem.concat(c.arena, []const u8, &.{ head, implib, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l, ol, "-idirafter", oinc, omp } }),
+        try mem.concat(c.arena, []const u8, &.{ head, implib, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l, ol, "-idirafter", oinc, omp, "-lws2_32" } }),
         try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o" }),
     );
     // a compile: the headers only
@@ -633,7 +634,7 @@ test "Windows: no target, the Fortran runtime before the -l lookup" {
     try f.touch("d/libz.dll.a");
     const l = f.fmt("-L{s}", .{f.path("d")});
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a") },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lws2_32" },
         try argv(&f.ctx, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", l, "-lz", "-lflang_rt.runtime" }),
     );
 }
@@ -653,10 +654,10 @@ test "every OS: -lgfortran and -lquadmath link flang's runtime, once; no gfortra
     try f.write("bin/gfortran", f.fmt("#!/bin/sh\n: > '{s}'\necho '{s}'\n", .{ f.path("gfortran-ran"), f.path("gcc/libgfortran.dll.a") }), .fromMode(0o755));
     try f.env.put("PATH", f.path("bin"));
     const mac: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0" };
-    const targets = [_]struct { os: Ctx.Os, target: Args, strip: Args = &.{}, implib: Args = &.{} }{
+    const targets = [_]struct { os: Ctx.Os, target: Args, strip: Args = &.{}, implib: Args = &.{}, ws2: Args = &.{} }{
         .{ .os = .linux, .target = &.{ "-target", linux_target }, .strip = &.{"-Wl,--strip-debug"} },
         .{ .os = .macos, .target = mac },
-        .{ .os = .windows, .target = &.{}, .implib = &.{ "-Xlinker", "--out-implib=p.so.rzig.lib" } },
+        .{ .os = .windows, .target = &.{}, .implib = &.{ "-Xlinker", "--out-implib=p.so.rzig.lib" }, .ws2 = &.{"-lws2_32"} },
     };
     for (targets) |t| {
         c.os = t.os;
@@ -664,13 +665,13 @@ test "every OS: -lgfortran and -lquadmath link flang's runtime, once; no gfortra
         // R CMD SHLIB's link of a package whose Makevars was written for
         // gcc (PKG_LIBS = -lgfortran -lquadmath), then $(FLIBS)
         try expectArgs(
-            try mem.concat(c.arena, []const u8, &.{ head, t.target, t.strip, t.implib, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", rt, "-lm" } }),
+            try mem.concat(c.arena, []const u8, &.{ head, t.target, t.strip, t.implib, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", rt, "-lm" }, t.ws2 }),
             try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", "-L/r/lib", "-lgfortran", "-lquadmath", "-lflang_rt.runtime", "-lm" }),
         );
         // either alone
         for ([_][]const u8{ "-lgfortran", "-lquadmath" }) |l| {
             try expectArgs(
-                try mem.concat(c.arena, []const u8, &.{ head, t.target, t.strip, t.implib, &.{ "-shared", "-o", "p.so", "a.o", rt } }),
+                try mem.concat(c.arena, []const u8, &.{ head, t.target, t.strip, t.implib, &.{ "-shared", "-o", "p.so", "a.o", rt }, t.ws2 }),
                 try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", l }),
             );
         }
@@ -859,7 +860,7 @@ test "linker options zig cannot take, through the whole line" {
     // StanHeaders' Makevars.win
     c.os = .windows;
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=StanHeaders.dll.rzig.lib", "-shared", "-o", "StanHeaders.dll", "a.o" },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=StanHeaders.dll.rzig.lib", "-shared", "-o", "StanHeaders.dll", "a.o", "-lws2_32" },
         try argv(c, .cxx, &.{ "-shared", "-Wl,--allow-multiple-definition", "-o", "StanHeaders.dll", "a.o" }),
     );
 }
@@ -877,7 +878,9 @@ test "every OS: an archive input without zig's extension goes as a copy named .a
     for ([_]Ctx.Os{ .linux, .windows }) |os| {
         c.os = os;
         const l = try argv(c, .c, &.{ "-shared", "-o", "p.so", f.path("deps/v8_monolith") });
-        try testing.expect(mem.endsWith(u8, l[l.len - 1], "/v8_monolith.a"));
+        // Windows: then its default system library (windows.defaultLibs)
+        const ws2 = @intFromBool(os == .windows);
+        try testing.expect(mem.endsWith(u8, l[l.len - 1 - ws2], "/v8_monolith.a"));
     }
 }
 
@@ -945,9 +948,9 @@ test "Windows links: the CFG stub and the import library before the caller's arg
     const stub = (try cfguard.object(c)).?;
     try testing.expect(mem.startsWith(u8, stub, f.path("cache/r-zig/cfguard-")));
     const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" };
-    // magick's link, and an executable (CMake's)
+    // magick's link, and an executable (CMake's): -lws2_32 on the DLL only
     try expectArgs(
-        try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-Xlinker", "--out-implib=magick.dll.rzig.lib", "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2" } }),
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-Xlinker", "--out-implib=magick.dll.rzig.lib", "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2", "-lws2_32" } }),
         try argv(c, .cxx, &.{ "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2" }),
     );
     try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-Xlinker", "--out-implib=cmTC_1.exe.rzig.lib", "-o", "cmTC_1.exe", "a.obj" } }), try argv(c, .cxx, &.{ "-o", "cmTC_1.exe", "a.obj" }));

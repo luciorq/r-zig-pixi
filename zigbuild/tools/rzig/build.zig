@@ -12,7 +12,9 @@ pub fn build(b: *std.Build) void {
     const r_version = b.option([]const u8, "r-version", "R's version, for the text that names a missing toolchain group (default: dev)") orelse "dev";
     const steps = add(b, b.path("."), target, optimize, r_version);
     b.getInstallStep().dependOn(&b.addInstallBinFile(steps.bin, if (target.result.os.tag == .windows) "rzig.exe" else "rzig").step);
-    b.step("test", "Run rzig's unit tests").dependOn(&b.addRunArtifact(steps.tests).step);
+    const t = b.step("test", "Run rzig's unit tests");
+    t.dependOn(&b.addRunArtifact(steps.tests).step);
+    t.dependOn(&b.addRunArtifact(steps.t1_tests).step);
 }
 
 pub const Artifacts = struct {
@@ -20,6 +22,9 @@ pub const Artifacts = struct {
     /// What to install: exe's binary, re-signed on a macOS host (see add).
     bin: std.Build.LazyPath,
     tests: *std.Build.Step.Compile,
+    /// zigbuild/rpkg/build_t1.zig's (rzig build's tier-1 root, beside
+    /// rzig in the tree): its response file's names (feat-win-link-fixes).
+    t1_tests: *std.Build.Step.Compile,
 };
 
 /// Safety checks stay on: a bounds error in an argument rewrite should stop
@@ -72,9 +77,15 @@ pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTar
             bin = sign.addOutputFileArg("rzig");
         }
     }
+    const t1_mod = b.createModule(.{
+        .root_source_file = dir.path(b, "../../rpkg/build_t1.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
     return .{
         .exe = exe,
         .bin = bin,
         .tests = b.addTest(.{ .name = "rzig-test", .root_module = test_mod }),
+        .t1_tests = b.addTest(.{ .name = "build-t1-test", .root_module = t1_mod }),
     };
 }

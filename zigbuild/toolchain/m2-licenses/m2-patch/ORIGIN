@@ -1,0 +1,5 @@
+package: m2-patch 2.7.6.3 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/patch-2.7.6-3.src.tar.zst sha256:df9a99ee825845b761911f2d1f29024468cb7a7811d1717fe8fa8d08348314e1
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/patch-2.7.6-3.src.tar.zst
+file: COPYING 8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903 <- patch/patch-2.7.6.tar.xz:patch-2.7.6/COPYING

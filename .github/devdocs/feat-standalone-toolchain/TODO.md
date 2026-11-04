@@ -834,12 +834,26 @@ a); the record is PLAN.md's "Phase 7 record".
       subdirs (2026-10-20), so 8 → 9, one history entry for phases 4 to 7
       and fix-r-utf8-manifest, which merges first (recipe.yaml); the
       hand-over's last commit
+- [ ] feat-win-link-fixes (its PLAN.md: rzig build's objects in a
+      response file, -lws2_32 on Windows DLL links, patch in TC/usr/bin)
+      merges after phase 7 and before CONDA_PUBLISH=true: no bump of its
+      own, it rides on phase 7's `_9` (r-zig-slim: rzig and build_t1.zig;
+      the standalone build-tools: patch.exe). No pixi.toml/pixi.lock
+      change; one recipe run dependency added, r-zig-build-tools (win-64)
+      on m2-patch, kept (user decision, 2026-10-22; its PLAN.md). Check
+      universe's newest is still `_8` first
 - [ ] Set CONDA_PUBLISH=true (`gh variable set CONDA_PUBLISH --body
       true`) after phase 7's bump merges, then publish (that push's run
       once the variable is set, or `pixi run ci-trigger`) and run phase
       4's post-publish check with the new number
 
-### After phase 7: pkgconf from source (a separate PR, next work)
+### After phase 9: pkgconf from source (a separate PR)
+
+Order (user, 2026-10-22): phase 8, phase 9, then this PR, then the zig
+0.17 port, then Windows on ARM. Nothing waits on it: it removes the
+tree's pkg-config 0.29.2 DLL closure (glib, iconv, charset, intl, pcre2,
+vcruntime140) and readUpstream's libglib case, and fixes ncdf4 (KN d);
+RPostgres (KN i) is to re-check, as its stress row names other causes.
 
 The user's decision D0 (a) of 2026-10-21: pkgconf left phase 7, whose
 `pkg-config` is conda-forge's 0.29.2 (no `pkgconf` name). It prints

@@ -162,6 +162,11 @@ build:
   # too, then its env's MSYS (Library/usr/bin), and R CMD check finds nm
   # (phase 7). The Windows front-ends embed R's UTF-8 manifest
   # (fix-r-utf8-manifest, merged before phase 7, which kept 8 too).
+  # feat-win-link-fixes, merged after phase 7 and before the publish, rides
+  # on 9 too: rzig build's links name their objects in a response file
+  # (Windows packages of a few hundred objects linked past 32,767
+  # characters), Windows package DLLs link ws2_32 by default, and the
+  # build tools carry patch (feat-win-link-fixes PLAN.md).
   number: 9
 
 outputs:
@@ -643,6 +648,9 @@ outputs:
             - m2-make
             - m2-which
             - m2-findutils
+            # a configure script that patches its sources (hdf5r's unix
+            # configure; feat-win-link-fixes item 4)
+            - m2-patch
             # B43: Makeconf.win names a bare pkg-config (pkg-config only:
             # the pkgconf name comes with a pkgconf built from source, a
             # later change after phase 7, PHASE4 open point F a)

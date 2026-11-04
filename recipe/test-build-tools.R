@@ -141,7 +141,7 @@ if (windows) {
     ## (find, sort, ...: PHASE7 amendment Am6) is checked by its file, the
     ## rest through Sys.which, the paths compared normalised (8.3 names)
     usr_bin <- shown(file.path(env_bin, "..", "usr", "bin"))
-    names <- c("sh", "bash", "make", "sed", "grep", "gawk", "awk", "which", "find", "xargs",
+    names <- c("sh", "bash", "make", "sed", "grep", "gawk", "awk", "which", "find", "xargs", "patch",
                "basename", "rm", "cp", "mv", "mkdir", "cat", "tr", "sort", "uname", "chmod", "ln",
                "ls", "expr", "touch", "head", "tail", "wc", "env", "printf", "mktemp", "test")
     shadow <- file.exists(file.path(Sys.getenv("SystemRoot"), "System32", paste0(names, ".exe")))

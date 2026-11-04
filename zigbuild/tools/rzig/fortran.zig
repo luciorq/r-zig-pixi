@@ -471,6 +471,9 @@ test "every link of objects goes through zig, executables too, less what zig cc 
             .{ &.{ "-Xlinker", "-J", "-ffree-form", "-o", "p", "a.o" }, &.{ "-Xlinker", "-J", "-ffree-form", "-o", "p", "a.o" } },
             // C sources and no Fortran one: zig's whole, as zig-cc's
             .{ &.{ "-o", "p", "a.o", "glue.c" }, &.{ "-o", "p", "a.o", "glue.c" } },
+            // objects in a response file (rzig build's links): an input,
+            // no Fortran source, so a link, the @file passed on for zig
+            .{ &.{ "-shared", "-o", "p.so", "@objects.rsp", "-lR" }, &.{ "-shared", "-o", "p.so", "@objects.rsp", "-lR" } },
         };
         for (links) |l| try expectZig(try zigCc(&f, cat(&f, &.{ l[1], fl })), try command(c, l[0]));
     }
@@ -727,9 +730,10 @@ test "Windows: the shared link resolves -l to import libraries, adds the runtime
     const a = try runtimeFlang(&f, "x86_64-w64-windows-gnu");
     try f.touch("d/libz.dll.a");
     const l = f.fmt("-L{s}", .{f.path("d")});
-    // winshlib.mk: $(SHLIB_LD) $(SHLIB_LDFLAGS) $(LDFLAGS) $(DLLFLAGS) -o pkg.dll tmp.def <objects> $(ALL_LIBS)
+    // winshlib.mk: $(SHLIB_LD) $(SHLIB_LDFLAGS) $(LDFLAGS) $(DLLFLAGS) -o pkg.dll tmp.def <objects> $(ALL_LIBS),
+    // then a DLL's default system library (windows.defaultLibs)
     try expectZig(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, f.path("d/libz.dll.a"), a },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, f.path("d/libz.dll.a"), a, "-lws2_32" },
         try command(c, &.{ "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, "-lz" }),
     );
 }

@@ -160,7 +160,7 @@ directories has its own `LICENSES/` and `SOURCES`, as point 3 requires
 | compilers | `TC/zig/` | `zig`, `lib/` (upstream 0.16.0; B4) | `zig.exe`, `lib/` |
 | compilers | `TC/flang/` | `bin/flang`; `lib/clang/23/finclude/flang/<conda triple>/` (15 intrinsic modules, `omp_lib.mod`, `omp_lib_kinds.mod`, `omp_lib.h`); `lib/clang/23/lib/<rt dir>/libflang_rt.runtime.a`. On linux flang-rt-zig also ships `x86_64-unknown-linux-gnu` as a symlink to the conda-triple directory (seen with build 9 in the default env; build 10 too: a `softlink` in its record, phase 6). It is not needed once zig-fc passes `-fintrinsic-modules-path`, and must not be installed as a copy (phase 6 copies only `hardlink` paths, PHASE6 open point A a) | `bin/flang.exe`; the same tree, with both `x86_64-w64-mingw32` and `x86_64-w64-windows-gnu` module directories |
 | compilers | `TC/openmp/` | `include/{omp.h,ompx.h,omp-tools.h,ompt.h}` | `include/{omp.h,ompx.h}`, `lib/libomp.lib` |
-| build-tools (the brief's "minimal build tools") | `TC/usr/` | `usr/bin/make` (B23 a) | `usr/bin/`: B39's list (sh, make, coreutils, sed, grep, gawk, which, findutils), every file of the eight `m2-*` packages' usr/bin with the nine MSYS DLLs they import (B11's phase 7 outcome: m2's make and coreutils too), and pkg-config 0.29.2 (B43), conda-forge's native build with its glib closure; no `pkgconf` name until it is built from source (TODO.md). `TC/etc/fstab` makes TC the MSYS root (phase 7) |
+| build-tools (the brief's "minimal build tools") | `TC/usr/` | `usr/bin/make` (B23 a) | `usr/bin/`: B39's list (sh, make, coreutils, sed, grep, gawk, which, findutils, patch: feat-win-link-fixes item 4), every file of the nine `m2-*` packages' usr/bin with the nine MSYS DLLs they import (B11's phase 7 outcome: m2's make and coreutils too), and pkg-config 0.29.2 (B43), conda-forge's native build with its glib closure; no `pkgconf` name until it is built from source (TODO.md). `TC/etc/fstab` makes TC the MSYS root (phase 7) |
 | build-tools | `TC/binutils/` | none | copies of conda-forge's MinGW binutils, as .exe: `nm, dlltool, as, strip, windres` and `objdump` (B24, B43); ar and ranlib are rzig's (B43), and each other tool moves to rzig once rzig can serve it (B24) |
 | extras | later | added when the stress suite shows a need; the first, from round 1 (2026-10-08): cmake on every OS | the same |
 
@@ -6389,7 +6389,8 @@ no DLL). All the recommended options:
   closure; conda's TC holds no usr/ (F1 gone, verify-tree unchanged);
   pixi.lock is phase 6's again; ncdf4 and RPostgres are expected
   failures again (KN d, i). The pkgconf follow-up is TODO.md's "After
-  phase 7: pkgconf from source".
+  phase 9: pkgconf from source" (moved after phases 8 and 9 by the
+  user, 2026-10-22).
 - F2 (b): the env's MSYS dir after the group's usr/bin, in Rcmd_environ
   and in sessions, on both channels (B25's note has the evidence for
   both channels and for the session's spelling without "..").
@@ -6507,7 +6508,9 @@ Tests (2026-10-21; `phase7m2/implementer2/RESULTS.md`):
   run ci-trigger`, then phase 4's post-publish check with `_9`; the
   CONDA_PUBLISH notes in build.yaml, pixi.toml and README are reworded
   then.
-- Next work: pkgconf from source (TODO.md), a separate PR.
+- Next work (user, 2026-10-22): phases 8 and 9, then pkgconf from
+  source (TODO.md), a separate PR, then the zig 0.17 port, then Windows
+  on ARM.
 - Follow-ups for the user (not phase 7): no `ld` anywhere (winch, C6);
   R's Windows manifest for non-ASCII paths (Am12) is fix-r-utf8-manifest,
   merged before phase 7 and published with `_9`; m2's behaviour past

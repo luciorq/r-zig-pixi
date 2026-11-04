@@ -342,8 +342,9 @@ tk = "8.6.*"
 gettext = "*"
 # MSYS2's userland. The toolchain tree's build-tools group copies every
 # file of m2-bash, m2-make, m2-coreutils, m2-sed, m2-grep, m2-gawk,
-# m2-which and m2-findutils's usr/bin, with the MSYS DLLs they import, into
-# R_HOME/bin/toolchain/usr/bin (zigbuild/toolchain/build.zig, phase 7).
+# m2-which, m2-findutils and m2-patch's usr/bin, with the MSYS DLLs they
+# import, into R_HOME/bin/toolchain/usr/bin (zigbuild/toolchain/build.zig,
+# phase 7; m2-patch: feat-win-link-fixes item 4).
 m2-bash = "*"
 m2-make = "*"
 m2-coreutils = "*"
@@ -358,7 +359,7 @@ m2-grep = "*"
 m2-gawk = "*"
 m2-unzip = "*"
 m2-zip = "*"
-m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no win-64 `patch`
+m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no win-64 `patch`; also TC/usr/bin's patch
 
 [target.osx-64.dependencies]
 uutils-coreutils = "*"

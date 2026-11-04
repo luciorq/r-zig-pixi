@@ -36,7 +36,10 @@
 //!     bring zig's libc++ DWARF back into release builds. It would also
 //!     take reading every member's headers.
 //!   - shared libraries. A link does not copy their debug info.
-//!   - objects named otherwise, or listed in a response file (@file).
+//!   - objects named otherwise.
+//! Objects listed in a response file (@file) are read as the ones on the
+//! command line (response.zig): rzig build's links name theirs so
+//! (feat-win-link-fixes item 1), and so does another tool's @file now.
 //! A file that cannot be read, or is no ELF relocatable object (an LLVM
 //! bitcode object from -flto too), counts as one without debug info.
 const std = @import("std");
@@ -45,12 +48,15 @@ const Io = std.Io;
 const elf = std.elf;
 const Ctx = @import("Ctx.zig");
 const cmdline = @import("cmdline.zig");
+const response = @import("response.zig");
 const Args = cmdline.Args;
 
 /// Whether a linux command gets -Wl,--strip-debug: a link (no
 /// compile-only flag) with no -g option and no input object with debug
 /// info.
-pub fn wanted(ctx: *Ctx, args: Args) bool {
+/// A response file's words count as the command line's (response.zig).
+pub fn wanted(ctx: *Ctx, given: Args) bool {
+    const args = response.expand(ctx, given) catch given;
     if (cmdline.compileOnly(args) or cmdline.debugOption(args)) return false;
     var it = cmdline.inputs(args);
     while (it.next()) |i| {
@@ -199,4 +205,14 @@ test wanted {
     }
     // the output: not an input (a partial link's, say)
     try testing.expect(wanted(c, &.{ "-r", "-o", g, g0 }));
+    // objects in a response file, as rzig build's links name them: read
+    // as the command line's; a -g in one too
+    try f.write("g0.rsp", f.fmt("\"{s}\"\n", .{g0}), .default_file);
+    try f.write("g.rsp", f.fmt("\"{s}\"\n\"{s}\"\n", .{ g0, g }), .default_file);
+    try f.write("opt.rsp", "-g\n", .default_file);
+    try testing.expect(wanted(c, &.{ "-shared", "-o", "p.so", f.fmt("@{s}", .{f.path("g0.rsp")}), "-lR" }));
+    try testing.expect(!wanted(c, &.{ "-shared", "-o", "p.so", f.fmt("@{s}", .{f.path("g.rsp")}), "-lR" }));
+    try testing.expect(!wanted(c, &.{ "-shared", "-o", "p.so", g0, f.fmt("@{s}", .{f.path("opt.rsp")}) }));
+    // a response file that cannot be read: nothing in it counts
+    try testing.expect(wanted(c, &.{ "-shared", "-o", "p.so", f.fmt("@{s}", .{f.path("nowhere.rsp")}) }));
 }
