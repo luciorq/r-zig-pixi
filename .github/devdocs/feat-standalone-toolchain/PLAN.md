@@ -4592,20 +4592,21 @@ Steps:
 - The toolchain step installs fetch-zig's zig into `TC/zig/` (B4), with
   `LICENSES/` (LICENSE and the dist-info licences) and `SOURCES` (wheel
   URL and sha256).
-- verify-tree: `zig/` counted as third-party in the build-path scan;
-  `zig/zig version` prints 0.16.0.
+- verify-toolchain (verify-tree checks the R trees, which hold no
+  `zig/`; phase 3 split the two): `zig/` counted as third-party in the
+  build-path scan; `zig/zig version` prints 0.16.0.
 - verify-bundle scenario 2 without `ZIG_BIN`: RZIG_PRINT_ARGV shows
   `TC/zig/zig`.
-- `-lsynchronization` with upstream zig on Windows (D6 = b): rzig
-  provides the import library itself when the zig it runs has none (for
-  example generated from MinGW's `.def` with zig's dlltool, into rzig's
-  cache); conda-forge's zig keeps its prebuilt one. Nothing is reported
-  upstream. It is an rzig change: feat-no-host-paths PLAN.md proposes it
-  in its rzig follow-up PR (ii); if that has not landed, this phase does
-  it, since the compilers group makes upstream zig the standalone
-  default on Windows.
+- `-lsynchronization` with upstream zig on Windows (D6 = b): done by PR
+  #19 (fix-rzig-follow-ups, 7a3004d): rzig renames `-lsynchronization`
+  to `api-ms-win-core-synch-l1-2-0` for both zigs; phase 5 adds the
+  Windows package test. No import library is generated: zig builds it
+  from the API set's `.def`, which both zigs ship, and fix-rzig-follow-ups
+  PLAN.md ("How this answers D6 b") gives why the rename meets the
+  user's answer. Nothing is reported upstream.
 - The existing compiles with `ZIG_BIN=$ZIG` and the env's tools stay as
-  a fourth pass, so conda-forge's zig keeps its package coverage.
+  a fourth pass, so conda-forge's zig keeps its package coverage:
+  verify-bundle's `build` pass.
 - Record the archive sizes per OS here.
 
 Tests:
@@ -4615,6 +4616,523 @@ Tests:
   upstream legs (label run).
 - kappa and windows-latest, with `TC/zig/` (upstream zig): a package
   that links `-lsynchronization` builds and loads.
+
+**Status (2026-10-15): steps 1 to 6 done in the worktree
+feat-standalone-phase5 (branch feat-standalone-phase5: main d11dee1 plus
+phase 4's and the R CMD SHLIB routing's uncommitted changes), not
+committed. Tested on linux-64 (both zigs), omicron (osx-arm64, both zigs;
+osx-64 under Rosetta) and kappa (win-64, both zigs); the review's two
+findings and one host finding are fixed, and the testers' rounds after
+them pass ("Phase 5 review", "tests on every host"). CI has not run: the
+branch is not pushed.** The work follows the reviewed implementation
+plan, copied here as phase5/PHASE5-IMPLEMENTATION.md with its critique
+phase5/CRITIQUE.md (cited below as PHASE5 <section>, Cc<n> and Cg<n>),
+and the user's answers to its open points ("Phase 5: the user's
+answers"). The build number stays 8 (the user's decision of
+2026-10-19, B14's amendment; it was 11, the number after SHLIB's 10, B14
+a): phase 5 changes rzig's text, which r-zig-slim and the r-zig wheel
+carry, and publishes with phase 7's bump.
+pixi.lock is unchanged on every host (sha256 fbb64b7b...a68bb96); phase 5
+changes no dependency of a pixi env. Merge order: phase 4's PR, then
+SHLIB's, then phase 5's, which is `phase5-only.diff` against those two
+(open point O). Next: the user commits and opens the PR (the core
+tier and conda-package first, then the `full-ci` and `upstream-zig`
+labels); CI's numbers go into a new "Phase 5 record: CI".
+
+#### Phase 5: the user's answers (2026-10-15)
+
+The user, 2026-10-15: "Start phase 5", after "Follow with the
+recommended" for the previous work. Every open point of PHASE5 section
+11 takes its recommended option; each is recorded here as answered that
+way, the options not taken named after it.
+- A (a): zig-toolchain.sh runs fetch-zig, the one pin table, and passes
+  the unpacked wheel as `-Dziglang=<dir>`; fetch-zig's `.complete`
+  marker holds the wheel's URL, its sha256 and the source line; build.zig
+  and wheel.zig read the rest from the wheel's METADATA and RECORD. Not
+  taken: (b) build.zig.zon lazy dependencies (a second pin table), (c)
+  the pins in build.zig read by bash.
+- B (a): `zig/SOURCES` is one block in conda's shape: package ziglang,
+  version, build (the wheel's tag), url and sha256 (the wheel), license
+  (METADATA's `License-Expression`), a `source:` line (ziglang.org's
+  zig-0.16.0.tar.xz and its sha256), a `feedstock:` line (zig-pypi; the
+  wheel records no commit) and a `file:` line per copy with the RECORD's
+  sha256 in hex. Not taken: (b) a shorter PyPI block with its own
+  branch in verify-toolchain.
+- C (a): `zig/LICENSES/ziglang/` is the wheel's dist-info licences, 15
+  files, as B4 says. Not taken: (b) adding LLVM's LICENSE.TXT from no
+  release. The licence wording is below ("the licence set").
+- D (a): verify-toolchain in batch: one hashing pass and one awk join
+  for the records and copies, one `xargs grep -l` for the build-path
+  scan, one `xargs grep -l` of the magic numbers before the exact binary
+  test, and the zig version check. Not taken: (b) skipping `zig/lib/`.
+- E (a): verify-bundle's no-zig preflight check moves `TC/zig/zig`
+  (`zig.exe`) aside into VERIFY_DIR and back. Not taken: (b) a directory
+  of its own with the base and the build-tools archive, (c) dropping the
+  check. The surveys split (Cg5): the records survey recommended (b), a
+  layout a user can have; the rzig survey (a). The plan took (a) for
+  simplicity, the user's rule: two lines and the same question rzig is
+  asked. (a) tests a modified tree, not a layout a user has.
+- F (a): verify-bundle.sh takes the pass as its argument: `toolchain`,
+  the default, runs every scenario with ZIG_BIN unset; then the script
+  runs itself once more as `build`, with ZIG_BIN=$ZIG and env.sh's
+  cache, unless `$ZIG` has TC/zig's bytes (the upstream legs). Not taken:
+  (b) only the package blocks twice, wrapped in a function; (c) no fourth
+  pass.
+- G (a): the toolchain pass passes no cache variable, so zig keeps its
+  default cache under the fresh HOME, as a new user's does; the build
+  pass keeps env.sh's. Not taken: (b) env.sh's cache in both passes.
+- H (a): the compilers group's standalone line reads `extract
+  R-<ver>-<plat>-compilers.tar.gz where you extracted R (zig 0.16 and the
+  OpenMP files), and put LLVM flang on PATH` (`.zip` on Windows); ZIG_BIN
+  is no longer named there (the README keeps it as an override). Not
+  taken: (b) "or zig 0.16 in ZIG_BIN". The surveys' wordings (Cg5): the
+  records survey proposed "(zig, OpenMP); LLVM flang on PATH for
+  Fortran", the rzig survey the wording taken.
+- I (a): every toolchain leg fetches the wheel through zig-toolchain.sh;
+  the artifact grows to 84-100 MB per platform; retention stays 30 days.
+  Not taken: (b) 7 days for the group artifacts.
+- J (a): no `zig/` and no fetch when the prefix is the env: build.zig's
+  `prefix_is_env` decides what is installed, zig-toolchain.sh whether to
+  download, by the same real-path test (`same_dir` in env.sh, which was
+  vendor-libs.sh's `resolved()`). Not taken: (b) R_TOOLCHAIN_PREFIX
+  conda-only.
+- K (a): CI's macos-15-intel leg (full-ci) is the osx-64 test; omicron
+  tried the toolchain tree and verify-package under Rosetta (below). Not
+  taken: (b) an upstream-zig osx-64 leg. So the one-zig case has no run
+  on osx-64 or linux-aarch64 (upstream-zig.yaml's three runners only);
+  their mixed case passes (omicron's osx-64, CI's default legs). TODO's
+  "Later" has the menu.
+- L (a): `-lmsvcrt` is recorded as an open item; kappa tested magick and
+  gifski with TC/zig (step 3b, below); no package reached `-lmsvcrt`, so
+  no `mingw_names` mapping. Not taken: (b) `msvcrt` → `c` now.
+- M (a): build number 11 (B14 a). If another build publishes first,
+  the one after universe's newest. (Superseded 2026-10-19: no bump in
+  phase 5, the number stays 8; B14's amendment.)
+- N (a): two zigs sharing zig's default cache on a user's machine goes
+  under "Later: zig's global cache"; no rzig change. Not taken: (b) a
+  per-zig ZIG_GLOBAL_CACHE_DIR set by rzig.
+- O (a): `phase5-only.diff` against the SHLIB baseline, checked by
+  applying it to a second copy; three PRs in order. Not taken: (b) the
+  whole worktree diff for the user to split.
+- P (a): the minimal env's `toolchain` fetches zig too: one tree per
+  platform. Not taken: (b) a flavor rule.
+- Q (a): verify-bundle asserts the zig through the check line (`/` only)
+  and through RZIG_PRINT_ARGV's first word with `\` turned into `/`,
+  case-insensitive, on every OS; rzig is unchanged. Not taken: (b)
+  find_zig's `inDir` joining with `/` on Windows.
+- R (a): the mixed case's notes are recorded below, no change. Not
+  taken: (b) CC_VER fixed now.
+- S (a): the build pass skips scenario 1 and the no-zig check, one note
+  line each. Not taken: (b) the whole script twice.
+- T (a): no workflow step changes; `compression-level: 0` goes to
+  "Later and future checks". Not taken: (b) the one line now.
+
+One more point, from step 3b, answered the same way (its (a)): Rust
+static libraries built for the r-windows clang-x86_64 bundles need an
+unwinder in a C link. gifski's prebuilt library, linked through gcc.exe,
+fails with 9 undefined `_Unwind_*` and `_GCC_specific_handler` symbols
+(Rust std's `rust_eh_personality`), with both zigs alike, so neither
+TC/zig nor `-lmsvcrt` is the cause. GNU gcc with `-static-libgcc` links
+libgcc_eh and llvm-mingw's clang links libunwind by default; zig cc does
+neither for a C link. magick's librsvg links only because its link is
+C++, where zig adds libunwind. (a) taken: recorded as an open item for
+after phase 5 ("Later and future checks"). Not taken: (b) a windows.zig
+rule adding `-lunwind` to an image link (-shared or exe) through
+gcc.exe, measured to work with both zigs via `SHLIB_LIBADD = -lunwind`;
+(c) leave it to packages.
+
+#### Phase 5 record: what changed (2026-10-15)
+
+- scripts/fetch-zig.sh: the source tarball's pin beside the version
+  (`https://ziglang.org/download/0.16.0/zig-0.16.0.tar.xz`, sha256
+  43186959..., checked against ziglang.org's index.json). `.complete`
+  holds `url:`, `sha256:` and `source: <url> sha256:<hex>` (SOURCES'
+  form); an empty marker (the old fetch-zig's) fetches again.
+- scripts/zig-toolchain.sh: runs `bash fetch-zig.sh` and passes
+  `-Dziglang=<dir>`, except for `test` or when `same_dir
+  "$TOOLCHAIN_PREFIX" "$CONDA_PREFIX"` (J). scripts/env.sh: `same_dir`,
+  vendor-libs.sh's `resolved()` moved and made a predicate (Windows
+  compares `cygpath -m -l`, lower-cased); vendor-libs.sh calls it.
+- zigbuild/toolchain/wheel.zig (new, pure, 6 tests): the marker,
+  METADATA (headers end at the first blank line; Project-URL `Source
+  Code`), the wheel tag and RECORD (`ziglang/<exe>` and `ziglang/lib/...`
+  kept, urlsafe base64 decoded to hex).
+- zigbuild/toolchain/build.zig: the `ziglang` option. Unless the prefix
+  is the env it reads the marker and the one `ziglang-*.dist-info`,
+  checks every RECORD entry exists, installs `zig/zig` (mode kept),
+  `zig/lib` and `zig/LICENSES/ziglang`, and writes `zig/SOURCES` with
+  conda.zig's `writeSources` from a synthetic record (B). The option
+  missing is an `addFail` step. The test step runs wheel.zig's tests.
+- scripts/verify-toolchain.sh (D): each directory's records and copies
+  as one find, one batched sha256sum and one awk join (messages sorted);
+  the build-path scan of the copies as one LC_ALL=C `xargs grep -laE`;
+  the binary detection as one `xargs grep -l` of the magic number ($'^\x7fELF'
+  on linux, Mach-O's $'^\xcf\xfa\xed\xfe' on macOS; Windows keeps its
+  name filter), then the four-byte test on those only; a positive check
+  that `zig/zig` is among the binaries when `zig/` is there (Cg8); `zig/zig
+  version` must equal SOURCES' ziglang version. Every batched grep sits
+  behind a `[ -s ]` guard or `|| true`, so a match of nothing does not
+  stop the script under pipefail (Cc2, Cc6).
+- zigbuild/tools/rzig/groups.zig (H, B35): the standalone line above;
+  parity-test.sh's anchored grep for it.
+- scripts/verify-bundle.sh (E, F, G, Q, S; Cc3, Cc4, Cc8, Cc11, Cg1,
+  Cg4): the pass argument and `pass_zig`; the check mode asserts "at
+  $pass_zig"; the first C++ compile (`<iostream>`, `<string>`,
+  `<vector>`) timed under env -i, with its cache where the pass puts it
+  (unix `$HOME/.cache/zig`, Windows `%LOCALAPPDATA%\zig`) and no shared
+  C++ runtime; RZIG_PRINT_ARGV's first word equals `$pass_zig` on every
+  OS, and again on unix under the package compiles' PATH, whose first
+  entry is the env's bin with conda-forge's zig (find_zig's order, B4;
+  review finding tests-1); every zig guard of scenarios 2 and 3 tests `$pass_zig`; the
+  baseline-CPU compiles under one shared `env -i` environment (three
+  calls: Windows' bin\x64 + System32 has no sh to run one shell); Windows'
+  `syncw` package (`PKG_LIBS = -lsynchronization`, WakeByAddressSingle)
+  built through rzig build tier 1, importing
+  api-ms-win-core-synch-l1-2-0.dll, loaded and called, in both passes;
+  the no-zig check moves only `TC/zig/zig` aside; the toolchain pass
+  removes its VERIFY_DIR before it `exec`s the build pass (Cc4); one
+  final line per pass with its zig and wall time.
+- Docs and comments: README (the compilers bullet, SOURCES, the extract
+  example, "a week" → the bases a week and the groups 30 days, the dev
+  note that `toolchain` downloads the wheel once per platform into
+  build/zig-upstream/, Cg6); env.sh, compile-tree.sh, toolchain.yaml's
+  header and upload comment, pixi.toml's fetch-zig, toolchain and
+  toolchain-test comments (comments only: no table changed, the lock
+  unchanged, `pixi lock --check` passes).
+- recipe/recipe.yaml: `number: 11` with its 10 → 11 history entry (M).
+  (2026-10-19: back to 8, with one "8 stays" line for phases 4 to 6;
+  B14's amendment.)
+
+What did not change: rzig's lookup (ZIG_BIN, then `<rzig dir>/zig/zig`,
+then R's environment's bin, PATH, `python3 -m ziglang`; B2 a, B34 a),
+package-standalone.sh, unpack-toolchain.sh (env.sh's `group_dirs
+compilers` already listed `zig`), windows.zig (D6 was PR #19's), the
+conda recipe's outputs (the exclusion of `lib/R/bin/toolchain/zig/**`
+now guards a directory the conda build never makes), make-wheel.py
+(it takes only `usr/` from the tree), compile-tree.sh's rule (zig/ and
+flang/ stay out, C12).
+
+#### Phase 5 record: the measurements (2026-10-15)
+
+Sizes (bytes; B13 a: recorded only, no format change). The compilers
+archive holds zig/ (19,558 files, 360.4 MB unpacked on linux-64) and
+openmp/; the archive's file count is verify-bundle's file-list line.
+
+| platform | compilers | files | build-tools | slim base |
+|---|---|---|---|---|
+| linux-64 (gamma) | 88,083,009 (.tar.gz) | 19,564 | 155,102 | 63,049,365 |
+| osx-arm64 (omicron) | 87,459,159 (.tar.gz) | 19,564 | 130,805 | 57,679,464 |
+| osx-64 (omicron, Rosetta) | 91,438,973 (.tar.gz) | 19,564 | 136,407 | about 57 MB |
+| win-64 (kappa) | 101,618,280 (.zip) | 19,563 | 5,401,812 | 64,582,740 |
+| linux-aarch64 | CI | | | |
+
+The survey's estimates were linux-64 87.1, linux-aarch64 84.1,
+osx-arm64 86.5, osx-64 90.4 and win-64 100.3 MB. The minimal
+linux-64 base is 51,743,277. win-64's zip is the largest, at 101.6 MB,
+under B13's 150 MB mark before flang.
+
+The first C++ compile with an empty zig cache: verify-bundle's new line,
+the toolchain pass (TC/zig, a new user's cache under the fresh HOME);
+the build pass's line for comparison. That cache is env.sh's, and it is
+warm only after an earlier task compiled C++ with it.
+
+| host | TC/zig, empty cache | the build's zig (env.sh's cache) |
+|---|---|---|
+| linux-64 | 15-18 s, 49 MB, about 3,350 warning lines | 1 s (warm) |
+| osx-arm64 | 9-11 s, 68 MB, about 3,420 lines | 9 s, 3,422 lines (cold: a fresh copy); minimal 1 s (warm) |
+| osx-64 (Rosetta) | 13 s, 68 MB, 3,440 lines | 15 s, 3,435 lines (cold) |
+| win-64 | 46 s, 94 MB, about 3,677 lines | 62 s, 3,668 lines (cold) |
+
+Each first compile builds libc++ into zig's cache, and its warnings
+are the libc++ headers' `-Wnullability-completeness` lines. That cost
+is zig's, not upstream's: conda-forge's zig pays the same when its
+cache is cold (step 3b on kappa, Rcpp's first build: TC/zig 66 s,
+conda-forge's 93 s). Pre-seeding stays a later menu.
+
+`pixi run toolchain` (the wheel cached; the task removes and rebuilds
+the tree each time): linux-64 5-11 s, osx-arm64 13 s, win-64 49-52 s
+(the 19.5k-file install). The first fetch of a wheel: osx-arm64 38 s
+(fetch-zig), osx-64 94 s for `toolchain` with its fetch, win-64 within
+step 3b's 3 min 37 s `package-toolchain`.
+
+verify-toolchain (wall time):
+- Before phase 5, today's tree (no zig/): linux-64 0.8 s batched, 3.3 s
+  per file.
+- With zig/ (19,567 files): linux-64 6 s (10 s as a pixi task),
+  osx-arm64 6 s (task), osx-64 12 s (task), win-64 49 s on the tree the
+  build installed and 157 s on the tree unpacked from the zip.
+- The old per-file script on a tree with zig/ (linux-64): 11 min.
+- win-64 stays well inside toolchain.yaml's 30-minute timeout.
+
+Step 1's binary count (Cg8): the old and the new script agree on the
+tree without zig/ on every host: linux-64 1 ELF file (GNU grep and
+xargs), osx-arm64 1 Mach-O (BSD grep and xargs), win-64 8 PE files
+(MSYS). With zig/ the new count is 2, 2 and 9: zig/zig (zig.exe) is
+among them. On the tree without zig/ the new script then stops at its
+zig check ("lib/R/bin/toolchain/zig/zig is missing"), as it should.
+
+unpack-toolchain: linux-64 8 s, osx-arm64 6 s, win-64 38 s, all
+as pixi tasks. CI's per-leg-kind times (Cg6) come with the PR.
+
+verify-package, per pass (verify-bundle's final line per pass; Cg1):
+
+| host | toolchain pass | build pass | the whole task |
+|---|---|---|---|
+| linux-64, slim | 73-75 s | 51 s | 278 s |
+| linux-64, minimal | 62 s | 40 s | 242 s |
+| linux-64, upstream (one zig) | about 72 s | skipped | 220 s |
+| osx-arm64, slim | 109 s | 91 s (cold cache) | 302 s |
+| osx-arm64, minimal | 90 s | 53 s | 233 s |
+| osx-arm64, upstream | 109 s | skipped | 210 s |
+| osx-64 (Rosetta), slim | 207 s | 179 s | 570 s |
+| win-64, slim | 243 s | 238 s | 12 min |
+| win-64, upstream | 246 s | skipped | 8 min |
+
+Against the step-0 baseline (main d11dee1 + phase 4 + SHLIB) on gamma,
+the same day, in a scratch copy: its verify-bundle.sh alone took 56 s;
+phase 5's took 127 s (73 s and 51 s). On the default legs verify-package
+is about 2.3 times as long; the toolchain pass is the slower of the two
+because every compile in it starts from an empty zig cache. CI's
+"Package + verify" step at ea7e6ee (run 38467545177, the newest
+completed build-r run before PR #27; d11dee1's own push run,
+38569479149, was cancelled) took: ubuntu-latest 237 s, ubuntu-24.04-arm
+293 s, macos-latest 268 s, macos-15-intel 484 s, windows-latest 312 s,
+ubuntu-latest minimal 198 s. The upstream legs at 60afeb0 (run
+38430385664) took: ubuntu-latest 206 s, macos-latest 258 s,
+windows-latest 309 s. The PR's times are compared with these.
+
+CI's toolchain jobs at ea7e6ee (for Cc7): windows-latest 278 s, of which
+setup-pixi took 214 s, the tests 21 s, the build and archive 4 s and
+verify-toolchain 6 s. The upstream windows-latest job (60afeb0) spent
+26 s fetching and unzipping the same wheel in its "Upstream zig" step.
+The PR's run gives the new step times.
+
+Not measured separately: the build runner's first build with TC/zig.
+It is inside verify-bundle's preflight block, which passed on every host
+(`rzig build: tier 1`).
+
+#### Phase 5 review (2026-10-15)
+
+The skeptical review of steps 1 and 2 together (Cg8) ran on gamma's diff
+in step 2 (Windows paths, `zig.exe`, quoting, the `set -e` and pipefail
+sites); its Windows parts were confirmed by kappa's runs (step 6). An
+adversarial review of the six steps then confirmed two findings, both
+fixed and rerun on linux-64 (logs in .../phase5/fix/):
+- [tests-1] step 4 moved the RZIG_PRINT_ARGV check to `PATH=/usr/bin:/bin`,
+  but the unix package compiles run with a PATH whose first entry is the
+  env's bin, which holds conda-forge's zig; so nothing showed those
+  compiles still run the pass's zig. verify-bundle.sh's unix packages
+  block now repeats the dry run under that PATH and requires its first
+  word to be `$pass_zig` (find_zig's order, B4). It passed in both passes
+  (73 s and 51 s). A negative run: with TC/zig moved aside, the first word
+  became the env's zig, so a find_zig change that let PATH win would fail
+  the check.
+- [tests-2] TODO.md waited on CI for a one-zig run that no CI leg makes
+  (upstream-zig.yaml runs linux-64, osx-arm64 and win-64 only), and left
+  out osx-64's mixed case, which had passed on omicron. The item now says
+  what passed where; the missing one-zig runs on linux-aarch64 and osx-64
+  are a "Later" menu and a note under K (a).
+
+One host finding, from kappa's round 1, fixed (logs in .../phase5/rfix1/):
+- On Windows, with ZIG_BIN unset, the build pass's label printed
+  `ZIG_BIN=/conda_bin/x86_64-w64-mingw32-zig`, the MSYS spelling of
+  env.sh's `$ZIG` (env.sh converts only a given ZIG_BIN). The zig handed
+  to rzig was already the `cygpath -m` form, so no check was wrong. The
+  label now uses `cygpath -m` on Windows; no assertion changed. Not
+  taken: env.sh converting `$ZIG` always, which touches about 27 users
+  that already convert where a native program needs it. kappa's round 2
+  shows `ZIG_BIN=C:/.../Library/bin/x86_64-w64-mingw32-zig.exe` on every
+  build-pass line.
+
+#### Phase 5 record: tests on every host (2026-10-15)
+
+pixi.lock was fbb64b7b...a68bb96 at every start and end, on gamma and
+in each host's copy but the osx-64 one, which is re-solved on purpose
+(below). `pixi lock --check` passes, and every other pixi task ran
+`--locked`. The hosts ran copies of the worktree made from its file
+list: 233 regular files, checked by sha256 against gamma's manifest at
+the start and the end of each chain (the osx-64 copy at its start, before
+its platform edit), all OK. No host wrote the worktree. The
+worktree's `git diff | sha256sum` was 847ec97b... at step 6's start.
+After the hosts' sync, step 6 changed one message in verify-bundle.sh:
+the build pass's C++ line said "warm" for a cache that was cold on
+omicron and kappa. Gamma's verify-package ran again on step 6's tree.
+The review's and the host's fixes came after these runs; the testers'
+rounds 1 and 2 on the fixed tree are at the end of this section.
+- gamma (linux-64): steps 1-5's chains, with conda-forge's zig and with
+  upstream zig (each step's record), and step 6's verify-package on
+  step 6's tree (278 s; toolchain pass 75 s, build pass 51 s).
+- omicron (macOS 26.4.1, osx-arm64, pixi 0.81.0), copy ~/rz-p5:
+  - `rzig-test` with both zigs (151/151 each);
+  - `build`, `toolchain`, verify-toolchain, step 1's binary count,
+    `package-toolchain`, `unpack-toolchain`, then verify-toolchain on
+    the unpacked tree, and verify-package (both passes);
+  - `-e minimal build` and verify-package (both passes);
+  - wheel (four wheels, macosx_13_0_arm64) and wheel-test (312 s);
+  - upstream zig (`ZIG_BIN` = fetch-zig's): `build`, `toolchain`,
+    `package-toolchain`, verify-package (the one-zig pass, the build
+    pass skipped with its note);
+  - conda-package (264 s; r-zig-slim h41cfa24_11, r-zig-compilers and
+    r-zig-build-tools h4105b44_11, r-zig-toolchain h0527d79_11, built
+    locally as `_11` before the 2026-10-19 decision; the PR keeps 8; the
+    four tests; "toolchain tree $PREFIX: nothing to install (the prefix
+    is the env)") and conda-consume (43 s).
+  - Nothing on macOS asked about the extracted zig: a tar.gz extracted
+    by the scripts carries no quarantine attribute. A browser download
+    was not tested (Risks).
+- omicron, osx-64 under Rosetta (open point K), copy ~/rz-p5-osx64,
+  re-solved for osx-64 (its lock 0662b7ae..., scratch only; the
+  worktree's lock fbb64b7b... before and after):
+  - `rzig-test` (151/151, an x86_64 zig);
+  - `toolchain` (it fetched the osx-64 wheel; zig/zig is "Mach-O 64-bit
+    executable x86_64" and prints 0.16.0, 26 s on its first run under
+    Rosetta), verify-toolchain and `package-toolchain`;
+  - `build` (223 s) and verify-package, both passes (570 s).
+  - The endpoint agent killed nothing: the first run of upstream's
+    unsigned x86_64 zig on omicron passed.
+  - A first try ran GNU sed from ~/.pixi/bin with BSD `-i ''`. The
+    platform edit failed, and the try was stopped before it did
+    anything for osx-64. The copy was cleaned and run again with
+    /usr/bin/sed.
+- kappa (Windows 11, win-64, pixi 0.81.0), copy C:\Users\admin\rz-p5-3b
+  (step 3b's, synced again):
+  - `rzig-test` with both zigs (121 pass and 30 skipped each);
+  - `build`, `toolchain` from an empty dist/toolchain (49 s) and again
+    (52 s), verify-toolchain (49 s), step 1's binary count,
+    `package-toolchain`, `unpack-toolchain` (38 s), verify-toolchain on
+    the unpacked tree (157 s);
+  - verify-package, both passes: in each, syncw (`PKG_LIBS =
+    -lsynchronization`) built through rzig build tier 1, imported the
+    API set and loaded with PATH = bin\x64 + System32. The no-zig check
+    moved `TC/zig/zig.exe` aside;
+  - upstream zig: `build`, `toolchain`, `package-toolchain`,
+    verify-package (the one-zig pass with syncw; the build pass skipped,
+    since `cmp` found the same bytes);
+  - conda-package (13 min; r-zig-slim h9490d1a_11, r-zig-compilers and
+    r-zig-build-tools hc5b9da2_11, r-zig-toolchain h7b95333_11, built
+    locally as `_11` before the 2026-10-19 decision; the PR keeps 8; the
+    four tests; the toolchain line names only `binutils/`, "(the prefix
+    is the env)") and conda-consume (2 min).
+  - Step 4's open Windows questions are answered by these runs:
+    `cygpath -m -l`'s `pass_zig` matched both the check line and
+    RZIG_PRINT_ARGV's `<TC>/zig\zig.exe`; zig 0.16 put its cache in
+    `LOCALAPPDATA\zig`; the baseline-CPU compiles ran a `C:/...zig.exe`
+    path under env -i; the build pass's argv matched `cygpath -m "$ZIG"`.
+  - Step 3b (before step 4): the `-lmsvcrt` check (open point L) with
+    magick and gifski in an extracted bundle (base + both groups,
+    ZIG_BIN unset). magick, with Rcpp, magrittr and curl, built and
+    rendered an SVG through librsvg. No log names msvcrt. gifski's
+    unwinder failure is the open item under "Later".
+- CI: not run. Phase 5 is not pushed: the user commits and pushes
+  (open point O). The PR's runs go into "Phase 5 record: CI" when they
+  exist, with their run IDs, each toolchain leg's time and artifact
+  size, windows-latest's toolchain step times (Cc7), the unpack time per
+  leg kind (Cg6), and verify-package per pass against the baselines
+  above (Cg1).
+
+Round 1 ran after the review's fixes (`git diff` sha256 4783d159...),
+round 2 after the host fix (f91d1b59..., the tree handed over). Each
+copy matched gamma's 235-file manifest at its chain's start and end,
+pixi.lock was fbb64b7b... throughout, and each tester removed its copy
+when everything passed (logs in .../phase5/omicron-tester/ and
+.../phase5/kappa/, round 2 in kappa/r2/).
+- omicron, osx-arm64, round 1 (35 min, every task passed, nothing
+  killed by the endpoint agent):
+  - `rzig-test` with both zigs, `toolchain-test`, `fetch-zig` (58 s on
+    a first fetch), `build`, verify-tree, `toolchain` (6 s),
+    verify-toolchain (6 s, BSD tools: 19,547 copies, 2 Mach-O files,
+    zig/zig among them), step 1's binary count (1 and 1 on the tree
+    without zig/), `package-toolchain` (87,457,796 B, 20,865 members),
+    `unpack-toolchain` and verify-toolchain on the result, contract,
+    pkg-parity, wheel and wheel-test (no `bin/toolchain/zig/` in any
+    wheel, B30);
+  - verify-package, slim: toolchain pass 109 s (first C++ compile 10 s,
+    68 MB), build pass 72 s (env.sh's cache warm, 1 s); minimal 90 s and
+    52 s; upstream, the one-zig pass 107 s, the build pass skipped. In
+    every pass tests-1's new check ran ("with the env's bin on PATH too,
+    the bundle's compilers run the ... pass's zig");
+  - conda-package (`_11`, built locally as `_11` before the 2026-10-19
+    decision; the PR keeps 8; r-zig-compilers 45 KB, no zig,
+    conda-forge's zig its dependency, B30) and conda-consume;
+  - Gatekeeper: TC/zig/zig is ad-hoc linker-signed and carries only
+    `com.apple.provenance`, no quarantine; `spctl` says "rejected" (not
+    notarized) yet it runs with no prompt;
+  - the first tier-1 install with TC/zig, by hand (base + compilers,
+    env -i, a fresh HOME): a plain C package in 15 s with empty caches
+    (rzig's 19 MB, zig's 47 MB), 1 s the second time.
+- kappa, win-64, round 1 (every task passed): `rzig-test` with both
+  zigs, `fetch-zig`, `build`, `toolchain` (2 min 48 s on an empty tree,
+  52 s again), verify-toolchain (48 s; the old per-file script took
+  1,934 s on the same tree, over toolchain.yaml's 30 minutes), step 1's
+  binary count (8 and 8; 9 with zig.exe), verify-tree, smoke,
+  `package-toolchain` (101,618,280 B), `unpack-toolchain` (37 s) and
+  verify-toolchain on the result (2 min 36 s), verify-package (toolchain
+  pass 244 s, first C++ compile 46 s, 94 MB; build pass 249 s, 67 s on
+  env.sh's cache; syncw in both), magick in an extracted bundle with
+  ZIG_BIN unset (179 s, an SVG through librsvg, no msvcrt), compile-tree
+  (no zig/), contract, pkg-parity, hermetic, the upstream chain (one-zig
+  pass 243 s, the build pass skipped), conda-package (`_11`, built
+  locally as `_11` before the 2026-10-19 decision; the PR keeps 8, no
+  zig/, no download, 12 min 39 s) and conda-consume (the new standalone
+  line names R-4.6.1-win-64-compilers.zip). Its one finding, the build
+  pass's label, is in "Phase 5 review".
+- kappa, win-64, round 2 (the label fix; verify-bundle.sh was the only
+  file changed since round 1): `build`, `toolchain`, `package-toolchain`
+  and verify-package on both legs passed. The conda leg's build-pass
+  lines (header, check mode, syncw, the final line) now name
+  `ZIG_BIN=C:/.../x86_64-w64-mingw32-zig.exe`; toolchain pass 245 s,
+  build pass 236 s. The upstream leg's one-zig pass 248 s, no build
+  pass. The other tasks do not run verify-bundle.sh and were not rerun.
+  omicron had no round 2: the fix only changes a Windows branch, and
+  gamma's build pass ran again after it (51 s, the same label).
+
+Two observations, no failures: the archives are not byte-identical
+across builds of the same tree (osx-arm64's compilers 87,459,159 and
+87,457,796 B; win-64's slim zip 64,582,740, 64,582,695 and 64,582,494 B,
+three sha256s), since tar and zip record mtimes; and package-standalone's
+"== done:" size is `du`'s (97M on APFS and 45M on gamma's compressed
+filesystem for an 87-88 MB file), so the sizes here come from `ls -l`.
+
+#### Phase 5 record: the mixed case and the facts the critiques added
+
+The mixed case (open point R, (a): recorded, no change):
+- CC_VER: `R_compiled_by()` and R CMD INSTALL's "using C compiler" line
+  name conda-forge's clang 21.1.8 when TC/zig (clang 21.1.0) compiles
+  the package. Cosmetic; TODO's "Later" item (build.zig fills CC_VER
+  from the zig that builds R) covers it.
+- An inherited ZIG_LIB_DIR reaches TC/zig too; upstream zig needs no
+  libc++ mirror (it links its own static libc++).
+- The shared build runner (PR #27) keys on the zig's path: each place a
+  compilers archive is extracted builds its own runner (about 45 MB, 3-13
+  s), swept after 7 days idle; conda-forge's and upstream zig never share
+  one. rzig build's tiers and every compile step they run find the same
+  zig (find_zig in each), and tier 2 compiles with that zig's own lib
+  dir.
+
+The facts the critiques added:
+- The build pass repeats every zig-independent check but scenario 1 and
+  the no-zig check (S), so verify-package nearly doubles on the default
+  legs; the per-pass times are in "the measurements".
+- Every build-r and stress leg downloads and unpacks the toolchain
+  artifact, now with zig/, though only verify-package reads zig/ (Cg6).
+  The dev chains (contract, pkg-parity, stress) reach PyPI once per
+  platform for it, and `toolchain` needs the network once (README's dev
+  note).
+- After phase 5 build.yaml's and upstream-zig.yaml's toolchain
+  artifacts carry the same TC/zig, so the upstream-zig run builds the
+  same tree twice (Cg9).
+- The licence set (Cc5, Cg2): the licence texts of the bundled
+  components are in `zig/LICENSES/ziglang/` as upstream ships them,
+  LLVM's included: libcxx's, libcxxabi's and libunwind's `LICENSE.TXT`
+  are the LLVM project's Apache-2.0 WITH LLVM-exception text, which
+  covers LLVM, Clang and LLD linked into the binary, libtsan
+  (compiler-rt) and clang's resource headers. What is missing is
+  upstream's attribution (no statement that the binary contains LLVM),
+  not a text, plus Apple's SDK headers and libSystem.tbd (APSL/BSD) and
+  the NetBSD and OpenBSD headers, which ship with no text of their own.
+  SOURCES' `license: MIT` is the wheel's METADATA `License-Expression`.
+  B33 covers the base's runtime files only, so the groups' licence
+  completeness is a "Later" menu, with phase 6's licence review.
 
 ### Phase 6 — Fortran in the compilers group
 
@@ -4759,9 +5277,9 @@ PATH set to `R_HOME\bin\x64;C:\Windows\System32`.
 2. **Base + compilers.**
    - The check mode exits 0 and reports zig 0.16.0 from `TC/zig/`.
    - C, C++ (static libc++), OpenMP C in three forms and the flagless
-     omp.h probe (not on minimal); from phase 5 on Windows, a
-     `-lsynchronization` link (D6); from phase 6 the Fortran checks of
-     phase 6, which must pass on every OS (B44).
+     omp.h probe (not on minimal); from phase 5 on Windows, a package
+     linking `-lsynchronization` (D6), built and loaded; from phase 6
+     the Fortran checks of phase 6, which must pass on every OS (B44).
    - unix uses the host's make from `/usr/bin` here; on Windows this
      scenario runs rzig's dry runs and direct compiles, since `R CMD
      INSTALL` needs make.
@@ -4777,7 +5295,11 @@ PATH set to `R_HOME\bin\x64;C:\Windows\System32`.
 Also in verify-bundle: the file lists (base ∪ groups = R tree ∪
 toolchain tree, no overlap, nothing compile-time in the base but
 Windows' Tcl/Tk headers, T1), and the existing compiles with
-`ZIG_BIN=$ZIG` and the env's make and flang as a fourth pass.
+`ZIG_BIN=$ZIG` and the env's make and flang as a fourth pass: from
+phase 5, `verify-bundle.sh build`, which the default `toolchain` pass
+runs after itself unless `$ZIG` has TC/zig's bytes (the upstream legs).
+The build pass skips the base alone and the no-zig check (PHASE5 open
+point S).
 
 The same three scenarios on the other channels: conda (the recipe's
 tests and conda-consume: r-zig-slim alone, with r-zig-compilers, with
@@ -4844,19 +5366,37 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   conda-consume.sh and stress.R list conda-forge first.
 - **Size.** zig is 343-380 MB and 19,546 files per platform, flang
   144-210 MB raw; now confined to the toolchain tree and the compilers
-  archive (about 131-149 MB with gzip).
+  archive (about 131-149 MB with gzip). Measured with zig and before
+  flang (phase 5, 2026-10-15): the compilers archive is 87.5-91.4 MB as
+  .tar.gz (linux-64 88.1, osx-arm64 87.5, osx-64 91.4) and 101.6 MB as
+  win-64's .zip; linux-aarch64 comes with CI ("Phase 5 record: the
+  measurements").
 - **The mixed zig case.** R by conda-forge's zig and packages by
-  upstream zig; tested today only by wheel-test, without OpenMP or
-  Fortran. Scenario 2 on the default legs covers it from phase 5.
+  upstream zig; tested before phase 5 only by wheel-test, without OpenMP
+  or Fortran. Since phase 5 verify-bundle's toolchain pass covers it on
+  the default legs, every scenario with TC/zig (passed on linux-64,
+  osx-arm64, osx-64 and win-64 by hand, 2026-10-15). Its cosmetic
+  CC_VER mismatch and a build runner per extraction place are recorded
+  in "Phase 5 record: the mixed case".
 - **Windows with upstream zig.** `-lsynchronization` (Rust packages)
-  fails with upstream zig 0.16.0 (feat-no-host-paths, What remains 8),
+  failed with upstream zig 0.16.0 (feat-no-host-paths, What remains 8),
   and the compilers group makes upstream zig the standalone default.
-  D6 = (b): rzig provides the import library (phase 5 at the latest);
-  nothing is reported upstream, so the fix stays ours until zig ships
-  one.
-- **The first compile is slow.** Upstream zig builds libc++ and
-  compiler_rt into its global cache on the first C++ compile and prints
-  about 3k warnings once.
+  D6 = (b) is done by PR #19 (fix-rzig-follow-ups, 7a3004d): rzig
+  renames `-lsynchronization` to `api-ms-win-core-synch-l1-2-0` for both
+  zigs, and zig builds the import library from the API set's `.def`
+  (that PLAN.md's "How this answers D6 b"); phase 5's verify-bundle
+  builds and loads such a package with TC/zig (kappa, 2026-10-15).
+  Nothing is reported upstream. `-lmsvcrt` fails with upstream zig and
+  links msvcrt.dll with conda-forge's: no package tried reached it
+  (PHASE5 open point L a, "Later and future checks"). A Rust static
+  library in a C link needs an unwinder with both zigs (the same
+  section).
+- **The first compile is slow.** zig builds libc++ and compiler_rt
+  into its global cache on the first C++ compile and prints about 3.4k
+  warnings once; conda-forge's zig does the same with a cold cache.
+  Measured with TC/zig and an empty cache (phase 5, 2026-10-15): linux-64
+  15-18 s, osx-arm64 9-11 s, osx-64 under Rosetta 13 s, win-64 46 s.
+  Pre-seeding is a later menu ("zig's global cache").
 - **macOS without the Command Line Tools.** rzig runs `xcrun` on every
   compile; frameworks need the SDK; whether a fresh Mac opens the install
   dialog is unobserved.
@@ -5016,6 +5556,50 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   in the port, since no upstream report is filed (A2').
 - **zig's global cache.** Measure the first C++ compile with upstream
   zig in phase 5; then put pre-seeding the cache to the user as a menu.
+  Measured (2026-10-15, "Phase 5 record: the measurements"): the first
+  C++ compile with an empty cache is a libc++ build into zig's cache, as
+  slow and as loud with conda-forge's zig as with upstream's. The same
+  menu decides where rzig's zig keeps its cache: a standalone R's zig
+  and a conda R's (both 0.16.0) share zig's default cache today, which
+  env.sh's comment says can mix objects (PHASE5 open point N a: not
+  seen to break a package, no rzig change).
+- **The groups' licence completeness** (PHASE5 Cc5, Cg2; a menu with
+  phase 6's licence review): zig/ ships upstream's licence set, whose
+  gaps are LLVM's attribution in the binary, Apple's SDK headers and
+  libSystem.tbd, and the NetBSD and OpenBSD headers ("Phase 5 record:
+  the mixed case and the facts the critiques added"); flang/ joins in
+  phase 6. B33 covers the base's runtime files only, so no phase picks
+  this up otherwise.
+- **zig/ on the legs that never read it** (Cg6; a menu): build-r's
+  build-only legs, stress and the local dev chains download and unpack
+  the compilers archive (or fetch the wheel) though only verify-package
+  reads zig/. Options: a toolchain artifact without zig/ for them, or
+  keep one artifact; with phase 5's unpack timings.
+- **upstream-zig.yaml reusing build.yaml's toolchain artifact** (Cg9; a
+  menu): since phase 5 both carry the same TC/zig, so the label run
+  builds the same tree again.
+- **verify-package's build pass** (Cg1; a menu): keep it, reduce it to
+  the package blocks (PHASE5 F b), or run it only under full-ci; with
+  CI's per-pass times against ea7e6ee's.
+- **The toolchain artifact's compression** (PHASE5 T a; a menu):
+  `compression-level: 0` on toolchain.yaml's upload, since the archives
+  are already .tar.gz/.zip; with windows-latest's step times (Cc7).
+- **Rust static libraries and an unwinder on Windows** (phase 5 step
+  3b; recorded, its option (a)): a Rust static library built for the
+  r-windows clang-x86_64 bundles (gifski's prebuilt one) fails a C link
+  through gcc.exe with 9 undefined `_Unwind_*` and
+  `_GCC_specific_handler` symbols, with both zigs. GNU gcc with
+  `-static-libgcc` links libgcc_eh and llvm-mingw's clang libunwind; zig
+  cc does neither for a C link (a C++ link gets libunwind, which is why
+  magick's librsvg links). `SHLIB_LIBADD = -lunwind` in a user's
+  Makevars.win fixes it with both zigs. When it comes back: a windows.zig
+  rule adding `-lunwind` to image links through gcc.exe, or leave it to
+  packages.
+- **`-lmsvcrt` with upstream zig on Windows** (PHASE5 open point L a):
+  upstream zig 0.16.0 has no msvcrt import library and conda-forge's
+  links msvcrt.dll into a UCRT R. No package tried reached it (magick
+  with Rcpp, magrittr and curl; gifski); map `msvcrt` to `c` in
+  `mingw_names` only when a real package needs it.
 - **macOS without the Command Line Tools.** Observe a Mac that never had
   them (does running `xcrun` open the install dialog?); then put rzig's
   `xcrun` handling to the user as a menu. `xcode-select -p` exits 0

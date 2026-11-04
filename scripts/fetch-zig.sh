@@ -14,10 +14,19 @@
 # to stderr; standard output is the path alone. It runs no zig, so it
 # drops ZIG_BIN: env.sh stops on one that names no zig, as one still
 # exported after `rm -rf build` does, and this is what makes it again.
+# The toolchain build installs this zig into the toolchain tree's zig/,
+# the compilers group's (feat-standalone-toolchain B4, phase 5;
+# zig-toolchain.sh), and its SOURCES from the marker below: the wheel's
+# URL and sha256 and the source its zig is built from.
 unset ZIG_BIN
 . "$(dirname "$0")/env.sh"
 
 version=0.16.0
+# The source of this zig, for the toolchain tree's SOURCES (zig/, B4):
+# ziglang.org's release tarball, which the wheels' zig is built from. One
+# pin per version, not per platform.
+src_url=https://ziglang.org/download/$version/zig-$version.tar.xz
+src_sha=43186959edc87d5c7a1be7b7d2a25efffd22ce5807c7af99067f86f99641bfdf
 # https://pypi.org/project/ziglang/0.16.0/#files: per platform (env.sh's
 # PLAT), the wheel's directory on files.pythonhosted.org, its file name
 # and sha256.
@@ -50,11 +59,15 @@ esac
 dir="$BUILD_DIR/zig-upstream/ziglang-$version-$PLAT"
 zig="$dir/ziglang/zig"
 [ "$OS" = windows ] && zig="$zig.exe"
-if ! [ -f "$dir/.complete" ] || ! [ -f "$zig" ]; then
+# The marker is written last and says where the wheel came from
+# (zigbuild/toolchain/wheel.zig parseMarker reads it): an empty one, as
+# fetch-zig wrote before phase 5, fetches again.
+if ! [ -s "$dir/.complete" ] || ! [ -f "$zig" ]; then
   mkdir -p "$BUILD_DIR/zig-upstream"
   file="$BUILD_DIR/zig-upstream/$whl"
+  url="https://files.pythonhosted.org/packages/$path/$whl"
   echo "fetch-zig: downloading $whl" >&2
-  curl -fsSL --retry 3 -o "$file" "https://files.pythonhosted.org/packages/$path/$whl"
+  curl -fsSL --retry 3 -o "$file" "$url"
   actual="$(sha256sum "$file" | cut -d' ' -f1)"
   # (msys sha256sum prefixes the line with '\' for a path with backslashes)
   actual="${actual#\\}"
@@ -66,7 +79,7 @@ if ! [ -f "$dir/.complete" ] || ! [ -f "$zig" ]; then
   rm -rf "$dir"
   unzip -q "$file" -d "$dir" >&2
   rm -f "$file"
-  : > "$dir/.complete"
+  printf 'url: %s\nsha256: %s\nsource: %s sha256:%s\n' "$url" "$sha" "$src_url" "$src_sha" > "$dir/.complete"
 fi
 v="$("$zig" version)"
 [ "$v" = "$version" ] || { echo "error: $zig says $v, not $version" >&2; exit 1; }

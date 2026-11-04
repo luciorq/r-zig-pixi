@@ -29,8 +29,11 @@
 #      tier 0/1 on the extracted tree, where the install preflight stops a
 #      compiled package with the compilers' text; TLS trust with the
 #      shipped CA bundle and nothing from the build env (unix).
-#   2. + compilers: rzig's check mode finds zig and flang; the
-#      preflight's other branches (zig from ZIG_BIN, no make, no flang;
+#   2. + compilers: rzig's check mode finds the pass's zig (below) and
+#      flang on PATH; the first C++ compile, a shared library, timed with
+#      zig's cache as the pass has it; every compiler runs the pass's zig
+#      (RZIG_PRINT_ARGV's first word, every OS); the
+#      preflight's other branches (zig, no make, no flang;
 #      feat-zig-pkg-build M4; Windows too [phase3-P3-9]): a C package
 #      with no Makevars builds through `rzig build` (patch 0013) with no
 #      make, its build runner in rzig's cache under the run's HOME,
@@ -60,8 +63,10 @@
 #      the macOS floor.
 #      Windows, where make is a build tool: rzig's dry runs (-L from
 #      where the tree now is, the group's openmp/, CONDA_PREFIX ignored),
-#      and an OpenMP DLL compiled and linked by gcc.exe alone, loaded
-#      with only bin\x64 and System32 on PATH.
+#      an OpenMP DLL compiled and linked by gcc.exe alone, loaded
+#      with only bin\x64 and System32 on PATH, and a package linking
+#      -lsynchronization (Rust's std's import, D6) through rzig build,
+#      loaded the same way.
 #   3. + build-tools: R runs the group's tools. unix: make is
 #      R_HOME/bin/toolchain/usr/bin/make (rzig's check mode, Sys.which,
 #      and on linux the make strace saw run), and install.packages with
@@ -78,15 +83,26 @@
 #      with a .rc file (make) and a plain C one (rzig build) build and
 #      load with only bin\x64 and System32 on PATH; LTO is recorded, not
 #      checked (B43-2, C9), with a tier-1 twin that MAKEFLAGS' assignment
-#      sends to make (N4). Every OS, with no ZIG_BIN (no zig: phase 5):
-#      a package with a configure script stops in the preflight with the
-#      compilers' text, and with R_ZIG_NO_PREFLIGHT=1 gets past it, runs
-#      its configure and fails in the compile (C26).
-# What phase 3 leaves to later phases (PLAN.md): the compilers group has
-# no zig (phase 5) and no flang (phase 6), so scenario 2 takes zig from
-# ZIG_BIN=$ZIG and flang from the env; Windows' build-tools group has no
-# usr/bin (phase 7), so scenario 3 takes sh and make from the env's
-# Library/usr/bin.
+#      sends to make (N4). Every OS, with no zig (TC/zig's binary moved
+#      aside): a package with a configure script stops in the preflight
+#      with the compilers' text, and with R_ZIG_NO_PREFLIGHT=1 gets past
+#      it, runs its configure and fails in the compile (C26).
+# Two passes (feat-standalone-toolchain phase 5; PHASE5 open points F, G,
+# S): `verify-bundle.sh [toolchain|build]`. The toolchain pass, the
+# default, is what a user of the archives gets: no ZIG_BIN and no zig
+# cache variable, so rzig takes R_HOME/bin/toolchain/zig/zig (TC/zig,
+# upstream zig, B4) and zig its default cache under the fresh HOME. Then,
+# unless the build's zig (env.sh's $ZIG) is TC/zig's bytes (the upstream
+# legs: fetch-zig's zig, the same wheel), the script runs itself again as
+# the build pass: ZIG_BIN=$ZIG with env.sh's global cache, so that
+# conda-forge's zig keeps its coverage on the default legs (the mixed
+# case, then conda-forge's zig). The build pass skips the base alone and
+# the no-zig check, which pass no zig and would test the same thing again
+# (S). pass_zig is the zig the pass's assertions name.
+# What phase 5 leaves to later phases (PLAN.md): the compilers group has
+# no flang (phase 6), so scenario 2 takes flang from the env; Windows'
+# build-tools group has no usr/bin (phase 7), so scenario 3 takes sh and
+# make from the env's Library/usr/bin.
 # The static checks of the trees (Makeconf, the compilers are rzig, the CA
 # bundle, rpaths, the glibc ceiling, the C++ runtime of R's binaries, the
 # macOS floor and load commands, minimal's excluded libraries, Windows'
@@ -98,6 +114,23 @@
 # cxx_deps, minos_over_floor, cannot_check).
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
+
+# The pass (above): toolchain, the default, or build.
+pass="${1:-toolchain}"
+case "$pass" in
+  toolchain) pass_what="TC/zig" ;;
+  build)
+    [ -n "$ZIG" ] || { echo "error: the build pass needs the build's zig, and env.sh found none (ZIG_BIN, PATH)" >&2; exit 1; }
+    # Named as rzig gets it (the Windows branch below passes cygpath -m's
+    # C:/...): with ZIG_BIN unset, env.sh's $ZIG is PATH's MSYS spelling.
+    pass_what="ZIG_BIN=$ZIG"
+    [ "$OS" != windows ] || pass_what="ZIG_BIN=$(cygpath -m "$ZIG")" ;;
+  *) echo "usage: verify-bundle.sh [toolchain|build]" >&2; exit 1 ;;
+esac
+echo "== the $pass pass: zig from $pass_what"
+# zig's file name in TC/zig
+exe=""
+[ "$OS" != windows ] || exe=.exe
 
 # The archives, in the order they are extracted: the base
 # (package-standalone.sh, `pixi run package`), then the groups (`pixi run
@@ -325,10 +358,10 @@ else
   cc="$TC/zig-cc"
   fc="$TC/zig-fc"
   base_env=(HOME="$home" TMPDIR="${TMPDIR:-/tmp}")
-  # zig: env.sh's $ZIG, the one the build used (ZIG_BIN, else the env's),
-  # passed on as ZIG_BIN, which env -i drops (rzig would then take the
-  # env's zig from PATH and test conda-forge's zig after an upstream zig's
-  # build), with the global cache env.sh keeps for that zig. Not its
+  # zig in the build pass: env.sh's $ZIG, the one the build used (ZIG_BIN,
+  # else the env's), passed on as ZIG_BIN, which env -i drops (rzig would
+  # then take TC/zig's), with the global cache env.sh keeps for that zig.
+  # Not its
   # ZIG_LOCAL_CACHE_DIR: rzig build would take that as its cache, and the
   # installs here are to use the one a user's install gets [phase3-P3-6]:
   # build_t1.zig's build runner in rzig's cache, under the fresh HOME
@@ -338,24 +371,31 @@ else
   zig_bin="$ZIG"
   zig_env=(ZIG_BIN="$zig_bin" ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR")
 fi
+# The toolchain pass passes no zig variable (open point G): rzig finds
+# TC/zig's zig (find_zig: <rzig dir>/zig/zig after ZIG_BIN), and zig keeps
+# its cache where a new user's is, under the fresh HOME (unix
+# $home/.cache/zig; Windows LOCALAPPDATA, $home/zig), never env.sh's,
+# which is keyed to the build's zig (the 2026-10-04 cache mix).
+[ "$pass" = build ] || zig_env=()
 test -x "$R_BIN" || { echo "error: $R_BIN missing from the extracted base" >&2; exit 1; }
 
-# minimal (the wheel profile) has no cairo/png by design — assert that
-# instead, so a graphics stack creeping back in fails here too.
-if [ "$VARIANT" = minimal ]; then
-  CHECK_CAPS='stopifnot(!capabilities("cairo"), !capabilities("png"), !capabilities("ICU"))'
-else
-  CHECK_CAPS='stopifnot(capabilities("cairo"), capabilities("png"))'
-fi
-# tcltk (unix full): Tcl starts with the script library the tree ships,
-# not the build env's that the vendored libtcl names, and `clock`, which
-# needs the msgcat module, works. Under env -i there is no DISPLAY, so Tk
-# stays down (a warning) and only Tcl is tested. (Windows: verify-tree.sh
-# checks R_HOME/Tcl's files, hermetic-check.sh loads tcltk from it with an
-# empty environment, and check's tcltk examples use it.)
-CHECK_TCLTK=""
-if [ "$OS" != windows ]; then
-  CHECK_TCLTK="
+if [ "$pass" = toolchain ]; then
+  # minimal (the wheel profile) has no cairo/png by design — assert that
+  # instead, so a graphics stack creeping back in fails here too.
+  if [ "$VARIANT" = minimal ]; then
+    CHECK_CAPS='stopifnot(!capabilities("cairo"), !capabilities("png"), !capabilities("ICU"))'
+  else
+    CHECK_CAPS='stopifnot(capabilities("cairo"), capabilities("png"))'
+  fi
+  # tcltk (unix full): Tcl starts with the script library the tree ships,
+  # not the build env's that the vendored libtcl names, and `clock`, which
+  # needs the msgcat module, works. Under env -i there is no DISPLAY, so Tk
+  # stays down (a warning) and only Tcl is tested. (Windows: verify-tree.sh
+  # checks R_HOME/Tcl's files, hermetic-check.sh loads tcltk from it with an
+  # empty environment, and check's tcltk examples use it.)
+  CHECK_TCLTK=""
+  if [ "$OS" != windows ]; then
+    CHECK_TCLTK="
 if (capabilities('tcltk')) {
   suppressWarnings(library(tcltk))
   lib <- normalizePath(tcltk::tclvalue(tcltk::.Tcl('info library')))
@@ -363,31 +403,31 @@ if (capabilities('tcltk')) {
             tcltk::tclvalue(tcltk::.Tcl('clock format 0 -gmt 1 -format %Y')) == '1970')
   cat('tcltk OK:', lib, '\n')
 }"
-fi
-CHECK_R="
+  fi
+  CHECK_R="
 stopifnot(max(abs(solve(matrix(c(2,0,0,2),2,2)) - matrix(c(.5,0,0,.5),2,2))) < 1e-9)
 $CHECK_CAPS
 $CHECK_TCLTK
 cat('bundle OK\n')
 "
-if [ "$OS" = windows ]; then
-  "$R_BIN" --vanilla -e "$CHECK_R"
-else
-  env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" --vanilla --no-echo -e "$CHECK_R"
-fi
-echo "== standalone base verified relocatable ($OS/$FLAVOR)"
+  if [ "$OS" = windows ]; then
+    "$R_BIN" --vanilla -e "$CHECK_R"
+  else
+    env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" --vanilla --no-echo -e "$CHECK_R"
+  fi
+  echo "== standalone base verified relocatable ($OS/$FLAVOR)"
 
-# The build tools first on PATH at run time (B25, C27), with the base
-# alone, where the directory does not exist yet (harmless: the host's make,
-# if any, comes next). unix: etc/Renviron's line, which R reads at start
-# and bin/Rcmd sources (patch 0008), so PATH starts with
-# <R_HOME>/bin/toolchain/usr/bin in R and under R CMD. Windows: under R
-# CMD, Rcmd_environ's line, whose default R's reader expands only as a
-# whole ${...} term (hence R_ZIG_TOOLS_PATH): the entry after bin\x64,
-# which R CMD puts first, is the expanded path, with no ${ left, or
-# R_CUSTOM_TOOLS_PATH's value when that is set (R's installer line).
-if [ "$OS" = windows ]; then
-  cat > "$VERIFY_DIR/path.R" <<'RCODE'
+  # The build tools first on PATH at run time (B25, C27), with the base
+  # alone, where the directory does not exist yet (harmless: the host's make,
+  # if any, comes next). unix: etc/Renviron's line, which R reads at start
+  # and bin/Rcmd sources (patch 0008), so PATH starts with
+  # <R_HOME>/bin/toolchain/usr/bin in R and under R CMD. Windows: under R
+  # CMD, Rcmd_environ's line, whose default R's reader expands only as a
+  # whole ${...} term (hence R_ZIG_TOOLS_PATH): the entry after bin\x64,
+  # which R CMD puts first, is the expanded path, with no ${ left, or
+  # R_CUSTOM_TOOLS_PATH's value when that is set (R's installer line).
+  if [ "$OS" = windows ]; then
+    cat > "$VERIFY_DIR/path.R" <<'RCODE'
 p <- strsplit(Sys.getenv("PATH"), ";", fixed = TRUE)[[1L]]
 slash <- function(x) tolower(chartr("\\", "/", x))
 i <- match(TRUE, endsWith(slash(p), "/bin/x64"))
@@ -398,170 +438,173 @@ if (grepl("${", got, fixed = TRUE) || slash(got) != slash(want))
     stop("the PATH entry after bin/x64 is '", got, "', not '", want, "'; PATH: ", Sys.getenv("PATH"))
 cat("the PATH entry after bin/x64:", got, "\n")
 RCODE
-  for custom in "" "C:/r-zig-custom-tools"; do
-    custom_env=()
-    [ -z "$custom" ] || custom_env=(R_CUSTOM_TOOLS_PATH="$custom")
-    (cd "$VERIFY_DIR" && env -i "${base_env[@]}" "${custom_env[@]}" PATH="$R_BINDIR:$sys32" \
-      "$R_EXE" CMD Rscript.exe --vanilla path.R) ||
-      { echo "error: under R CMD, the PATH entry after bin\\x64 is not ${custom:-R_HOME/bin/toolchain/usr/bin, expanded} (etc/Rcmd_environ, B25)" >&2; exit 1; }
-  done
-  echo "== R CMD's PATH: bin\\x64, then R_HOME/bin/toolchain/usr/bin (or R_CUSTOM_TOOLS_PATH)"
-else
-  tools_dir="$(cd "$RHD" && pwd -P)/bin/toolchain/usr/bin"
-  in_r="$(env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" --vanilla --no-echo -e 'cat(Sys.getenv("PATH"))')"
-  in_cmd="$(env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" CMD sh -c 'echo "$PATH"')"
-  for p in "R:$in_r" "R CMD:$in_cmd"; do
-    case "${p#*:}" in
-      "$tools_dir:"*) ;;
-      *) echo "error: PATH in ${p%%:*} is ${p#*:}, which does not start with $tools_dir (etc/Renviron, B25)" >&2; exit 1 ;;
-    esac
-  done
-  echo "== PATH in R and under R CMD starts with R_HOME/bin/toolchain/usr/bin"
-fi
-
-# rzig's check mode with no group (B26, B35), the texts the install
-# preflight and R CMD config show: exit 127 for the compilers (no
-# ZIG_BIN, no zig/ in the toolchain, none in the tree's bin or on PATH)
-# and for the build tools (no make on PATH: unix the tree's bin, Windows
-# bin\x64 and System32), as a compile that finds no zig, after a line
-# saying what is missing and the group's text. A zig of the host's own in
-# /usr/bin or /bin, or a python3 there with ziglang, is one rzig rightly
-# finds: the compilers' check is then skipped with a note.
-if [ "$OS" = windows ]; then
-  zig_path="$R_BINDIR:$sys32"; make_path="$R_BINDIR:$sys32"
-else
-  zig_path=/usr/bin:/bin; make_path="$BUNDLE_DIR/bin"
-fi
-host_zig=""
-if [ "$OS" != windows ]; then
-  for z in /usr/bin/zig /bin/zig /usr/bin/x86_64-w64-mingw32-zig /bin/x86_64-w64-mingw32-zig; do
-    if [ -x "$z" ]; then host_zig="$z"; fi
-  done
-  if [ -z "$host_zig" ] && env -i "${base_env[@]}" PATH=/usr/bin:/bin python3 -c 'import ziglang' > /dev/null 2>&1; then
-    host_zig="python3 -m ziglang"
-  fi
-fi
-checked=""
-for chk in --rzig-check --rzig-check=build-tools; do
-  if [ "$chk" = --rzig-check ]; then
-    p="$zig_path"; what="$no_zig_line"; group_head="$compilers_head"
+    for custom in "" "C:/r-zig-custom-tools"; do
+      custom_env=()
+      [ -z "$custom" ] || custom_env=(R_CUSTOM_TOOLS_PATH="$custom")
+      (cd "$VERIFY_DIR" && env -i "${base_env[@]}" "${custom_env[@]}" PATH="$R_BINDIR:$sys32" \
+        "$R_EXE" CMD Rscript.exe --vanilla path.R) ||
+        { echo "error: under R CMD, the PATH entry after bin\\x64 is not ${custom:-R_HOME/bin/toolchain/usr/bin, expanded} (etc/Rcmd_environ, B25)" >&2; exit 1; }
+    done
+    echo "== R CMD's PATH: bin\\x64, then R_HOME/bin/toolchain/usr/bin (or R_CUSTOM_TOOLS_PATH)"
   else
-    p="$make_path"; what="$no_make_line"; group_head="$build_tools_head"
+    tools_dir="$(cd "$RHD" && pwd -P)/bin/toolchain/usr/bin"
+    in_r="$(env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" --vanilla --no-echo -e 'cat(Sys.getenv("PATH"))')"
+    in_cmd="$(env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" CMD sh -c 'echo "$PATH"')"
+    for p in "R:$in_r" "R CMD:$in_cmd"; do
+      case "${p#*:}" in
+        "$tools_dir:"*) ;;
+        *) echo "error: PATH in ${p%%:*} is ${p#*:}, which does not start with $tools_dir (etc/Renviron, B25)" >&2; exit 1 ;;
+      esac
+    done
+    echo "== PATH in R and under R CMD starts with R_HOME/bin/toolchain/usr/bin"
   fi
-  if [ "$chk" = --rzig-check ] && [ -n "$host_zig" ]; then
-    echo "   note: ${cc##*/} $chk skipped: this host's $host_zig is on PATH=$p"
-    continue
-  fi
-  rc=0
-  env -i "${base_env[@]}" PATH="$p" "$cc" "$chk" > "$VERIFY_DIR/check.log" 2>&1 || rc=$?
-  if [ "$rc" != 127 ] || ! starts_line "$VERIFY_DIR/check.log" "$what" ||
-     ! starts_line "$VERIFY_DIR/check.log" "$group_head"; then
-    cat "$VERIFY_DIR/check.log" >&2
-    echo "error: ${cc##*/} $chk with the base alone (PATH=$p): exit $rc, not 127 with '$what' and '$group_head...'" >&2
-    exit 1
-  fi
-  checked="$checked $chk"
-done
-[ -z "$checked" ] || echo "== check mode with the base alone: ${cc##*/}$checked exit 127, each with what is missing and its group's text"
 
-# R CMD SHLIB with the base alone (feat-shlib-rzig-build Cg5, Cg13): R
-# asks rzig build first (patch 0013's one hook), which stops with the
-# compilers' text, the text pkgbuild's check_build_tools(debug = TRUE)
-# shows for its probe, and builds nothing; with a Makevars rule as well,
-# both groups' texts in one stop, the compilers' first, then rzig's
-# reason and the build tools'. No zig and no make: unix the tree's bin
-# alone on PATH, Windows bin\x64 and System32 (no ZIG_BIN either way).
-s1="$VERIFY_DIR/shlib-base"
-mkdir -p "$s1/probe" "$s1/rule"
-printf 'void foo(int *bar) { *bar = 1; }\n' > "$s1/probe/foo.c"
-printf 'void x(int *n) { *n = 1; }\n' > "$s1/rule/x.c"
-printf '%s\n' 'all: $(SHLIB) extra' 'extra:' '	@echo extra' > "$s1/rule/Makevars"
-if [ "$OS" = windows ]; then s1_r="$R_EXE"; s1_path="$R_BINDIR:$sys32"; else s1_r="$R_BIN"; s1_path="$BUNDLE_DIR/bin"; fi
-for d in probe rule; do
-  rc=0; why=""; bt=""
-  src=foo.c; [ "$d" = probe ] || src=x.c
-  (cd "$s1/$d" && env -i "${base_env[@]}" PATH="$s1_path" "$s1_r" CMD SHLIB "$src") > "$s1/$d.log" 2>&1 || rc=$?
-  comp="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "$compilers_head" | cut -d: -f1 || true)"
-  bad=""
-  [ "$rc" != 0 ] && [ -n "$comp" ] || bad=1
-  [ -z "$(cd "$s1/$d" && ls ./*.o ./*."$SO" 2> /dev/null)" ] || bad=1
-  if [ "$d" = rule ]; then
-    why="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "x.$SO needs make: Makevars has a rule or target line" | cut -d: -f1 || true)"
-    bt="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "$build_tools_head" | cut -d: -f1 || true)"
-    { [ -n "$why" ] && [ -n "$bt" ] && [ -n "$comp" ] && [ "$comp" -lt "$why" ] && [ "$why" -lt "$bt" ]; } || bad=1
+  # rzig's check mode with no group (B26, B35), the texts the install
+  # preflight and R CMD config show: exit 127 for the compilers (no
+  # ZIG_BIN, no zig/ in the toolchain, none in the tree's bin or on PATH)
+  # and for the build tools (no make on PATH: unix the tree's bin, Windows
+  # bin\x64 and System32), as a compile that finds no zig, after a line
+  # saying what is missing and the group's text. A zig of the host's own in
+  # /usr/bin or /bin, or a python3 there with ziglang, is one rzig rightly
+  # finds: the compilers' check is then skipped with a note.
+  if [ "$OS" = windows ]; then
+    zig_path="$R_BINDIR:$sys32"; make_path="$R_BINDIR:$sys32"
+  else
+    zig_path=/usr/bin:/bin; make_path="$BUNDLE_DIR/bin"
   fi
-  if [ -n "$bad" ]; then
-    cat "$s1/$d.log" >&2
-    want="the compilers' text"
-    [ "$d" = probe ] || want="the compilers' text, rzig's reason and the build tools' text, in that order"
-    echo "error: R CMD SHLIB $src with the base alone (PATH=$s1_path): exit $rc, or not $want, or something built" >&2
-    exit 1
+  host_zig=""
+  if [ "$OS" != windows ]; then
+    for z in /usr/bin/zig /bin/zig /usr/bin/x86_64-w64-mingw32-zig /bin/x86_64-w64-mingw32-zig; do
+      if [ -x "$z" ]; then host_zig="$z"; fi
+    done
+    if [ -z "$host_zig" ] && env -i "${base_env[@]}" PATH=/usr/bin:/bin python3 -c 'import ziglang' > /dev/null 2>&1; then
+      host_zig="python3 -m ziglang"
+    fi
   fi
-done
-echo "== R CMD SHLIB with the base alone: stops with the compilers' text, nothing built; with a Makevars rule, the compilers' text, rzig's reason and the build tools' text, in that order"
-
-# TLS trust (unix): the bundle must verify HTTPS without the build env's
-# trust anchors. conda-forge's libcurl/OpenSSL carry $CONDA/ssl compiled
-# in, which exists on this machine only, so "HTTPS works here" proves
-# nothing on its own. scripts/tls-check.R (shared with wheel-test.sh)
-# checks the wiring and makes real requests; here, where strace can
-# trace, the requests must also read no CA file from the build env. The
-# trace only counts when the requests ran: curl opens its CA file after
-# connecting, so an offline run would pass it vacuously. Windows uses
-# Schannel (the Windows store) and needs none of this.
-if [ "$OS" != windows ]; then
-  tls_r="$(cd "$(dirname "$0")" && pwd)/tls-check.R"
-  tls_out="$VERIFY_DIR/tls-check.out"
-  run_tls() {
-    env -i "${base_env[@]}" PATH=/usr/bin:/bin \
-      "$@" "$R_BIN" --vanilla --no-echo -f "$tls_r"
-  }
-  build_env="${CONDA_PREFIX:-}"
-  strace_bin=""
-  if [ "$OS" = linux ] && [ -n "$build_env" ]; then
-    # `?`: skip syscalls this architecture lacks (aarch64 has no open(2)).
-    # Preflight: where ptrace is blocked (containers, Yama) the trace is
-    # skipped locally rather than failing a good bundle (cannot_check).
-    if ! command -v strace > /dev/null 2>&1; then
-      cannot_check "strace unavailable; build-env CA check skipped"
-    elif strace -f -qq -e 'trace=?openat,?open' -o /dev/null /bin/true 2> /dev/null; then
-      strace_bin="$(command -v strace)"
+  checked=""
+  for chk in --rzig-check --rzig-check=build-tools; do
+    if [ "$chk" = --rzig-check ]; then
+      p="$zig_path"; what="$no_zig_line"; group_head="$compilers_head"
     else
-      cannot_check "strace cannot trace here; build-env CA check skipped"
+      p="$make_path"; what="$no_make_line"; group_head="$build_tools_head"
     fi
-  fi
-  if [ -n "$strace_bin" ]; then
-    trace="$VERIFY_DIR/tls-trace.txt"
-    run_tls "$strace_bin" -f -qq -e 'trace=?openat,?open' -o "$trace" | tee "$tls_out"
-  else
-    run_tls | tee "$tls_out"
-  fi
-  if grep -q '^TLS: requests OK' "$tls_out"; then
-    if [ -n "$strace_bin" ]; then
-      opened="$(grep -oE "\"$build_env/[^\"]*\"" "$trace" | tr -d '"' | sort -u || true)"
-      opened_ca="$(printf '%s\n' "$opened" | grep -E 'cacert|ca-bundle|cert\.pem|/certs(/|$)' || true)"
-      if [ -n "$opened_ca" ]; then
-        echo "error: HTTPS read trust anchors from the build env:" >&2
-        printf '  %s\n' $opened_ca >&2
-        exit 1
-      fi
-      other="$(printf '%s\n' "$opened" | grep -v '^$' | tr '\n' ' ' || true)"
-      [ -z "$other" ] || echo "   note: still opened from the build env (missing elsewhere, harmless): $other"
+    if [ "$chk" = --rzig-check ] && [ -n "$host_zig" ]; then
+      echo "   note: ${cc##*/} $chk skipped: this host's $host_zig is on PATH=$p"
+      continue
     fi
-    echo "== TLS trust verified${strace_bin:+ (no CA file read from the build env)}"
-  else
-    echo "== TLS trust: wiring checked; requests skipped (offline)"
-  fi
-fi
+    rc=0
+    env -i "${base_env[@]}" PATH="$p" "$cc" "$chk" > "$VERIFY_DIR/check.log" 2>&1 || rc=$?
+    if [ "$rc" != 127 ] || ! starts_line "$VERIFY_DIR/check.log" "$what" ||
+       ! starts_line "$VERIFY_DIR/check.log" "$group_head"; then
+      cat "$VERIFY_DIR/check.log" >&2
+      echo "error: ${cc##*/} $chk with the base alone (PATH=$p): exit $rc, not 127 with '$what' and '$group_head...'" >&2
+      exit 1
+    fi
+    checked="$checked $chk"
+  done
+  [ -z "$checked" ] || echo "== check mode with the base alone: ${cc##*/}$checked exit 127, each with what is missing and its group's text"
 
-# hermetic-check.sh's tier 0/1 on the extracted base (R_INSTALL_PREFIX
-# makes it env.sh's prefix): R-only packages one at a time and with
-# Ncpus = 2, a binary package, the install preflight stopping a compiled
-# package with rzig's compilers text, unix R CMD config CC with the
-# build tools' text, Windows tcltk from R_HOME/Tcl, no temp leftovers,
-# linux under strace. It works on a copy of the base as extracted, rzig
-# included (B26).
-R_INSTALL_PREFIX="$BUNDLE_DIR" bash "$(dirname "$0")/hermetic-check.sh"
+  # R CMD SHLIB with the base alone (feat-shlib-rzig-build Cg5, Cg13): R
+  # asks rzig build first (patch 0013's one hook), which stops with the
+  # compilers' text, the text pkgbuild's check_build_tools(debug = TRUE)
+  # shows for its probe, and builds nothing; with a Makevars rule as well,
+  # both groups' texts in one stop, the compilers' first, then rzig's
+  # reason and the build tools'. No zig and no make: unix the tree's bin
+  # alone on PATH, Windows bin\x64 and System32 (no ZIG_BIN either way).
+  s1="$VERIFY_DIR/shlib-base"
+  mkdir -p "$s1/probe" "$s1/rule"
+  printf 'void foo(int *bar) { *bar = 1; }\n' > "$s1/probe/foo.c"
+  printf 'void x(int *n) { *n = 1; }\n' > "$s1/rule/x.c"
+  printf '%s\n' 'all: $(SHLIB) extra' 'extra:' '	@echo extra' > "$s1/rule/Makevars"
+  if [ "$OS" = windows ]; then s1_r="$R_EXE"; s1_path="$R_BINDIR:$sys32"; else s1_r="$R_BIN"; s1_path="$BUNDLE_DIR/bin"; fi
+  for d in probe rule; do
+    rc=0; why=""; bt=""
+    src=foo.c; [ "$d" = probe ] || src=x.c
+    (cd "$s1/$d" && env -i "${base_env[@]}" PATH="$s1_path" "$s1_r" CMD SHLIB "$src") > "$s1/$d.log" 2>&1 || rc=$?
+    comp="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "$compilers_head" | cut -d: -f1 || true)"
+    bad=""
+    [ "$rc" != 0 ] && [ -n "$comp" ] || bad=1
+    [ -z "$(cd "$s1/$d" && ls ./*.o ./*."$SO" 2> /dev/null)" ] || bad=1
+    if [ "$d" = rule ]; then
+      why="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "x.$SO needs make: Makevars has a rule or target line" | cut -d: -f1 || true)"
+      bt="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "$build_tools_head" | cut -d: -f1 || true)"
+      { [ -n "$why" ] && [ -n "$bt" ] && [ -n "$comp" ] && [ "$comp" -lt "$why" ] && [ "$why" -lt "$bt" ]; } || bad=1
+    fi
+    if [ -n "$bad" ]; then
+      cat "$s1/$d.log" >&2
+      want="the compilers' text"
+      [ "$d" = probe ] || want="the compilers' text, rzig's reason and the build tools' text, in that order"
+      echo "error: R CMD SHLIB $src with the base alone (PATH=$s1_path): exit $rc, or not $want, or something built" >&2
+      exit 1
+    fi
+  done
+  echo "== R CMD SHLIB with the base alone: stops with the compilers' text, nothing built; with a Makevars rule, the compilers' text, rzig's reason and the build tools' text, in that order"
+
+  # TLS trust (unix): the bundle must verify HTTPS without the build env's
+  # trust anchors. conda-forge's libcurl/OpenSSL carry $CONDA/ssl compiled
+  # in, which exists on this machine only, so "HTTPS works here" proves
+  # nothing on its own. scripts/tls-check.R (shared with wheel-test.sh)
+  # checks the wiring and makes real requests; here, where strace can
+  # trace, the requests must also read no CA file from the build env. The
+  # trace only counts when the requests ran: curl opens its CA file after
+  # connecting, so an offline run would pass it vacuously. Windows uses
+  # Schannel (the Windows store) and needs none of this.
+  if [ "$OS" != windows ]; then
+    tls_r="$(cd "$(dirname "$0")" && pwd)/tls-check.R"
+    tls_out="$VERIFY_DIR/tls-check.out"
+    run_tls() {
+      env -i "${base_env[@]}" PATH=/usr/bin:/bin \
+        "$@" "$R_BIN" --vanilla --no-echo -f "$tls_r"
+    }
+    build_env="${CONDA_PREFIX:-}"
+    strace_bin=""
+    if [ "$OS" = linux ] && [ -n "$build_env" ]; then
+      # `?`: skip syscalls this architecture lacks (aarch64 has no open(2)).
+      # Preflight: where ptrace is blocked (containers, Yama) the trace is
+      # skipped locally rather than failing a good bundle (cannot_check).
+      if ! command -v strace > /dev/null 2>&1; then
+        cannot_check "strace unavailable; build-env CA check skipped"
+      elif strace -f -qq -e 'trace=?openat,?open' -o /dev/null /bin/true 2> /dev/null; then
+        strace_bin="$(command -v strace)"
+      else
+        cannot_check "strace cannot trace here; build-env CA check skipped"
+      fi
+    fi
+    if [ -n "$strace_bin" ]; then
+      trace="$VERIFY_DIR/tls-trace.txt"
+      run_tls "$strace_bin" -f -qq -e 'trace=?openat,?open' -o "$trace" | tee "$tls_out"
+    else
+      run_tls | tee "$tls_out"
+    fi
+    if grep -q '^TLS: requests OK' "$tls_out"; then
+      if [ -n "$strace_bin" ]; then
+        opened="$(grep -oE "\"$build_env/[^\"]*\"" "$trace" | tr -d '"' | sort -u || true)"
+        opened_ca="$(printf '%s\n' "$opened" | grep -E 'cacert|ca-bundle|cert\.pem|/certs(/|$)' || true)"
+        if [ -n "$opened_ca" ]; then
+          echo "error: HTTPS read trust anchors from the build env:" >&2
+          printf '  %s\n' $opened_ca >&2
+          exit 1
+        fi
+        other="$(printf '%s\n' "$opened" | grep -v '^$' | tr '\n' ' ' || true)"
+        [ -z "$other" ] || echo "   note: still opened from the build env (missing elsewhere, harmless): $other"
+      fi
+      echo "== TLS trust verified${strace_bin:+ (no CA file read from the build env)}"
+    else
+      echo "== TLS trust: wiring checked; requests skipped (offline)"
+    fi
+  fi
+
+  # hermetic-check.sh's tier 0/1 on the extracted base (R_INSTALL_PREFIX
+  # makes it env.sh's prefix): R-only packages one at a time and with
+  # Ncpus = 2, a binary package, the install preflight stopping a compiled
+  # package with rzig's compilers text, unix R CMD config CC with the
+  # build tools' text, Windows tcltk from R_HOME/Tcl, no temp leftovers,
+  # linux under strace. It works on a copy of the base as extracted, rzig
+  # included (B26).
+  R_INSTALL_PREFIX="$BUNDLE_DIR" bash "$(dirname "$0")/hermetic-check.sh"
+else
+  echo "   note: scenario 1 (the base alone) runs in the toolchain pass only: it passes no zig (PHASE5 open point S)"
+fi
 
 # --- Scenario 2: base + compilers -------------------------------------------
 extract "${archives[1]}" "$lists/compilers"
@@ -571,23 +614,49 @@ echo "== scenario 2: base + compilers"
 fc_dir="$(dirname "$(command -v flang 2>/dev/null || echo /nonexistent/flang)")"
 mk="$RHD/etc/Makeconf"
 [ "$OS" != windows ] || mk="$RHD/etc/x64/Makeconf"
+# The PATH of the check mode and of the compiles below that need nothing
+# but the compilers: unix /usr/bin:/bin, Windows bin\x64 and System32.
+if [ "$OS" = windows ]; then chk_path="$R_BINDIR:$sys32"; else chk_path=/usr/bin:/bin; fi
 
-# rzig's check mode with the compilers there: zig from ZIG_BIN=$ZIG (phase
-# 5 puts one in the group), exit 0, and the line names it; zig-fc's, with
+# pass_zig, the zig the pass's compiles run and its assertions name: in
+# the toolchain pass the compilers group's, as rzig spells it (unix: its
+# own path with symlinks resolved, main.zig's selfExe, so macOS' /var is
+# /private/var; Windows: the long form, as the check line shows it, with
+# `/`: windows-latest's TEMP is an 8.3 path); in the build pass $ZIG.
+if [ "$pass" = build ]; then
+  pass_zig="$zig_bin"
+else
+  test -x "$TC/zig/zig$exe" ||
+    { echo "error: ${archives[1]##*/} has no zig/zig$exe: the compilers group holds zig since phase 5 (B4; pixi run toolchain, package-toolchain)" >&2; exit 1; }
+  if [ "$OS" = windows ]; then
+    pass_zig="$(cygpath -m -l "$TC")/zig/zig.exe"
+  else
+    pass_zig="$(cd "$TC/zig" && pwd -P)/zig"
+  fi
+fi
+# The build pass follows unless the build's zig is TC/zig's bytes (the
+# upstream legs: fetch-zig's zig, the same wheel): nothing more to test.
+# Decided here, while TC/zig/zig is in place (scenario 3 moves it aside
+# for a while) (Cc4).
+build_pass=""
+if [ "$pass" = toolchain ] && [ -n "$ZIG" ] && ! cmp -s "$ZIG" "$TC/zig/zig$exe"; then build_pass=1; fi
+
+# rzig's check mode with the compilers there: the pass's zig (TC/zig's,
+# or ZIG_BIN's in the build pass), exit 0, and the line names it (Windows:
+# with `/` only, check.zig's display; PHASE5 open point Q); zig-fc's, with
 # the env's flang on PATH, names that flang too.
-if [ -n "$ZIG" ]; then
-  if [ "$OS" = windows ]; then chk_path="$R_BINDIR:$sys32"; else chk_path=/usr/bin:/bin; fi
+if [ -n "$pass_zig" ]; then
   out="$(env -i "${base_env[@]}" "${zig_env[@]}" PATH="$chk_path" "$cc" --rzig-check | tr -d '\r')" ||
-    { echo "error: ${cc##*/} --rzig-check failed with ZIG_BIN=$zig_bin" >&2; exit 1; }
-  printf '%s\n' "$out" | grep -qiF -- " at $zig_bin" ||
-    { printf '%s\n' "$out" >&2; echo "error: ${cc##*/} --rzig-check does not name ZIG_BIN's zig, $zig_bin" >&2; exit 1; }
+    { echo "error: ${cc##*/} --rzig-check failed with zig from $pass_what" >&2; exit 1; }
+  printf '%s\n' "$out" | grep -qiF -- " at $pass_zig" ||
+    { printf '%s\n' "$out" >&2; echo "error: ${cc##*/} --rzig-check does not name the $pass pass's zig, $pass_zig" >&2; exit 1; }
   echo "   $out"
-  checked="zig from ZIG_BIN"
+  checked="zig from $pass_what"
   if [ -x "$fc_dir/flang" ]; then
     fc_shown="$fc_dir/flang"
     [ "$OS" != windows ] || fc_shown="$(cygpath -m "$fc_dir")/flang"
     out="$(env -i "${base_env[@]}" "${zig_env[@]}" PATH="$fc_dir:$chk_path" "$fc" --rzig-check | tr -d '\r')" ||
-      { echo "error: ${fc##*/} --rzig-check failed with ZIG_BIN=$zig_bin and $fc_dir on PATH" >&2; exit 1; }
+      { echo "error: ${fc##*/} --rzig-check failed with zig from $pass_what and $fc_dir on PATH" >&2; exit 1; }
     printf '%s\n' "$out" | grep -qiF -- "flang at $fc_shown" ||
       { printf '%s\n' "$out" >&2; echo "error: ${fc##*/} --rzig-check does not name the flang on PATH, $fc_shown" >&2; exit 1; }
     echo "   $out"
@@ -596,8 +665,77 @@ if [ -n "$ZIG" ]; then
   echo "== check mode with the compilers: exit 0, $checked"
 fi
 
+# The first C++ compile (PHASE5 open point G, (Cc11)): a shared library
+# from <iostream>, <string> and <vector>, by the bundle's C++ compiler
+# (unix zig-cxx, Windows g++.exe) with nothing but the compilers on PATH,
+# timed. In the toolchain pass zig's cache is a new user's, empty: the
+# time is what a user waits once (zig builds libc++ into its cache, with
+# its header warnings), the measurement TODO asks for; in the build pass
+# it is env.sh's, for comparison: warm only if an earlier task compiled
+# C++ there (contract, pkg-parity), which a fresh checkout's chain may
+# not have (omicron, phase 5 step 6). No shared C++ runtime: zig links
+# libc++ statically.
+if [ -n "$pass_zig" ]; then
+  cx="$VERIFY_DIR/first-cxx"
+  mkdir -p "$cx"
+  cat > "$cx/x.cpp" <<'CPP'
+#include <iostream>
+#include <string>
+#include <vector>
+extern "C" int rzig_len(const char *s)
+{
+    std::vector<std::string> v{std::string(s)};
+    if (v[0].empty()) std::cerr << "empty\n";
+    return (int) v[0].size();
+}
+CPP
+  if [ "$OS" = windows ]; then
+    cx_cc="$TC/g++.exe"; cx_flags=(-shared -o x.dll); cx_lib=x.dll
+  else
+    cx_cc="$TC/zig-cxx"; cx_flags=(-shared -fPIC -o x.so); cx_lib=x.so
+  fi
+  if [ "$pass" = build ]; then
+    cx_cache="$ZIG_GLOBAL_CACHE_DIR"; cx_which="env.sh's cache, for comparison"
+  elif [ "$OS" = windows ]; then
+    cx_cache="$home/zig"; cx_which="an empty cache, \$HOME's LOCALAPPDATA"
+  else
+    cx_cache="$home/.cache/zig"; cx_which="an empty cache, \$HOME/.cache/zig"
+  fi
+  t0=$SECONDS
+  (cd "$cx" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$chk_path" "$cx_cc" "${cx_flags[@]}" x.cpp) > "$cx/log" 2>&1 ||
+    { cat "$cx/log" >&2; echo "error: the bundle's ${cx_cc##*/} could not build a C++ shared library (zig from $pass_what)" >&2; exit 1; }
+  cx_s=$((SECONDS - t0))
+  test -d "$cx_cache" ||
+    { echo "error: after the first C++ compile, zig's cache is not at $cx_cache (a zig cache variable reached the $pass pass?)" >&2; exit 1; }
+  if [ "$OS" = windows ]; then
+    cx_dep="$(needed_of "$cx/$cx_lib" | grep -iE '^(libc\+\+|libstdc\+\+-6)\.dll$' || true)"
+  else
+    cx_dep="$(cxx_deps "$cx/$cx_lib")"
+  fi
+  [ -z "$cx_dep" ] || { echo "error: $cx_lib, the first C++ compile, needs a shared C++ runtime: $cx_dep" >&2; exit 1; }
+  # sizes from ls, not du: du counts blocks, which a compressing
+  # filesystem shrinks
+  cx_mb="$(find "$cx_cache" -type f -exec ls -ln {} + | awk '{ s += $5 } END { printf "%d", s / 1048576 }')"
+  cx_warn="$(grep -c 'warning:' "$cx/log" || true)"
+  echo "== the first C++ compile (the $pass pass, $cx_which): $cx_s s, zig's cache $cx_mb MB, $cx_warn warning lines; no shared C++ runtime"
+
+  # The zig the compilers run, every OS (Cg4): rzig takes ZIG_BIN only
+  # when it names a zig from the compile's own directory, and otherwise
+  # quietly looks further (TC/zig's, the tree's bin/, then PATH's), so the
+  # command's first word, after the ZIG_LIB_DIR= line rzig prints first
+  # where it gives conda-forge's zig the libc++ mirror (every macOS env),
+  # must be the pass's zig. Windows: rzig joins TC/zig's as
+  # <TC>/zig\zig.exe, hence `\` to `/`, and NTFS ignores case (open
+  # point Q). A dry run: no zig runs.
+  rz="$(cd "$cx" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$chk_path" RZIG_PRINT_ARGV=1 "$cc" -c a.c |
+    tr -d '\r' | grep -v '^ZIG_LIB_DIR=' | sed -n 1p | tr '\\' /)" || true
+  printf '%s\n' "$rz" | grep -qixF -- "$pass_zig" ||
+    { echo "error: the bundle's ${cc##*/} runs '$rz', not the $pass pass's zig $pass_zig" >&2; exit 1; }
+  echo "== the bundle's compilers run the $pass pass's zig, $pass_zig"
+fi
+
 # The install preflight's other branches (B26, C26; feat-zig-pkg-build
-# M4): zig from ZIG_BIN=$ZIG, and no make (the build-tools group is not
+# M4): the pass's zig, and no make (the build-tools group is not
 # extracted yet) and no flang on PATH: unix the tree's bin alone, Windows
 # bin\x64 and System32 [phase3-P3-9]. The preflight (patch 0009, rzig's
 # --rzig-check=package) decides as `rzig build` decides in install.R's
@@ -619,7 +757,7 @@ fi
 # later, before the configure (that call needs make too), which the
 # marker alone could not.
 # None but pfC installs. (Scenario 3 runs the preflight with no zig.)
-if [ -n "$ZIG" ]; then
+if [ -n "$pass_zig" ]; then
   pf="$VERIFY_DIR/preflight"
   # the R that installs (R CMD INSTALL) and its PATH; the R that loads
   # pfC, with its PATH
@@ -708,8 +846,8 @@ check_minos() {
 # R CMD SHLIB with no make (feat-shlib-rzig-build), every OS: the
 # run-time compiles of Rcpp, cpp11, TMB, inline and knitr, and pkgbuild's
 # compiler probe, which R CMD SHLIB now builds through rzig build (patch
-# 0013's one hook in .shlib_internal; rzig build --shlib), with zig from
-# ZIG_BIN=$ZIG and the build tools not extracted: PATH unix the tree's bin
+# 0013's one hook in .shlib_internal; rzig build --shlib), with the
+# pass's zig and the build tools not extracted: PATH unix the tree's bin
 # alone, Windows bin\x64 and System32; for Fortran also a directory
 # holding the env's flang alone (Windows: copies of flang.exe,
 # flang-new.exe and their .cfg files, as pkg-parity's no-make install
@@ -729,7 +867,7 @@ check_minos() {
 # PATH" and the build tools' text, nothing built. Each library loads with
 # nothing but the tree on PATH; none leaves an object or a build root
 # (.rzig.*) beside its sources.
-if [ -n "$ZIG" ]; then
+if [ -n "$pass_zig" ]; then
   sn="$VERIFY_DIR/shlib-nomake"
   mkdir -p "$sn/fc"
   if [ "$OS" = windows ]; then
@@ -948,23 +1086,24 @@ fi
 # LLVM IR, whose target-cpu must be what the same zig gives with
 # -mcpu=baseline and no target: x86-64 on linux and Windows x86_64,
 # generic on linux aarch64, apple-m1 on macOS arm64, core2 on macOS
-# x86_64 (also under Rosetta). The same zig: env.sh's $ZIG, which the
-# compiler finds as env.sh did (ZIG_BIN, exported absolute, else PATH's:
-# the bundle has no toolchain zig/ and no zig in its bin/, which rzig
-# would try first).
+# x86_64 (also under Rosetta). The same zig: the pass's, which the
+# compiler runs (asserted above). All three compiles under one env -i
+# (Cc3): the build's shell exports env.sh's caches, keyed to the build's
+# zig, which TC/zig must never write into (the 2026-10-04 cache mix).
 # Once more with -mtune=native, which a Makevars may pass as a portable
 # tuning flag: zig would take it as the CPU, so rzig drops it (dropTune).
 # (verify-tree.sh checks R's own x86_64 binaries for AVX instructions.)
-if [ -n "$ZIG" ]; then
+if [ -n "$pass_zig" ]; then
   cpu_dir="$VERIFY_DIR/cpu"
   mkdir -p "$cpu_dir"
   printf '%s\n' 'double dot(const double *x, const double *y, int n)' \
     '{ double s = 0; for (int i = 0; i < n; i++) s += x[i] * y[i]; return s; }' > "$cpu_dir/cpu.c"
   # the distinct target-cpu values of an IR file, one line
   target_cpu() { { grep -o '"target-cpu"="[^"]*"' "$1" || true; } | sed 's/^"target-cpu"=//' | sort -u | tr '\n' ' ' | sed 's/ $//'; }
-  (cd "$cpu_dir" && "$ZIG" cc -mcpu=baseline -O2 -S -emit-llvm cpu.c -o want.ll &&
-    "$cc" -O2 -S -emit-llvm cpu.c -o got.ll &&
-    "$cc" -O2 -mtune=native -S -emit-llvm cpu.c -o tune.ll) > "$cpu_dir/log" 2>&1 ||
+  cpu_env=(env -i "${base_env[@]}" "${zig_env[@]}" PATH="$chk_path")
+  (cd "$cpu_dir" && "${cpu_env[@]}" "$pass_zig" cc -mcpu=baseline -O2 -S -emit-llvm cpu.c -o want.ll &&
+    "${cpu_env[@]}" "$cc" -O2 -S -emit-llvm cpu.c -o got.ll &&
+    "${cpu_env[@]}" "$cc" -O2 -mtune=native -S -emit-llvm cpu.c -o tune.ll) > "$cpu_dir/log" 2>&1 ||
     { cat "$cpu_dir/log" >&2; echo "error: compiling a C file to LLVM IR (zig cc -mcpu=baseline, or the bundle's ${cc##*/}) failed" >&2; exit 1; }
   want="$(target_cpu "$cpu_dir/want.ll")"; got="$(target_cpu "$cpu_dir/got.ll")"; tune="$(target_cpu "$cpu_dir/tune.ll")"
   if [ -z "$want" ] || [ "$got" != "$want" ]; then
@@ -1031,8 +1170,8 @@ if [ "$OS" = windows ]; then
   # libomp.dll, which then loads from the base's bin\x64 in an R whose
   # environment holds only what Windows needs and whose PATH is bin\x64
   # and System32 (hermetic-check.sh's scenario). Nothing else on PATH:
-  # zig from ZIG_BIN, CONDA_PREFIX the poisoned decoy.
-  if [ -n "$ZIG" ] && grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
+  # the pass's zig, CONDA_PREFIX the poisoned decoy.
+  if [ -n "$pass_zig" ] && grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
     od="$VERIFY_DIR/omp-direct"
     mkdir -p "$od"
     printf '%s\n' '#include <omp.h>' '__declspec(dllexport) void ompd(int *n) { *n = omp_get_max_threads(); }' > "$od/ompd.c"
@@ -1047,6 +1186,34 @@ if [ "$OS" = windows ]; then
       { echo "error: ompd.dll did not load with PATH = bin\\x64 + System32" >&2; exit 1; }
     echo "== an OpenMP DLL from gcc.exe alone: omp.h and libomp.lib from the compilers group, libomp.dll from bin\\x64 at load"
   fi
+
+  # -lsynchronization (D6): Rust's std links WaitOnAddress and
+  # WakeByAddress* from it, and upstream zig has no import library of that
+  # name; rzig links the API set's, which both zigs have (windows.zig). A
+  # package (mkpkg's shape) whose src/sync.c calls WakeByAddressSingle and
+  # whose Makevars.win is PKG_LIBS = -lsynchronization alone (no rule, so
+  # rzig build's tier 1, no make), installed and loaded with PATH = bin\x64
+  # and System32; in both passes, so each zig links it.
+  if [ -n "$pass_zig" ]; then
+    sy="$VERIFY_DIR/syncw"
+    mkpkg "$sy/pk" syncw 0
+    rm "$sy/pk/syncw/src/val.c"
+    printf '%s\n' '#include <windows.h>' 'int syncw_val(void) { LONG x = 8; WakeByAddressSingle(&x); return (int) x; }' > "$sy/pk/syncw/src/sync.c"
+    printf '%s\n' 'PKG_LIBS = -lsynchronization' > "$sy/pk/syncw/src/Makevars.win"
+    mkdir -p "$sy/lib"
+    (cd "$sy" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$R_BINDIR:$sys32" RZIG_TRACE=1 \
+      "$R_EXE" CMD INSTALL -l lib pk/syncw) > "$sy/install.log" 2>&1 ||
+      { cat "$sy/install.log" >&2; echo "error: syncw (PKG_LIBS = -lsynchronization) did not install with the compilers and no make (zig from $pass_what)" >&2; exit 1; }
+    starts_line "$sy/install.log" "rzig build: tier 1" ||
+      { cat "$sy/install.log" >&2; echo "error: syncw did not build through rzig build (no 'rzig build: tier 1' line)" >&2; exit 1; }
+    sy_dll="$(find "$sy/lib/syncw/libs" -name syncw.dll | head -1)"
+    needed_of "$sy_dll" | grep -qix 'api-ms-win-core-synch-l1-2-0\.dll' ||
+      { needed_of "$sy_dll" >&2; echo "error: syncw.dll does not import api-ms-win-core-synch-l1-2-0.dll (-lsynchronization)" >&2; exit 1; }
+    (cd "$sy" && env -i "${base_env[@]}" PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla \
+      -e 'stopifnot(getExportedValue(loadNamespace("syncw", lib.loc = "lib"), "f")() == 8L)') ||
+      { echo "error: syncw (-lsynchronization) did not load with PATH = bin\\x64 + System32" >&2; exit 1; }
+    echo "== -lsynchronization: syncw builds through rzig build (tier 1, zig from $pass_what), imports the API set and loads with PATH = bin\\x64 + System32"
+  fi
 fi
 
 # Packages compiled with the relocated tree (unix). A package compiled
@@ -1059,29 +1226,33 @@ fi
 # own binaries is relative is verify-tree.sh's. Skipped without zig, as on
 # a user machine.
 if [ "$OS" != windows ]; then
-  # What a compile needs under env -i, as on a user machine: zig through
-  # zig_env, make and flang from PATH, their own directories (the env's
-  # bin); flang's decides whether the Fortran checks run. Every env -i
-  # that compiles takes $pkg_path and zig_env. The env's make, not the
-  # build-tools group's, which is not extracted yet: PLAN.md's
-  # Verification has scenario 2 use the host's make from /usr/bin, and any
-  # make that is not the group's stands in for it (PHASE3 C17); the env's
-  # is on every machine this runs on, where a host may have none (CI's
-  # containers) or Apple's 3.81 (omicron). Scenario 3 checks the group's.
+  # What a compile needs under env -i, as on a user machine: the pass's
+  # zig (TC/zig's, or ZIG_BIN's through zig_env), make and flang from
+  # PATH, their own directories (the env's bin); flang's decides whether
+  # the Fortran checks run. Every env -i that compiles takes $pkg_path
+  # and zig_env. The env's make, not the build-tools group's, which is
+  # not extracted yet: PLAN.md's Verification has scenario 2 use the
+  # host's make from /usr/bin, and any make that is not the group's
+  # stands in for it (PHASE3 C17); the env's is on every machine this
+  # runs on, where a host may have none (CI's containers) or Apple's 3.81
+  # (omicron). Scenario 3 checks the group's.
   pkg_path="$(dirname "$(command -v make 2>/dev/null || echo /nonexistent/make)"):$fc_dir:/usr/bin:/bin"
-  if [ -n "$ZIG" ] && [ -x "$ZIG" ]; then
+  if [ -n "$pass_zig" ] && [ -x "$pass_zig" ]; then
     pkg_dir="$VERIFY_DIR/shlib"
     mkdir -p "$pkg_dir"
-    # rzig takes ZIG_BIN only when it names a zig from the compile's own
-    # directory, and otherwise quietly looks further (the toolchain's zig/,
-    # the tree's bin/, then PATH's, the env's). env.sh makes
-    # $ZIG absolute; this checks that the compiles below do run it: the
-    # command's first word, after the ZIG_LIB_DIR= line rzig prints first
-    # where it gives conda-forge's zig the libc++ mirror (every macOS env).
+    # The compiles below run with $pkg_path, whose first entry is the
+    # env's bin, where conda-forge's zig is (every leg's default env, the
+    # upstream legs' too), so the toolchain pass's compiles have a zig on
+    # PATH that is not the pass's. The dry run above, under /usr/bin:/bin,
+    # cannot see that; this one, under $pkg_path, checks that the compiles
+    # below still run the pass's zig (find_zig's order: ZIG_BIN, then
+    # TC/zig, before PATH; B4): the command's first word, after the
+    # ZIG_LIB_DIR= line.
     rz="$(cd "$pkg_dir" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" RZIG_PRINT_ARGV=1 \
-      "$cc" -c a.c | grep -v '^ZIG_LIB_DIR=' | sed -n 1p)"
-    [ "$rz" = "$ZIG" ] || { echo "error: the bundle's zig-cc runs '$rz', not the build's zig $ZIG" >&2; exit 1; }
-    echo "== the bundle's compilers run the build's zig, $ZIG"
+      "$cc" -c a.c | grep -v '^ZIG_LIB_DIR=' | sed -n 1p)" || true
+    [ "$rz" = "$pass_zig" ] ||
+      { echo "error: with the env's bin on PATH (conda-forge's zig there), the bundle's ${cc##*/} runs '$rz', not the $pass pass's zig $pass_zig" >&2; exit 1; }
+    echo "== with the env's bin on PATH too, the bundle's compilers run the $pass pass's zig"
 
     # Each shape below is built twice: through R CMD SHLIB, which is make
     # here by R_ZIG_PKG_BUILDER=make, the make reference (R CMD SHLIB's
@@ -1463,7 +1634,7 @@ FORTRAN
       # (zig itself, and its lib dir, may live in the build env)
       argv="$(cd "$pkg_dir" && for a in "-fopenmp -c a.c" "-shared -fopenmp -o x.so a.o -lz" "-o conftest conftest.c -lz"; do
         env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" CONDA_PREFIX="$cpfx" RZIG_PRINT_ARGV=1 "$cc" $a; done |
-        grep -vxF -- "$ZIG" | grep -v '^ZIG_LIB_DIR=')"
+        grep -vxF -- "$pass_zig" | grep -v '^ZIG_LIB_DIR=')"
       if printf '%s\n' "$argv" | grep -F -- "$cpfx"; then
         echo "error: rzig's command lines name CONDA_PREFIX=$cpfx" >&2; exit 1
       fi
@@ -1572,7 +1743,7 @@ if [ "$OS" != windows ]; then
   # which make --version must say.
   make_version="$(awk '$1 == "package:" { p = $2 } p == "make" && $1 == "version:" { print $2; exit }' "$TC/usr/SOURCES")"
   [ -n "$make_version" ] || { echo "error: $TC/usr/SOURCES records no version for make" >&2; exit 1; }
-  if [ -n "$ZIG" ] && [ -x "$ZIG" ]; then
+  if [ -n "$pass_zig" ] && [ -x "$pass_zig" ]; then
     # On linux, where strace can trace, every make that ran is the
     # group's: no other make answered for it (cannot_check in CI).
     strace_bin=""
@@ -1611,7 +1782,8 @@ else
   # Windows. sh and make: the env's Library/usr/bin (m2-bash, m2-make)
   # until the group has its usr/bin (phase 7). Library/bin is not on PATH,
   # so none of the env's other tools (its binutils, zig, pkg-config) can
-  # stand in for what Makeconf.win names; zig comes from ZIG_BIN.
+  # stand in for what Makeconf.win names; zig is the pass's (TC/zig's, or
+  # ZIG_BIN's in the build pass).
   [ -n "${CONDA_PREFIX:-}" ] ||
     { echo "error: CONDA_PREFIX is not set: run this through pixi (scenario 3 takes sh and make from the env's Library/usr/bin until phase 7)" >&2; exit 1; }
   usr_bin="$(cygpath -u "$CONDA_PREFIX")/Library/usr/bin"
@@ -1725,7 +1897,7 @@ RCODE
   # r.rc -o r.o; $(OBJDUMP) -p on R.dll. (R CMD INSTALL --strip reads
   # R_STRIP_SHARED_LIB, not Makeconf's STRIP_SHARED_LIB, and R runs
   # DLLTOOL only through that rule: nothing else here would.)
-  if [ -n "$ZIG" ]; then
+  if [ -n "$pass_zig" ]; then
     tw="$VERIFY_DIR/tools"
     mkdir -p "$tw"
     printf '%s\n' 'int tools_sym(void) { return 7; }' > "$tw/t.c"
@@ -1779,7 +1951,7 @@ RCODE
   # openmp/lib/libomp.lib). Then they load in an R whose environment holds
   # only what Windows needs and whose PATH is bin\x64 and System32
   # (hermetic-check.sh's scenario), so libomp.dll comes from the base.
-  if [ -n "$ZIG" ] && grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
+  if [ -n "$pass_zig" ] && grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
     ow="$VERIFY_DIR/omp-win"
     mkdir -p "$ow/omp" "$ow/probe" "$ow/lomp"
     printf '%s\n' '#include <omp.h>' '#include <R.h>' 'void ompn(int *n) { *n = omp_get_max_threads(); }' > "$ow/omp/omp.c"
@@ -1873,7 +2045,7 @@ RCODE
     echo "== compiled packages verified: OpenMP with the groups ($pkgs: tier 1, each DLL imports libomp.dll, no import library or build root left, loads with PATH = bin\\x64 + System32; R CMD INSTALL, rzig build)"
   fi
 
-  if [ -n "$ZIG" ]; then
+  if [ -n "$pass_zig" ]; then
     (cd "$bt" && env -i "${base_env[@]}" "${zig_env[@]}" CONDA_PREFIX="$(cygpath -w "$decoy")" PATH="$bt_path" RZIG_TRACE=1 \
       "$RSCRIPT" --vanilla bt.R) > "$bt/bt.log" 2>&1 ||
       { cat "$bt/bt.log" >&2; echo "error: the packages ($bt_pkgs) did not build with the base and the groups (btA through rzig build, btLib and btRc through make)" >&2; exit 1; }
@@ -1942,8 +2114,7 @@ RCODE
 fi
 
 # The install preflight and R_ZIG_NO_PREFLIGHT (B26, C26), every OS: with
-# both groups and no zig (ZIG_BIN unset; the compilers group has none
-# until phase 5), a package with C code and a configure script stops in
+# both groups and no zig, a package with C code and a configure script stops in
 # the preflight with the compilers' text, its configure not run; with
 # R_ZIG_NO_PREFLIGHT=1 it gets past the preflight, its configure runs and
 # leaves its marker, and the compile then fails with rzig's no-zig line.
@@ -1952,10 +2123,19 @@ fi
 # build tools (patch 0010; on Windows the binutils too). PATH: unix
 # /usr/bin:/bin, the group's make first (etc/Renviron); Windows as for the
 # builds above. A zig of the host's own (scenario 1) would let the compile
-# through: then this is skipped with a note.
-if [ -n "$host_zig" ]; then
+# through: then this is skipped with a note. The compilers group brings
+# zig since phase 5: without its binary, rzig sees what a user with R and
+# the build tools only sees (find_zig tests only <rzig dir>/zig/zig). The
+# binary alone, out of R_HOME and back after (Cc8, PHASE5 open point E): a
+# rename of the 19.5k-file directory fails on NTFS while anything
+# (Defender) holds a handle under it. In the toolchain pass only: it passes
+# no zig, so the build pass would test the same thing (open point S).
+if [ "$pass" != toolchain ]; then
+  echo "   note: the preflight with no zig runs in the toolchain pass only: it passes no zig (PHASE5 open point S)"
+elif [ -n "$host_zig" ]; then
   echo "   note: the preflight and R_ZIG_NO_PREFLIGHT not checked: this host's $host_zig is on PATH"
 else
+  mv "$TC/zig/zig$exe" "$VERIFY_DIR/zig.aside"
   np="$VERIFY_DIR/nopre"
   mkpkg "$np/pk" nopre 5
   configure_marker "$np/pk/nopre"
@@ -1980,6 +2160,22 @@ else
       exit 1
     fi
   done
-  echo "== the install preflight with no zig: a package stops before its configure with the compilers' text; with R_ZIG_NO_PREFLIGHT=1 its configure runs and the compile fails with no zig"
+  mv "$VERIFY_DIR/zig.aside" "$TC/zig/zig$exe"
+  echo "== the install preflight with no zig (TC/zig/zig$exe moved aside): a package stops before its configure with the compilers' text; with R_ZIG_NO_PREFLIGHT=1 its configure runs and the compile fails with no zig"
 fi
-echo "== standalone archives verified ($OS/$FLAVOR): the base alone, + compilers, + build-tools"
+
+# The build pass (feat-standalone-toolchain phase 5, PHASE5 open point F):
+# the same archives with the build's zig, ZIG_BIN=$ZIG, so that
+# conda-forge's zig keeps its package coverage on the default legs. This
+# pass's directory goes first, so the two never take TMPDIR's space at
+# once, and the build pass's result is the script's: the log's last
+# "verified" line is the last pass that ran (Cc4).
+scenarios="the base alone, + compilers, + build-tools"
+[ "$pass" = toolchain ] || scenarios="+ compilers, + build-tools (the base alone in the toolchain pass)"
+echo "== standalone archives verified ($OS/$FLAVOR, the $pass pass: zig from $pass_what, $SECONDS s): $scenarios"
+if [ -n "$build_pass" ]; then
+  rm -rf "$VERIFY_DIR"; trap - EXIT
+  exec bash "$0" build
+elif [ "$pass" = toolchain ] && [ -n "$ZIG" ]; then
+  echo "   note: the build's zig is TC/zig's bytes ($ZIG): no build pass"
+fi

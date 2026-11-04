@@ -69,9 +69,10 @@ TOOLCHAIN_PREFIX="${R_TOOLCHAIN_PREFIX:-$ROOT/dist/toolchain/$TOP}"
 R_HOME_DIR="$PREFIX/$RH"
 # The toolchain groups (feat-standalone-toolchain B38) and the directories
 # under R_HOME/bin/toolchain each one holds (B20, B23, B24): compilers,
-# zig/ (phase 5), flang/ (phase 6) and openmp/; build-tools, usr/ and
-# Windows' binutils/. Only those that exist count: a group's archive
-# holds its directories that the toolchain tree has (package-standalone.sh).
+# zig/ (upstream zig, B4), flang/ (phase 6) and openmp/; build-tools,
+# usr/ and Windows' binutils/. Only those that exist count: a group's
+# archive holds its directories that the toolchain tree has
+# (package-standalone.sh).
 TOOLCHAIN_GROUPS="compilers build-tools"
 group_dirs() {
   case "$1" in
@@ -79,6 +80,24 @@ group_dirs() {
     build-tools) echo "usr binutils" ;;
     *) echo "error: no toolchain group named '$1'" >&2; return 1 ;;
   esac
+}
+# Whether two directories are one, by real path: samePhysicalDir, which
+# sets prefix_is_env in R's build.zig and zigbuild/toolchain/build.zig,
+# for the scripts that must agree with them (vendor-libs.sh,
+# zig-toolchain.sh; PHASE5 Cc1). One that does not exist, such as a
+# prefix not made yet, or an empty name is another. Windows: MSYS bash may
+# be handed C:\..., C:/... or /c/..., with 8.3 short names, and NTFS
+# ignores case, so the long Windows form (cygpath -m -l), lower-cased, is
+# compared there.
+same_dir() {
+  local d r=()
+  for d in "$1" "$2"; do
+    [ -n "$d" ] && [ -d "$d" ] || return 1
+    d="$(cd "$d" && pwd -P)" || return 1
+    if [ "$OS" = windows ]; then d="$(cygpath -m -l "$d" | tr '[:upper:]' '[:lower:]')"; fi
+    r+=("$d")
+  done
+  [ "${r[0]}" = "${r[1]}" ]
 }
 # The compile tree (PHASE3 open point B (a); scripts/compile-tree.sh): a
 # copy of the flavor's R tree with the toolchain tree's group directories,
@@ -114,7 +133,9 @@ fi
 # compiles): ZIG_BIN, else zig on PATH, the env's (conda-forge's). rzig
 # finds the same one in a dev tree (zigbuild/tools/rzig/find_zig.zig): it
 # looks in the toolchain's zig/ and the tree's bin/ before PATH, and a dev
-# tree has no zig in either (feat-standalone-toolchain B2, B34). R builds
+# tree has no zig in either (feat-standalone-toolchain B2, B34): the
+# compile tree leaves zig/ out (C12). A standalone tree, with the
+# compilers archive extracted, finds TC/zig/zig there (phase 5). R builds
 # with conda-forge's zig and with upstream zig, the ziglang.org release,
 # which PyPI's ziglang is (feat-no-host-paths F4): with ZIG_BIN=<its path>
 # (`pixi run fetch-zig` prints one) the pipeline tasks that run zig

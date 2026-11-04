@@ -3,7 +3,8 @@
 # point 3, B21), dist/toolchain/R-<ver>-zig: zig-toolchain.sh installs it
 # (zigbuild/toolchain/build.zig), package-standalone.sh's toolchain mode
 # archives it, one archive per group. Every file in it is a third-party
-# file copied unchanged from a conda package, or that package's record:
+# file copied unchanged from a conda package or, in zig/, from PyPI's
+# ziglang wheel (B4, phase 5), or that package's record:
 #   - layout: group directories under R_HOME/bin/toolchain only (env.sh's
 #     group_dirs), and no file directly in it;
 #   - records: each directory has SOURCES, each package block of it with
@@ -11,14 +12,14 @@
 #     non-empty LICENSES/<package>/ for each package SOURCES names, and
 #     no other;
 #   - copies: every other file is the target of a `file:` line of
-#     SOURCES, with the sha256 that line gives (the package's, from
-#     conda-meta's paths_data), and every such target is there;
+#     SOURCES, with the sha256 that line gives (the package's: conda-meta's
+#     paths_data; the wheel's RECORD), and every such target is there;
 #   - build paths: SOURCES and LICENSES name none of the checkout, the
 #     tree's own place, zig's caches, the env or $HOME (verify-tree.sh's
 #     list). A copy that names one is listed, not failed: the copies are
-#     conda's bytes, and conda-forge's macOS make names its build path,
-#     /Users/runner/..., which is under $HOME on GitHub's macOS runners
-#     (PHASE3 C18);
+#     third-party bytes as their packages ship them, and conda-forge's
+#     macOS make names its build path, /Users/runner/..., which is under
+#     $HOME on GitHub's macOS runners (PHASE3 C18);
 #   - closures: a copy loads only the system's libraries or files beside
 #     it (B21; none of today's needs the base's runtime): linux, glibc's
 #     libraries, at most GLIBC 2.28 (conda-forge's baseline: these run
@@ -27,7 +28,9 @@
 #     relative; Windows, every DLL a PE file imports beside it or the
 #     system's;
 #   - OpenMP (the compilers group, B22): openmp/include/omp.h; Windows
-#     also openmp/lib/libomp.lib.
+#     also openmp/lib/libomp.lib;
+#   - zig (the compilers group, B4): zig/zig runs and prints the version
+#     SOURCES records for ziglang.
 # Nothing here asks a copy to be stripped or changed: they are conda's
 # binaries as conda ships them (C24). A separate script from
 # verify-tree.sh, which checks the R trees (the base).
@@ -104,27 +107,45 @@ for d in "${dirs[@]}"; do
     $1 == "source:" { s++ }
     $1 == "feedstock:" { f++ }
     END { check() }')
-  # file: <path in the package> -> <path here> <sha256>
+  # file: <path in the package> -> <path here> <sha256>, as "<path here>
+  # <sha256>". Then the copies here (every file but SOURCES and LICENSES/)
+  # and their sha256 in one hashing pass, and one awk joins the three
+  # lists: zig/ has 19.5k files, where one sha256sum and one awk per file
+  # took minutes (feat-standalone-toolchain phase 5, open point D).
   tr -d '\r' < "$D/SOURCES" | awk -v d="$d" '
     $1 != "file:" { next }
     NF != 5 || $3 != "->" || length($5) != 64 || $5 ~ /[^0-9a-f]/ { print "BAD " d "/SOURCES:" NR ": " $0; next }
     { print $4, $5 }' > "$WORK/files.txt"
-  while read -r to sum; do
-    if [ "$to" = BAD ]; then bad="$bad
-  $sum (not a file line)"; continue; fi
-    if [ ! -f "$D/$to" ]; then bad="$bad
-  $d/$to (in SOURCES, missing)"; continue; fi
-    got="$(sha256sum < "$D/$to" | cut -d' ' -f1)"
-    [ "$got" = "$sum" ] || bad="$bad
-  $d/$to (sha256 $got, SOURCES says $sum)"
-  done < "$WORK/files.txt"
-  while IFS= read -r f; do
-    rel="${f#"$D"/}"
-    case "$rel" in SOURCES|LICENSES/*) continue ;; esac
-    printf '%s\n' "$f" >> "$WORK/copies.txt"
-    awk -v r="$rel" '$1 == r { f = 1 } END { exit !f }' "$WORK/files.txt" || bad="$bad
-  $d/$rel (no file line in SOURCES)"
-  done < <(find "$D" ! -type d)
+  (cd "$D" && find . ! -type d ! -path ./SOURCES ! -path './LICENSES/*') | sed 's|^\./||' | LC_ALL=C sort > "$WORK/here.txt"
+  # sha256sum's lines are "<sha256>  <name>", or "<sha256> *<name>" in
+  # binary mode, and start with a \ when the name is escaped (MSYS, as
+  # fetch-zig.sh reads them); the names go in as ./<path>, so none reads
+  # as an option. A file it cannot read has no line: "in SOURCES,
+  # missing", as today's -f test said. The [ -s ] guard: GNU xargs runs
+  # its command once on no input, and sha256sum would hash stdin.
+  : > "$WORK/sums.txt"
+  if [ -s "$WORK/here.txt" ]; then
+    (cd "$D" && sed 's|^|./|' "$WORK/here.txt" | tr '\n' '\0' | xargs -0 sha256sum || true) |
+      awk '{ h = $1; sub(/^\\/, "", h); n = substr($0, length($1) + 2); sub(/^[ *]/, "", n); sub(/^\.\//, "", n); print h, n }' > "$WORK/sums.txt"
+  fi
+  # FILENAME, not FNR == NR: files.txt is empty when SOURCES has no file:
+  # line, and every copy is then "no file line" (PHASE5 Cc6).
+  while IFS= read -r line; do
+    bad="$bad
+  $line"
+  done < <(awk -v d="$d" '
+    FILENAME == ARGV[1] { if ($1 == "BAD") print substr($0, 5) " (not a file line)"; else want[$1] = $2; next }
+    FILENAME == ARGV[2] { got[substr($0, 66)] = $1; next }
+    { here[$0] = 1 }
+    END {
+      for (f in want)
+        if (!(f in got)) print d "/" f " (in SOURCES, missing)"
+        else if (got[f] != want[f]) print d "/" f " (sha256 " got[f] ", SOURCES says " want[f] ")"
+      for (f in here) if (!(f in want)) print d "/" f " (no file line in SOURCES)"
+    }' "$WORK/files.txt" "$WORK/sums.txt" "$WORK/here.txt" | LC_ALL=C sort)
+  # The copies' full paths: awk takes $D from its environment, so a &, |
+  # or \ in it stays itself (sed's replacement and awk -v would read them).
+  D="$D" awk '{ print ENVIRON["D"] "/" $0 }' "$WORK/here.txt" >> "$WORK/copies.txt"
 done
 if [ -n "$bad" ]; then
   echo "error: the toolchain tree's records (SOURCES, LICENSES) and copies:$bad" >&2
@@ -150,7 +171,7 @@ re="$(path_forms "${build_dirs[@]}" "${home_dirs[@]}" | path_re)"
 icase=()
 [ "$OS" = windows ] && icase=(-i)
 first_match() {
-  grep -aoE "${icase[@]}" -e "($re)[^[:space:][:cntrl:]\"'<>]{0,72}" "$1" | head -1 || true
+  LC_ALL=C grep -aoE "${icase[@]}" -e "($re)[^[:space:][:cntrl:]\"'<>]{0,72}" "$1" | head -1 || true
 }
 bad=""
 while IFS= read -r f; do
@@ -161,23 +182,41 @@ if [ -n "$bad" ]; then
   echo "error: SOURCES or LICENSES name the build machine (the checkout, zig's caches, the env, the tree or \$HOME), first match each:$bad" >&2
   exit 1
 fi
+# The copies, in one grep: those that name one are listed, never failed.
+# Batched greps run only in a process substitution that ends in || true,
+# behind a [ -s ] guard: grep finds nothing on a clean tree and exits 1,
+# xargs then exits 1-125, and in a plain pipeline or $(...) set -e would
+# end the script with no message (PHASE5 Cc2). LC_ALL=C: the paths are
+# ASCII, -i then folds ASCII (drive letters, Users) without GNU grep's
+# slow multibyte folding over zig's binaries on MSYS (PHASE5 Cc7).
 named=""
 n_named=0
 while IFS= read -r f; do
-  if grep -qaE "${icase[@]}" -e "$re" "$f"; then
-    named="$named
+  named="$named
      ${f#"$TREE"/}: $(first_match "$f")"
-    n_named=$((n_named + 1))
-  fi
-done < "$WORK/copies.txt"
+  n_named=$((n_named + 1))
+done < <([ -s "$WORK/copies.txt" ] && tr '\n' '\0' < "$WORK/copies.txt" | LC_ALL=C xargs -0 grep -laE "${icase[@]}" -e "$re" || true)
 echo "== build paths verified: SOURCES and LICENSES name none of the checkout, zig's caches, the env, the tree or \$HOME"
 if [ "$n_named" -gt 0 ]; then
-  echo "   conda's copies that name one of them, as conda ships them: $n_named$named"
+  echo "   third-party copies that name one of them, as their packages ship them: $n_named$named"
 fi
 
-# Closures and floors of the copies that are binaries.
+# Closures and floors of the copies that are binaries. On linux and macOS
+# the candidates come from one grep of the magic number at a line start
+# (guarded as the scan above), and today's exact four-byte test runs on
+# those only: a static archive of ELF objects matches the grep, not the
+# test (PHASE5 open point D). Windows tells them by name. When zig/ is in
+# the tree (the compilers group's zig, phase 5), its zig must be among
+# them, so a grep that misses on BSD or MSYS cannot skip the closures
+# silently (PHASE5 Cg8).
 bad=""
 n_bin=0
+zig_exe="$TREE/$tc/zig/zig"
+[ "$OS" = windows ] && zig_exe="$zig_exe.exe"
+zig_seen=""
+candidates() {
+  [ -s "$WORK/copies.txt" ] && tr '\n' '\0' < "$WORK/copies.txt" | LC_ALL=C xargs -0 grep -l "$1" || true
+}
 case "$OS" in
   linux)
     if ! command -v objdump > /dev/null 2>&1; then
@@ -188,6 +227,7 @@ case "$OS" in
     while IFS= read -r f; do
       head -c4 "$f" | od -An -tx1 | grep -q "7f 45 4c 46" || continue
       n_bin=$((n_bin + 1))
+      [ "$f" != "$zig_exe" ] || zig_seen=1
       rel="${f#"$TREE"/}"
       for dep in $(needed_of "$f"); do
         case "$dep" in
@@ -210,13 +250,14 @@ case "$OS" in
           if [ -z "$worst" ] || [ "$(printf '%s\n' "$ceil" "$worst" | sort -V | tail -1)" = "$ceil" ]; then worst="$ceil"; fi
         fi
       fi
-    done < "$WORK/copies.txt"
+    done < <(candidates $'^\x7fELF')
     what="$n_bin ELF files: DT_NEEDED glibc's only, rpaths relative, GLIBC at most ${worst:-?} (ceiling $GLIBC_TOOLS_CEILING)"
     ;;
   macos)
     while IFS= read -r f; do
       head -c4 "$f" | od -An -tx1 | grep -q "cf fa ed fe" || continue
       n_bin=$((n_bin + 1))
+      [ "$f" != "$zig_exe" ] || zig_seen=1
       rel="${f#"$TREE"/}"
       if m="$(minos_over_floor "$f")"; then bad="$bad
   $rel: minos $m > $MACOS_MIN"; fi
@@ -230,13 +271,14 @@ case "$OS" in
         case "$rp" in @loader_path|@loader_path/*) ;; *) bad="$bad
   $rel: rpath $rp" ;; esac
       done
-    done < "$WORK/copies.txt"
+    done < <(candidates $'^\xcf\xfa\xed\xfe')
     what="$n_bin Mach-O files: dependencies the system's, minos <= $MACOS_MIN, rpaths relative"
     ;;
   windows)
     while IFS= read -r f; do
       case "$f" in *.[Ee][Xx][Ee]|*.[Dd][Ll][Ll]) ;; *) continue ;; esac
       n_bin=$((n_bin + 1))
+      [ "$f" != "$zig_exe" ] || zig_seen=1
       for dep in $(needed_of "$f"); do
         [ -f "${f%/*}/$dep" ] || win_system_dll "$dep" || bad="$bad
   ${f#"$TREE"/}: imports $dep (neither beside it nor the system's)"
@@ -245,6 +287,8 @@ case "$OS" in
     what="$n_bin PE files: every DLL they import beside them or the system's"
     ;;
 esac
+if [ -d "$TREE/$tc/zig" ] && [ -z "$zig_seen" ]; then bad="$bad
+  the binary detection missed ${zig_exe#"$TREE"/} (zig/ is in the tree)"; fi
 if [ -n "$bad" ]; then
   echo "error: the toolchain's binaries load or need what the tree does not hold:$bad" >&2
   exit 1
@@ -258,4 +302,16 @@ for f in $omp; do
   [ -s "$TREE/$tc/$f" ] || { echo "error: $tc/$f is missing (the compilers group's OpenMP)" >&2; exit 1; }
 done
 echo "== OpenMP verified: $omp (in $tc)"
+
+# The compilers group's zig (B4, phase 5): upstream zig, PyPI's ziglang
+# wheel; it runs, and says the version SOURCES records for it (SOURCES',
+# not a literal: a new zig changes fetch-zig.sh only, B18). This runs only
+# on the standalone tree, which always has zig/: the conda build's tree is
+# its env, never checked here.
+[ -x "$zig_exe" ] || { echo "error: ${zig_exe#"$TREE"/} is missing (the compilers group's zig)" >&2; exit 1; }
+want="$(awk '{ sub(/\r$/, "") } $1 == "package:" { p = $2 } p == "ziglang" && $1 == "version:" && v == "" { v = $2 } END { print v }' "$TREE/$tc/zig/SOURCES")"
+got="$("$zig_exe" version 2>&1 | tr -d '\r')" || true
+[ -n "$want" ] && [ "$got" = "$want" ] ||
+  { echo "error: ${zig_exe#"$TREE"/} says '$got', SOURCES records ziglang '${want:-(none)}'" >&2; exit 1; }
+echo "== zig verified: ${zig_exe#"$TREE"/} $got, the ziglang version SOURCES records"
 echo "== toolchain tree verified ($OS)"

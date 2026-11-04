@@ -25,8 +25,8 @@
 //!   R was. The text names it for what it holds and the tools themselves
 //!   for the rest. build-tools holds unix make, and on Windows the binutils
 //!   (B24); phase 7 adds Windows' usr/bin, until then sh and make on PATH.
-//!   compilers holds the OpenMP files (C19); phases 5 and 6 add zig and
-//!   flang, until then on PATH (zig also in ZIG_BIN).
+//!   compilers holds zig (from phase 5, PyPI's ziglang wheel, B4) and the
+//!   OpenMP files (C19); phase 6 adds flang, until then on PATH.
 //!
 //! rzig does not read R_ZIG_TOOLCHAIN_HINT. Nothing writes it since phase
 //! 4, which ships rzig with R on every channel (B19, B35). The preflight
@@ -112,7 +112,7 @@ pub fn text(a: mem.Allocator, g: Group, p: Platform) ![]const u8 {
     const archive = try std.fmt.allocPrint(a, "R-{s}-{s}-{s}.{s}", .{ p.r, p.name, g.name(), if (p.windows) "zip" else "tar.gz" });
     const head = switch (g) {
         .compilers => try std.fmt.allocPrint(a, "Compiling needs the r-zig compilers for R {s} on {s}: zig {s}, and flang for Fortran.\n" ++
-            "  standalone:  zig {s} on PATH or in ZIG_BIN, LLVM flang on PATH; for OpenMP, extract {s} where you extracted R\n", .{ p.r, p.name, p.zig, p.zig, archive }),
+            "  standalone:  extract {s} where you extracted R (zig {s} and the OpenMP files), and put LLVM flang on PATH\n", .{ p.r, p.name, p.zig, archive, p.zig }),
         .build_tools => if (p.windows)
             try std.fmt.allocPrint(a, "Building packages needs the r-zig build tools for R {s} on {s}: sh, make, binutils and the tools R's makefiles run.\n" ++
                 "  standalone:  extract {s} where you extracted R (binutils), and put sh and make on PATH (for example Rtools45's usr/bin)\n", .{ p.r, p.name, archive })
@@ -166,14 +166,14 @@ test "one text per group, the same on every channel" {
     // pip line, parity-test.sh the first lines and unix's standalone lines
     try testing.expectEqualStrings(
         \\Compiling needs the r-zig compilers for R 4.6.1 on linux-64: zig 0.16, and flang for Fortran.
-        \\  standalone:  zig 0.16 on PATH or in ZIG_BIN, LLVM flang on PATH; for OpenMP, extract R-4.6.1-linux-64-compilers.tar.gz where you extracted R
+        \\  standalone:  extract R-4.6.1-linux-64-compilers.tar.gz where you extracted R (zig 0.16 and the OpenMP files), and put LLVM flang on PATH
         \\  conda, pixi: pixi add r-zig-compilers (or conda install r-zig-compilers); r-zig-toolchain installs every group
         \\  pip:         pip install r-zig-compilers (zig only: PyPI has no Fortran compiler); r-zig-toolchain installs every group
         \\
     , try text(a, .compilers, linux));
     try testing.expectEqualStrings(
         \\Compiling needs the r-zig compilers for R 4.6.1 on win-64: zig 0.16, and flang for Fortran.
-        \\  standalone:  zig 0.16 on PATH or in ZIG_BIN, LLVM flang on PATH; for OpenMP, extract R-4.6.1-win-64-compilers.zip where you extracted R
+        \\  standalone:  extract R-4.6.1-win-64-compilers.zip where you extracted R (zig 0.16 and the OpenMP files), and put LLVM flang on PATH
         \\  conda, pixi: pixi add r-zig-compilers (or conda install r-zig-compilers); r-zig-toolchain installs every group
         \\  pip:         no wheels for Windows
         \\
