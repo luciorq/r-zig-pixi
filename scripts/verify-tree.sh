@@ -21,7 +21,8 @@
 #   - Makeconf names no build path and has no rpath; CPPFLAGS and LDFLAGS
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
 #   - Windows (every tree): CRAN's layout, Makeconf's R_ARCH is /x64 and
-#     its NM_FILTER CRAN's, and R_HOME/bin has R.exe and Rscript.exe;
+#     its NM_FILTER CRAN's, R_HOME/bin has R.exe and Rscript.exe, and
+#     every front-end carries R's UTF-8 manifest;
 #   - the build tools (every tree): R puts the build-tools group's usr/bin
 #     first on PATH (unix: etc/Renviron, and MAKE is make; Windows:
 #     etc/Rcmd_environ; B25), and Windows' Makeconf runs ar and ranlib as
@@ -201,7 +202,10 @@ has_line() { tr -d '\r' < "$1" | grep -xF -- "$2" > /dev/null; }
 # is CRAN's, which gnuwin32's fixed/Makefile writes and build.zig
 # substitutes: winshlib.mk's .def then leaves out the compiler's
 # .refptr. and .weak. names, so a package DLL exports what CRAN's does
-# (PR #25 review records-REC-3).
+# (PR #25 review records-REC-3). Each front-end embeds R's manifest
+# (build.zig's winManifest), whose activeCodePage UTF-8 lets R start
+# under a path outside the system's code page; a manifest resource is
+# its file's bytes, so a byte search finds it.
 if [ "$OS" = windows ]; then
   bad=""
   grep -Eq '^R_ARCH = /x64 *'$'\r''?$' "$mk" || bad="$bad R_ARCH-not-/x64"
@@ -209,11 +213,14 @@ if [ "$OS" = windows ]; then
   for f in R.exe Rscript.exe; do
     [ "$(head -c2 "$TREE/$rh/bin/$f" 2>/dev/null)" = MZ ] || bad="$bad bin/$f(missing, or no PE file)"
   done
+  for f in bin/R.exe bin/Rscript.exe bin/x64/R.exe bin/x64/Rcmd.exe bin/x64/Rscript.exe bin/x64/Rterm.exe; do
+    grep -aq '<activeCodePage [^>]*>UTF-8</activeCodePage>' "$TREE/$rh/$f" 2>/dev/null || bad="$bad $f(no UTF-8 manifest)"
+  done
   if [ -n "$bad" ]; then
     echo "error: $rh lacks CRAN's layout:$bad" >&2
     exit 1
   fi
-  echo "== CRAN's layout verified: Makeconf's R_ARCH = /x64 and NM_FILTER, $rh/bin/{R,Rscript}.exe"
+  echo "== CRAN's layout verified: Makeconf's R_ARCH = /x64 and NM_FILTER, $rh/bin/{R,Rscript}.exe, the front-ends' UTF-8 manifest"
 fi
 
 # The build tools (feat-standalone-toolchain B24, B25, B43), every tree:
