@@ -768,9 +768,10 @@ if [ -n "$real_zig" ]; then
       grep -qxF 'zig-cc: pw needs make: a configure script R runs; no $wnb/binutils/nm.exe' '$W/check.err'"
 fi
 # a tier-2 package whose plan needs make: make would ignore its build.zig,
-# so the check and rzig build stop with why, 1, not 3 [preflight-PF-1]
-# and, since 0009's stop after it says the toolchain is incomplete, a
-# line that says it is complete [code-6]
+# so the check and rzig build stop with why, 1, not 3 [preflight-PF-1],
+# and the check with a line that says the toolchain is complete [code-6];
+# 0009's stop after it says the package cannot be built (PHASE4 open
+# point J a)
 check "--rzig-check=package: tier 2 whose plan needs make, 1, why, no group's text" \
   bash -c "$pc pkg_check pz PATH='$W/nothing' R_MAKEVARS_USER='$W/ccache.mk'; [ \$? = 1 ] &&
     grep -q '^zig-cc: pz: src/build.zig cannot be built by make: CC = ccache is not a compiler of R.s toolchain (' '$W/check.err' &&

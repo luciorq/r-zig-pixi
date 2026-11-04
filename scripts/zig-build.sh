@@ -53,17 +53,6 @@ fi
 # (staticLibcxxLibDir), rzig does the same for packages, one
 # implementation for both (zigbuild/tools/rzig/libcxx_mirror.zig; F4).
 
-# The conda build (recipe/recipe.yaml sets R_ZIG_CONDA_BUILD): the compile
-# preflight's hint names r-zig-toolchain (the wheel sets its own; otherwise
-# R's generic message). Nothing else depends on this flag: rzig decides a
-# conda env's rpath where it runs (F3b), and what a standalone tree takes
-# from the env (build.zig's installEnvRuntime, vendor-libs.sh) is left out
-# because the prefix is the env, not because of the flag.
-conda=()
-if [ -n "${R_ZIG_CONDA_BUILD:-}" ]; then
-  conda=("-Dtoolchain-hint=add the r-zig-toolchain package to this environment (pixi add r-zig-toolchain, or conda install r-zig-toolchain)")
-fi
-
 # The installed tree runs on its own, and is the tree that ships (F1.3,
 # F1.7): the env's shared libraries it needs go into it, <prefix>/lib on
 # unix (R's rpaths are relative, build.zig relRPaths), R_HOME/bin/x64 on
@@ -74,5 +63,5 @@ fi
 # rpath before the fallback path): after a `pixi update` it would be the
 # env's old one. A no-op for the conda build, whose prefix is the env.
 R_INSTALL_PREFIX="$PREFIX" bash "$(dirname "$0")/vendor-libs.sh"
-"$ZIG" build --prefix "$PREFIX" -Dvariant="$VARIANT" -Dblas="$BLAS" "${conda[@]}" "$@"
+"$ZIG" build --prefix "$PREFIX" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"
 R_INSTALL_PREFIX="$PREFIX" bash "$(dirname "$0")/vendor-libs.sh"

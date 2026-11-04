@@ -31,8 +31,12 @@
 //!                             script (R_ZIG_CONFIGURE=1, from install.R),
 //!                             with rzig's own reason in the failing line
 //!                             ("<pkg> needs make: <reason>; no make on
-//!                             PATH"). A tier-2 package whose plan needs
-//!                             make stops, as `rzig build` does
+//!                             PATH"). Every group the package needs that
+//!                             is missing, in one stop: with no compilers
+//!                             either, their text first, then the build
+//!                             tools' (PHASE4 open point H a). A tier-2
+//!                             package whose plan needs make stops, as
+//!                             `rzig build` does
 //!                             (pkgbuild.buildZigNeedsMake). R_ZIG_C_STD is
 //!                             install.R's use_C (the hook's --c-std);
 //!                             R_ZIG_PKG_BUILDER=make forces make. Four
@@ -44,7 +48,10 @@
 //!
 //! All there: one line on stdout, what it found, and exit 0. A tool
 //! missing: a line that says which, then its group's text (groups.zig), on
-//! stderr, and exit 127, as a compile that finds no zig. zig is also asked
+//! stderr, and exit 127, as a compile that finds no zig. A build tool PATH
+//! does not have that R's own environment has (an environment used
+//! without activation) is named in that line as installed, not on PATH,
+//! with how to put it there (PHASE4 open point I a). zig is also asked
 //! its version: a major.minor other than R's, no version at all, or a zig
 //! that did not run (it could not start, or a signal ended it; the line
 //! says why), exits 1, after a line that says so and the compilers group's
@@ -55,7 +62,9 @@
 //! package whose plan needs make, after "<pkg>: src/build.zig cannot be
 //! built by make: <reason>" and "<pkg>: the r-zig toolchain is complete:
 //! change what the line above names", no group's text, since no group
-//! would help [preflight-PF-1, code-6]; and 2 when R_HOME is unset, or
+//! would help [preflight-PF-1, code-6]; 0009 then stops with "this package
+//! cannot be built (see above)", as after any exit but 127 (PHASE4 open
+//! point J a); and 2 when R_HOME is unset, or
 //! R_HOME or the working directory does not resolve (a line names the
 //! path and why).
 //! Any other `--rzig-check=` value: a usage line and exit 2 (main.zig).
@@ -162,12 +171,12 @@ fn buildToolsFound(ctx: *Ctx) !Found {
             try ctx.fmt("no {s} on PATH (MAKE={s})", .{ word, m })
         else
             "no make on PATH";
-        return .{ .missing = what };
+        return .{ .missing = if (isPath(word)) what else try notOnPath(ctx, what, word) };
     };
     const line = try ctx.fmt("build-tools ok: make at {s}", .{try display(ctx, make)});
     // R runs configure.win and config.sh through sh (install.R, rcmdfn.c)
     if (ctx.os != .windows) return .{ .ok = line };
-    const sh = (try find_zig.onPath(ctx, "sh")) orelse return .{ .missing = "no sh on PATH" };
+    const sh = (try find_zig.onPath(ctx, "sh")) orelse return .{ .missing = try notOnPath(ctx, "no sh on PATH", "sh") };
     // the binutils beside rzig, as Makeconf.win names them, not on PATH;
     // with no directory of its own (the OS would not say) rzig finds none
     const tc = environment.toolchain(ctx);
@@ -177,6 +186,21 @@ fn buildToolsFound(ctx: *Ctx) !Found {
         if (tc == null or !ctx.isFile(exe)) return .{ .missing = try ctx.fmt("no {s}", .{try display(ctx, exe)}) };
     }
     return .{ .ok = try ctx.fmt("{s}; sh at {s}; binutils at {s}", .{ line, try display(ctx, sh), try display(ctx, dir) }) };
+}
+
+/// `what`, the line for a build tool PATH does not have, saying so when R's
+/// own environment has it where r-zig-build-tools installs it (PHASE4 open
+/// point I a): unix <dir>/bin (conda-forge's make), Windows m2's
+/// <dir>/usr/bin (make and sh; <dir> is <root>/Library there). That is an
+/// environment used without activation: an IDE pointed at <env>/bin/R, or
+/// win-64's R.bat, which adds nothing to PATH. Finding the tool stays
+/// PATH's (B34's note); this only says why it was not found. The
+/// standalone tree and the wheel have none there.
+fn notOnPath(ctx: *Ctx, what: []const u8, name: []const u8) ![]const u8 {
+    const e = (try environment.own(ctx)) orelse return what;
+    const bin = try ctx.fmt("{s}/{s}", .{ e.dir, if (ctx.os == .windows) "usr/bin" else "bin" });
+    const p = (try find_zig.inDir(ctx, bin, name)) orelse return what;
+    return ctx.fmt("{s}; {s} is installed in R's environment, which is not on PATH: activate it (pixi shell, conda activate) or start R with pixi run", .{ what, try display(ctx, p) });
 }
 
 /// A switch in the environment, as install.R sets it: set, not empty, not "0".
@@ -239,10 +263,11 @@ fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
             .rzig = ctx.self_exe orelse "rzig",
         });
     // a tier-2 package make cannot build: no tool would help, stop as
-    // `rzig build` stops, before asking for any [preflight-PF-1]. 0009's
-    // stop that follows says the toolchain is incomplete (its two texts are
-    // fixed, I-T11), so one more line here says it is not, and what to
-    // change: a site Makevars, the Makeconf, a C or C++ standard [code-6]
+    // `rzig build` stops, before asking for any [preflight-PF-1]. One more
+    // line says the toolchain is complete, and what to change: a site
+    // Makevars, the Makeconf, a C or C++ standard [code-6]. 0009's stop
+    // after an exit other than 127 says the package cannot be built
+    // (PHASE4 open point J a)
     if (pkgbuild.buildZigNeedsMake(ctx, name, d)) {
         ctx.warn("{s}: the r-zig toolchain is complete: change what the line above names", .{name});
         return .{ .code = 1 };
@@ -267,6 +292,19 @@ fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
         .make, .r_only => topLevelFortran(ctx, src_dir),
     };
     const comp = try compilers(ctx, fortran);
+    // a zig that is not R's (1): no group would help
+    if (comp.code != 0 and comp.code != 127) return comp;
+    // make, or a configure R runs: the build tools, with the reason first.
+    // With the compilers missing too, every missing group in one stop, the
+    // compilers' text first, so the user installs what the package needs
+    // in one round (PHASE4 open point H a)
+    const needs_make = configure or d.tier == .make;
+    const why = if (configure) "a configure script R runs" else d.reason;
+    const bt: ?Found = if (needs_make) try buildToolsFound(ctx) else null;
+    if (bt) |b| switch (b) {
+        .ok => {},
+        .missing => |what| return fail(ctx, 127, try ctx.fmt("{s} needs make: {s}; {s}", .{ name, why, what }), .build_tools),
+    };
     if (comp.code != 0) return comp;
     const tier: []const u8 = switch (d.tier) {
         .r_only => "no src/",
@@ -274,13 +312,9 @@ fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
         .zig => "tier 2 (rzig build)",
         .make => "needs make",
     };
-    if (!configure and d.tier != .make) return .{ .code = 0, .line = try ctx.fmt("package ok: {s} {s}; {s}", .{ name, tier, comp.line }) };
-    // make, or a configure R runs: the build tools, with the reason first
-    const why = if (configure) "a configure script R runs" else d.reason;
-    return switch (try buildToolsFound(ctx)) {
-        .ok => |line| .{ .code = 0, .line = try ctx.fmt("package ok: {s} {s} ({s}); {s}; {s}", .{ name, tier, why, comp.line, line }) },
-        .missing => |what| fail(ctx, 127, try ctx.fmt("{s} needs make: {s}; {s}", .{ name, why, what }), .build_tools),
-    };
+    const line = try ctx.fmt("package ok: {s} {s}", .{ name, tier });
+    if (bt) |b| return .{ .code = 0, .line = try ctx.fmt("{s} ({s}); {s}; {s}", .{ line, why, comp.line, b.ok }) };
+    return .{ .code = 0, .line = try ctx.fmt("{s}; {s}", .{ line, comp.line }) };
 }
 
 /// A path as the check's lines show it: with `/` only on Windows.
@@ -550,6 +584,7 @@ test "package: flang by tier, never for tier 2, by src/'s top level with a confi
     try f.env.put("PATH", f.path("nothing"));
     const ok = f.fmt("compilers ok: zig {s} at {s}", .{ same_zig, zig });
     const no_flang = f.fmt("rzig-test: " ++ groups.no_flang ++ "\n{s}", .{try groups.text(c.arena, .compilers, groups.this)});
+    const bt = try groups.text(c.arena, .build_tools, groups.this);
     // tier 2 with a stray top-level .f: rpkg compiles C and C++ only
     try f.touch("z/src/build.zig");
     try f.touch("z/src/x.f");
@@ -564,11 +599,12 @@ test "package: flang by tier, never for tier 2, by src/'s top level with a confi
     try f.touch("t/src/y.f90");
     try testing.expectEqual(127, (try packageIn(c, r, f.path("t"))).code);
     try testing.expectEqualStrings(no_flang, f.takeWarnings());
-    // tier 3 (a Makevars rule): src/'s top level, either case
+    // tier 3 (a Makevars rule): src/'s top level, either case; no make
+    // either, so the build tools' text follows (PHASE4 open point H a)
     try f.write("m/src/Makevars", "all: $(SHLIB)\n", .default_file);
     try f.touch("m/src/x.F");
     try testing.expectEqual(127, (try packageIn(c, r, f.path("m"))).code);
-    try testing.expectEqualStrings(no_flang, f.takeWarnings());
+    try testing.expectEqualStrings(f.fmt("{s}rzig-test: m needs make: src/Makevars has a rule or target line: 'all: $(SHLIB)'; no make on PATH\n{s}", .{ no_flang, bt }), f.takeWarnings());
     // a configure script R runs: src/'s top level whatever the tier, so a
     // tier-2 package's .F too (CONSENSUS B)
     try f.touch("zF/src/build.zig");
@@ -577,17 +613,117 @@ test "package: flang by tier, never for tier 2, by src/'s top level with a confi
     try testing.expectEqual(0, res.code);
     try f.env.put("R_ZIG_CONFIGURE", "1");
     try testing.expectEqual(127, (try packageIn(c, r, f.path("zF"))).code);
-    try testing.expectEqualStrings(no_flang, f.takeWarnings());
+    try testing.expectEqualStrings(f.fmt("{s}rzig-test: zF needs make: a configure script R runs; no make on PATH\n{s}", .{ no_flang, bt }), f.takeWarnings());
     // with flang: then the build tools, a configure script's reason first
     const fc = try f.touchProgram("fl/flang");
     try f.env.put("PATH", f.path("fl"));
     try testing.expectEqual(127, (try packageIn(c, r, f.path("zF"))).code);
-    try testing.expectEqualStrings(f.fmt("rzig-test: zF needs make: a configure script R runs; no make on PATH\n{s}", .{try groups.text(c.arena, .build_tools, groups.this)}), f.takeWarnings());
+    try testing.expectEqualStrings(f.fmt("rzig-test: zF needs make: a configure script R runs; no make on PATH\n{s}", .{bt}), f.takeWarnings());
     const make = try f.touchProgram("fl/make");
     res = try packageIn(c, r, f.path("zF"));
     try testing.expectEqual(0, res.code);
     try testing.expectEqualStrings(f.fmt("package ok: zF tier 2 (rzig build) (a configure script R runs); {s}; flang at {s}; build-tools ok: make at {s}", .{ ok, fc, make }), res.line);
     try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "package: every missing group in one stop, the compilers' text first" {
+    // PHASE4 open point H (a)
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    try f.env.put("PATH", f.path("nothing"));
+    const no_zig = f.fmt("rzig-test: " ++ groups.no_zig ++ "\n{s}", .{try groups.text(c.arena, .compilers, groups.this)});
+    const bt = try groups.text(c.arena, .build_tools, groups.this);
+    // an R-only package with a configure script R runs, neither group:
+    // both texts, one 127
+    try f.write("cf/DESCRIPTION", "Package: cf\n", .default_file);
+    try f.env.put("R_ZIG_CONFIGURE", "1");
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("cf"))).code);
+    try testing.expectEqualStrings(f.fmt("{s}rzig-test: cf needs make: a configure script R runs; no make on PATH\n{s}", .{ no_zig, bt }), f.takeWarnings());
+    // the build tools there: the compilers' text alone
+    _ = try f.touchProgram("mk/make");
+    try f.env.put("PATH", f.path("mk"));
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("cf"))).code);
+    try testing.expectEqualStrings(no_zig, f.takeWarnings());
+    // a tier-1 package needs no make: the compilers' text alone, either way
+    _ = f.env.swapRemove("R_ZIG_CONFIGURE");
+    try f.touch("t/src/a.c");
+    for ([_][]const u8{ "nothing", "mk" }) |p| {
+        try f.env.put("PATH", f.path(p));
+        try testing.expectEqual(127, (try packageIn(c, r, f.path("t"))).code);
+        try testing.expectEqualStrings(no_zig, f.takeWarnings());
+    }
+    // a zig that is not R's (1): its line and the compilers' text alone,
+    // since no group would help
+    if (builtin.os.tag == .windows) return; // shell-script stand-ins below
+    const other = std.fmt.comptimePrint("{d}.{d}.0", .{ builtin.zig_version.major, builtin.zig_version.minor + 1 });
+    try f.env.put("ZIG_BIN", try fakeZig(&f, "bin/zig", other));
+    try f.env.put("R_ZIG_CONFIGURE", "1");
+    try f.env.put("PATH", f.path("nothing"));
+    try testing.expectEqual(1, (try packageIn(c, r, f.path("cf"))).code);
+    const w = f.takeWarnings();
+    try testing.expect(mem.find(u8, w, "\nCompiling needs the r-zig compilers for R ") != null);
+    try testing.expect(mem.find(u8, w, "Building packages needs") == null);
+}
+
+test "build-tools: installed in R's environment, not on PATH, named as such" {
+    // PHASE4 open point I (a): an environment used without activation
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const text = try groups.text(c.arena, .build_tools, groups.this);
+    const tail = "is installed in R's environment, which is not on PATH: activate it (pixi shell, conda activate) or start R with pixi run";
+    try f.env.put("PATH", f.path("nothing"));
+    try f.tmp.dir.createDirPath(testing.io, "env/lib/R/bin/toolchain");
+    c.self_exe = f.path("env/lib/R/bin/toolchain/zig-cc");
+    // in neither: today's line
+    try testing.expectEqual(127, (try run(c, .build_tools)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no make on PATH\n{s}", .{text}), f.takeWarnings());
+    // conda-forge's make in <env>/bin
+    const make = try f.touchProgram("env/bin/make");
+    try testing.expectEqual(127, (try run(c, .build_tools)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no make on PATH; {s} {s}\n{s}", .{ make, tail, text }), f.takeWarnings());
+    // MAKE's first word, as R runs it; a path is not PATH's matter
+    try f.env.put("MAKE", "make -j4");
+    try testing.expectEqual(127, (try run(c, .build_tools)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no make on PATH (MAKE=make -j4); {s} {s}\n{s}", .{ make, tail, text }), f.takeWarnings());
+    try f.env.put("MAKE", f.path("gnu/make"));
+    try testing.expectEqual(127, (try run(c, .build_tools)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no {s} (MAKE={s})\n{s}", .{ f.path("gnu/make"), f.path("gnu/make"), text }), f.takeWarnings());
+    _ = f.env.swapRemove("MAKE");
+    // on PATH: found there, as before (B34's note)
+    try f.env.put("PATH", f.path("env/bin"));
+    try testing.expectEqualStrings(f.fmt("build-tools ok: make at {s}", .{make}), (try run(c, .build_tools)).line);
+    try f.env.put("PATH", f.path("nothing"));
+    // the preflight's line, after the package's reason
+    if (builtin.os.tag != .windows) { // a shell-script stand-in for zig
+        const r = try pkgplan.rHome(&f);
+        try f.env.put("ZIG_BIN", try fakeZig(&f, "bin/zig", same_zig));
+        try f.write("m/src/Makevars", "all: $(SHLIB)\n", .default_file);
+        try f.touch("m/src/a.c");
+        try testing.expectEqual(127, (try packageIn(c, r, f.path("m"))).code);
+        try testing.expectEqualStrings(f.fmt("rzig-test: m needs make: src/Makevars has a rule or target line: 'all: $(SHLIB)'; no make on PATH; {s} {s}\n{s}", .{ make, tail, text }), f.takeWarnings());
+    }
+    // Windows: m2's make and sh in <root>/Library/usr/bin
+    c.os = .windows;
+    try f.tmp.dir.createDirPath(testing.io, "wenv/Library/lib/R/bin/toolchain");
+    c.self_exe = f.path("wenv/Library/lib/R/bin/toolchain/gcc.exe");
+    try testing.expectEqual(127, (try run(c, .build_tools)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no make on PATH\n{s}", .{text}), f.takeWarnings());
+    const wmake = try f.touchProgram("wenv/Library/usr/bin/make");
+    try testing.expectEqual(127, (try run(c, .build_tools)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no make on PATH; {s} {s}\n{s}", .{ slashed(&f, wmake), tail, text }), f.takeWarnings());
+    // make on PATH, sh only in the environment
+    _ = try f.touchProgram("p/make");
+    try f.env.put("PATH", f.path("p"));
+    try testing.expectEqual(127, (try run(c, .build_tools)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no sh on PATH\n{s}", .{text}), f.takeWarnings());
+    const wsh = try f.touchProgram("wenv/Library/usr/bin/sh");
+    try testing.expectEqual(127, (try run(c, .build_tools)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no sh on PATH; {s} {s}\n{s}", .{ slashed(&f, wsh), tail, text }), f.takeWarnings());
 }
 
 test "package: a tier-2 package whose plan needs make, 1 and why, no group's text" {

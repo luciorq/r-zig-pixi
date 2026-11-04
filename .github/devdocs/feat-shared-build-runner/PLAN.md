@@ -8,9 +8,14 @@ review"). Tested on linux-64 (gamma), osx-arm64 (omicron) and win-64
 ("Tested"). CI is still to run ("CI"). Not committed: the user commits.
 pixi.lock is main's, unchanged, sha256
 fbb64b7ba4e31e45bb18dbd0868a96aa5b0939ee291e0dddeeba2dd09a68bb96. No
-build-number bump: phase 4's bump (8 to 9) publishes both packages
-(feat-zig-pkg-build's N5). Three choices are left to the user ("Open
-decisions").
+build-number bump: the next bump publishes both packages
+(feat-zig-pkg-build's N5). That was to be phase 4's (8 to 9); since the
+user's decision of 2026-10-19 it comes with feat-standalone-toolchain
+phase 7's merge, and phases 4 to 6 keep 8. Three choices are left to
+the user ("Open decisions").
+
+**Merged (2026-10-14)** as PR #27 (main d11dee1); the stress dispatch
+on main after the merge passed on the five runners ("CI").
 
 ## Why
 
@@ -366,6 +371,31 @@ first tier-1 row of each leg carrying the one runner compile, and
 report.md should name the build-runner directory among what the run
 removed from rzig's cache.
 
+**The stress dispatch, 2026-10-14.** Run 38569895172 on main d11dee1
+(PR #27 merged; g3 g4, tree, trace, `builder = auto`, `shared_cache =
+false`) passed on all five runners, 60 rows each, no unexpected row.
+Against 38467907779 one status changed: igraph on macos-15-intel, from
+that run's download failure back to ok. Each leg's report.md names one
+`build-runner-<key>` directory among what it removed from rzig's cache,
+Windows included (one key there: the stress path reaches zig one way,
+so it did not meet open decision 1's `\` and `/` duplicate). The small
+tier-1 rows, mean seconds per install:
+
+| runner | rows | shared `ZIG_LOCAL_CACHE_DIR` (38317654371) | per-install runner (38467907779) | shared runner, PR #27 (38569895172) |
+|---|---|---|---|---|
+| ubuntu-latest | askpass, base64enc, glue, magrittr | 1.1 | 4.4 | 1.3 |
+| ubuntu-24.04-arm | askpass, base64enc, glue, magrittr | 1.2 | 12.3 | 1.2 |
+| macos-latest | askpass, base64enc, glue, magrittr | 2.2 | 11.9 | 1.8 |
+| macos-15-intel | askpass, base64enc, glue, magrittr | 5.4 | 17.2 | 4.8 |
+| windows-latest | base64enc, glue, magrittr | 1.6 | 14.4 | 2.6 |
+
+So the shared runner brings tier-1 installs back to the shared-cache
+times on every CI runner; the runner compile is paid once per runner
+per leg, in the leg's first tier-1 row (sys: 7.8, 15.6, 10.2, 22.2 and
+19.2 s in the table's order).
+report.json keeps minutes to two decimals, so a row is known to 0.6 s.
+Artifacts: /data/gamma/luciorq/workspaces/temp/r-zig-pixi/stress-38569895172/.
+
 ## Not tested
 
 - linux-aarch64 and osx-64 on a host (CI's legs), so the runner's size
@@ -397,6 +427,12 @@ removed from rzig's cache.
    - (c) `zig version` and a hash of zig's lib/std instead of its path:
      envs with the same zig share one runner, at the cost of hashing
      std's files (or caching that hash per zig) on every install.
+   - The user, 2026-10-14: (b), folded into feat-standalone-toolchain
+     phase 4. rzig's cache.command keys the command with `/` on Windows,
+     for the runner and for cache.compiled's cfguard and dso_fini
+     objects, which split the same way; kappa's rerun: one zig spelled
+     three ways, one build-runner and one cfguard directory (that
+     plan's "Phase 4 record: tests on every host").
 2. How long an unused directory stays.
    - (a) ★ A week (`runner_idle_days = 7`): a runner compiles again in
      3 to 13 s, and a week keeps what is in use.
@@ -412,8 +448,10 @@ removed from rzig's cache.
 
 In feat-standalone-toolchain TODO.md unless named:
 
-- The stress dispatch above, after the merge (`shared_cache = false`).
-- With open decision 1 at (b) or (c): the key change and a kappa rerun.
+- Done: the stress dispatch above, after the merge (`shared_cache =
+  false`): run 38569895172, 2026-10-14 ("CI").
+- Done in feat-standalone-toolchain phase 4: open decision 1 (b), the
+  key change and a kappa rerun.
 - Route `R CMD SHLIB` through rzig build, or give it a preflight;
   revisit 0010 for pkgbuild's probe (as before).
 

@@ -5,16 +5,20 @@ build profile: no cairo/png devices, no ICU, no OpenMP, no X11/tcltk —
 under ``r_zig/R``. The ``R`` and ``Rscript`` console scripts run it, and
 ``r_home()``/``environ()`` hand it to embedders such as rpy2.
 
-Packages without compiled code install with this wheel alone. Packages
-with C/C++ code need the ``r-zig-toolchain`` wheel, which adds
-``R_HOME/bin/toolchain`` (rzig, the compiler front R's Makeconf names,
-and GNU make) and requires the PyPI ``ziglang`` package as the compiler;
-without it, R CMD INSTALL stops and says so. rzig runs ``$ZIG_BIN``: the console
-scripts and ``environ()`` set it from the importable ``ziglang``, and when
-R is started some other way ``R_HOME/etc/Renviron.site`` points it at a
-``ziglang`` installed in the same site-packages directory. Packages with
-Fortran sources need a Fortran compiler, which the toolchain does not
-provide.
+Packages without compiled code install with this wheel alone. It carries
+rzig, the compiler front R's Makeconf names, in ``R_HOME/bin/toolchain``;
+the compiler and the build tools come in their own wheels. To compile
+packages, ``pip install r-zig-toolchain`` (r-zig-compilers, which brings
+the PyPI ``ziglang`` package as the C/C++ compiler, and
+r-zig-build-tools, which brings GNU make). r-zig-compilers alone installs
+packages that have no configure script and no make rules. Without a
+group, R CMD INSTALL stops and names the wheel to add. rzig runs
+``$ZIG_BIN``: the console scripts and ``environ()`` set it from the
+importable ``ziglang``, and when R is started some other way
+``R_HOME/etc/Renviron.site`` points it at a ``ziglang`` installed in the
+same site-packages directory. PyPI has no Fortran compiler: packages
+with Fortran sources need LLVM flang on PATH (feat-standalone-toolchain
+B29).
 """
 
 from __future__ import annotations

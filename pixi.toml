@@ -3,8 +3,10 @@ authors = ["luciorq <luciorqueiroz@gmail.com>"]
 # `universe` (prefix.dev, public) carries flang-pixi's zig-built Fortran
 # toolchain (flang-zig / flang-rt-zig / lld-zig, LLVM 23.1.1) for every
 # subdir: R's Fortran compiler on all of them (see [dependencies]).
-# Listed after conda-forge: its package names never collide with
-# conda-forge's, so priority is moot.
+# Listed after conda-forge: its index names ../conda-forge as its base
+# (channel_relations), so listed first it would give pixi, whose channel
+# priority is strict, every conda-forge package from prefix.dev's mirror,
+# which can lag (feat-standalone-toolchain phase 4, kappa).
 channels = ["conda-forge", "https://prefix.dev/universe"]
 name = "r-zig-pixi"
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
@@ -191,8 +193,10 @@ configure = { cmd = "bash zigbuild/tools/configure-only.sh", depends-on = ["fetc
 [tasks]
 # --- CI (build-r.yml on GitHub Actions; needs `gh auth login`) ---
 # The full tier on demand, on main: all 15 legs and conda-package on all
-# 5, which publishes, as a push to main does (a push runs only the core
-# tier's 6 legs; .github/devdocs/chore-ci-tiers/PLAN.md). For a branch:
+# 5, which publishes as a push to main does, while the repository
+# variable CONDA_PUBLISH is `true` (off until phase 7's bump merges). A
+# push runs only the core tier's 6 legs
+# (.github/devdocs/chore-ci-tiers/PLAN.md). For a branch:
 # `gh workflow run build.yaml --ref <branch>`; for a pull request, the
 # `full-ci` label.
 ci-trigger = "gh workflow run build.yaml --ref main"
@@ -424,10 +428,11 @@ R_BLAS = "openblas"
 # Unix only: gnuwin32 has no switches for any of this (Windows is always
 # full, see build.zig).
 #
-# The wheel itself (r-zig, built by `pixi run -e wheel wheel`) wraps
-# this variant's standalone tree. Its runtime compiler for
-# install.packages() is the PyPI `ziglang` package (same zig version as
-# this env's, 0.16.0), declared as a wheel dependency.
+# The wheels (`pixi run -e wheel wheel`) wrap this variant's standalone
+# tree: r-zig is the tree. The runtime compiler for install.packages() is
+# the PyPI `ziglang` package (same zig version as this env's, 0.16.0),
+# which the r-zig-compilers wheel requires (feat-standalone-toolchain
+# B29).
 [feature.minimal]
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
 
@@ -487,12 +492,14 @@ minimal-check = "bash scripts/check-minimal.sh"
 
 # Wheel assembly + test: only Python (stdlib zipfile/hashlib, venv, pip).
 # Not the build env: python's own closure (readline, tk, sqlite, ...)
-# has no business being visible to R's configure. The input is the
-# minimal build's installed, vendored tree (`pixi run -e minimal build`),
-# dist/minimal/R-<ver>-zig, and make from the toolchain tree (`pixi run
-# -e minimal toolchain`), dist/toolchain/R-<ver>-zig; R_BUILD_VARIANT is
-# set here too, as env.sh's prefix and make-wheel.py's --prefix default
-# need it.
+# has no business being visible to R's configure. Four wheels, as the
+# conda packages (B29 a): r-zig from the minimal build's installed,
+# vendored tree (`pixi run -e minimal build`), dist/minimal/R-<ver>-zig,
+# with rzig; r-zig-build-tools from the toolchain tree's usr/, GNU make
+# (`pixi run -e minimal toolchain`), dist/toolchain/R-<ver>-zig;
+# r-zig-compilers (it requires ziglang) and r-zig-toolchain (both
+# groups) hold no file. R_BUILD_VARIANT is set here too, as env.sh's
+# prefix and make-wheel.py's --prefix default need it.
 [feature.wheel]
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
 
@@ -510,9 +517,12 @@ binutils = "*"
 
 [feature.wheel.tasks]
 wheel = "python scripts/make-wheel.py"
-# Installs the wheel plus ziglang (from PyPI: needs network) into a
-# throwaway venv and runs it with the pixi env scrubbed from the
-# environment, including an R CMD INSTALL of a C package through ziglang.
+# Installs the wheels the way a pip user would, into throwaway venvs with
+# the pixi env scrubbed from the environment, and uses them: r-zig alone
+# (recipe/test-preflight.R); + r-zig-compilers, which brings ziglang
+# from PyPI (needs network), and an R CMD INSTALL of a C/C++ package
+# through it; + r-zig-build-tools (make); + r-zig-toolchain; then the
+# groups uninstalled (scripts/wheel-test.sh).
 wheel-test = "bash scripts/wheel-test.sh"
 
 # conda packaging (rattler-build) lives in its own environment.
@@ -543,13 +553,25 @@ python = ">=3.9"
 # editing them reused the old build (2026-09-30); and it indexes
 # dist/conda as it starts and lists a package only under a file name
 # the index lacks, so a rebuild with the same build string kept the old
-# package's sha256, and r-zig-toolchain's test (and any env made from
+# package's sha256, and a package's test (and any env made from
 # dist/conda) installed the old r-zig-slim from the rattler cache
 # (kappa, 2026-10-11). The cost: every build downloads R's sources.
 # --error-*: two outputs packaging the same file, or a staging file no
 # output takes, fail the build instead of warning (no 0.76.1 build of
 # ours has warned).
-conda-package = "rm -rf dist/conda && rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id --error-overlapping-files --error-unused-staging-files -c conda-forge -c https://prefix.dev/universe"
+# R_ZIG_TEST_ZIG_CACHE: one zig cache for the four recipe tests, which
+# the recipe passes to them as a secret (on unix rattler-build's test env
+# keeps no other variable of the caller's; recipe/recipe.yaml), so the
+# libc++ and flang runtime the first one builds serve the others;
+# conda-consume.sh names the same directory. Emptied with dist/conda: the
+# next build may solve another zig of the same version, and zig's cache
+# cannot tell them apart (scripts/env.sh).
+conda-package = "rm -rf dist/conda build/conda-test-zig-cache && R_ZIG_TEST_ZIG_CACHE=$PIXI_PROJECT_ROOT/build/conda-test-zig-cache rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id --error-overlapping-files --error-unused-staging-files -c conda-forge -c https://prefix.dev/universe"
+# The packages conda-package made, as a user installs them: a fresh pixi
+# workspace from dist/conda, one environment per group, and the recipe's
+# tests through pixi's activation (scripts/conda-consume.sh). CI runs it
+# on every conda-package leg before the publish.
+conda-consume = "bash scripts/conda-consume.sh"
 
 # Channel administration: list/delete published package files. Neither
 # rattler-build nor pixi has CLI support for either operation (upload-
@@ -573,6 +595,9 @@ conda-channel-delete = "bash scripts/prefix-delete-package.sh"
 # rattler-build's own dist/conda/broken/ (its convention for a package
 # that failed its test phase) — each dev machine only ever builds its own
 # platform, so this is exact, not just defensive.
+# Not run by hand either from 2026-10-19 until phase 7's build-number bump
+# merges: build 8's new packages would land beside universe's old
+# r-zig-slim _8, which has no rzig (build.yaml's CONDA_PUBLISH says why).
 [feature.pkg.target.linux-64.tasks]
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/linux-64/*.conda"
 

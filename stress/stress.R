@@ -174,13 +174,16 @@ if (!flag("resume") && length(list.files(lib))) stop(lib, " is not empty: use --
 # decides (README). First match wins. toolchain has rzig build's own
 # failures, not its `zig build failed (N)`, which follows every failed
 # compile: the compiler's lines above it decide, as under make [tests-T4];
-# and the install preflight's stop (patch 0009), in build 8's words (as
-# universe's packages print it until phase 4) and today's [tests-T11].
+# and the install preflight's stops (patch 0009): after rzig's 127, in
+# build 8's words (as universe's packages print it until phase 4) and
+# today's [tests-T11]; after any other status, "this package cannot be
+# built (see above)" (PHASE4 open point J a), which classify sends to
+# package for a src/build.zig make cannot build.
 patterns <- c(
   network   = "cannot open URL|cannot open the connection to '?https?:|Could not resolve host|Failed to connect|Connection (timed out|refused|reset)|Temporary failure in name resolution|status was '[45][0-9][0-9]|HTTP (error|status) [45][0-9][0-9]|HTTP/[0-9.]+ [45][0-9][0-9]|Timeout of [0-9]+ seconds was reached|curl: \\([0-9]+\\)|download (failed|error)|SSL connect error",
   resource  = "No space left on device|[Cc]annot allocate memory|[Oo]ut of memory|std::bad_alloc|Killed signal terminated|virtual memory exhausted|OutOfMemory",
   abi       = "(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__cxx11|B5cxx11|St3__1|std::__1|__cxa_|__gxx_personality|_Unwind_|\\?[A-Za-z_][A-Za-z0-9_@?$]*@@)|undefined symbol: _Z|could not open 'lib(MSVCRT|OLDNAMES|LIBCMT|msvcprt)\\.a'|-LIBPATH:|Windows Kits/10/Lib|/(W[0-4]|bigobj|wd[0-9]+): unrecognized file extension",
-  toolchain = "unknown CPU: '|unrecognized file extension|Could NOT find Threads|thread [0-9]+ panic: |/bin/R(term\\.exe|script\\.exe)?: No such file or directory|is not a full path to an existing compiler tool|windres: command not found|Building for: NMake Makefiles|make: invalid option -- \\?|ar(\\.exe)?: [^ ]+\\.o: No such file or directory|unsupported linker arg: |-Werror,-Wdate-time|version script assignment of '[^']+' to symbol '[^']+' failed: symbol not defined|rzig: |(zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib): (cannot |waiting for |could not |no flang|warning: no |warning: R_ZIG_EXTRA_ENV)|rzig build: (no zig|cannot |waiting for zig build)|R_HOME/share/zig/rpkg is not installed|r-zig toolchain (is|\\(compiled code or a configure script\\), which is) (incomplete|not installed)|zig: error|error: unable to (spawn|create|open|load|parse|emit)|LLVM ERROR|PLEASE submit a bug report|unknown target CPU|unsupported option|unsupported argument '[^']*' to option '|unknown argument|compiler cannot create executables|relocation R_[A-Z0-9_]+ .*against|(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__(u)?(div|mod|mul)ti3|___chkstk_ms|__extend|__trunc|__emutls|__guard_(dispatch|check)_icall)",
+  toolchain = "unknown CPU: '|unrecognized file extension|Could NOT find Threads|thread [0-9]+ panic: |/bin/R(term\\.exe|script\\.exe)?: No such file or directory|is not a full path to an existing compiler tool|windres: command not found|Building for: NMake Makefiles|make: invalid option -- \\?|ar(\\.exe)?: [^ ]+\\.o: No such file or directory|unsupported linker arg: |-Werror,-Wdate-time|version script assignment of '[^']+' to symbol '[^']+' failed: symbol not defined|rzig: |(zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib): (cannot |waiting for |could not |no flang|warning: no |warning: R_ZIG_EXTRA_ENV)|rzig build: (no zig|cannot |waiting for zig build)|R_HOME/share/zig/rpkg is not installed|r-zig toolchain (is|\\(compiled code or a configure script\\), which is) (incomplete|not installed)|this package cannot be built \\(see above\\)|zig: error|error: unable to (spawn|create|open|load|parse|emit)|LLVM ERROR|PLEASE submit a bug report|unknown target CPU|unsupported option|unsupported argument '[^']*' to option '|unknown argument|compiler cannot create executables|relocation R_[A-Z0-9_]+ .*against|(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__(u)?(div|mod|mul)ti3|___chkstk_ms|__extend|__trunc|__emutls|__guard_(dispatch|check)_icall)",
   crash     = "\\*\\*\\* caught (segfault|bus error|illegal operation) \\*\\*\\*|R is aborting now|An irrecoverable exception occurred",
   upstream  = "Library not loaded: (/opt/homebrew|/usr/local/(opt|Cellar))/|(system library '|cannot find -l|library not found for -l|unable to find library -l)(debug|optimized)\\b|[Tt]he specified procedure could not be found|failed to solve the environment|Cannot solve the request|[Cc]ould not solve for environment specs",
   sysdep    = "(?m)configure: error|was not found in the pkg-config search path|No package '[^']+' found|fatal error: '?[^ ']+\\.h(pp|xx)?'?( file)? not found|\\.h: No such file|cannot find -l|unable to find (dynamic |static )?system library|library not found for -l|command not found|: not found$|[Cc][Mm]ake.*not found|Could NOT find")
@@ -199,14 +202,17 @@ first_error <- function(log, after = NULL) {
   sym <- grep("undefined symbol: |[Ss]ymbol not found: |Library not loaded: |LoadLibrary failure: ", x)
   sym <- sym[!is.na(hit) & sym > hit & sym <= hit + 3]
   if (length(sym)) line <- sub(".*(undefined symbol: |[Ss]ymbol not found: |Library not loaded: |LoadLibrary failure: )", "\\1", x[sym[1]])
-  # the install preflight's stop (patch 0009) points "see above": the line
+  # the install preflight's stops (patch 0009) point "see above": the line
   # is rzig's last one above it, which names what is missing (zig-cc: on
-  # every OS, also run as gcc.exe), not the stop itself; its words differ
-  # between builds, its end does not [tests-T11]. For a src/build.zig
-  # package make cannot build it is the line with rzig's reason, which the
-  # line "the r-zig toolchain is complete" follows. The failing part then
-  # starts at rzig's line, which classify reads too [code-6]
-  if (!is.na(hit) && grepl("r-zig toolchain", x[hit], fixed = TRUE) && grepl("incomplete (see above)", x[hit], fixed = TRUE)) {
+  # every OS, also run as gcc.exe), not the stop itself; the 127 stop's
+  # words differ between builds, its end does not [tests-T11]. After any
+  # other status the stop is "this package cannot be built (see above)"
+  # (PHASE4 open point J a). For a src/build.zig package make cannot build
+  # it is the line with rzig's reason, which the line "the r-zig toolchain
+  # is complete" follows. The failing part then starts at rzig's line,
+  # which classify reads too [code-6]
+  if (!is.na(hit) && (grepl("r-zig toolchain", x[hit], fixed = TRUE) && grepl("incomplete (see above)", x[hit], fixed = TRUE) ||
+                      grepl("this package cannot be built (see above)", x[hit], fixed = TRUE))) {
     z <- grep("^zig-cc: ", x[seq_len(hit - 1)])
     c1 <- z[grepl("src/build.zig cannot be built by make: ", x[z], fixed = TRUE)]
     if (length(c1)) z <- c1
@@ -221,9 +227,9 @@ first_error <- function(log, after = NULL) {
 }
 classify <- function(text) {
   # a src/build.zig package make cannot build (rzig's line, from the hook
-  # or the preflight, whose stop after it says the toolchain is
-  # incomplete): the package's own or a site's settings, not the
-  # toolchain [code-6]
+  # or the preflight, whose stop after it says the package cannot be
+  # built): the package's own or a site's settings, not the toolchain
+  # [code-6]. Any other preflight stop matches toolchain's pattern
   if (grepl("src/build.zig cannot be built by make: ", text, fixed = TRUE)) return("package")
   for (k in names(patterns)) if (grepl(patterns[[k]], text, perl = TRUE)) return(k)
   "package"
@@ -240,8 +246,12 @@ if (!is.null(conda) && !in_ws) {
     if (!dir.exists(channel)) stop("no conda channel at ", channel, ": run `pixi run -e pkg conda-package`, or use --conda=universe", call. = FALSE)
     channel <- normalizePath(channel, winslash = "/")
   }
-  # conda-forge before universe, as pixi.toml: universe mirrors some
-  # conda-forge packages (libdeflate), and pixi's channel priority is strict
+  # conda-forge before universe, as pixi.toml and README: universe's index
+  # names ../conda-forge as its base (channel_relations), so listed first
+  # it gives pixi, whose channel priority is strict, every conda-forge
+  # package from prefix.dev's mirror, which can lag (phase 4 on kappa:
+  # win-64's r-zig-slim, built locally as _9 before the 2026-10-19
+  # decision kept 8, needed a libcurl the mirror did not have yet)
   channels <- unique(c(if (channel != "https://prefix.dev/universe") channel, "conda-forge", "https://prefix.dev/universe"))
   subdir <- switch(paste(os, arch), "linux x86_64" = "linux-64", "linux aarch64" = "linux-aarch64",
                    "macos x86_64" = "osx-64", "macos aarch64" = "osx-arm64", "windows x86_64" = "win-64",

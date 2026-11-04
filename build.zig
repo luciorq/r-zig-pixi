@@ -127,7 +127,6 @@ const Ctx = struct {
     openmp: bool,
     devcairo: bool,
     flangrt_dir: []const u8, // conda clang resource dir holding libflang_rt.runtime.a (findFlangRt)
-    toolchain_hint: []const u8, // -Dtoolchain-hint, "" when unset
     sdk: []const u8, // macOS: the installed SDK's root (xcrun); "" elsewhere
     // The zig lib dir of R's links, null for zig's own: a mirror of it
     // where conda-forge's zig would link a shared libc++
@@ -308,14 +307,6 @@ pub fn build(b: *std.Build) !void {
 
     var variant = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal (unix only)") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
-    // What the compile preflight and R CMD config (patches 0009, 0010) tell
-    // someone whose R has no rzig, its toolchain package missing, to
-    // install: written into etc/Renviron (Windows: etc/Renviron.site).
-    // Where rzig is there, its check mode's text names what is missing
-    // instead (feat-standalone-toolchain B26, B35; PHASE3 C8). zig-build.sh
-    // passes the conda one for the conda build; the wheel sets its own;
-    // empty means R's generic message.
-    const toolchain_hint = b.option([]const u8, "toolchain-hint", "R_ZIG_TOOLCHAIN_HINT default written into etc/Renviron") orelse "";
 
     const native = b.resolveTargetQuery(.{});
     const os: Os = switch (native.result.os.tag) {
@@ -492,7 +483,6 @@ pub fn build(b: *std.Build) !void {
         .prefix = install_prefix,
         .rhome = rhome,
         .config_dir = config_dir,
-        .toolchain_hint = toolchain_hint,
         .sdk = sdk,
         .zig_lib_dir = try staticLibcxxLibDir(b, io, os),
         .prefix_is_env = samePhysicalDir(io, arena, install_prefix, conda),
@@ -1897,7 +1887,7 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
         .install_dir = .{ .custom = "Library/bin" },
         .install_subdir = "",
     }).step);
-    // (etc/Renviron.site, with the compile preflight's hint: installEnvRuntime)
+    // (etc/Renviron.site: installEnvRuntime)
 }
 
 /// Makeconf's COMPILED_BY on Windows: clang-<version> of the zig that
@@ -2562,10 +2552,12 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 /// (feat-no-host-paths F3): one binary, a copy per name, dispatching on
 /// the name it was started as. They are the only files directly in that
 /// directory: the toolchain groups' files sit in its subdirectories
-/// (feat-standalone-toolchain B19, B30). The r-zig-toolchain packages own
-/// this directory; the compile preflight (patch 0009, install.R) and R CMD
-/// config (patch 0010) run its check mode by the name of CC, zig-cc on
-/// unix and gcc.exe on Windows (B26 a).
+/// (feat-standalone-toolchain B19, B30). The base carries them on every
+/// channel: the base archive, r-zig-slim and the r-zig wheel (B19). The
+/// groups' packages hold only subdirectories (B28, B29). The compile
+/// preflight (patch 0009, install.R) and R CMD config (patch 0010) run
+/// its check mode by the name of CC, zig-cc on unix and gcc.exe on
+/// Windows (B26 a).
 ///   unix:    zig-cc, zig-cxx (CC/CXX/OBJC/OBJCXX), zig-fc (FC), zig-ar,
 ///            zig-ranlib, and rzig itself (`rzig build`, `rzig def`:
 ///            feat-zig-pkg-build)
@@ -3090,14 +3082,14 @@ fn pathExists(io: std.Io, p: []const u8) bool {
 ///     fontconfig's configuration (installFontconfig) as
 ///     R_HOME/etc/fonts, which
 ///     etc/Renviron.site points FONTCONFIG_PATH at. etc/Renviron.site is
-///     written here, for the conda build too: it carries the compile
-///     preflight's hint (Windows R reads Renviron.site, not etc/Renviron,
-///     which finalRenviron writes for unix), and in the conda build
-///     MY_TCLTK: tcltk's .onLoad (src/library/tcltk/R/windows/zzz.R)
-///     stops with "Tcl/Tk support files were not installed" unless
-///     R_HOME/Tcl/bin exists or MY_TCLTK names the directory of the Tcl/Tk
-///     DLLs, which in a conda env is the tk package's Library/bin
-///     (tcl86t.dll finds its scripts in Library/lib relative to itself).
+///     written here, for the conda build too (Windows R reads
+///     Renviron.site, not etc/Renviron, which finalRenviron writes for
+///     unix): in the conda build it carries MY_TCLTK: tcltk's .onLoad
+///     (src/library/tcltk/R/windows/zzz.R) stops with "Tcl/Tk support
+///     files were not installed" unless R_HOME/Tcl/bin exists or MY_TCLTK
+///     names the directory of the Tcl/Tk DLLs, which in a conda env is the
+///     tk package's Library/bin (tcl86t.dll finds its scripts in
+///     Library/lib relative to itself).
 ///     `R --vanilla` skips Renviron.site, and on Windows no other file R
 ///     reads at startup, so there library(tcltk) needs MY_TCLTK set by
 ///     hand.
@@ -3150,9 +3142,6 @@ fn installEnvRuntime(ctx: *const Ctx, io: std.Io) !void {
         return;
     }
     var site = std.ArrayList(u8).empty;
-    if (ctx.toolchain_hint.len > 0) {
-        try site.appendSlice(b.allocator, b.fmt("R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{s}'}}\n", .{ctx.toolchain_hint}));
-    }
     if (ctx.prefix_is_env) {
         // R_HOME is <env>/Library/lib/R, so this is <env>/Library/bin.
         // Renviron expands a nested default only when it is a whole ${...}
@@ -3809,8 +3798,7 @@ const macos_cmake_toolchain =
 /// (installing a package without compiling runs no tar or unzip),
 /// printing goes to a bare `lpr`, MAKE is R's `make` in every flavor and
 /// the build-tools group's usr/bin leads PATH (feat-standalone-toolchain
-/// B25), the compile preflight's hint comes from -Dtoolchain-hint, on
-/// macOS CMake's default toolchain file is etc/r-zig.cmake
+/// B25), on macOS CMake's default toolchain file is etc/r-zig.cmake
 /// (macos_cmake_toolchain), and a tree that is not the env names its CA
 /// bundle and, in full, Tcl's script library (installEnvRuntime).
 /// `${X-default}` keeps a value set in the environment, as upstream's
@@ -3833,9 +3821,6 @@ fn finalRenviron(ctx: *const Ctx, raw: []const u8) ![]u8 {
             try out.appendSlice(b.allocator, line);
         }
         try out.append(b.allocator, '\n');
-    }
-    if (ctx.toolchain_hint.len > 0) {
-        try out.appendSlice(b.allocator, b.fmt("R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{s}'}}\n", .{ctx.toolchain_hint}));
     }
     // macOS: CMake's default toolchain file (macos_cmake_toolchain), in the
     // conda build too. R reads this file at startup and R CMD sources it,

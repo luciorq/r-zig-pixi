@@ -7,13 +7,13 @@ R_HOME/bin/toolchain/zig-cc --rzig-check=build-tools (gcc.exe on
 Windows, where this script is bin/config.sh and the check also finds sh
 and the binutils Makeconf.win names): it says what is missing and names
 the build-tools group on stderr, and R CMD config exits with its status.
-With no rzig (R without its toolchain package), check for make and name
-that package, from R_ZIG_TOOLCHAIN_HINT. feat-no-host-paths PLAN.md,
-phase T; feat-standalone-toolchain PLAN.md, B26.
+rzig ships with R on every channel (the base archive, r-zig-slim, the
+r-zig wheel), so there is no other branch. feat-no-host-paths PLAN.md,
+phase T; feat-standalone-toolchain PLAN.md, B26 and phase 4.
 
 --- a/src/scripts/config
 +++ b/src/scripts/config
-@@ -175,6 +175,23 @@
+@@ -175,6 +175,19 @@
    R_SHARE_DIR=${R_HOME}/share
  fi
  
@@ -21,19 +21,15 @@ phase T; feat-standalone-toolchain PLAN.md, B26.
 +## B26): it finds make as R runs it (Windows: also sh and the binutils),
 +## or names the build-tools group on stderr and exits non-zero, which ends
 +## this script with its status. Its ok line goes to /dev/null: stdout is
-+## the value R CMD config prints. Without rzig (R without its toolchain
-+## package), make alone, and R_ZIG_TOOLCHAIN_HINT names that package.
++## the value R CMD config prints. rzig ships with R on every channel
++## (feat-standalone-toolchain phase 4). A user's hint is shown by the
++## install preflight alone (patch 0009; PHASE4 open point B b).
 +if test "${R_OSTYPE}" = "windows"; then
 +  rzig="${R_HOME}/bin/toolchain/gcc.exe"
 +else
 +  rzig="${R_HOME}/bin/toolchain/zig-cc"
 +fi
-+if test -f "${rzig}"; then
-+  "${rzig}" --rzig-check=build-tools > /dev/null || exit
-+elif ! command -v "${MAKE%% *}" > /dev/null 2>&1; then
-+  echo "ERROR: 'R CMD config' needs make, which comes with the r-zig toolchain: ${R_ZIG_TOOLCHAIN_HINT:-install the r-zig toolchain package for this R}" >&2
-+  exit 1
-+fi
++"${rzig}" --rzig-check=build-tools > /dev/null || exit
  makefiles="-f ${R_HOME}/etc${R_ARCH}/Makeconf -f ${R_SHARE_DIR}/make/config.mk"
  ## avoid passing down -jN
  MAKEFLAGS=

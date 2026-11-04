@@ -213,7 +213,7 @@ today.
 | Component | Standalone | conda | PyPI |
 |---|---|---|---|
 | R (R_HOME, launchers, Makeconf, headers) | base archive `R-<ver>-<flavor>-<plat>` | r-zig-slim | r-zig (minimal) |
-| rzig | base archive (today in the tree, archived with it) | r-zig-slim (today r-zig-toolchain) | r-zig (today r-zig-toolchain) |
+| rzig | base archive (today in the tree, archived with it) | r-zig-slim (since phase 4; on universe from the bump with phase 7's merge) | r-zig (since phase 4) |
 | vendored runtime libraries | base archive | conda-forge packages, r-zig-slim's run dependencies | r-zig |
 | libomp runtime | base archive (slim, full) | llvm-openmp, a run dependency of r-zig-slim | none (minimal) |
 | Tcl/Tk | base archive (unix full; Windows, with its headers in `R_HOME/Tcl/include`: T1) | unix: none (conda builds slim); win-64: tk 8.6 through `MY_TCLTK` | none |
@@ -244,7 +244,7 @@ Where PyPI differs: linux and macOS only, and the minimal flavor only.
 r-zig-compilers brings zig (ziglang) and no flang or OpenMP (B29 a), so
 `flang/` and `openmp/` exist on the standalone and conda channels only.
 The wheel's etc/Renviron.site sets a `ZIG_BIN` default that names the
-sibling ziglang (make-wheel.py:229-241); that is the wheel's one
+sibling ziglang (make-wheel.py's renviron_site); that is the wheel's one
 channel-specific setting.
 
 Where names differ: Windows builds full, and every channel calls it slim
@@ -269,7 +269,8 @@ wants a really slim Windows slim later ("Later and future checks").
 | Tier | Covers | Standalone | conda | PyPI |
 |---|---|---|---|---|
 | 0 Run, 1 Install without compiling | `R`, `Rscript`, `library()`, R-only source and binary packages, `install.packages(Ncpus > 1)` | base archive | r-zig-slim | r-zig |
-| 2 Compile | `src/`, `configure`, `R CMD SHLIB`, `R CMD config` | base + compilers + build-tools archives in one directory (unix: build-tools optional where the host has make) | + r-zig-toolchain | + r-zig-toolchain |
+| 2 Compile, compilers alone | `src/` that `rzig build` installs: no configure script R runs, a Makevars that only sets variables (feat-zig-pkg-build N2); not `R CMD SHLIB`, `R CMD config`, pak or pkgbuild's probe | base + compilers archives | + r-zig-compilers | + r-zig-compilers (zig only, no Fortran) |
+| 2 Compile | `src/`, `configure`, `R CMD SHLIB`, `R CMD config` | base + compilers + build-tools archives in one directory (unix: build-tools optional where the host has make) | + r-zig-toolchain (r-zig-compilers and r-zig-build-tools) | + r-zig-toolchain (r-zig-compilers and r-zig-build-tools) |
 | 3 Develop | `R CMD check`, `Rd2pdf`, vignettes | host tools found on PATH when used (unchanged) | the same | the same |
 
 verify-bundle's three scenarios follow these tiers: base alone; base +
@@ -800,7 +801,7 @@ What it means for this plan:
 | B11 | Where Windows' usr/bin tools come from | the user's: conda-forge packages, native first, `m2-*` where needed | phase 7 |
 | B12 | Publishing | (a) CI artifacts now, release job later | phase 3 |
 | B13 | Compression | (a) gzip/zip now, measure after phase 6 | phases 3, 6 |
-| B14 | conda build number | (a) bump in phase 4's PR and in each later PR that changes a package | phases 4, 9 |
+| B14 | conda build number | (a) bump in phase 4's PR and in each later PR that changes a package; amended 2026-10-19: no bump in phases 4, SHLIB routing, 5 and 6, the next with phase 7's merge | phases 7, 9 |
 | B17 | Archive names | (a) working names, groups without flavor | phase 3 |
 | B18 | The zig 0.17 wave | (a) upstream leads on the gated legs, conda waits for conda-forge | not phases 2-9 |
 | B23 | Where unix make sits | (a) `TC/usr/bin/make` | phase 3 |
@@ -843,7 +844,8 @@ The items that touch this plan:
   atexit workaround (addSharedLib's `.drectve` exclude) stays, through
   the 0.17 port too (B18).
 - **D7 = (a):** CC_VER/FC_VER are refreshed with the first B14 bump,
-  phase 4's.
+  phase 4's (done in phase 4, which keeps build 8 since 2026-10-19: the
+  first bump is phase 7's, B14's amendment).
 - **D12 = (a):** rattler-build >= 0.76 with its warnings as errors.
   feat-no-host-paths PLAN.md puts it in its proposed follow-up PR (i);
   phase 4's rattler-build checks (B28) and the overlapping-files risk
@@ -854,7 +856,8 @@ The items that touch this plan:
   (its own branch, feat-stress-suite). It decides the extras group and
   reassesses B39's list and B43's tools.
 - **E2 = (a):** zstd is declared in the recipe with the first bump,
-  phase 4's: in r-zig-slim (R.dll imports zstd.dll) and in win-64
+  phase 4's (done in phase 4; the first bump is phase 7's since
+  2026-10-19): in r-zig-slim (R.dll imports zstd.dll) and in win-64
   r-zig-build-tools (the binutils import it).
 - **C1 = (a):** Windows minimal drops ICU, cairo, Tcl/Tk and OpenMP and
   keeps png/jpeg/tiff and NLS. **C2 = (a):** a Windows wheel without
@@ -1197,6 +1200,32 @@ when it is complete on conda, and each later change when it merges (G4).
 Depends on: B37. Blocks: phase 4 (the bump) and phase 9; later PRs
 follow the same answer. Replaces: old 12; "no bump" is no longer
 possible.
+
+**Amended (2026-10-19, the user): "do not bump conda package build
+version in the previous PRs. the next build bump is going to be after
+phase 7 is merged."** Phases 4, SHLIB routing (feat-shlib-rzig-build),
+5 and 6 keep build 8. The next bump comes with phase 7's merge, and (a)
+still decides its number then: the one after universe's newest. Without
+a bump, a publish from main would upload the new r-zig-compilers and
+r-zig-build-tools and a new-hash r-zig-toolchain at `_8`, while
+`--skip-existing` keeps universe's old r-zig-slim `_8`, which has no
+rzig (feat-zig-pkg-build's N5 coupling: every compiled install would
+stop). So build.yaml's publish step also needs the repository variable
+`CONDA_PUBLISH` to be `true`; it is unset until phase 7's bump merges,
+and the user sets it then (`gh variable set CONDA_PUBLISH --body true`;
+TODO.md, phase 7). Phases 4 to 6 publish with that bump. Their records
+of local builds at `_9` to `_12` are from before this decision. Until
+the bump, a local r-zig-slim build has universe's file name: linux-64's
+r-zig-slim hash is hb0f4dca in the render of 2026-10-19 and in phase
+4's and 6's builds (hb0f4dca_9, hb0f4dca_12), so build 8 is
+r-zig-slim-4.6.1-hb0f4dca_8, the name of universe's build 8, while
+r-zig-toolchain's hash moves (phase 4's build: hdc6fa2d, universe's
+build 8: hc48ad4c). So a local test empties dist/conda (as
+conda-package does) and uses fresh package caches (N5's cache trap,
+pixi.toml's conda-package comment), and a local channel is not mixed
+with universe in a solver without strict channel priority: universe's
+r-zig-toolchain `_8` pins that exact r-zig-slim file name and would
+pair the new R with the old rzig.
 
 ### B17. Archive names (old 15)
 
@@ -2625,7 +2654,8 @@ by feat-shared-build-runner, its PLAN.md, after dispatch 38467907779
 measured that cost at 3.3 to 12.8 s per tier-1 install). `rzig` /
 `rzig.exe` is one more name in `rzig_names()` (the hook's name for
 `rzig build` and `rzig def`), and `R_HOME/share/zig/rpkg/` holds the zig
-build roots. No build-number bump: phase 4's (8 to 9) publishes both.
+build roots. No build-number bump: phase 4's (8 to 9) publishes both
+(since 2026-10-19: phase 7's bump, B14's amendment).
 
 **feat-zig-pkg-build's review follow-up (2026-10-13;
 fix-zig-pkg-build-review's PLAN.md, and the review in `review/`
@@ -3810,7 +3840,8 @@ The user committed steps 4 to 6 as 548da1a and opened PR #24 with the
   exits 0 unless --strict, so a row's failure shows only in its table.
 C13 holds: universe has r-zig-slim and r-zig-toolchain build 8 on all
 five subdirs (repodata, 2026-10-11), so phase 3's files publish nothing
-until phase 4's bump. Not run anywhere: upstream zig on osx-64.
+until phase 4's bump (since 2026-10-19: the bump with phase 7's merge,
+B14's amendment). Not run anywhere: upstream zig on osx-64.
 
 #### Phase 3 review: steps 1 and 2 (2026-10-10)
 
@@ -3867,7 +3898,9 @@ Steps:
   `Library/...`); r-zig-compilers, r-zig-build-tools and the
   r-zig-toolchain metapackage; the build number per B14 (a: the number
   after the one published when phase 4 merges; build 8 is on universe,
-  so 9 unless another PR bumps first; C14).
+  so 9 unless another PR bumps first; C14). Amended 2026-10-19: phase 4
+  keeps 8 and main does not publish it; the bump comes with phase 7's
+  merge (B14's amendment).
   - win-64 r-zig-build-tools holds B41's binutils copies (nm, dlltool,
     as, strip, windres, objdump, less any tool rzig took over: none in
     phase 3; B24's follow-up PRs can take dlltool and as, then windres)
@@ -3900,6 +3933,653 @@ Tests:
   build: rzig moves from r-zig-toolchain to r-zig-slim without a clobber
   error.
 - wheel-test on linux-64 and CI's four unix minimal legs.
+
+**Status (2026-10-14): steps 1 to 5 done in the worktree
+feat-standalone-phase4 (branch feat-standalone-phase4, from main
+d11dee1: phase 3, PR #25 and #26's rzig build, PR #27's shared tier-1
+build runner), not committed. Tested on linux-64 (both zigs), omicron
+(osx-arm64) and kappa (win-64), two rounds on each remote host, and the
+upgrade from universe's `_8` with pixi, conda and micromamba (gamma),
+pixi and conda (kappa) and pixi (omicron): all pass. CI has not run.**
+The work follows the reviewed implementation plan, copied here as
+phase4/PHASE4-IMPLEMENTATION.md with its critique phase4/CRITIQUE.md
+(cited below as PHASE4 <section>, Cc<n> and Cg<n>), and the user's
+answers to its open points ("Phase 4: the user's answers"). The build
+number was 9 (universe holds r-zig-slim and r-zig-toolchain `_8` and
+nothing newer on all five subdirs: repodata, read again 2026-10-14
+17:50 UTC; C14); since the user's decision of 2026-10-19 it stays 8,
+and the records below of `_9` packages are local builds from before
+it (B14's amendment). pixi.lock is unchanged on every host (sha256
+fbb64b7b...a68bb96); phase 4 changes no dependency of a pixi env. Next:
+the user commits and opens the PR with the `full-ci` and `upstream-zig`
+labels; CI's five conda legs run the four package tests and
+conda-consume each (phase 4's first conda-package on osx-64 and
+linux-aarch64). Phase 4's merge publishes nothing: build.yaml's publish
+step waits for `CONDA_PUBLISH`, which the user sets after phase 7's bump
+merges; PHASE4 section 7's post-publish check runs after that publish
+(TODO.md).
+
+N5 closes with the bump that publishes phase 4: since 2026-10-19 the
+one with phase 7's merge, not a `_9` from phase 4. That build ships
+rzig in the base on conda (r-zig-slim) and PyPI (r-zig), in the same
+package as patches 0009, 0012 and 0013 and share/zig/rpkg, as the
+standalone base archive has since phase 3 (B19), and the exact pins
+make its base with an `_8` r-zig-toolchain unsolvable. So no channel
+can pair a new R with an older rzig again. It also publishes what
+bumped nothing: phase 3, feat-zig-pkg-build (PR #25), its review
+follow-up (PR #26), the shared tier-1 build runner (PR #27) and phases
+4 to 6. The closing notes "published as `_<N>`, <date>" in
+feat-zig-pkg-build's N5 and fix-zig-pkg-build-review's status wait for
+that publish (Cc19; TODO.md). Until then main must not publish at all:
+a build 8 from main would put the new group packages beside universe's
+old r-zig-slim `_8`, which has no rzig (build.yaml's `CONDA_PUBLISH`).
+
+#### Phase 4: the user's answers (2026-10-14)
+
+The user, 2026-10-14: "Start phase 4 now"; PHASE4 section 12's open
+points take their recommended options.
+- A (a): each group wheel requires `r-zig==<ver>` (r-zig-compilers also
+  `ziglang>=0.16.0,<0.16.1`); r-zig-toolchain requires
+  `r-zig-compilers==<ver>` and `r-zig-build-tools==<ver>`, as conda's
+  exact pins (B28).
+- B (b): `R_ZIG_TOOLCHAIN_HINT` is a user's own value only. Patch 0009
+  shows it as `hint: <value>` after rzig's text, on exit 127 only; patch
+  0010 shows none.
+- C (a): patch 0013 drops "the r-zig toolchain is older than this R";
+  I-PF4's `R_ZIG_PKG_BUILDER=zig` stop and the make path stay.
+- D: settled before phase 4 started. The user had the shared tier-1
+  build runner land first (feat-shared-build-runner, PR #27, main
+  d11dee1), so phase 4's publish carries it too: (b) in effect (that
+  publish was `_9`; since 2026-10-19 it is phase 7's bump). Its open
+  decision 1 (b), the Windows key, is folded into phase 4 (step 3 and
+  the host rounds).
+- E (a): a package or wheel that holds third-party files states their
+  licence: conda's win-64 r-zig-build-tools `GPL-3.0-or-later` (the
+  MinGW binutils), pip's r-zig-build-tools `GPL-3.0-or-later` with
+  make's COPYING as its licence file. The base and the packages and
+  wheels with no third-party file say R's `GPL-2.0-only OR
+  GPL-3.0-only` on both channels (conda said `GPL-2.0-or-later` on every
+  output until `_8`).
+- F (a): conda's win-64 r-zig-build-tools depends on `pkg-config` only;
+  phase 7 adds the `pkgconf` name on both channels.
+- G (a): the upgrade test by hand before merging: gamma (pixi, conda,
+  micromamba), kappa (pixi, conda), omicron (pixi).
+- H (a): `--rzig-check=package` names every missing group the package
+  needs in one stop (both texts, compilers first, one exit 127), and
+  each conda and pip line ends "; r-zig-toolchain installs every group".
+  A refinement within B35: one text per group, several groups per stop.
+- I (a): a build tool installed in R's environment but not on PATH is
+  named as such ("<path> is installed in R's environment, which is not
+  on PATH: activate it (pixi shell, conda activate) or start R with pixi
+  run"). Finding it stays PATH's (B34's note).
+- J (a): 0009 says "...which is incomplete (see above)" after a 127 and
+  "this package cannot be built (see above)" after any other status.
+  I-T11 gets that third text (fix-zig-pkg-build-review PLAN.md), and
+  stress.R classes it.
+- K (a): r-zig-slim has `run_constraints: zig 0.16.*`, bumped with
+  r-zig-compilers' pins in the 0.17 wave (B18).
+- L (a): the README says universe is public and needs no login.
+
+Also folded into phase 4 by the user: any fix the stress dispatch on
+main d11dee1 (38569895172) called for. It called for records only: its
+table and conclusion are in feat-shared-build-runner's PLAN.md ("CI"),
+and TODO.md's "Later" item is ticked. No code changed for it.
+
+The two decisions the phase 4 run left open, answered by the user on
+2026-10-14 ("Follow with the recommended"):
+- A (a): conda-package keeps `-c conda-forge` (conda.anaconda.org). A
+  build can take a conda-forge package that prefix.dev's mirror has not
+  synced yet (libcurl 8.23.0 on win-64, 2026-10-14); the risk is recorded
+  under Risks and the README's channel order is the one tested.
+- B (a): the four recipe tests keep sharing one zig cache
+  (`R_ZIG_TEST_ZIG_CACHE`) until CI's conda leg times decide (TODO.md).
+
+#### Phase 4 record: step 1, conda's four packages (2026-10-14, linux-64)
+
+What changed (B28 a, B41, B39/B11 interim, E2, B14; open points E, H,
+K; Cc4, Cc11, Cc12, Cg7, Cg8, Cg9):
+- recipe.yaml: build number 9, with an 8 → 9 history entry; the outputs
+  comment covers four packages. (2026-10-19: the number is back to 8
+  and the history entry is one line, "8 stays", B14's amendment.)
+  - r-zig-slim excludes only
+    `lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**` and its
+    `Library/` form, so it keeps rzig under its six names (unix) or ten
+    (Windows) beside share/zig/rpkg. `run_constraints: zig 0.16.*` (K).
+    zstd is a run dependency on every OS (E2); libiconv, libstdcxx and
+    libgcc stay linux-only.
+  - r-zig-compilers: `inherit` with `run_exports: false` and `files:
+    []`. It depends on the exact r-zig-slim, `zig 0.16.*`, `flang-zig
+    ==23.1.1 *_6`, `lld-zig ==23.1.1 *_5`, `flang-rt-zig ==23.1.1 *_10`
+    and llvm-openmp.
+  - r-zig-build-tools: win-64's `binutils/**` only (B41). It depends on
+    the exact r-zig-slim; on unix also `make >=4.4`; on win-64 today's
+    eight m2 packages, pkg-config and zstd, and no native make (Cg7:
+    m2-make is the one on PATH, SC §5). Its licence is
+    `GPL-3.0-or-later` on win-64 and R's elsewhere (E a).
+  - r-zig-toolchain: a metapackage (`files: []`) that exactly pins the
+    three others. The recipe's licence is `GPL-2.0-only OR
+    GPL-3.0-only` (E a).
+  - A `package_contents` test on each output (Cc12): rzig, zig-cc or
+    gcc.exe and rpkg/build_t1.zig in r-zig-slim, and no group directory;
+    nothing under `lib/R` in the group packages; win-64
+    r-zig-build-tools' six tools, SOURCES and LICENSES. Not `strict`:
+    every output carries its test file (PHASE4 risk 4).
+- The first action, rattler-build 0.76.1's file lists: r-zig-slim
+  linux-64 holds 1,883 files, rzig ×6 at 633 KiB each and
+  share/zig/rpkg; r-zig-compilers, unix r-zig-build-tools and
+  r-zig-toolchain hold only `etc/conda/test-files/<name>/0/<test>.R`.
+  r-zig-slim keeps `_8`'s hashes (hb0f4dca linux-64; h41cfa24 osx-arm64
+  and h9490d1a win-64 from `--render-only`): target_platform is its
+  only hash input.
+- recipe/build.sh's comment: r-zig-build-tools owns the binutils (B41),
+  r-zig-slim owns rzig (B28).
+- The four recipe tests start with one shared header (PHASE4 section
+  3): the caller's variables that change what a test checks are unset;
+  `R_MAKEVARS_USER` names a file that does not exist (unset, R and rzig
+  fall back to ~/.R/Makevars, A3); zig's cache is
+  `R_ZIG_TEST_ZIG_CACHE` or the test's own; `narrow()`, `shown()`,
+  `same_path()` and `run_to()`.
+  - test-preflight.R (r-zig-slim alone), rewritten: rzig and rpkg
+    present, no binutils/ or usr/; an R-only package installs; a
+    compiled one stops with `zig-cc: no zig (`, the compilers text, the
+    conda line naming r-zig-compilers, the pip line, "which is
+    incomplete (see above)" and no `hint:` line.
+  - test-compilers.R (new): no make on PATH; `--rzig-check=fortran`
+    finds the env's flang; a C package and a Fortran package (s.f, the
+    FLIBS path) build through `rzig build: tier 1` and load; a package
+    with a Makevars rule stops naming r-zig-build-tools and installs
+    nothing; unix `R CMD config CC` exits 127 with the build-tools text.
+  - test-build-tools.R (new): `--rzig-check=build-tools` finds this
+    env's make (Windows: also sh, and the binutils beside rzig);
+    `--rzig-check` exits 127 naming r-zig-compilers; `R CMD config CC`
+    names toolchain/zig-cc (gcc.exe). Windows: SOURCES and LICENSES
+    (moved from test-toolchain.R), nm with only the env's bin and
+    System32 on PATH, `pkg-config --version`.
+  - test-toolchain.R: every install under the narrowed PATH (Cg9);
+    readelf and otool found before PATH is narrowed and run by path;
+    the Windows block keeps NM, OBJDUMP and ar.exe.
+- groups.zig's conda line: "pixi add r-zig-<group> (or conda install
+  r-zig-<group>); r-zig-toolchain installs every group" (H a), with the
+  tests' expected texts and the header's conda/pip bullet.
+- scripts/conda-consume.sh (new) and the pkg task `conda-consume`
+  (Cg8): a fresh pixi workspace from dist/conda, then conda-forge, then
+  universe, with environments default, compilers and build-tools; each
+  runs its test through `pixi run Rscript` (win-64: Rscript.bat, which
+  rattler-build's test phase cannot run).
+- conda-package sets `R_ZIG_TEST_ZIG_CACHE` (one zig cache for the four
+  tests, Cc11) and empties it with dist/conda: zig's cache cannot tell
+  two builds of zig 0.16 apart (env.sh's lesson).
+
+Choices and deviations, with their reasons:
+- A B25 finding: on unix R's makefiles need more than make and sh's
+  builtins. GNU make runs a recipe line without shell syntax directly,
+  by PATH, so config.mk's `@echo $($(VAR))` failed with a PATH of the
+  env alone ("make: echo: No such file or directory", 127).
+  `narrow(usr_bin = TRUE)` therefore adds the host's /usr/bin:/bin after
+  the env on unix (B25's host userland) and m2's Library\usr\bin first
+  on Windows. Only test-build-tools.R and test-toolchain.R use it; the
+  base-alone and compilers tests keep a PATH of the env only, and
+  test-build-tools.R asserts that the make it finds is this env's.
+  PHASE4 risk 1 expected such a finding.
+- rzig prints its ok lines with the tool's prefix, so the tests match
+  `zig-cc: compilers ok: zig 0.16.` and `zig-cc: build-tools ok: make
+  at `.
+- `run_to()` wraps system2 in suppressWarnings: a 127 written to a file
+  makes R warn "error in running command", and the status is the check.
+- conda-consume.sh runs pixi by `$PIXI_EXE`, as check-minimal.sh does
+  (env.sh narrows PATH), converted with `cygpath -u` on Windows.
+- groups.zig's header bullet changed in step 1, with the conda line.
+- test-preflight.R and test-compilers.R install with Rcmd.exe INSTALL on
+  Windows, as test-toolchain.R does.
+
+Tests (linux-64, conda-forge zig unless named; logs in
+/data/gamma/luciorq/workspaces/temp/r-zig-pixi/phase4/step1/):
+- `rzig-test` with conda-forge zig and with upstream zig: 129/129;
+  parity 112 identical, 59 identical but for the own-env `-L`, 34
+  deliberate, 0 failed.
+- build, verify-tree, hermetic, package-toolchain, verify-package (the
+  three scenarios); `-e minimal` build and toolchain; wheel and
+  wheel-test.
+- conda-package from an emptied output directory and zig cache: both
+  `--error-*` flags, no overlapping or unused staging file, the four
+  packages' `package_contents` and script tests (13:38:54 to 13:43:40
+  UTC); conda-consume on its three environments (about 30 s).
+- verify-tree on an r-zig-slim-alone env made by hand from that channel:
+  "compilers verified: lib/R/bin/toolchain/{zig-cc,zig-cxx,zig-fc,
+  zig-ar,zig-ranlib,rzig} are rzig, and nothing else is there".
+
+#### Phase 4 record: step 2, PyPI's four wheels (2026-10-14, linux-64)
+
+What changed (B29 a, B35; open points A, E, H; Cg3, Cg10, Cg16, Cc5,
+Cc8, Cc14):
+- make-wheel.py writes four wheels with one tag set, computed over
+  r-zig's and r-zig-build-tools' files together (B29):
+  - r-zig: the minimal tree with rzig under its six names beside
+    share/zig/rpkg, 51.9 MB (PHASE4's estimate);
+  - r-zig-build-tools: the toolchain tree's `usr/` (make, SOURCES,
+    `LICENSES/make/COPYING`), 169 KB, `GPL-3.0-or-later` with make's
+    COPYING as its licence file (E a); a missing COPYING stops the
+    build;
+  - r-zig-compilers (8.5 KB) and r-zig-toolchain (8.3 KB): their
+    `.dist-info` only.
+  - Requires-Dist per A (a); one `metadata()` and one description table,
+    every description giving the one recommendation (Cg16) and saying
+    PyPI has no Fortran compiler.
+  - renviron_hint and TOOLCHAIN_HINT are gone (B35): the wheel's
+    etc/Renviron has no hint line. renviron_site (Renviron.site's
+    `ZIG_BIN` default, the sibling ziglang) stays. The precondition now
+    also requires TC/rzig.
+- groups.zig's pip lines: "pip install r-zig-compilers (zig only: PyPI
+  has no Fortran compiler); r-zig-toolchain installs every group" and
+  "pip install r-zig-build-tools; r-zig-toolchain installs every group"
+  (Cg3, H a). Windows keeps "no wheels for Windows".
+- python/r_zig/__init__.py's docstring: rzig is in this wheel, `pip
+  install r-zig-toolchain` is the recommendation, what r-zig-compilers
+  alone does, no Fortran on PyPI.
+- test-preflight.R expects the new pip line.
+- wheel-test.sh follows PHASE4 section 3's scenarios, with two PATHs:
+  `run` (the venv's bin, /usr/bin, /bin) and `run_venv` (the venv's bin
+  only) for the boundary checks (Cc8, Cg11):
+  - r-zig alone: no ziglang pulled in; zig-cc and rzig present, no
+    TC/usr; TLS; then recipe/test-preflight.R itself (Cg10);
+  - + r-zig-compilers: ziglang installed, still no TC/usr; zig-fc with
+    no flang exits 127 with the new pip text; the console-script install
+    builds through `rzig build: tier 1`; the static C++, CONDA_PREFIX
+    decoy and R_ZIG_EXTRA_ENV checks as before; `ZIG_BIN=/nonexistent`
+    builds through `python3 -m ziglang`; a Makevars-rule package stops
+    naming r-zig-build-tools and installs nothing;
+  - + r-zig-build-tools: make is TC/usr/bin/make; the Makevars-rule
+    package builds through it; the bundled bin/R with
+    `R_ZIG_PKG_BUILDER=make`;
+  - + r-zig-toolchain: the two empty wheels hold only `.dist-info` (pip
+    show -f). A second venv gets ziglang first, then r-zig-toolchain
+    with `--no-index --find-links dist/wheel` (Cc5, Cc14): all five
+    names, and `Sys.which("make")` is that R's own usr/bin/make;
+  - uninstalling the three groups leaves TC with rzig's six names and a
+    C/C++ package still builds through rzig build; after `pip uninstall
+    ziglang`, test-preflight.R runs again (PHASE4 risk 10).
+- The diff is over 200 lines, so it was reviewed skeptically before the
+  tests (dropped names, quoting, the globs, `--no-index`, PATH, BSD
+  tools); negative controls showed that the dist-info-only assertion
+  catches a stray file and a missing METADATA.
+
+Choice: the second venv installs ziglang at the version the first venv
+resolved, so wheel-test does not repeat make-wheel.py's requirement
+string.
+
+Tests (linux-64; logs in .../phase4/step2/logs/): `rzig-test` with both
+zigs (129/129, parity 0 failed); `-e minimal` build and toolchain;
+wheel; wheel-test (also a run that kept its temp dir, whose logs were
+read: the `ZIG_BIN=/nonexistent` install ran `python3 -m ziglang
+build`); the default chain's verify-package.
+
+#### Phase 4 record: step 3, the hint writers and the stop texts (2026-10-14, linux-64)
+
+What changed (B35, C8; open points B, C, H, I, J; Cg1, Cg2, Cg4, Cg5,
+Cc9, Cc19):
+- build.zig: `-Dtoolchain-hint`, Ctx's field and both writers
+  (Renviron.site, etc/Renviron) are gone. installRzig's doc comment says
+  the base carries rzig on every channel (B19, B28, B29). win-64's
+  Renviron.site keeps MY_TCLTK.
+- zig-build.sh's `R_ZIG_CONDA_BUILD` branch and recipe.yaml's
+  `R_ZIG_CONDA_BUILD: "1"` are gone.
+- Patch 0009: the rzig-missing branch and its "not installed" stop are
+  gone (C8). After a 127: a set `R_ZIG_TOOLCHAIN_HINT` as `hint:
+  <value>`, then "...which is incomplete (see above)"; after any other
+  status: "this package cannot be built (see above)", with no hint (B b,
+  J a).
+- Patch 0010 keeps one line, `"${rzig}" --rzig-check=build-tools >
+  /dev/null || exit` (B b).
+- Patch 0013: the "older than this R" stop and its cc lookup are gone;
+  I-PF4's stop and the make path stay (C a).
+- The series was regenerated in scratch (0001-0008 applied, then 0009,
+  0010 and 0013 edited and diffed): all 13 patches apply to the pristine
+  tarball with `patch -p1 -f -F0`, no offset, fuzz or reject.
+- check.zig: H's stop (with the compilers missing, a package that needs
+  make and has none gets both texts, compilers first, one 127; a wrong
+  zig's exit 1 returns before that, with no build-tools text) and I's
+  `notOnPath()` line (unix: `<env>/bin/<MAKE's first word>`; Windows:
+  `<env>/Library/usr/bin/make.exe` or `sh.exe`; a MAKE that is a path
+  gets none), with unit tests; the tier-3 `m` and configure `zF` cases
+  now expect both texts.
+- pkgbuild.zig's sharedRunner keys the zig command with `/` on Windows
+  (feat-shared-build-runner open decision 1 b), with a unit test. The
+  host round moved the normalisation into cache.zig (below).
+- Comments: groups.zig's header (rzig does not read the hint; nothing
+  writes it since phase 4), fortran.zig's test, parity-test.sh's and
+  check.zig's code-6. stress.R's classifier and stress/README.md learn
+  J's stop (Cc19).
+- test-preflight.R: no `R_ZIG_TOOLCHAIN_HINT=` line in etc/Renviron or
+  Renviron.site (Cc9); a configure-script package (configure.win on
+  Windows) stops with both texts, compilers first, its script not run
+  (H); a user's hint appears once, after the compilers text and before
+  the stop (B). test-build-tools.R: with an empty PATH (Windows: plus
+  System32), the build-tools check exits 127 with I's line naming this
+  env's make.
+
+Choices and deviations, with their reasons:
+- I's lookup uses MAKE's first word (MAKE=gmake looks for
+  `<env>/bin/gmake`); PHASE4 named `<env>/bin/make`.
+- 0010's comment points at 0009 without naming the variable, so PHASE4
+  section 2's `git grep` keeps to its list. The grep finds only 0009,
+  test-preflight.R, the comments in groups.zig, fortran.zig and
+  verify-bundle.sh, and the shared test header's unset (the plan's own
+  header).
+- 0009's header covers rzig shipping on every channel, the two stops,
+  H's stop and code-6's extra line (fix-zig-pkg-build-review's small
+  follow-up).
+
+Tests (linux-64; logs in .../phase4/step3/logs/):
+- `rzig-test` with both zigs: 132/132; parity 112/59/34/0. rzig and its
+  unit tests cross-compiled (`--test-no-exec`) for x86_64-windows-gnu,
+  aarch64-macos and x86_64-macos.
+- default: build (R re-extracted for the new series, 161 s), toolchain,
+  verify-tree, smoke, compile-tree, contract, hermetic, pkg-parity,
+  package-toolchain, verify-package. minimal: build, verify-tree,
+  contract, verify-package; wheel, wheel-test.
+- conda-package: r-zig-slim hb0f4dca_9, r-zig-compilers h9276ec7_9,
+  r-zig-build-tools h9276ec7_9, r-zig-toolchain hdc6fa2d_9 (built
+  locally as `_9` before the 2026-10-19 decision; the PR keeps 8), the
+  four tests with the new H, B and I checks; conda-consume.
+- By hand on dist/slim: a stand-in zig 0.17 with the hint set gives "is
+  zig 0.17.0, not R's zig 0.16", the compilers text and "ERROR: this
+  package cannot be built (see above)", no hint; no zig gives the
+  compilers text, `hint: site-hint` and the incomplete stop. stress.R on
+  synthetic logs: 127 and a wrong zig are toolchain, a src/build.zig
+  make cannot build is package.
+- pkg-parity failed once only because a minimal build beside it wrote to
+  the shared build/zig-cache between its two counts; run alone it
+  passed. Do not run another R build, contract or verify-package beside
+  pkg-parity.
+
+#### Phase 4 record: step 4, D7, docs and CI (2026-10-14, linux-64)
+
+What changed (D7; open point L; Cg8, Cc11, Cc14):
+- D7: CC_VER in linux-x86_64-{slim,full} and linux-arm64-{slim,full}
+  (config.h and subst.txt) names clangdev-feedstock 334cf9a5 (the lock's
+  libclang-cpp21.1 `_6`, the same build on linux-aarch64;
+  linux-arm64-minimal had it). FC_VER in osx-arm64-{slim,full,minimal}
+  is "flang version 23.1.1": the lock's osx-arm64 flang-zig `_6` has no
+  repository string (it was built from a rattler-build work dir, not a
+  git checkout), as omicron's `flang --version` confirmed. Windows'
+  strings come from build.zig (compiledBy) and are unchanged.
+- README: five platforms; universe is public, no login (L a);
+  r-zig-slim with the one recommendation ("To compile packages, add
+  r-zig-toolchain (r-zig-compilers and r-zig-build-tools)") and a bullet
+  per group (r-zig-compilers alone installs packages with no configure
+  script whose Makevars only sets variables; r-zig-build-tools serves
+  configure scripts, Makevars rules, `R CMD SHLIB` and pak's probe); the
+  stop that names the package to add, and I's advice; the four .conda
+  files and conda-consume; four wheels, Linux and macOS only, with the
+  ziglang-first and `--no-index --find-links dist/wheel` lines (Cc14),
+  no Fortran or OpenMP on PyPI (B29), and "uninstall ziglang too for R
+  alone" (PHASE4 risk 10).
+- pixi.toml's comments (minimal's wheel, `[feature.wheel]`, wheel-test,
+  conda-package) and verify-tree.sh's (r-zig-build-tools carries
+  binutils/, B41).
+- build.yaml: the win-64-only "Fresh-env consume test (Windows PATH
+  shim)" becomes "Fresh-env consume test (each group alone)", `pixi run
+  -e pkg conda-consume`, on every conda-package leg before the publish
+  (Cg8). recipe.yaml's win test comment points at conda-consume.sh.
+- recipe.yaml: the four R tests declare `secrets:
+  [R_ZIG_TEST_ZIG_CACHE]` (below).
+
+Findings and deviations, with their reasons:
+- Cc11's shared test cache had never worked on unix. rattler-build
+  0.76.1's unix test env keeps PATH and rattler-build's own variables
+  only (a probe recipe dumped it); SC §3 had seen win-64's, which keeps
+  the caller's. The tests now get the variable as a test secret: the
+  test sees it (masked in the log), info/tests records only its name,
+  and without it one warning and the test's own cache. `env:` would have
+  written the build machine's path into the package. The shared header's
+  and pixi.toml's comments say how the variable arrives. Sharing saved
+  no measurable time on gamma (preflight 3 and 4 s, compilers 20 and
+  22 s, build tools 1 and 1 s, toolchain 40 and 42 s, without and with):
+  CI's conda legs decide whether it stays (TODO.md).
+- D7 drifted on day one (PHASE4 risk 7). The conda build solves
+  libclang-cpp21.1 21.1.8 `_7` (clangdev 0586bae9) where the lock has
+  `_6`, and zig `_20` takes its clang version from libclang-cpp at run
+  time. So linux `_9`'s libR.so carries config.h's 334cf9a5, which
+  R_compiled_by() prints, and 0586bae9, the compiler's own `.comment`.
+  recipe.yaml's history note said so (until 2026-10-19, when the
+  history entry became one line), and TODO's first "Later" item is
+  build.zig computing CC_VER/FC_VER on every OS (Cg15).
+- README: "packages" in Publish and two plural headings, from the split.
+
+Tests (linux-64; logs in .../phase4/step4/logs/): build, then
+`R_compiled_by()` prints the clangdev 334cf9a5 string and "flang version
+23.1.1", what the lock's zig and flang print; verify-tree; actionlint on
+the six workflows, no finding; conda-package before and after the
+secrets (after: build/conda-test-zig-cache 56 MB, the four suites pass)
+and conda-consume on each; `rattler-build --render-only` for win-64 and
+osx-arm64 renders the five outputs.
+
+#### Phase 4 review (2026-10-14)
+
+An adversarial review of steps 1 to 4 confirmed four findings, all
+fixed and rerun on linux-64 (logs in .../phase4/fix/logs/):
+- [conda-d7-cc-ver-stale] the recipe said CC_VER was refreshed while
+  linux `_9` names another compiler: the 8 → 9 history note said what
+  CC_VER is and why it differs (that note gave way to the one-line "8
+  stays" entry on 2026-10-19), TODO.md's D7 item records it, and
+  "Later" starts with build.zig filling CC_VER/FC_VER. Pinning
+  libclang-cpp21.1 `_6` in the staging env was the alternative, not
+  taken (simplicity first).
+- [conda-win64-boundary-usr-bin] on win-64 the "no build tools in this
+  group" checks ignored `Library\usr\bin`, where m2's make and sh
+  install: test-compilers.R and test-preflight.R fail on make or sh
+  there too, and their stop assertions also reject I's "is installed in
+  R's environment".
+- [conda-stale-pin-comment] the staging flang pins' comment named
+  r-zig-toolchain's depends: it names r-zig-compilers' now
+  (r-zig-toolchain pins the other three outputs).
+- [preflight-j-b-untested] no test checked J's non-127 stop or B's
+  127-only hint: test-preflight.R (unix) points ZIG_BIN at a stand-in
+  zig that says 0.99.0, with the hint set, and asserts "is zig 0.99.0,
+  not R's zig", "this package cannot be built (see above)", no
+  "incomplete", no `hint:` line and nothing installed.
+Rerun: conda-consume on step 4's packages, wheel-test (test-preflight.R
+twice), conda-package (15:31:56 to 15:36:40 UTC, the four tests) and
+conda-consume on its packages.
+
+#### Phase 4 record: tests on every host (2026-10-14)
+
+Round 1 ran on the worktree after the review's fixes (`git diff` sha256
+0a033cb3...4a83962), round 2 after the host fixes below (88c0160a...
+f14e540). pixi.lock was fbb64b7b...a68bb96 at every start and end, and no
+host wrote the worktree. The code has not changed since round 2's sync
+(16:50 UTC); only these records have.
+- omicron (macOS 26.4, osx-arm64, pixi 0.81.0), both rounds: `rzig-test`
+  with conda-forge zig and with upstream zig (132/132, then 133/133);
+  build, toolchain, verify-tree, compile-tree, contract, pkg-parity,
+  package-toolchain, verify-package; `-e minimal` build, toolchain,
+  verify-package (round 2 also verify-tree); wheel (four wheels,
+  macosx_13_0_arm64, r_zig 46.8 MiB) and wheel-test (322 s);
+  conda-package (248 s; r-zig-slim h41cfa24_9, r-zig-compilers
+  h3c217e4_9, r-zig-build-tools h3c217e4_9, r-zig-toolchain h80fa0fb_9,
+  built locally as `_9` before the 2026-10-19 decision, the PR keeps 8;
+  the four tests) and conda-consume (40 s). D7: flang-zig prints
+  "flang version 23.1.1" and zig cc "clang version 21.1.8", as the
+  osx-arm64 configs now say, and R_compiled_by() prints both. Not run:
+  osx-64 under Rosetta (PHASE4 section 8's conda-package and
+  conda-consume row); CI's macos-15-intel leg is the first run there.
+- kappa (win-64, Windows 11, pixi 0.81.0), both rounds: `rzig-test` with
+  both zigs (104 pass and 28 skipped, then 105 and 28); build (7 min),
+  toolchain, verify-tree (TC holds exactly the ten rzig names),
+  compile-tree, contract, pkg-parity, hermetic, package-toolchain,
+  verify-package; conda-package (12.5 min; r-zig-slim h9490d1a_9,
+  r-zig-compilers h5f95ccc_9, r-zig-build-tools h5f95ccc_9,
+  r-zig-toolchain h98fa296_9, built locally as `_9` before the
+  2026-10-19 decision, the PR keeps 8; the four tests; R_ZIG_TEST_ZIG_CACHE
+  reached the win-64 tests) and conda-consume (1.8 min through
+  Rscript.bat: the H, I and boundary checks, nm with the env's zstd.dll,
+  pkg-config 0.29.2). r-zig-build-tools holds the six binutils, SOURCES
+  and LICENSES; the other three hold only their test file.
+- gamma (linux-64): steps 1 to 4 and the review's reruns (above), the
+  upgrade test (below), and the host fixes' reruns.
+
+The host fixes, between the rounds (linux-64, then round 2 on omicron
+and kappa):
+- verify-tree.sh's rzig-names check compared the copies byte for byte.
+  In a macOS conda env rattler-build relinks every Mach-O it packages
+  (rzig gets the rpath `@loader_path/../../..`) and signs each copy ad
+  hoc under its own file name (Identifier=zig-cc-5555...), so the six
+  copies differ in their signatures alone, as `_8`'s did. `same_rzig()`
+  compares them unsigned there (copies run through codesign
+  --remove-signature; plain cmp elsewhere), and the baseline-CPU check's
+  "is this rzig" test uses it too.
+- verify-tree.sh's binary checks walked the whole conda env, so
+  conda-forge's own files failed them: zig's wrappers (glibc 2.34;
+  macOS 15.7), sysroot_linux-64's libc (2.28 in pixi's solve, 2.39 in
+  conda's and micromamba's), ncurses' libtinfo named by its path. In a
+  conda env they now read R_HOME only: r-zig-slim ships no binary
+  outside it (bin/R and bin/Rscript are scripts). Trees that are not
+  conda envs are read whole, as before. The check predates phase 4 (an
+  `_8` env fails it the same way); section 7 was the first to run it on
+  an env with every group.
+- cache.zig's `command()` keys the zig command with `/` on Windows, for
+  `compiled()` (the cfguard and dso_fini objects) and pkgbuild's
+  sharedRunner alike: in round 1 the runner was fixed, but one zig
+  still got two cfguard entries (04c199fe, 6dc1c0c6). Unit test `test
+  command`.
+- stress.R's and pixi.toml's comments on universe and conda-forge (the
+  upgrade's channel order, below).
+- Reruns on linux-64: `rzig-test` with both zigs (133/133, parity 0
+  failed); the patched verify-tree on gamma's seven upgrade and fresh
+  envs (pixi ×2, conda, micromamba, r-zig-slim alone, + compilers,
+  + build tools: 22 R_HOME binaries each, glibc worst 2.17 at libR.so;
+  unpatched, every env with r-zig-compilers had failed) and on dist/slim
+  (71 binaries) and dist/minimal (43). Round 2: omicron's verify-tree
+  passes on the upgraded env and three single-group envs (22 Mach-O
+  files each) and on dist/slim (63) and dist/minimal (40); kappa's on
+  its upgraded envs.
+
+The Windows runner key (feat-shared-build-runner open decision 1 b),
+on kappa: one conda-forge zig reached three ways (PATH's
+`C:\...\x86_64-w64-mingw32-zig.exe`, `ZIG_BIN=C:/...` and
+`ZIG_BIN=C:\...`) used one `build-runner-6960828f...` directory in round
+1, and one build-runner and one `cfguard-6dc1c0c6...` directory in round
+2; upstream zig got its own pair. The runner's last-used names the `/`
+form. Other OSes key the command as spelled (`\` is a file name's
+character there).
+
+Local conda-package times (Cc11; CI's legs are still to come, against
+ea7e6ee's, win-64 15.5 min): linux-64 about 4 min 45 s, osx-arm64 248 s,
+win-64 12.5 min.
+
+#### Phase 4 record: the upgrade from `_8` (2026-10-14)
+
+PHASE4 section 7, G (a). Each host went from universe's `_8` to its own
+`_9` channel (built locally as `_9` before the 2026-10-19 decision;
+the PR keeps 8), in scratch with fresh caches (PIXI_CACHE_DIR,
+RATTLER_CACHE_DIR, CONDA_PKGS_DIRS, MAMBA_ROOT_PREFIX):
+- gamma (linux-64; pixi 0.81.0, and conda 26.9.2 with libmamba and
+  micromamba 2.9.0 through `pixi exec`; `env -i` with PATH=/usr/bin:/bin,
+  so gamma's ~/.pixi/bin zig 0.17 stayed out): pixi (section 7's
+  channels, universe first), `conda update` and `micromamba update` of
+  r-zig-slim and r-zig-toolchain, and conda adding only r-zig-compilers
+  to an `_8` env, which moved all four to `_9` in one transaction (the
+  forced replacement section 7 predicts). The channel was the review
+  fix's conda-package (r-zig-slim hb0f4dca_9 sha256 3b443b89...). Its
+  rzig predates cache.command, which changes nothing on linux.
+- kappa (win-64; pixi 0.81.0, conda 26.9.2 through `pixi exec`): a
+  script run as `bash <file>` in Git Bash, from a .bat over ssh, with
+  paths in `cygpath -m` form and `file:///` for conda's channel URL
+  (the form Cc7 named; no PowerShell). conda with section 7's channels
+  (local, universe, conda-forge) in both rounds; pixi in README's order
+  (conda-forge, universe, the local channel prepended) in both rounds.
+- omicron (osx-arm64; pixi 0.81.0): pixi in both rounds, README's order
+  in round 2.
+
+Every upgraded env ended with:
+- the four packages at `_9`; no clobber in any log and no
+  `__clobbers__`;
+- TC exactly rzig's names (six on unix, ten on win-64), one binary
+  (macOS: once unsigned), owned by r-zig-slim `_9` in conda-meta; on
+  win-64 also binutils/ with its six tools, SOURCES and LICENSES, owned
+  by r-zig-build-tools `_9`, and none of `_8`'s as, ld, nm, dlltool,
+  strip, windres, zig-cc or zig-cxx at TC's top (`ar.exe` is
+  `gcc.exe`'s bytes);
+- share/zig/rpkg/build_t1.zig present; no `R_ZIG_TOOLCHAIN_HINT` in
+  etc/Renviron or Renviron.site (`_8`'s line gone);
+- R starting; recipe/test-toolchain.R passing (C and C++ through rzig
+  build and make, zlib, AR/RANLIB, NM/OBJDUMP on win-64, Fortran with
+  USE_FC_TO_LINK); verify-tree passing on the env, with the host fixes.
+This closes the risk "rzig moving between conda packages".
+
+Also on gamma, fresh envs from the `_9` channel: r-zig-slim alone passes
+test-preflight.R, and a compiled install stops naming r-zig-compilers
+and "r-zig-toolchain installs every group", with no hint; with gamma's
+zig 0.17 on PATH it stops with "is zig 0.17.0, not R's zig 0.16" and
+"this package cannot be built (see above)" (J a). + r-zig-compilers
+passes test-compilers.R and installs a C package through tier 1 with no
+make anywhere on PATH. + r-zig-build-tools passes test-build-tools.R.
+K: `pixi add r-zig-slim zig` solves zig 0.16.0 `_20` although
+conda-forge has 0.17.0. Each group package installs only its test file,
+and all four say `GPL-2.0-only OR GPL-3.0-only` on unix.
+
+What changed against section 7's procedure:
+- pixi 0.81.0's `pixi workspace channel add --prepend` re-locks and
+  installs, so the `pixi update` after it reports the lock up to date
+  and its log shows no transaction. With `--no-install` the lock is
+  `_9` (`pixi list` reads it) while the env stays `_8` until `pixi
+  install` or `pixi run`. Round 2 ran `channel add --prepend
+  --no-install "$CH"`, checked that the env still held `_8`, then `pixi
+  install -v 2>&1 | tee`. That log has summary lines only, so "no
+  clobber" rests on no WARN line and no `__clobbers__`.
+- "All the same bytes" holds on macOS once unsigned (above).
+- verify-tree on a conda env reads R_HOME's binaries (above).
+- The channel order. kappa's pixi solve with universe before
+  conda-forge (section 7's `pixi init` line) failed on 2026-10-14:
+  r-zig-slim `_9` win-64 has the run export libcurl >=8.23.0 (its build
+  solved conda.anaconda.org's libcurl-8.23.0-hdb0ef4a_0, uploaded at
+  15:14 UTC, about an hour earlier), and universe's shard index
+  (win-64/repodata_shards.msgpack.zst) declares `channel_relations:
+  {base: ../conda-forge}`. Listed first, universe gives pixi, whose
+  channel priority is strict, every conda-forge name from prefix.dev's
+  conda-forge mirror, which did not have that libcurl on win-64 yet
+  (linux-64's had it: gamma's universe-first upgrade passed, taking make
+  and zig from prefix.dev/conda-forge). README, conda-consume.sh and
+  stress.R list conda-forge first, and conda reads repodata.json, which
+  has no channel relations. At 17:54 UTC the mirror listed the package,
+  and a solve-only probe on gamma (platform win-64, kappa's round-2
+  packages, fresh caches; .../phase4/recorder/probe/) solved
+  r-zig-toolchain `_9` in both orders, universe-first taking libcurl
+  8.23.0 from prefix.dev/conda-forge: it was the mirror's lag.
+  pixi.toml's and stress.R's comments now give this as the reason for
+  conda-forge first. They said that priority was moot because
+  universe's names never collide with conda-forge's, and that universe
+  mirrors libdeflate; universe's repodata lists only blast, flang-rt-zig,
+  flang-zig, lld-zig, r-zig-slim and r-zig-toolchain, and the base
+  relation is what matters. Users who list universe first can meet the
+  same lag after any publish ("Risks").
+
+Not run, by G (a): micromamba on kappa and omicron, conda on omicron.
+
+#### Phase 4 record: what PHASE4 asked to record, and the rest
+
+- E2 is applied on every OS (Cg18): osx-arm64's libR.dylib links libzstd
+  too, and `HAVE_ZSTD` is set in all 13 configs (SC §9), so r-zig-slim
+  states zstd everywhere; the host's run exports gave it already.
+- No native make on win-64 (Cg7): r-zig-build-tools depends on m2-make,
+  which is the make on PATH (SC §5). Phase 7 chooses the set for both
+  channels.
+- I-T11's third text (J a) is recorded in fix-zig-pkg-build-review's
+  PLAN.md; its "not installed" text is gone with 0009's rzig-missing
+  branch.
+- H's stop names every missing group: one text per group (B35), several
+  groups in one stop.
+- The test PATH (PHASE4 risk 1, Cg9): every recipe test narrows PATH to
+  its env; on unix the build-tools and toolchain tests add the host's
+  /usr/bin:/bin after it (step 1's B25 finding), and rattler-build's
+  unix test env passes no other caller variable (step 4).
+- PHASE4 section 11's stale line references were not rewritten: the
+  decision records and "What exists today" cite HEAD 9bbce0b, as this
+  file's header says, and phase 4 moved those lines again. The
+  references in text that looks forward now name functions ("Where PyPI
+  differs", phase 8).
+- The copied plan keeps section 7's original procedure; the changes are
+  above.
 
 ### Phase 5 — zig in the compilers group
 
@@ -4003,6 +4683,12 @@ Steps:
 - Rprofile.windows gets the same PATH line if the tests need it.
 - `R CMD config` without the build tools fails with one clear message
   (rcmdfn.c runs `sh` before patch 0010's check can run).
+- The build-number bump (B14's amendment, 2026-10-19): phases 4, SHLIB
+  routing, 5 and 6 kept 8, so phase 7's PR takes the number after
+  universe's newest (B14 a), with one history entry for phases 4 to 7.
+  After it merges the user sets `gh variable set CONDA_PUBLISH --body
+  true`, and that push's run (or a `ci-trigger` dispatch) publishes all
+  four packages; then PHASE4 section 7's post-publish check.
 
 Tests: scenario 3 on kappa and windows-latest with the contract set,
 pak, data.table, glue and a package whose configure.win uses
@@ -4019,7 +4705,7 @@ Decisions (answered): B27 (a), B33 (a).
 Steps:
 - unix: the CA bundle at `<top>/ssl/cacert.pem`; etc/Renviron's
   `R_ZIG_CA_BUNDLE` follows; patch 0011 unchanged; make-wheel.py's check
-  (368-371) follows.
+  (`has_ca` in its main) follows.
 - Windows: fontconfig at `<top>/Library/etc/fonts`; `FONTCONFIG_PATH`
   moves out of etc/Renviron.site to a place R reads under `--vanilla`
   (find which first).
@@ -4093,9 +4779,11 @@ toolchain tree, no overlap, nothing compile-time in the base but
 Windows' Tcl/Tk headers, T1), and the existing compiles with
 `ZIG_BIN=$ZIG` and the env's make and flang as a fourth pass.
 
-The same three scenarios on the other channels: conda (r-zig-slim
-alone, with r-zig-compilers, with r-zig-toolchain) and pip (r-zig
-alone, with r-zig-compilers, with r-zig-build-tools).
+The same three scenarios on the other channels: conda (the recipe's
+tests and conda-consume: r-zig-slim alone, with r-zig-compilers, with
+r-zig-build-tools, and r-zig-toolchain) and pip (wheel-test: r-zig
+alone, with r-zig-compilers, with r-zig-build-tools, r-zig-toolchain,
+the groups uninstalled).
 
 By hand on each machine (after phase 3; names per B17, B36 and B38):
 
@@ -4109,7 +4797,7 @@ pixi run build && pixi run toolchain && pixi run verify-tree && \
 pixi run -e minimal build && pixi run -e minimal verify-tree && \
   pixi run -e minimal contract && pixi run -e minimal verify-package   # unix
 pixi run -e wheel wheel && pixi run -e wheel wheel-test                # unix
-pixi run -e pkg conda-package
+pixi run -e pkg conda-package && pixi run -e pkg conda-consume
 # upstream zig (F4), then the same tasks:
 export ZIG_BIN="$(pixi run fetch-zig)"   # PowerShell: $env:ZIG_BIN = pixi run fetch-zig
 # a user's view: the archives, nothing else
@@ -4130,14 +4818,30 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   with the compilers group could include omp.h and fail at link.
 - **rzig moving between conda packages.** An upgrade from the build on
   the channel (`_8` on 2026-10-11) must
-  unlink r-zig-toolchain's rzig before linking r-zig-slim's; untested
-  with pixi, conda and mamba. rattler-build's `--error-overlapping-files`
+  unlink r-zig-toolchain's rzig before linking r-zig-slim's.
+  rattler-build's `--error-overlapping-files`
   (>= 0.76; D12 = a, warnings as errors) catches overlap between
-  outputs at build time; the upgrade itself is phase 4's test.
+  outputs at build time. Closed (2026-10-14): pixi, conda and micromamba
+  on linux-64, pixi and conda on win-64 and pixi on osx-arm64 went from
+  universe's `_8` to `_9` with no clobber and nothing left over ("Phase
+  4 record: the upgrade from `_8`"; built locally as `_9` before the
+  2026-10-19 decision, the PR keeps 8: the files move the same way at
+  phase 7's number).
 - **Unpinned flang in the published `_4`.** Installs that resolve
   r-zig-toolchain `_4` take flang-pixi's next builds (7 and 11, zig 0.17)
   when they appear; only a published build with the re-lock's exact pins
-  avoids it.
+  avoids it. Those builds exist now, and `_4` resolves to them (PHASE4
+  section 10, 2026-10-13); `_8` and the next build pin exact builds, so
+  only a user who pins `_4` by hand gets them.
+- **universe listed before conda-forge.** universe's index names
+  `../conda-forge` as its base (`channel_relations`), so pixi, whose
+  channel priority is strict, then reads every conda-forge package from
+  prefix.dev's mirror. A new build that took a conda-forge package
+  newer than the mirror cannot be installed that way until the mirror
+  syncs (win-64's libcurl 8.23.0 on 2026-10-14: on conda.anaconda.org at
+  15:14 UTC, not on the mirror at 16:50, there at 17:54; "Phase 4
+  record: the upgrade from `_8`"). README, pixi.toml,
+  conda-consume.sh and stress.R list conda-forge first.
 - **Size.** zig is 343-380 MB and 19,546 files per platform, flang
   144-210 MB raw; now confined to the toolchain tree and the compilers
   archive (about 131-149 MB with gzip).
@@ -4209,9 +4913,15 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
 - Is flang-pixi's docs/19, its file lists and its carve script committed
   now?
 - Can rattler-build 0.76.1 (pixi.lock) make an output with no files that
-  does not inherit the staging build (B28 a)?
+  does not inherit the staging build (B28 a)? (2026-10-14, phase 4: not
+  needed. The group packages and the metapackage `inherit` with `files:
+  []` and package only their test file, as rattler-build's own
+  staging-empty-files test does; the form without inherit stays
+  untested, Cc17.)
 - Which make wins on PATH in a win-64 conda env today: m2-make or
-  conda-forge's make (r-zig-toolchain `_4` depends on both)?
+  conda-forge's make (r-zig-toolchain `_4` depends on both)? (2026-10-14:
+  m2-make, PHASE4 SC §5; phase 4's r-zig-build-tools depends on m2-make
+  only, Cg7.)
 - Does zig's dlltool accept the GNU long options and the `--as`
   Makeconf.win passes (B24's routing check, phase 3)? (2026-10-11,
   kappa: yes, in their two-word forms, and `--as` is ignored; the

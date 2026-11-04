@@ -13,24 +13,36 @@ toolchain` leaves in dist/toolchain/R-<ver>-zig, as
 lib/R/bin/toolchain/usr/bin/make with its SOURCES and LICENSES/
 (feat-standalone-toolchain B23, B30), where etc/Renviron's PATH line
 finds it (B25).
-That tree already runs from anywhere, so the wheel is that tree under
+That tree already runs from anywhere, so a wheel is that tree under
 `r_zig/R/` plus the small `r_zig` Python package (python/r_zig/) and the
-console scripts `R`/`Rscript`. Two wheels come out of it (phase T of
-feat-no-host-paths, the toolchain as its own package): `r-zig` is R and
-installs packages that need no compiling; `r-zig-toolchain` holds
-R_HOME/bin/toolchain (rzig, the compilers Makeconf names, and the
-toolchain tree's usr/: GNU make) and requires PyPI `ziglang` as the
-compiler and exactly this `r-zig`. Not the toolchain tree's openmp/: the
-wheel's R offers no OpenMP (feat-standalone-toolchain B29). Both install
-into the same `r_zig/` directory without sharing a file, so each one's
-RECORD owns only its own. No build backend: a wheel is a zip with a
-.dist-info directory (PEP 427), written here with the stdlib only.
+console scripts `R`/`Rscript`. Four wheels come out of it, the base and
+a package per toolchain group, as on conda (feat-standalone-toolchain
+B29 a; phase 4):
+- `r-zig`, the base: R, with rzig under each of its names in
+  R_HOME/bin/toolchain, as in the base archive and r-zig-slim (B19). It
+  installs packages that need no compiling; a package that does stops in
+  the preflight with rzig's text, which names the group's wheel (B35).
+- `r-zig-compilers`: no files; it requires PyPI `ziglang`, the C/C++
+  compiler rzig runs. PyPI has no Fortran compiler, and the wheel's R
+  offers no OpenMP, so the toolchain tree's openmp/ is in no wheel.
+- `r-zig-build-tools`: the toolchain tree's usr/ (GNU make, its SOURCES
+  and LICENSES/), under make's licence (PHASE4 open point E a).
+- `r-zig-toolchain`: no files; it requires both groups.
+Each group requires exactly this `r-zig` (PHASE4 open point A a), as
+conda's exact pins do (B28): r-zig-build-tools writes into `r_zig/R/`,
+and without its R would leave a partial tree. The wheels install into the
+same `r_zig/` directory without sharing a file, so each one's RECORD owns
+only its own. No build backend: a wheel is a zip with a .dist-info
+directory (PEP 427), written here with the stdlib only; a wheel with no
+files is its .dist-info alone.
 
 The platform tag is computed from the binaries, not assumed: on Linux the
 highest GLIBC_x.y symbol version any ELF file references (manylinux_x_y;
 the zig build targets 2.17, which is also manylinux2014), on macOS the
 highest LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX minimum any Mach-O file
-declares. Python-independent (`py3-none`): nothing here links libpython.
+declares. One tag set, from r-zig's and r-zig-build-tools' files
+together, for all four wheels (B29): make alone would tag an older macOS
+than R. Python-independent (`py3-none`): nothing here links libpython.
 
 Usage (from the `wheel` pixi env, which sets R_VERSION/R_BUILD_VARIANT):
     pixi run -e wheel wheel [--prefix DIR] [--toolchain-prefix DIR]
@@ -55,12 +67,23 @@ import zipfile
 
 DIST_NAME = "r-zig"
 IMPORT_NAME = "r_zig"
+# the groups' wheels, and the one that installs both (B29 a)
+COMPILERS_DIST = "r-zig-compilers"
+BUILD_TOOLS_DIST = "r-zig-build-tools"
 TOOLCHAIN_DIST = "r-zig-toolchain"
-TOOLCHAIN_PREFIX = "lib/R/bin/toolchain/"  # inside both trees; the toolchain wheel's files
-# What the toolchain wheel takes from the toolchain tree: the build-tools
+TOOLCHAIN_PREFIX = "lib/R/bin/toolchain/"  # inside both trees; rzig's names in the R tree's
+# What r-zig-build-tools takes from the toolchain tree: the build-tools
 # group's usr/ (GNU make, its SOURCES and LICENSES/).
 TOOLCHAIN_USR = TOOLCHAIN_PREFIX + "usr/"
-TOOLCHAIN_HINT = "pip install r-zig-toolchain (same Python environment as r-zig)"
+# The licence each wheel states (PHASE4 open point E a): R's own, but
+# GNU make's for r-zig-build-tools, whose only program is make (its
+# usr/SOURCES says the same).
+R_LICENSE = "GPL-2.0-only OR GPL-3.0-only"
+MAKE_LICENSE = "GPL-3.0-or-later"
+LICENSE_CLASSIFIERS = {
+    R_LICENSE: ["GNU General Public License v2 (GPLv2)", "GNU General Public License v3 (GPLv3)"],
+    MAKE_LICENSE: ["GNU General Public License v3 or later (GPLv3+)"],
+}
 # The runtime compiler. Keep in step with pixi.toml's `zig = "0.16.*"`:
 # zig is pinned by exact version across this project family (consolidation
 # PLAN.md, convention 2); `<0.16.1` still admits ziglang's `.postN`
@@ -255,17 +278,11 @@ def renviron_site(existing: bytes | None) -> bytes:
     return (existing.rstrip(b"\n") + b"\n\n" + add) if existing else add
 
 
-def renviron_hint(existing: bytes) -> bytes:
-    # etc/Renviron, not Renviron.site: R reads it even under --vanilla, and
-    # R CMD INSTALL's compile preflight (zigbuild/patches/) names this package.
-    line = f"R_ZIG_TOOLCHAIN_HINT=${{R_ZIG_TOOLCHAIN_HINT-'{TOOLCHAIN_HINT}'}}\n".encode()
-    if b"\nR_ZIG_TOOLCHAIN_HINT=" in b"\n" + existing:
-        return existing
-    return existing.rstrip(b"\n") + b"\n" + line
-
-
-def metadata(version: str, r_version: str) -> str:
-    description = f"""\
+# The four wheels' descriptions. Each says the one recommendation the
+# conda packages and the README give (PHASE4 Cg16), and that PyPI has no
+# Fortran compiler (B29).
+DESCRIPTIONS = {
+    DIST_NAME: """\
 # r-zig
 
 R {r_version} as a Python wheel: a complete, relocatable R built from
@@ -281,77 +298,112 @@ python -c 'import r_zig; print(r_zig.r_home())'   # R_HOME, e.g. for rpy2
 ```
 
 `install.packages()` installs packages that need no compiling with this
-wheel alone. For packages with C/C++ code, add the toolchain, which brings
-the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package as the
-compiler and GNU make, so no system compiler is needed:
+wheel alone. It carries rzig, the compiler front R's Makeconf names; the
+compiler and the build tools come in their own wheels. To compile
+packages, add r-zig-toolchain (r-zig-compilers and r-zig-build-tools):
 
 ```sh
 pip install r-zig-toolchain
 ```
 
-Packages with Fortran sources need a Fortran compiler, which neither the
-toolchain nor ziglang provides.
+r-zig-compilers brings the PyPI [`ziglang`](https://pypi.org/project/ziglang/)
+package as the C/C++ compiler, so no system compiler is needed; alone, it
+installs packages that have no configure script and no make rules.
+r-zig-build-tools brings GNU make, for the rest and for `R CMD SHLIB`.
+Without a group, an install that needs it stops and names the wheel to
+add. PyPI has no Fortran compiler: packages with Fortran sources need
+LLVM flang on PATH.
 
 The minimal profile has no cairo/png/svg devices (`pdf()` and
 `postscript()` work), no ICU (collation uses the C library), no OpenMP
 (nothing to clash with the OpenMP runtimes other wheels load), no
 X11/tcltk/readline/NLS, and R's internal reference BLAS/LAPACK. Linux
 wheels need glibc 2.17 or newer.
-"""
-    return (
-        "Metadata-Version: 2.1\n"
-        f"Name: {DIST_NAME}\n"
-        f"Version: {version}\n"
-        f"Summary: R {r_version} built with zig (minimal profile), relocatable\n"
-        "Home-page: https://github.com/luciorq/r-zig-pixi\n"
-        "License: GPL-2.0-only OR GPL-3.0-only\n"
-        "Classifier: Programming Language :: R\n"
-        "Classifier: License :: OSI Approved :: GNU General Public License v2 (GPLv2)\n"
-        "Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)\n"
-        "Classifier: Operating System :: POSIX :: Linux\n"
-        "Classifier: Operating System :: MacOS\n"
-        "Requires-Python: >=3.8\n"
-        "Description-Content-Type: text/markdown\n"
-        "\n" + description
-    )
+""",
+    COMPILERS_DIST: """\
+# r-zig-compilers
 
+The compilers for the [`r-zig`](https://pypi.org/project/r-zig/) wheel
+(R {r_version}): it requires the PyPI
+[`ziglang`](https://pypi.org/project/ziglang/) package, which rzig, the
+compiler front in r-zig's R_HOME/bin/toolchain, runs as the C/C++
+compiler, and exactly the `r-zig` it was built with. It holds no files.
 
-def toolchain_metadata(version: str, r_version: str) -> str:
-    description = f"""\
-# r-zig-toolchain
-
-Compilers for the [`r-zig`](https://pypi.org/project/r-zig/) wheel (R
-{r_version}): R_HOME/bin/toolchain, the compilers R's Makeconf names, and
-GNU make, with the PyPI [`ziglang`](https://pypi.org/project/ziglang/)
-package as the C/C++ compiler. Install it next to `r-zig` to compile
-packages from source:
+With it, `install.packages()` compiles packages that have no configure
+script and no make rules. To compile packages, add r-zig-toolchain
+(r-zig-compilers and r-zig-build-tools):
 
 ```sh
 pip install r-zig-toolchain
 ```
 
-It requires exactly the `r-zig` it was built with. Packages with Fortran
-sources need a Fortran compiler, which this toolchain does not provide.
+PyPI has no Fortran compiler: packages with Fortran sources need LLVM
+flang on PATH.
+""",
+    BUILD_TOOLS_DIST: """\
+# r-zig-build-tools
+
+The build tools for the [`r-zig`](https://pypi.org/project/r-zig/) wheel
+(R {r_version}): GNU make, which R runs for configure scripts, Makevars
+rules and `R CMD SHLIB`. It requires exactly the `r-zig` it was built
+with. To compile packages, add r-zig-toolchain (r-zig-compilers and
+r-zig-build-tools):
+
+```sh
+pip install r-zig-toolchain
+```
 
 GNU make is conda-forge's build of it, unchanged, in
-R_HOME/bin/toolchain/usr/bin: `usr/SOURCES` names its package and where
-its source is, and `usr/LICENSES/` holds its licence.
-"""
+R_HOME/bin/toolchain/usr/bin, which r-zig's etc/Renviron puts first on
+PATH: `usr/SOURCES` names its package and where its source is, and
+`usr/LICENSES/` holds its licence, the GPL version 3 or later.
+""",
+    TOOLCHAIN_DIST: """\
+# r-zig-toolchain
+
+Everything the [`r-zig`](https://pypi.org/project/r-zig/) wheel (R
+{r_version}) needs to compile packages: r-zig-compilers (the PyPI
+[`ziglang`](https://pypi.org/project/ziglang/) package as the C/C++
+compiler) and r-zig-build-tools (GNU make). It holds no files.
+
+```sh
+pip install r-zig-toolchain
+```
+
+PyPI has no Fortran compiler: packages with Fortran sources need LLVM
+flang on PATH.
+""",
+}
+
+
+def metadata(dist: str, version: str, r_version: str) -> str:
+    """A wheel's METADATA, from one table for the four (B29 a): its
+    summary, licence (PHASE4 open point E a) and requirements, each group
+    on exactly this r-zig and r-zig-toolchain on exactly both groups
+    (PHASE4 open point A a)."""
+    summary, license_, requires = {
+        DIST_NAME: (f"R {r_version} built with zig (minimal profile), relocatable", R_LICENSE, []),
+        COMPILERS_DIST: (f"The r-zig compilers for R {r_version}: zig, from the PyPI ziglang package",
+                         R_LICENSE, [f"{DIST_NAME}=={version}", ZIGLANG_REQUIREMENT]),
+        BUILD_TOOLS_DIST: (f"The r-zig build tools for R {r_version}: GNU make", MAKE_LICENSE, [f"{DIST_NAME}=={version}"]),
+        TOOLCHAIN_DIST: (f"The r-zig toolchain for R {r_version}: r-zig-compilers and r-zig-build-tools",
+                         R_LICENSE, [f"{COMPILERS_DIST}=={version}", f"{BUILD_TOOLS_DIST}=={version}"]),
+    }[dist]
     return (
         "Metadata-Version: 2.1\n"
-        f"Name: {TOOLCHAIN_DIST}\n"
+        f"Name: {dist}\n"
         f"Version: {version}\n"
-        f"Summary: Compilers for r-zig (zig via ziglang, GNU make)\n"
+        f"Summary: {summary}\n"
         "Home-page: https://github.com/luciorq/r-zig-pixi\n"
-        "License: GPL-2.0-only OR GPL-3.0-only\n"
+        f"License: {license_}\n"
         "Classifier: Programming Language :: R\n"
-        "Classifier: Operating System :: POSIX :: Linux\n"
+        + "".join(f"Classifier: License :: OSI Approved :: {c}\n" for c in LICENSE_CLASSIFIERS[license_])
+        + "Classifier: Operating System :: POSIX :: Linux\n"
         "Classifier: Operating System :: MacOS\n"
         "Requires-Python: >=3.8\n"
-        f"Requires-Dist: {DIST_NAME}=={version}\n"
-        f"Requires-Dist: {ZIGLANG_REQUIREMENT}\n"
-        "Description-Content-Type: text/markdown\n"
-        "\n" + description
+        + "".join(f"Requires-Dist: {r}\n" for r in requires)
+        + "Description-Content-Type: text/markdown\n"
+        "\n" + DESCRIPTIONS[dist].replace("{r_version}", r_version)
     )
 
 
@@ -382,8 +434,11 @@ def main() -> None:
         die(f"R_BUILD_VARIANT is {variant!r}; the wheel wraps the minimal variant (--any-variant to override)")
     if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "exec", "R")):
         die(f"no R build at {prefix} — run `pixi run -e minimal build` first")
-    if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "toolchain", "zig-cc")):
-        die(f"{prefix} has no R_HOME/bin/toolchain — run `pixi run -e minimal build` first")
+    # rzig, under CC's name and under the name install.R's hook runs it by
+    # (patch 0013): the base's (B19)
+    for name in ("zig-cc", "rzig"):
+        if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "toolchain", name)):
+            die(f"{prefix} has no R_HOME/bin/toolchain/{name} — run `pixi run -e minimal build` first")
     if not any(re.search(r"\.(so(\.\d+)*|dylib)$", f) for f in os.listdir(os.path.join(prefix, "lib"))):
         die(f"no vendored libraries in {prefix}/lib — run `pixi run -e minimal build` first")
     with open(os.path.join(prefix, "lib", "R", "etc", "Renviron"), "rb") as f:
@@ -412,8 +467,9 @@ def main() -> None:
     # The R tree's R_HOME/bin/toolchain holds rzig only, under each of its
     # names (feat-standalone-toolchain B19, B30): anything else there is a
     # leftover of an older build, since zig's install never removes a
-    # file, and would ship beside the toolchain tree's copy. The R tree's
-    # files come first in `files`.
+    # file, and would ship in r-zig (a usr/ there, beside the toolchain
+    # tree's in r-zig-build-tools). The R tree's files come first in
+    # `files`.
     rzig = dict(files)[TOOLCHAIN_PREFIX + "zig-cc"]
     stray = [r for r, d in files[:len(tree)] if r.startswith(TOOLCHAIN_PREFIX) and d != rzig]
     if stray:
@@ -428,15 +484,16 @@ def main() -> None:
     existing = dict(files).get(renv)
     files = [(r, d) for r, d in files if r != renv] + [(renv, renviron_site(existing))]
     modes.setdefault(renv, 0o644)
-    renv_main = "lib/R/etc/Renviron"
-    files = [(r, renviron_hint(d) if r == renv_main else d) for r, d in files]
 
-    toolchain_files = [(r, d) for r, d in files if r.startswith(TOOLCHAIN_PREFIX)]
-    files = [(r, d) for r, d in files if not r.startswith(TOOLCHAIN_PREFIX)]
-    if not toolchain_files:
-        die(f"nothing under {TOOLCHAIN_PREFIX} in {prefix}")
+    # r-zig-build-tools' files: the toolchain tree's usr/. Everything else,
+    # rzig under each of its names included, is r-zig's (B19, B29 a).
+    bt_files = [(r, d) for r, d in files if r.startswith(TOOLCHAIN_USR)]
+    files = [(r, d) for r, d in files if not r.startswith(TOOLCHAIN_USR)]
+    make_copying = dict(bt_files).get(TOOLCHAIN_USR + "LICENSES/make/COPYING")
+    if make_copying is None:
+        die(f"no {TOOLCHAIN_USR}LICENSES/make/COPYING in {tc_prefix} — run `pixi run -e minimal toolchain` first")
 
-    tags = platform_tags(files + toolchain_files)
+    tags = platform_tags(files + bt_files)
     build = f"-{args.build_tag}" if args.build_tag else ""
 
     pkg_dir = os.path.join(ROOT, "python", IMPORT_NAME)
@@ -451,16 +508,23 @@ def main() -> None:
     with open(os.path.join(prefix, "lib", "R", "COPYING"), "rb") as f:
         copying = f.read()
     entry_points = f"[console_scripts]\nR = {IMPORT_NAME}:main\nRscript = {IMPORT_NAME}:main_rscript\n"
-    write_wheel(args, IMPORT_NAME, tags, build, entries, metadata(args.version, r_version), entry_points, copying)
+    write_wheel(args, DIST_NAME, tags, build, entries, metadata(DIST_NAME, args.version, r_version), entry_points, copying)
 
-    tc_entries = [(base + rel, data, modes[rel]) for rel, data in sorted(toolchain_files)]
-    write_wheel(args, TOOLCHAIN_DIST.replace("-", "_"), tags, build, tc_entries,
-                toolchain_metadata(args.version, r_version), None, copying)
+    # the build tools under make's licence, and two wheels of
+    # requirements alone (E a; B29 a)
+    bt_entries = [(base + rel, data, modes[rel]) for rel, data in sorted(bt_files)]
+    write_wheel(args, BUILD_TOOLS_DIST, tags, build, bt_entries,
+                metadata(BUILD_TOOLS_DIST, args.version, r_version), None, make_copying)
+    for dist in (COMPILERS_DIST, TOOLCHAIN_DIST):
+        write_wheel(args, dist, tags, build, [], metadata(dist, args.version, r_version), None, copying)
 
 
-def write_wheel(args: argparse.Namespace, name: str, tags: list[str], build: str,
+def write_wheel(args: argparse.Namespace, dist: str, tags: list[str], build: str,
                 entries: list[tuple[str, bytes, int]], meta: str,
                 entry_points: str | None, copying: bytes) -> None:
+    """Write dist's wheel; `copying` is its dist-info licence. No entries:
+    a wheel of its .dist-info alone."""
+    name = dist.replace("-", "_")  # the wheel file's and the dist-info's name (PEP 427)
     plat = ".".join(tags)
     dist_info = f"{name}-{args.version}.dist-info"
     wheel_name = f"{name}-{args.version}{build}-py3-none-{plat}.whl"

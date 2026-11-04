@@ -21,28 +21,35 @@ the package needs make or R runs a configure script (R_ZIG_CONFIGURE=1),
 whatever its tier. A check that fails exits non-zero after a line
 saying what is missing, with rzig's own reason when make is needed
 ("<pkg> needs make: src/Makevars has a rule or target line: '...'; no
-make on PATH"), and the group's text, which names how to install it; a
+make on PATH"), and the group's text, which names how to install it
+(each missing group's, in one stop: PHASE4 open point H a); a
 src/build.zig package whose build would need make, which ignores
 build.zig, fails with "<pkg>: src/build.zig cannot be built by make:
-<reason>" [preflight-PF-1]. Run it before the configure step and stop
-with that text, instead of failing deep in configure or make. With no
-rzig at all (R without its toolchain package), stop with one message
-naming the package to install, from R_ZIG_TOOLCHAIN_HINT (the conda and
-wheel builds set it). Both stops say "this package needs the r-zig
-toolchain (compiled code or a configure script)": an R-only package
-with a configure script stops too [tests-T11]. The C standard (use_C,
-the hook's --c-std) goes through R_ZIG_C_STD; R_ZIG_PKG_BUILDER=make
-makes the check ask for the build tools. A user Makevars (their own
-compiler) or R_ZIG_NO_PREFLIGHT skips the check; binary packages never
-reach it. Four inputs differ from the hook's, and are recorded:
-CLINK_CPPFLAGS is set only after the preflight, the user-Makevars skip
-stays, and use_LTO and Windows' --debug are not passed [preflight-PF-7].
+<reason>" [preflight-PF-1] and "<pkg>: the r-zig toolchain is complete:
+change what the line above names" [code-6]. Run it before the configure
+step and stop with that text, instead of failing deep in configure or
+make. rzig ships with R on every channel (the base archive,
+r-zig-slim, the r-zig wheel; feat-standalone-toolchain phase 4). A
+check that exits 127 (a group missing) stops with "this package needs
+the r-zig toolchain (compiled code or a configure script), which is
+incomplete (see above)", after a user's own R_ZIG_TOOLCHAIN_HINT as a
+"hint:" line when one is set: an R-only package with a configure
+script stops too [tests-T11]. Any other status (a package make cannot
+build, a zig that is not R's, a path that does not resolve) stops with
+"this package cannot be built (see above)" (PHASE4 open point J a). The
+C standard (use_C, the hook's --c-std) goes through R_ZIG_C_STD;
+R_ZIG_PKG_BUILDER=make makes the check ask for the build tools. A user
+Makevars (their own compiler) or R_ZIG_NO_PREFLIGHT skips the check;
+binary packages never reach it. Four inputs differ from the hook's, and
+are recorded: CLINK_CPPFLAGS is set only after the preflight, the
+user-Makevars skip stays, and use_LTO and Windows' --debug are not
+passed [preflight-PF-7].
 feat-no-host-paths PLAN.md, phase T; feat-standalone-toolchain PLAN.md,
-B26 and B35; feat-zig-pkg-build PLAN.md, consolidation M1.
+B26, B35 and phase 4; feat-zig-pkg-build PLAN.md, consolidation M1.
 
 --- a/src/library/tools/R/install.R
 +++ b/src/library/tools/R/install.R
-@@ -1273,6 +1273,52 @@
+@@ -1273,6 +1273,54 @@
              }
  	}
  
@@ -65,16 +72,6 @@ B26 and B35; feat-zig-pkg-build PLAN.md, consolidation M1.
 +            ## (R.home("bin") is bin/x64 on Windows)
 +            rzig <- file.path(R.home(), "bin", "toolchain",
 +                              if (WINDOWS) "gcc.exe" else "zig-cc")
-+            ## no rzig: R without its toolchain package, which the
-+            ## distribution's R_ZIG_TOOLCHAIN_HINT names. Both stops give
-+            ## either reason the package needs the toolchain, since an
-+            ## R-only package with a configure script stops here too
-+            ## [tests-T11]
-+            if (!file.exists(rzig))
-+                pkgerrmsg(paste0("this package needs the r-zig toolchain (compiled code or a configure script), which is not installed: ",
-+                                 Sys.getenv("R_ZIG_TOOLCHAIN_HINT",
-+                                            "install the r-zig toolchain package for this R")),
-+                          pkg_name)
 +            ## What rzig build will see, through the environment (system2's
 +            ## env = is not supported on Windows): the C standard, and
 +            ## whether R runs a configure script. A check that fails says on
@@ -88,9 +85,21 @@ B26 and B35; feat-zig-pkg-build PLAN.md, consolidation M1.
 +                       R_ZIG_C_STD = if (is.na(use_C)) "" else as.character(use_C))
 +            status <- suppressWarnings(system2(rzig, "--rzig-check=package", stdout = FALSE))
 +            Sys.unsetenv(c("R_ZIG_CONFIGURE", "R_ZIG_C_STD"))
-+            if (status != 0L)
++            ## 127: a group is missing, and rzig named it above; a user's
++            ## own pointer follows (feat-standalone-toolchain B35, PHASE3
++            ## C8). Its stop gives either reason the package needs the
++            ## toolchain, since an R-only package with a configure script
++            ## stops here too [tests-T11]. Any other status: the package
++            ## cannot be built as it is, and no group would help (rzig's
++            ## exit 1, with its own lines above; 2: a path)
++            if (status == 127L) {
++                hint <- Sys.getenv("R_ZIG_TOOLCHAIN_HINT")
++                if (nzchar(hint)) message("hint: ", hint)
 +                pkgerrmsg("this package needs the r-zig toolchain (compiled code or a configure script), which is incomplete (see above)",
 +                          pkg_name)
++            }
++            if (status != 0L)
++                pkgerrmsg("this package cannot be built (see above)", pkg_name)
 +        }
          if (use_configure) {
              if (WINDOWS) {

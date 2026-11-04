@@ -14,7 +14,8 @@
 # Rscript reads its compressed files), so the answer does not depend on
 # where the tree sits:
 #   - R_HOME/bin/toolchain holds rzig and nothing else, under the names
-#     Makeconf and the compile preflight use (one binary, no scripts):
+#     Makeconf and the compile preflight use (one binary, no scripts; in a
+#     macOS conda env, the same bytes once unsigned):
 #     the groups' files are the toolchain tree's (feat-standalone-toolchain
 #     B19, B30; verify-toolchain.sh), a conda env's win-64 binutils/
 #     excepted (B41);
@@ -61,7 +62,10 @@
 #     needs a shared C++ runtime; linux: every DT_NEEDED is a bare name;
 #   - macOS: every Mach-O at or below MACOS_MIN; install names relative,
 #     dependencies relative or the system's, and only what conda has no
-#     copy of from the SDK's /usr/lib.
+#     copy of from the SDK's /usr/lib;
+#   - in a conda env, the binary checks (glibc, rpaths, DT_NEEDED, C++
+#     runtime, macOS floor and load commands) read R_HOME's files: the
+#     env's other packages are conda-forge's.
 # verify-bundle.sh (pixi task verify-package, after package) keeps what
 # only a moved, environment-free copy can show, with this tree's archive
 # and the two group archives extracted into one directory, a scenario
@@ -100,7 +104,7 @@ trap 'rm -rf "$WORK"' EXIT
 # vendor-libs.sh copies. A conda env (<tree>/conda-meta, the conda build's
 # prefix) has both from its own packages, and gets neither. On win-64 it
 # also has the build-tools group's binutils/ in R_HOME/bin/toolchain,
-# r-zig-toolchain's copies (feat-standalone-toolchain B41).
+# r-zig-build-tools' copies (feat-standalone-toolchain B41).
 conda_tree=""
 if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
 
@@ -111,11 +115,28 @@ if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
 # and gcc-ranlib.exe (B43), and CMake's ar and ranlib, which it looks for
 # beside CC, its ar.exe and ranlib.exe. The names: rzig_names
 # (verify-helpers.sh), which verify-bundle.sh holds the base archive to.
+# In a macOS conda env the copies differ in their code signatures alone:
+# rattler-build relinks every Mach-O it packages (rzig gets the rpath
+# @loader_path/../../.., the same in each copy) and signs each copy ad
+# hoc under its own file name, so they are compared unsigned there
+# (phase 4's upgrade test on omicron; r-zig-toolchain _8's copies
+# differed the same way). A copy codesign declines (unsigned) is
+# compared as it is.
+same_rzig() {
+  if [ -n "$conda_tree" ] && [ "$OS" = macos ]; then
+    cp "$1" "$WORK/rzig-a" && cp "$2" "$WORK/rzig-b" || return 1
+    /usr/bin/codesign --remove-signature "$WORK/rzig-a" 2> /dev/null || true
+    /usr/bin/codesign --remove-signature "$WORK/rzig-b" 2> /dev/null || true
+    cmp -s "$WORK/rzig-a" "$WORK/rzig-b"
+  else
+    cmp -s "$1" "$2"
+  fi
+}
 tc_dir="$rh/bin/toolchain"
 tc_names="$(rzig_names)"
 for t in $tc_names; do
   f="$TREE/$tc_dir/$t"
-  if [ ! -f "$f" ] || [ "$(head -c2 "$f")" = '#!' ] || ! cmp -s "$f" "$TREE/$tc_dir/${tc_names%% *}"; then
+  if [ ! -f "$f" ] || [ "$(head -c2 "$f")" = '#!' ] || ! same_rzig "$f" "$TREE/$tc_dir/${tc_names%% *}"; then
     echo "error: $tc_dir/$t is missing, a script, or not the same rzig as the rest" >&2
     exit 1
   fi
@@ -123,7 +144,7 @@ done
 # And nothing else is there (B19, B30): the toolchain groups' files
 # (openmp/, usr/, binutils/) are the toolchain tree's (zig-toolchain.sh,
 # verify-toolchain.sh), whose archives a user extracts beside this tree's.
-# A conda env is the exception: on win-64 r-zig-toolchain carries
+# A conda env is the exception: on win-64 r-zig-build-tools carries
 # binutils/ here (B41). zig's install never removes a file, so a tree
 # built before phase 3 still has the files that left it (PHASE3 C25).
 bad=""
@@ -498,7 +519,7 @@ case "$(uname -m)" in
     esac > "$WORK/r-bins-all.txt"
     : > "$WORK/r-bins.txt"
     while IFS= read -r f; do
-      case "$f" in "$TREE/$tc_dir"/*) cmp -s "$f" "$rzig_file" || continue ;; esac
+      case "$f" in "$TREE/$tc_dir"/*) same_rzig "$f" "$rzig_file" || continue ;; esac
       if grep -qxF -- "$f" "$WORK/vendored-r.txt"; then continue; fi
       printf '%s\n' "$f" >> "$WORK/r-bins.txt"
     done < "$WORK/r-bins-all.txt"
@@ -703,16 +724,24 @@ fi
 # `exit 1` inside a `while read < <(find ...)` loop fires the EXIT trap's
 # rm -rf while find is still walking (the first CI failure of the glibc
 # check was a screenful of that noise after the real error line).
+# In a conda env, R_HOME's only: r-zig-slim has no binary outside it
+# (bin/R and bin/Rscript are scripts), and the env's other packages are
+# conda-forge's, with their own floors (their __glibc dependency) and
+# install names: in phase 4's upgrade test conda-forge's zig wrappers
+# needed glibc 2.34 (linux) and macOS 15.7, sysroot_linux-64's libc
+# 2.39, and ncurses names libtinfo by its path.
 bin_list="$WORK/bin-list.txt"
+bin_root="$TREE"; bin_where="the tree"
+if [ -n "$conda_tree" ]; then bin_root="$TREE/$rh"; bin_where="R_HOME ($rh)"; fi
 if [ "$OS" = linux ]; then
-  find "$TREE" -type f \( -name '*.so*' -o -perm -u+x \) \
+  find "$bin_root" -type f \( -name '*.so*' -o -perm -u+x \) \
     -exec sh -c 'head -c4 "$1" | od -An -tx1 | grep -q "7f 45 4c 46"' _ {} \; -print > "$bin_list"
 else
-  find "$TREE" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) \
+  find "$bin_root" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) \
     -exec sh -c 'head -c4 "$1" | od -An -tx1 | grep -q "cf fa ed fe"' _ {} \; -print > "$bin_list"
 fi
 n_bins="$(wc -l < "$bin_list" | tr -d ' ')"
-[ "$n_bins" -gt 0 ] || { echo "error: no binaries found under $TREE" >&2; exit 1; }
+[ "$n_bins" -gt 0 ] || { echo "error: no binaries found under $bin_root" >&2; exit 1; }
 
 # Old-server guarantee (Linux only): fail if any shipped ELF requires glibc
 # newer than the floor build.zig's target pin promises, 2.17, anywhere in
@@ -751,7 +780,7 @@ elif [ "$OS" = linux ]; then
   if [ -z "$worst" ]; then
     cannot_check "objdump -T read no glibc version from any ELF file; glibc ceiling not checked"
   else
-    echo "== glibc ceiling verified: worst $worst ($worst_file) <= floor $GLIBC_FLOOR, every ELF file of the tree"
+    echo "== glibc ceiling verified: worst $worst ($worst_file) <= floor $GLIBC_FLOOR, every ELF file of $bin_where"
   fi
 fi
 

@@ -287,8 +287,8 @@ test "no flang: nothing runs, the compilers group's text; R_ZIG_TOOLCHAIN_HINT n
         try testing.expectError(error.NoFlang, command(c, call));
         try testing.expectEqualStrings(msg, f.takeWarnings());
     }
-    // R_ZIG_TOOLCHAIN_HINT (the channels still write it, phase 4 removes
-    // that) changes nothing: the wheel's would name the wrong remedy
+    // R_ZIG_TOOLCHAIN_HINT, a user's value since phase 4, changes nothing
+    // (the two values are what the channels wrote before it)
     for ([_][]const u8{
         "pip install r-zig-toolchain (same Python environment as r-zig)",
         "add the r-zig-toolchain package to this environment",

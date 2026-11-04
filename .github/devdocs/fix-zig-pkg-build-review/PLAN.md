@@ -10,9 +10,10 @@ unchanged, sha256
 fbb64b7ba4e31e45bb18dbd0868a96aa5b0939ee291e0dddeeba2dd09a68bb96. CI is
 still to run: the PR is to get the `full-ci` and `upstream-zig` labels
 (menu 3). No build-number bump: feat-zig-pkg-build's N5 stands, and
-phase 4's bump publishes both packages (feat-standalone-toolchain
-TODO.md, phase 4). Two choices are left to the user ("Open
-decisions").
+the next bump publishes both packages: since the user's decision of
+2026-10-19 it comes with feat-standalone-toolchain phase 7's merge, not
+phase 4's (phases 4 to 6 keep 8; its TODO.md, phase 7). Two choices
+are left to the user ("Open decisions").
 
 ## Why
 
@@ -76,6 +77,13 @@ Every part of the work used these exact texts:
   code or a configure script), which is not installed: <hint>" (the
   R_ZIG_TOOLCHAIN_HINT as before). An R-only package with a configure
   script stops there too, which "has compiled code" got wrong.
+  Since feat-standalone-toolchain phase 4 (its open points B, C8 and J
+  a, 2026-10-14): the "not installed" stop is gone with 0009's
+  rzig-missing branch (rzig ships in every base); "...which is
+  incomplete (see above)" follows rzig's exit 127 only, after a user's
+  `hint: <R_ZIG_TOOLCHAIN_HINT>` when it is set; and after any other
+  status the stop is the third text, "this package cannot be built (see
+  above)" (open decision 1 (c) below). stress.R classes both.
 - I-C1, a tier-2 package whose plan needs make [preflight-PF-1]: `rzig
   build` (the hook, and `--classify`) and `--rzig-check=package` print
   "<pkg>: src/build.zig cannot be built by make: <reason>" and exit 1
@@ -496,7 +504,8 @@ In feat-standalone-toolchain TODO.md unless named:
   revisit 0010 for pkgbuild's probe (as before).
 - With open decision 1 at (a): 0009 tells the check's exit 1 (a package
   that cannot be built) from 127 (the toolchain incomplete) and words
-  its stop for each.
+  its stop for each. Done in feat-standalone-toolchain phase 4 (its open
+  point J a, 2026-10-14; I-T11 above).
 - Not recorded elsewhere, small: omicron's tester notes that argv_of
   keeps `-I` and `-L` but not `-F`, so rzig's fixed
   `-F<SDK>/System/Library/Frameworks` compares as `Frameworks` on both

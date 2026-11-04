@@ -31,7 +31,7 @@ brackets point there. Items with no id come from the accepted overview
 | N2 | (a) the build-tools scope is written as in section H; routing R CMD SHLIB through rzig is a later item |
 | N3 | (a) a per-install zig-build cache, removed with the install (section D) |
 | N4 | (a) a variable assignment in MAKEFLAGS makes the package need make, with that reason (section C) |
-| N5 | (a) no build-number bump in this PR; phase 4's bump (8 to 9) publishes both |
+| N5 | (a) no build-number bump in this PR; phase 4's bump (8 to 9) publishes both (2026-10-19: phase 4 keeps build 8, the user's decision; the bump that publishes both comes with feat-standalone-toolchain phase 7's merge) |
 | N6 | (a) tier 2 means vendored or path dependencies only (section E) |
 | N7 | (a) the zig-pkg-build session implements; the phase 3 session reviews before the commit and push |
 | R1 | (a) CONSOLIDATION.md is not committed: its decisions and the corrected facts go into PLAN.md, and it is deleted like HANDOFF.md |
@@ -300,7 +300,9 @@ Verified against the code, except where marked "inferred".
     asks for it (D);
   - verify-bundle scenario 2's new assertions;
   - no build-number bump in this PR; phase 4's bump (8 to 9) publishes
-    both [channels-C9].
+    both [channels-C9]. (2026-10-19: phase 4 keeps build 8, the user's
+    decision; the bump that publishes both comes with
+    feat-standalone-toolchain phase 7's merge.)
 
 ### I. Tests, review, commit, stress
 - [ ] linux-64: `pixi run toolchain`, `pixi run build`, `pixi run

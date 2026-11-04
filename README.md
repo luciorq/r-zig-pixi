@@ -8,11 +8,15 @@ toolchain plus a separate build system.
 
 ## Use cases
 
-### Install R from the built conda package
+### Install R from the built conda packages
 
-The package (`r-zig-slim`) targets `linux-64`, `osx-64`, `osx-arm64`, and
-`win-64`, publishing to the `universe` channel on prefix.dev (currently
-private — requires `rattler-build auth login prefix.dev` access):
+The packages target `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64`
+and `win-64`, and are published to the `universe` channel on prefix.dev.
+The channel is public: adding it is all it takes, with no login.
+Publishing is paused until the next build-number bump: until then
+universe has build 8's two packages, `r-zig-slim` and `r-zig-toolchain`
+(which brings the compilers and build tools), and not yet
+`r-zig-compilers` or `r-zig-build-tools`.
 
 ```bash
 pixi init my-r-project
@@ -25,30 +29,48 @@ pixi run Rscript -e 'R.version.string'
 `r-zig-slim` is R alone: it runs R and installs packages that need no
 compiling (R-only source packages and binary packages). On Windows it has
 full's content (Tcl/Tk, JPEG, TIFF, NLS): R's Windows build has no
-switches to leave them out. To compile CRAN packages with C/C++/Fortran
-sources, add the toolchain, which brings zig, flang, make (and on Windows
-the POSIX userland and the MinGW binutils) and pins the exact
-`r-zig-slim` build:
+switches to leave them out. It carries rzig, the compiler front R's
+Makeconf names; the compilers and the build tools are two groups, each a
+package that pins the exact `r-zig-slim` build. To compile packages, add
+r-zig-toolchain (r-zig-compilers and r-zig-build-tools):
 
 ```bash
 pixi add r-zig-toolchain
 ```
 
-Without it, installing a package with compiled code stops with a message
-naming `r-zig-toolchain`.
+- `r-zig-compilers` (zig 0.16, LLVM flang, OpenMP) alone installs
+  packages that have no configure script and whose Makevars only sets
+  variables: R builds them with `rzig build`, without make.
+- `r-zig-build-tools` (make; on Windows also sh, the MSYS2 tools,
+  pkg-config and the MinGW binutils) is for configure scripts and
+  Makevars rules, for `R CMD SHLIB` (`Rcpp::sourceCpp()`, inline), and
+  for pak, whose compiler check runs `R CMD SHLIB`.
 
-### Build the conda package yourself
+Without a group, an install that needs it stops with a message naming the
+package to add. In an environment used without activation (an IDE
+pointed at `<env>/bin/R`), the build tools are not on `PATH`: activate
+the environment (`pixi shell`, `conda activate`) or start R with
+`pixi run`.
+
+### Build the conda packages yourself
 
 ```bash
 pixi run -e pkg conda-package
+pixi run -e pkg conda-consume
 ```
 
-Produces `dist/conda/<platform>/r-zig-slim-*.conda` and
-`r-zig-toolchain-*.conda` via `rattler-build`,
-using this repo's own recipe (`recipe/recipe.yaml`). Useful for testing a
+`conda-package` produces the four packages,
+`dist/conda/<platform>/r-zig-slim-*.conda`, `r-zig-compilers-*.conda`,
+`r-zig-build-tools-*.conda` and `r-zig-toolchain-*.conda`, via
+`rattler-build`, using this repo's own recipe (`recipe/recipe.yaml`), and
+tests each one in a fresh environment of its own. Useful for testing a
 change to the build before publishing, or for producing a package for a
 platform not published upstream. Each run empties `dist/conda` first, so
-the previous run's packages do not survive it.
+the previous run's packages do not survive it. `conda-consume` then
+installs them as a user does: a fresh pixi workspace from `dist/conda`,
+with `r-zig-slim` alone and with each group in an environment of its
+own, where it runs the recipe's tests through pixi's activation. CI runs
+both on every `conda-package` leg, before the publish.
 
 ### Publish to your own channel
 
@@ -56,7 +78,7 @@ the previous run's packages do not survive it.
 pixi run -e pkg conda-publish
 ```
 
-Uploads the just-built package for the current platform via
+Uploads the just-built packages for the current platform via
 `rattler-build upload`. Each platform has its own task
 (`[feature.pkg.target.<platform>.tasks]` in `pixi.toml`), so this is
 typically run once per machine/OS as part of a release.
@@ -124,35 +146,47 @@ its recipe's zig, conda-forge's: rattler-build gives the recipe a clean
 environment, without `ZIG_BIN`. `wheel-test` always compiles with the
 `ziglang` it installs into its venv, which is upstream zig already.
 
-### Build R as a Python wheel
+### Build R as Python wheels
 
 ```bash
 pixi run -e minimal build              # the installed tree, libraries vendored
 pixi run -e minimal verify-tree        # its static checks
 pixi run -e minimal package-toolchain  # the toolchain tree and its two group archives
 pixi run -e minimal verify-package     # archive the tree, check the archives relocated
-pixi run -e wheel wheel                # -> dist/wheel/r_zig-4.6.1-*.whl and r_zig_toolchain-4.6.1-*.whl
-pixi run -e wheel wheel-test           # pip-install them into a fresh venv and use them
+pixi run -e wheel wheel                # -> dist/wheel/{r_zig,r_zig_compilers,r_zig_build_tools,r_zig_toolchain}-4.6.1-*.whl
+pixi run -e wheel wheel-test           # pip-install them into fresh venvs, a group at a time, and use them
 ```
 
-`wheel` takes GNU make for `r-zig-toolchain` from the toolchain tree, so
-it needs `pixi run -e minimal toolchain` first (`package-toolchain` runs
-it, and `verify-package` needs the group archives it makes).
+`wheel` takes GNU make for `r-zig-build-tools` from the toolchain tree,
+so it needs `pixi run -e minimal toolchain` first (`package-toolchain`
+runs it, and `verify-package` needs the group archives it makes).
 
-The wheel (`r-zig`, import name `r_zig`) is the whole relocatable
-`minimal` tree plus console scripts `R`/`Rscript` and `r_zig.r_home()` for
-embedders such as rpy2; it installs packages that need no compiling. For
-packages with C/C++ code, `pip install r-zig-toolchain` adds the compiler
-front (rzig) and GNU make, with the PyPI
-[`ziglang`](https://pypi.org/project/ziglang/) package as the compiler, so
-no system compiler is needed.
+The four wheels split as the conda packages do, for Linux and macOS (no
+Windows wheels yet). `r-zig` (import name `r_zig`) is the whole
+relocatable `minimal` tree, rzig included, plus console scripts
+`R`/`Rscript` and `r_zig.r_home()` for embedders such as rpy2; it
+installs packages that need no compiling. To compile packages, add
+r-zig-toolchain (r-zig-compilers and r-zig-build-tools). r-zig-compilers
+brings the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package
+as the C/C++ compiler, so no system compiler is needed; alone, it
+installs packages that have no configure script and whose Makevars only
+sets variables. r-zig-build-tools brings GNU make, for the rest and for
+`R CMD SHLIB`. None of the four is on PyPI yet: install them from
+`dist/wheel`, ziglang first, so that pip needs no index for the rest:
+
+```bash
+pip install 'ziglang>=0.16.0,<0.16.1'
+pip install --no-index --find-links dist/wheel r-zig-toolchain
+```
+
 ziglang is an upstream zig build, which links its own libc++ statically,
 so compiled C++ packages need no C++ runtime (with conda-forge's zig,
 which would link conda's shared libc++, rzig keeps it static). Linux
-wheels are `manylinux2014` (glibc 2.17). Packages with Fortran sources need
-a Fortran compiler, which neither the wheel nor ziglang provides: R's FC,
-the toolchain's `zig-fc`, runs an LLVM `flang` found on PATH and stops
-with a message when there is none.
+wheels are `manylinux2014` (glibc 2.17). PyPI has no Fortran compiler,
+and the wheels have no OpenMP: packages with Fortran sources need LLVM
+`flang` on PATH, and R's FC, rzig's `zig-fc`, stops with a message when
+there is none. pip leaves ziglang installed when the groups are
+uninstalled, and rzig still finds it; uninstall ziglang too for R alone.
 Details: `.github/devdocs/feat-wheel-minimal/PLAN.md`.
 
 ### Standalone archives
@@ -222,17 +256,20 @@ tree, which is the tree the standalone base archive packs), and
 `conda-package` for all
 five subdirs (linux-64, linux-aarch64, osx-arm64, osx-64, win-64), which
 publishes to the `universe` channel on prefix.dev via OIDC trusted
-publishing on every push to `main`. There is no self-hosted fleet — the
-former gamma/omicron/kappa runners were decommissioned in September 2026
-and fully removed on 2026-09-24. Docs-only changes (`*.md`,
-`.github/devdocs/`) skip the workflow.
+publishing on every push to `main` while the repository variable
+`CONDA_PUBLISH` is `true` (paused from 2026-10-19 until the next
+build-number bump merges, with feat-standalone-toolchain's phase 7).
+There is no self-hosted fleet — the former gamma/omicron/kappa runners
+were decommissioned in September 2026 and fully removed on 2026-09-24.
+Docs-only changes (`*.md`, `.github/devdocs/`) skip the workflow.
 
 The full matrix above runs only on request: on a pull request labelled
 `full-ci` and on a manual dispatch (`pixi run ci-trigger` for main, `gh
 workflow run build.yaml --ref <branch>` for a branch). Every other pull
 request push and every push to `main` runs the core tier: `default` on
 all five platforms and `minimal` on linux-64 (6 legs). `conda-package`
-also runs on every push to `main`, which publishes, and on a pull
+also runs on every push to `main`, which publishes (with
+`CONDA_PUBLISH`), and on a pull
 request that changes `recipe/`, `pixi.toml`, `pixi.lock`, `build.zig`,
 `zigbuild/`, `scripts/` or the workflows. See
 `.github/devdocs/chore-ci-tiers/PLAN.md`.
@@ -274,7 +311,10 @@ gh variable set ENABLE_HOSTED_JOBS --body false  # pause all CI jobs
 gh variable set ENABLE_HOSTED_JOBS --body true   # resume
 ```
 
-No commit or workflow edit needed either way.
+No commit or workflow edit needed either way. Publishing has a switch
+of its own, `CONDA_PUBLISH`: `conda-package` still builds and tests on
+main without it, and uploads only with it set to `true`
+(`gh variable set CONDA_PUBLISH --body true`).
 
 ## More detail
 

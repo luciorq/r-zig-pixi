@@ -54,7 +54,9 @@ PLAN.md, "The answers of 2026-10-08".
 - [x] B12 = (a): CI artifacts now, release job later
 - [x] B13 = (a): gzip/zip now; measure after phase 6
 - [x] B14 = (a): bump in phase 4's PR and in each later PR that changes
-      a package
+      a package. Amended by the user, 2026-10-19: no bump in phases 4,
+      SHLIB routing, 5 and 6; the next bump comes with phase 7's merge,
+      to the number after universe's newest (PLAN.md's B14)
 - [x] B17 = (a): base `R-<ver>-<flavor>-<plat>`, groups
       `R-<ver>-<plat>-<group>`
 - [x] B18 = (a): upstream leads on the gated legs, conda waits for
@@ -121,14 +123,15 @@ Related items of the 2026-10-07 menu, answered 2026-10-08:
       at the latest phase 5
 - [x] A2' ("A2: Do not file any report"): the atexit report is not
       filed; build.zig's workaround stays, through the 0.17 port
-- [x] D7 = (a): CC_VER/FC_VER refreshed with phase 4's bump
+- [x] D7 = (a): CC_VER/FC_VER refreshed with phase 4's bump (phase 4
+      keeps build 8 since 2026-10-19; they publish with phase 7's bump)
 - [x] D12 = (a): rattler-build >= 0.76 with warnings as errors
       (feat-no-host-paths' proposed follow-up PR (i), or phase 4)
 - [x] D14 = (a): the toolchain in its own env stays later
 - [x] D15 = (a): the stress suite starts now, in parallel; it decides
       the extras and reassesses B39 and B43
 - [x] E2 = (a): zstd declared with phase 4's bump (r-zig-slim; win-64
-      r-zig-build-tools)
+      r-zig-build-tools; phase 4 keeps build 8 since 2026-10-19)
 - [x] C1 = (a), C2 = (a), C3 = (a): Windows minimal (no ICU, cairo,
       Tcl/Tk, OpenMP) and a Windows wheel without compile support, after
       phase 7
@@ -165,6 +168,12 @@ D5 (a), D8-D11 (a), D13 (a), E3 (a), E4 (a).
       and 11. PyPI ziglang 0.17.0 uploaded 2026-10-08 01:00 UTC (six
       wheels at 01:09 UTC, no win_amd64); conda-forge's main label still
       0.16.0
+- [x] 2026-10-13: conda-forge's main label has zig 0.17.0, B18's
+      trigger (PHASE4 Cg14). Phase 4 stays on 0.16 because build.zig
+      does not compile on 0.17 yet: r-zig-compilers' `zig 0.16.*` and
+      r-zig-slim's `run_constraints: zig 0.16.*` (K a) keep a solved
+      env on R's zig (gamma, 2026-10-14: `pixi add r-zig-slim zig`
+      solves 0.16.0 `_20`); the 0.17 wave bumps both
 - [x] Superseded: the old flang-rt-zig `build-number = ">=10"` item;
       the re-lock pins exact builds and drops the win-64 override
 - [x] 2026-10-08, A2': no upstream report on the MinGW atexit export;
@@ -442,48 +451,166 @@ the results; B24's routing check moved no tool (follow-up PRs).
 
 ## Phase 4 — conda and PyPI on the same boundary
 
-Needs (answered): B14, B28, B29, B35, B38, B39, B11, B41; D7, D12, E2.
+Needs (answered): B14, B28, B29, B35, B38, B39, B11, B41; D7, D12, E2;
+PHASE4's open points A-L (the user, 2026-10-14: the recommended
+options; PLAN.md's "Phase 4: the user's answers").
 
-- [ ] Check: rattler-build 0.76.1 makes outputs with no files that do not
-      inherit the staging build
-- [ ] rattler-build >= 0.76 with warnings as errors (D12), if
-      feat-no-host-paths' follow-up PR (i) has not done it
-- [ ] recipe.yaml: r-zig-slim excludes only
+Status (2026-10-14): steps 1 to 5 done in the worktree
+feat-standalone-phase4 (from main d11dee1), not committed. Tested on
+linux-64 (both zigs), omicron (osx-arm64) and kappa (win-64), two
+rounds on each remote host; the upgrade from `_8` passed on all three.
+CI has not run. PLAN.md's "Phase 4 record" sections have what changed,
+the choices and the results; the reviewed plan and its critique are in
+phase4/ beside these files.
+
+- [x] Check: rattler-build 0.76.1 makes outputs with no files that do not
+      inherit the staging build (not needed: the group packages and the
+      metapackage `inherit` with `files: []` and package only their test
+      file, as rattler-build's own staging-empty-files test does; the
+      form without inherit stays untested, Cc17; step 1's file lists)
+- [x] rattler-build >= 0.76 with warnings as errors (D12), if
+      feat-no-host-paths' follow-up PR (i) has not done it (on main since
+      3510530: conda-package's `--error-overlapping-files` and
+      `--error-unused-staging-files`; every phase 4 conda-package ran
+      with both)
+- [x] recipe.yaml: r-zig-slim excludes only
       `lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**` (and
       `Library/...`); r-zig-compilers, r-zig-build-tools, r-zig-toolchain
       metapackage; build number: the one after the number published
       when phase 4 merges (build 8 is on universe, so 9 unless another
-      PR bumps first; B14 a, C14). feat-zig-pkg-build (PR #25 and its
+      PR bumps first; B14 a, C14); since 2026-10-19 it stays 8 (B14's
+      amendment). feat-zig-pkg-build (PR #25 and its
       review follow-up) changes r-zig-slim (patches 0009, 0012, 0013,
       share/zig/rpkg) and r-zig-toolchain (rzig: `--rzig-check=package`,
       `rzig build`, `rzig def`, the `rzig` name) and bumps nothing (its
       N5). They are coupled: a new r-zig-slim with an older
       r-zig-toolchain stops every compiled install (the old rzig answers
       `--rzig-check=package` with exit 2; without the preflight, 0013
-      stops on CC's binary with no rzig). This bump publishes both
-      together, and until then no channel mixes a locally built `_8`
-      with universe's `_8` [phase3-P3-7, records-REC-7]
-- [ ] win-64 r-zig-build-tools: B41's binutils copies (nm, dlltool, as,
+      stops on CC's binary with no rzig). The bump that publishes phase
+      4 publishes both together, and until then no channel mixes a
+      locally built `_8` with universe's `_8` [phase3-P3-7,
+      records-REC-7]. That bump comes with phase 7's merge (the user's
+      decision, 2026-10-19: phases 4, SHLIB routing, 5 and 6 keep 8;
+      PLAN.md's B14 amendment), and main does not publish until then
+      (build.yaml's `CONDA_PUBLISH`) (step 1, 2026-10-14: build 9, built
+      locally before that decision; universe still `_8` only on all
+      five subdirs at 17:50 UTC; r-zig-slim keeps rzig and rpkg and gets
+      `run_constraints: zig 0.16.*` (K a); `package_contents` tests on
+      each output (Cc12); licences per E (a); PR #27's runner is in
+      the build too; PLAN.md's "Phase 4 record: step 1")
+- [x] win-64 r-zig-build-tools: B41's binutils copies (nm, dlltool, as,
       strip, windres, objdump, less any tool moved to rzig); run
       dependencies on conda-forge packages for B39's list and pkg-config
-      (today's m2 list plus pkg-config until phase 7 chooses)
-- [ ] zstd declared (E2): r-zig-slim and win-64 r-zig-build-tools
-- [ ] CC_VER/FC_VER refreshed with this bump (D7)
-- [ ] Hint writers removed: `-Dtoolchain-hint`, zig-build.sh:57-66,
-      make-wheel.py's renviron_hint
-- [ ] groups.zig (B35): the conda and pip lines name r-zig-compilers and
-      r-zig-build-tools
-- [ ] make-wheel.py: r-zig with rzig; r-zig-build-tools with
+      (today's m2 list plus pkg-config until phase 7 chooses) (no tool
+      moved, so all six; the eight m2 packages, pkg-config (F a) and
+      zstd; no native make, Cg7; `GPL-3.0-or-later`; checked on kappa's
+      packages and upgraded envs)
+- [x] zstd declared (E2): r-zig-slim and win-64 r-zig-build-tools
+      (r-zig-slim on every OS: libR.dylib links libzstd too, Cg18)
+- [x] CC_VER/FC_VER refreshed in phase 4 (D7). On linux CC_VER is
+      what the dev envs' zig prints (pixi.lock's libclang-cpp21.1 `_6`:
+      clangdev 334cf9a5); the conda build solves libclang-cpp21.1 `_7`,
+      whose zig prints 0586bae9, so phase 4's R_compiled_by()["C"] on
+      linux-64 and linux-aarch64 is not the compiler libR.so's .comment
+      names. PHASE4's risk 7 has come already, from a libclang-cpp
+      rebuild, not a zig one (the first "Later" item)
+      [conda-d7-cc-ver-stale] (step 4: osx-arm64's FC_VER is "flang
+      version 23.1.1", confirmed on omicron; Windows' strings come from
+      build.zig)
+- [x] Hint writers removed: `-Dtoolchain-hint`, zig-build.sh's conda
+      branch, make-wheel.py's renviron_hint (step 3, with recipe.yaml's
+      `R_ZIG_CONDA_BUILD`; 0009 shows a user's hint on 127 only and
+      0010 none, B b)
+- [x] groups.zig (B35): the conda and pip lines name r-zig-compilers and
+      r-zig-build-tools (steps 1 and 2: each ends "; r-zig-toolchain
+      installs every group", H a; the pip compilers line says PyPI has
+      no Fortran compiler, Cg3)
+- [x] make-wheel.py: r-zig with rzig; r-zig-build-tools with
       `usr/bin/make`; r-zig-compilers and r-zig-toolchain without files;
-      one tag set; the zig-cc check moves to the base wheel
-- [ ] test-preflight.R: rzig present, no zig, preflight names
-      r-zig-compilers
-- [ ] wheel-test.sh: the three scenarios with pip; uninstalling the
-      groups leaves R whole
-- [ ] Upgrade test from the build on the channel (`_8` on 2026-10-11;
-      pixi, conda, mamba): no clobber error
-- [ ] Tested: conda-package on linux-64, omicron (both), kappa, CI;
-      wheel-test on linux-64 and CI
+      one tag set; the zig-cc check moves to the base wheel (step 2:
+      Requires-Dist per A (a), licences per E (a); PLAN.md's "Phase 4
+      record: step 2")
+- [x] test-preflight.R: rzig present, no zig, preflight names
+      r-zig-compilers (steps 1 and 3 and the review: also the
+      configure-script stop with both texts (H), the user's hint (B), no
+      hint writer, J's non-127 stop with a stand-in zig; wheel-test runs
+      it with pip too, Cg10)
+- [x] test-compilers.R and test-build-tools.R (new), test-toolchain.R
+      with a narrowed PATH, one shared header (Cc4, Cg9); unix PATH for
+      make's recipes: the host's /usr/bin:/bin after the env (step 1's
+      B25 finding)
+- [x] wheel-test.sh: the three scenarios with pip; uninstalling the
+      groups leaves R whole (step 2: r-zig alone, + r-zig-compilers,
+      + r-zig-build-tools, + r-zig-toolchain, the metapackage alone with
+      `--no-index`, the groups and then ziglang uninstalled)
+- [x] check.zig: one stop names every missing group (H a); a build tool
+      installed in R's environment but not on PATH is named (I a); 0009
+      tells exit 1 from 127 (J a; I-T11's third text); 0013's "older
+      than this R" stop gone (C a) (step 3)
+- [x] scripts/conda-consume.sh and its pkg task; build.yaml runs it on
+      every conda-package leg before the publish (Cg8; steps 1 and 4)
+- [x] rzig keys the zig command with `/` on Windows, for the shared
+      build runner and the cfguard/dso_fini objects
+      (feat-shared-build-runner open decision 1 b; step 3 and the host
+      fixes: cache.command; kappa round 2: one zig spelled three ways,
+      one build-runner and one cfguard directory)
+- [x] verify-tree.sh on a conda env: rzig's copies compared unsigned in
+      a macOS conda env (rattler-build signs each copy under its own
+      name), and the binary checks read R_HOME only (conda-forge's zig
+      wrappers, sysroot and ncurses failed them) (the host fixes; gamma's
+      seven envs, omicron's four, kappa's two)
+- [x] README (five platforms; universe public, L a; the groups and the
+      one recommendation; four wheels), pixi.toml's and verify-tree.sh's
+      comments (step 4)
+- [x] Upgrade test from the build on the channel (`_8` on 2026-10-11;
+      pixi, conda, mamba): no clobber error (2026-10-14, G a: gamma
+      pixi, conda, micromamba; kappa pixi, conda; omicron pixi; no
+      clobber, no `__clobbers__`, nothing left over, test-toolchain.R and
+      verify-tree pass; PLAN.md's "Phase 4 record: the upgrade from
+      `_8`", with what changed in the procedure)
+- [x] The universe-first solve that failed on kappa (r-zig-slim `_9`,
+      built locally before the 2026-10-19 decision kept 8, on win-64
+      needs libcurl 8.23.0, which prefix.dev's conda-forge mirror,
+      read through universe's `channel_relations`, lacked): a solve-only
+      probe on gamma at 17:54 UTC with kappa's packages solved in both
+      channel orders once the mirror had it; pixi.toml's and stress.R's
+      comments give the reason for conda-forge first
+- [x] Tested: conda-package on linux-64, omicron (osx-arm64), kappa;
+      wheel-test on linux-64 and omicron (2026-10-14, both rounds)
+- [ ] Tested by CI (the PR's run): the core tier with the five
+      conda-package legs, each with its four package tests and
+      conda-consume. osx-64 and linux-aarch64 conda-package have run on
+      no host (omicron's Rosetta row was not run), and conda-consume has
+      not run on GitHub's Windows runner. Then `full-ci` (wheel-test on
+      the four unix minimal legs: the linux-aarch64 and osx-64 wheels
+      exist nowhere else) and `upstream-zig` (the patches changed)
+- [ ] CI's conda legs' times against ea7e6ee's (win-64 15.5 min; Cc11);
+      they decide whether the four tests keep sharing a zig cache
+      (`R_ZIG_TEST_ZIG_CACHE` as a rattler-build test secret, step 4),
+      which saved no measurable time on gamma
+- [ ] Optional: one stress dispatch with `distribution: conda`,
+      `channel: local`, `g3 g4` on the five runners, which installs the
+      PR's r-zig-slim and r-zig-toolchain (PHASE4 section 8)
+- [x] ~~Just before merging: universe still holds `_8` and nothing
+      newer on the five subdirs, else the number moves (B14 a)~~: no
+      number to check since 2026-10-19 (phase 4 keeps 8); phase 7's
+      item does it for the bump
+- [x] build.yaml's publish step needs `vars.CONDA_PUBLISH == 'true'`
+      (2026-10-19): without a bump, a push to main would upload the new
+      r-zig-compilers, r-zig-build-tools and a new-hash r-zig-toolchain
+      at `_8` beside universe's old r-zig-slim `_8`, which has no rzig
+      (N5's coupling). The variable stays unset until phase 7's bump
+      merges (phase 7's item)
+- [ ] The user commits and opens the PR (hand over the commands, no
+      trailer)
+- [ ] After the publish from main, which waits for phase 7's bump and
+      `CONDA_PUBLISH` (PHASE4 section 7, with that bump's number `_N`
+      for `_9`): the four `_N` files on all five subdirs
+      (`conda-channel-list`); a fresh env from universe only (no local
+      channel, fresh caches, dist/conda removed) gets `_N` with `pixi
+      add r-zig-toolchain` and passes test-toolchain.R; then the closing
+      note "published as `_N`, <date>" in feat-zig-pkg-build's N5 and
+      fix-zig-pkg-build-review's status (Cc19)
 
 ## Phase 5 — zig in the compilers group
 
@@ -597,6 +724,16 @@ Needs (answered): B11, B25, B39, B43 (pkg-config).
 - [ ] The same with Rtools or Git for Windows also on PATH (msys-2.0.dll
       clash), and in a fresh conda env with r-zig-toolchain
 - [ ] Tested: kappa, CI windows-latest (watch for the old spawn hangs)
+- [ ] The build-number bump (PLAN.md's B14 amendment, the user's
+      decision of 2026-10-19): phases 4, SHLIB routing, 5 and 6 kept 8;
+      phase 7's PR takes the number after universe's newest (B14 a),
+      checked just before merging (`pixi run -e pkg conda-channel-list
+      universe <subdir>` on the five subdirs), with one history entry
+      for phases 4 to 7
+- [ ] Set CONDA_PUBLISH=true (`gh variable set CONDA_PUBLISH --body
+      true`) after phase 7's bump merges, then publish (that push's run
+      once the variable is set, or `pixi run ci-trigger`) and run phase
+      4's post-publish check with the new number
 
 ## Phase 8 — the base's runtime files
 
@@ -622,8 +759,9 @@ Needs (answered): B14 (a), with B37 (a).
       the last bump; conda-package on all five platforms.
       feat-zig-pkg-build's PR changes r-zig-slim (patches 0009, 0012,
       0013, share/zig/rpkg) and r-zig-toolchain (rzig's new modes and
-      name) and bumps nothing (its N5, 2026-10-12): phase 4's bump to 9
-      publishes both, together (phase 4's item says why)
+      name) and bumps nothing (its N5, 2026-10-12): the bump that
+      publishes phase 4 publishes both, together (phase 4's item says
+      why); since 2026-10-19 that is phase 7's bump, not a 9 in phase 4
 - [ ] feat-no-host-paths PLAN.md: What remains 3 points here; the T
       record and the OpenMP note (467-470) updated
 - [ ] This PLAN.md: status and records with dates and test results
@@ -633,6 +771,12 @@ Needs (answered): B14 (a), with B37 (a).
 
 ## Later / future checks
 
+- [ ] build.zig fills CC_VER/FC_VER from the zig and flang that build R,
+      on every OS, as it fills Windows' COMPILED_BY (compiledBy): the
+      vendored strings in zigbuild/config drift with every rebuild of
+      conda-forge's zig or of the libclang-cpp21.1 it loads, and phase
+      4's linux packages already show it (phase 4's D7 item; PHASE4 risk 7)
+      [conda-d7-cc-ver-stale]
 - [ ] Which full-only features can become add-on R components (tcltk
       first); drop the separate full build only if readline/NLS can be
       settled
@@ -663,12 +807,21 @@ Needs (answered): B14 (a), with B37 (a).
       alone, the Makevars-rule stop; on unix also the configure-only and
       no-flang stops; Windows since the review follow-up
       [phase3-P3-9]) are the gate for the group's scope
-- [ ] A stress dispatch of g3 g4 with trace and `shared_cache = false`
+- [x] A stress dispatch of g3 g4 with trace and `shared_cache = false`
       on main after feat-shared-build-runner merges: rzig build's
       default cache, as a user's install has it, should bring the small
       tier-1 rows back to about 38317654371's shared-cache times on the
       five runners, the first tier-1 row of each leg carrying the one
-      runner compile (feat-shared-build-runner's PLAN.md, "CI")
+      runner compile (feat-shared-build-runner's PLAN.md, "CI"). Done:
+      run 38569895172 on main d11dee1 (2026-10-14) passed on the five
+      runners with no unexpected row, one build-runner directory per
+      leg; the small tier-1 rows' means were 1.3, 1.2, 1.8, 4.8 and
+      2.6 s (ubuntu-latest, ubuntu-24.04-arm, macos-latest,
+      macos-15-intel, windows-latest), against 1.1, 1.2, 2.2, 5.4 and
+      1.6 s shared and 4.4, 12.3, 11.9, 17.2 and 14.4 s per install: the
+      shared runner brings tier-1 installs back to the shared-cache
+      times on every CI runner, the runner compile paid once per runner
+      per leg
 - [ ] A stress dispatch of g1 with trace (Rcpp's cppFunction, rstan's
       stan_model): run-time compilation, `R CMD SHLIB`, which the g3 g4
       dispatch of 2026-10-12 did not exercise (no smoke compiled)
@@ -690,6 +843,10 @@ Needs (answered): B14 (a), with B37 (a).
 - [ ] GNU make built with zig (B7 b)
 - [ ] The release job (B12): `v*` tags, GitHub Release, GPL sources
       mirrored
+- [ ] The four PyPI names (r-zig, r-zig-compilers, r-zig-build-tools,
+      r-zig-toolchain), all free on 2026-10-13: reserve or publish them
+      with B12's wheel publishing; until then the README and wheel-test
+      install the group wheels with `--no-index` (PHASE4 Cc14)
 - [ ] The toolchain in an environment of its own (feat-no-host-paths
       item 4; D14 a)
 - [ ] Windows minimal and the Windows wheel (C1-C3 a), after phase 7
