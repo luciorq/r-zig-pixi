@@ -148,16 +148,26 @@ build:
   # databases name no build path: build 7's named rattler's work dir and
   # host prefix inside their compressed objects, which conda's prefix
   # replacement cannot reach.
+  # 8 stays (2026-10-19, the user's decision): feat-standalone-toolchain
+  # phases 4, SHLIB routing (feat-shlib-rzig-build), 5 and 6 keep build
+  # 8, and main does not publish them (build.yaml's CONDA_PUBLISH); the
+  # next bump comes with phase 7's merge, to the number after universe's
+  # newest (B14 a).
   number: 8
 
 outputs:
-  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), two
-  # packages split by directory: the toolchain package owns
-  # R_HOME/bin/toolchain, which Makeconf points at (on win-64 with
-  # binutils/, the MinGW binutils Makeconf.win names, B41), and the
-  # compiler run dependencies; everything else is R. Without the
-  # toolchain, installing a package that has compiled code or a configure
-  # script stops with the preflight message (zigbuild/patches/) naming it.
+  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), four
+  # packages (feat-standalone-toolchain B28 a). The base, r-zig-slim, owns
+  # R and its compiler front rzig (R_HOME/bin/toolchain's compiler names,
+  # which Makeconf points at, and share/zig/rpkg), as the standalone base
+  # archive does (B19). Each group package owns, or depends on,
+  # third-party software only: r-zig-compilers depends on zig, flang and
+  # llvm-openmp; r-zig-build-tools on make (win-64: the MSYS2 tools and
+  # pkg-config), and on win-64 owns R_HOME/bin/toolchain/binutils/, the
+  # MinGW binutils Makeconf.win names (B41). r-zig-toolchain is the
+  # metapackage of both groups. Without a group, an install that needs it
+  # stops with rzig's text naming that package (the preflight, patch
+  # 0009).
   - staging:
       name: r-zig-build
     requirements:
@@ -173,8 +183,9 @@ outputs:
         # (flang-zig 6, lld-zig 5, flang-rt-zig 10); its zig 0.17 builds
         # come at the next build numbers. The build string's `_N` suffix
         # pins it: a `[build_number="==N"]` bracket would be copied into
-        # r-zig-toolchain's depends, which conda's default (libmamba)
-        # solver and micromamba cannot parse. lld-zig only for its pin.
+        # r-zig-compilers' depends (r-zig-toolchain only pins the other
+        # three outputs, B28), which conda's default (libmamba) solver and
+        # micromamba cannot parse. lld-zig only for its pin.
         - flang-zig ==23.1.1 *_6
         - lld-zig ==23.1.1 *_5
         - flang-rt-zig ==23.1.1 *_10
@@ -300,10 +311,13 @@ outputs:
           then:
             - xorg-xorgproto
         # discovered via `ldd`/`otool -L` on the actual built bin/exec/R +
-        # libR — the full runtime closure, not just pixi.toml's direct deps
+        # libR — the full runtime closure, not just pixi.toml's direct deps.
+        # zstd on every OS (feat-standalone-toolchain E2, widened from
+        # win-64 by phase 4's survey): libR.so, libR.dylib and R.dll link
+        # it (HAVE_ZSTD in every config), and win-64's MinGW binutils too
+        - zstd
         - if: linux
           then:
-            - zstd
             - libiconv
             - libstdcxx
             - libgcc
@@ -329,16 +343,19 @@ outputs:
         file: build.sh
         env:
           R_VERSION: ${{ version }}
-          R_ZIG_CONDA_BUILD: "1"
 
   - package:
       name: r-zig-slim
     inherit: r-zig-build
     build:
+      # everything but the groups' directories under R_HOME/bin/toolchain
+      # (feat-standalone-toolchain B20, B28): rzig's names stay here. Of
+      # these, the conda build makes only win-64's binutils/, which
+      # r-zig-build-tools owns
       files:
         exclude:
-          - lib/R/bin/toolchain/**
-          - Library/lib/R/bin/toolchain/**
+          - lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
+          - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
     requirements:
       run:
         # R's own shared libraries (libR, base packages like stats/utils via
@@ -366,9 +383,10 @@ outputs:
         - freetype
         - libpng
         - glib
+        # E2, on every OS (staging host)
+        - zstd
         - if: linux
           then:
-            - zstd
             - libiconv
             - libstdcxx
             - libgcc
@@ -377,7 +395,8 @@ outputs:
             - libiconv
             # build.zig's deployment target (macos_min): every Mach-O says
             # minos 13.0, so refuse older macOS at solve time rather than
-            # at load time. r-zig-toolchain gets it through its exact pin.
+            # at load time. The group packages get it through their exact
+            # pins.
             - __osx >=13.0
         - if: win
           then:
@@ -385,6 +404,14 @@ outputs:
             - libtiff
             - tk 8.6.*
             - gettext
+      run_constraints:
+        # the zig that built R and rzig: rzig finds the env's zig first
+        # (B34), and B32's check stops a compile with another
+        # major.minor; conda-forge's main label has 0.17.0 since
+        # 2026-10-13. Constrains an installed zig, pulls none in; bumped
+        # with r-zig-compilers' pins in the zig 0.17 wave (B18; PHASE4
+        # open point K a)
+        - zig 0.16.*
     tests:
       # Mirrors scripts/smoke-test.sh's actual assertions (numerics: LAPACK
       # solve/qr, BLAS matmul, fft round-trip; pcre2 regex; zlib compression;
@@ -408,7 +435,7 @@ outputs:
                 # testing what its own comment used to claim either (PATH-
                 # based invocation of the Library/bin/{R,Rscript}.bat shims
                 # is covered by the separate fresh-env consume test instead —
-                # build.yml / feat-prefix-publish devdocs — where PATH is
+                # scripts/conda-consume.sh, which build.yaml runs — where PATH is
                 # genuinely expanded, against a real installed env). So: a
                 # relative path back to the test env root instead of any
                 # PREFIX substitution at all. The test's own cwd is always
@@ -442,37 +469,136 @@ outputs:
               else:
                 - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
                 - $PREFIX/bin/Rscript test-preflight.R
+          # conda-package's shared zig cache for the recipe tests
+          # (pixi.toml): on unix rattler-build gives a test script a clean
+          # environment, PATH and its own variables only, so the caller's
+          # R_ZIG_TEST_ZIG_CACHE reaches the test only as a secret, which
+          # records its name in info/tests but not its value (`env:` would
+          # record the build machine's path). Unset, rattler-build warns and
+          # each test uses its own cache.
+          secrets:
+            - R_ZIG_TEST_ZIG_CACHE
         files:
           recipe:
             - test-win.R
             - test-preflight.R
+      # rzig and rpkg are the base's on every channel (B19); no group's
+      # directory is (B28). Not `strict`: whether the packaged test files
+      # count in the checked list is unverified (PHASE4 Cc12), and
+      # `not_exists` holds either way
+      - package_contents:
+          files:
+            exists:
+              - if: win
+                then:
+                  - Library/lib/R/bin/toolchain/rzig.exe
+                  - Library/lib/R/bin/toolchain/gcc.exe
+                  - Library/lib/R/share/zig/rpkg/build_t1.zig
+                else:
+                  - lib/R/bin/toolchain/rzig
+                  - lib/R/bin/toolchain/zig-cc
+                  - lib/R/share/zig/rpkg/build_t1.zig
+            not_exists:
+              - lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
+              - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
     # Windows builds R with full's content, under the name slim on every
     # channel (feat-standalone-toolchain B42 a); a Windows slim that is
     # really slim is a later aim.
     about:
-      summary: R built with the zig toolchain (headless slim profile; Windows slim has full's content)
+      summary: R built with the zig toolchain, with its compiler front rzig (headless slim profile; Windows slim has full's content)
       description: |
         R built from source with the zig toolchain, in the headless slim
         profile: no X11, Tcl/Tk, JPEG, TIFF or NLS. Windows slim has full's
         content (tcltk, jpeg, tiff, NLS): R's Windows build has no switches
         to leave them out.
 
+        To compile packages, add r-zig-toolchain (r-zig-compilers and
+        r-zig-build-tools). r-zig-compilers alone installs packages that
+        have no configure script and no make rules.
 
+  # The groups (feat-standalone-toolchain B28 a, B38). Each pins exactly
+  # the R build whose Makeconf and rzig it serves, and comes without the
+  # staging host's run exports (cairo, icu, libcurl, ...): R's libraries
+  # come with r-zig-slim. `inherit` with `files: []` (or a conditional
+  # list no branch of which matches) makes a package with no payload
+  # (rattler-build >= 0.76, pixi.toml), the form rattler-build's own
+  # tests cover with both --error-* flags; it holds only its test file,
+  # under etc/conda/test-files/ (PHASE4 risk 4).
   - package:
-      name: r-zig-toolchain
-    # Without the staging host's run exports (cairo, icu, libcurl, ...):
-    # this package only adds compilers; R's libraries come with r-zig-slim.
+      name: r-zig-compilers
     inherit:
       from: r-zig-build
       run_exports: false
     build:
-      files:
-        - lib/R/bin/toolchain/**
-        - Library/lib/R/bin/toolchain/**
+      files: []
     requirements:
       run:
-        # exactly the R build whose Makeconf names this directory
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
+        # The compilers rzig runs. The Fortran compiler must be the one R
+        # itself was built with (CRAN's own rule — module files and
+        # runtime ABI differ between Fortran compilers), so this mirrors
+        # the build exactly. flang-zig's closure is ~1.5 GiB (flang-zig +
+        # lld-zig + flang-rt-zig), the accepted cost of one Fortran
+        # toolchain everywhere (on osx-arm64, of correct complex LAPACK at
+        # -O2; flang-pixi docs/11). Pinned as in build, so a user gets the
+        # zig 0.16 flang this was built and tested with, not a later 0.17
+        # build. zig: the one that built R and rzig, B32's check fails on
+        # another major.minor (r-zig-slim also constrains it, PHASE4 open
+        # point K).
+        - zig 0.16.*
+        - flang-zig ==23.1.1 *_6
+        - lld-zig ==23.1.1 *_5
+        - flang-rt-zig ==23.1.1 *_10
+        # omp.h and libomp: r-zig-slim already has them (B41's
+        # exception); named here as B28 lists the group
+        - llvm-openmp
+    tests:
+      - package_contents:
+          files:
+            not_exists:
+              - lib/R/**
+              - Library/lib/R/**
+      - script:
+          content:
+            - if: win
+              then:
+                - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-compilers.R'
+              else:
+                - $PREFIX/bin/Rscript test-compilers.R
+          # the tests' shared zig cache, as r-zig-slim's test
+          secrets:
+            - R_ZIG_TEST_ZIG_CACHE
+        files:
+          recipe:
+            - test-compilers.R
+    about:
+      summary: The r-zig compilers for r-zig-slim (zig 0.16, LLVM flang from flang-pixi, OpenMP)
+
+  - package:
+      name: r-zig-build-tools
+    inherit:
+      from: r-zig-build
+      run_exports: false
+    build:
+      # win-64: conda-forge's MinGW binutils, copied by the toolchain build
+      # with SOURCES and LICENSES/ (B24, B41; Makeconf.win names them by
+      # path under R_HOME). unix: nothing (no branch matches: an empty
+      # package)
+      files:
+        - if: win
+          then:
+            - Library/lib/R/bin/toolchain/binutils/**
+    requirements:
+      run:
+        - ${{ pin_subpackage("r-zig-slim", exact=True) }}
+        # B28 (a): unix make. On win-64, m2-make is the make R runs (it
+        # comes first on PATH), so no native make there (PHASE4 Cg7);
+        # phase 7 chooses native or m2 (B11)
+        - if: unix
+          then:
+            - make >=4.4
+        # win-64's interim set until phase 7 chooses one for both channels
+        # (B11, B39)
         - if: win
           then:
             # bash.exe: packages' own configure scripts and make's recipe
@@ -490,10 +616,10 @@ outputs:
             # package: `./configure: line 62: sed: command not found` —
             # `sed.exe` genuinely didn't exist anywhere in the installed env
             # (these were build:-only, same gap m2-bash had). `make` also
-            # needed here, separately from build:'s own `make >=4.4` below —
-            # `R CMD SHLIB`/`INSTALL` shells out to it to actually drive
-            # compilation for any package with a Makevars or multiple source
-            # files, not just packages with a configure script.
+            # needed here: `R CMD SHLIB`/`INSTALL` shells out to it to
+            # drive compilation for any package that needs make (a
+            # configure script, a Makevars rule), not just packages with a
+            # configure script.
             # texinfo/diffutils/tar/gzip/unzip/zip stay build:-only —
             # documentation-generation and archive tools a package's own
             # `configure`/compile step essentially never needs; add if a real
@@ -506,23 +632,71 @@ outputs:
             - m2-make
             - m2-which
             - m2-findutils
-        # package compilation works out of the box: Makeconf records the
-        # bundled compiler front (rzig, R_HOME/bin/toolchain); these provide
-        # the actual compilers. The Fortran
-        # compiler must be the one R itself was built with (CRAN's own rule —
-        # module files and runtime ABI differ between Fortran compilers), so
-        # this mirrors the build exactly. flang-zig's closure is ~1.5 GiB
-        # (flang-zig + lld-zig + flang-rt-zig), the accepted cost of one
-        # Fortran toolchain everywhere (on osx-arm64, of correct complex
-        # LAPACK at -O2; flang-pixi docs/11). Pinned as in build, so a
-        # user gets the zig 0.16 flang this was built and tested with, not
-        # a later 0.17 build.
-        - zig 0.16.*
-        - flang-zig ==23.1.1 *_6
-        - lld-zig ==23.1.1 *_5
-        - flang-rt-zig ==23.1.1 *_10
-        - make >=4.4
+            # B43: Makeconf.win names a bare pkg-config (pkg-config only:
+            # phase 7 adds the pkgconf name, PHASE4 open point F a)
+            - pkg-config
+            # E2: the six binutils import zstd.dll
+            - zstd
     tests:
+      - package_contents:
+          files:
+            exists:
+              - if: win
+                then:
+                  # one entry per tool: an `exists` glob passes when it
+                  # matches one file, so a {a,b} list would not catch a
+                  # missing tool
+                  - Library/lib/R/bin/toolchain/binutils/nm.exe
+                  - Library/lib/R/bin/toolchain/binutils/dlltool.exe
+                  - Library/lib/R/bin/toolchain/binutils/as.exe
+                  - Library/lib/R/bin/toolchain/binutils/strip.exe
+                  - Library/lib/R/bin/toolchain/binutils/windres.exe
+                  - Library/lib/R/bin/toolchain/binutils/objdump.exe
+                  - Library/lib/R/bin/toolchain/binutils/SOURCES
+                  - Library/lib/R/bin/toolchain/binutils/LICENSES/binutils_impl_win-64/**
+            not_exists:
+              - lib/R/**
+              - Library/lib/R/bin/toolchain/{gcc,rzig}.exe
+              - Library/lib/R/etc/**
+      - script:
+          content:
+            - if: win
+              then:
+                - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-build-tools.R'
+              else:
+                - $PREFIX/bin/Rscript test-build-tools.R
+          # the tests' shared zig cache, as r-zig-slim's test
+          secrets:
+            - R_ZIG_TEST_ZIG_CACHE
+        files:
+          recipe:
+            - test-build-tools.R
+    about:
+      summary: The r-zig build tools for r-zig-slim (make; on Windows also sh, the MSYS2 tools, pkg-config and the MinGW binutils)
+      # win-64 holds GNU binutils' copies (PHASE4 open point E a); unix
+      # holds no file
+      license: ${{ "GPL-3.0-or-later" if win else "GPL-2.0-only OR GPL-3.0-only" }}
+
+  - package:
+      name: r-zig-toolchain
+    # the metapackage of both groups (B28 a): `pixi add r-zig-toolchain`
+    # installs everything a package build needs, as it did up to build 8
+    inherit:
+      from: r-zig-build
+      run_exports: false
+    build:
+      files: []
+    requirements:
+      run:
+        - ${{ pin_subpackage("r-zig-slim", exact=True) }}
+        - ${{ pin_subpackage("r-zig-compilers", exact=True) }}
+        - ${{ pin_subpackage("r-zig-build-tools", exact=True) }}
+    tests:
+      - package_contents:
+          files:
+            not_exists:
+              - lib/R/**
+              - Library/lib/R/**
       - script:
           content:
             - if: win
@@ -530,13 +704,18 @@ outputs:
                 - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-toolchain.R'
               else:
                 - $PREFIX/bin/Rscript test-toolchain.R
+          # the tests' shared zig cache, as r-zig-slim's test
+          secrets:
+            - R_ZIG_TEST_ZIG_CACHE
         files:
           recipe:
             - test-toolchain.R
     about:
-      summary: Compilers for r-zig-slim (zig, flang, make and R_HOME/bin/toolchain's compiler front; on Windows also MinGW binutils)
+      summary: "The r-zig toolchain for r-zig-slim: r-zig-compilers and r-zig-build-tools"
 
 about:
   homepage: https://www.r-project.org
-  license: GPL-2.0-or-later
+  # R's own (PHASE4 open point E a), as the r-zig wheel says; win-64
+  # r-zig-build-tools states its binutils' own
+  license: GPL-2.0-only OR GPL-3.0-only
   summary: R built with the zig toolchain (headless slim profile)

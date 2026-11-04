@@ -5,7 +5,7 @@
 #define R_CONFIG_H
 
 /* Version of C Compiler */
-#define CC_VER "clang version 21.1.8 (https://github.com/conda-forge/clangdev-feedstock 0b2bbeecf482914054e314d49929705c3c8516f8)"
+#define CC_VER "clang version 21.1.8 (https://github.com/conda-forge/clangdev-feedstock 334cf9a5e6c0331e9f261eaf01fc3568724fcce9)"
 
 /* Define to 1 if using 'alloca.c'. */
 /* #undef C_ALLOCA */

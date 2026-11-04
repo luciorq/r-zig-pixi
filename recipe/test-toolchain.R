@@ -1,22 +1,67 @@
-## r-zig-toolchain: a package with C and C++ code compiles, installs and
-## loads (feat-no-host-paths PLAN.md, phase T). rzig is there under CC's
-## name, which the install preflight runs (gcc.exe on Windows,
-## feat-standalone-toolchain B26), in R_HOME/bin/toolchain (R.home("bin")
-## is bin/x64 on Windows).
+## r-zig-toolchain (r-zig-compilers and r-zig-build-tools; feat-no-host-
+## paths PLAN.md, phase T; feat-standalone-toolchain B28): a package with C
+## and C++ code compiles, installs and loads. rzig, r-zig-slim's, is under
+## CC's name, which the install preflight runs (gcc.exe on Windows, B26),
+## in R_HOME/bin/toolchain (R.home("bin") is bin/x64 on Windows).
 windows <- .Platform$OS.type == "windows"
+d <- tempfile("rzig-"); dir.create(d)
+## the caller's settings (pixi run, conda run, wheel-test; rattler-build's
+## test env passes them on win-64, and only PATH on unix, SC §3):
+## R_ZIG_EXTRA_ENV (pixi.toml) adds an environment; ZIG_BIN a zig;
+## R_ZIG_NO_PREFLIGHT skips 0009; R_ZIG_PKG_BUILDER=make sends tier 1 to
+## make; RZIG_TRACE changes the logs; a MAKEFLAGS assignment makes rzig
+## build decline (0013); ZIG_LOCAL_CACHE_DIR defeats N3's per-install
+## cache; R_ZIG_TOOLCHAIN_HINT adds a line
+Sys.unsetenv(c("R_ZIG_EXTRA_ENV", "ZIG_BIN", "R_ZIG_TOOLCHAIN_HINT", "R_ZIG_NO_PREFLIGHT",
+               "R_ZIG_PKG_BUILDER", "RZIG_TRACE", "MAKEFLAGS", "ZIG_LOCAL_CACHE_DIR"))
+## a user Makevars switches the preflight off. Unset, R_MAKEVARS_USER lets
+## R (install.R's makevars_user) and rzig (pkgbuild.zig) fall back to
+## ~/.R/Makevars*; naming a file that does not exist means "none" to both
+Sys.setenv(R_MAKEVARS_USER = file.path(d, "no-Makevars"))
+## zig's cache: shared between the recipe tests when conda-package asks
+## (R_ZIG_TEST_ZIG_CACHE), else this test's own; rzig's cache in d
+Sys.setenv(ZIG_GLOBAL_CACHE_DIR = Sys.getenv("R_ZIG_TEST_ZIG_CACHE", file.path(d, "zig-cache")),
+           XDG_CACHE_HOME = file.path(d, "cache"))
+## only this env's programs (Windows: also R's bin\x64 and System32);
+## env_bin is <prefix>/bin, on Windows <prefix>/Library/bin. With usr_bin
+## also the userland R's makefiles run besides make: on Windows m2's
+## Library\usr\bin, before the env; on unix the host's /usr/bin and /bin,
+## after it (B25), since GNU make runs a recipe line with no shell syntax,
+## such as config.mk's `@echo $($(VAR))`, from PATH itself
+env_bin <- normalizePath(file.path(R.home(), "..", "..", "bin"))
+narrow <- function(usr_bin = FALSE)
+    Sys.setenv(PATH = paste(c(if (windows && usr_bin) normalizePath(file.path(env_bin, "..", "usr", "bin")),
+                              env_bin,
+                              if (windows) c(R.home("bin"), file.path(Sys.getenv("SystemRoot"), "System32"))
+                              else if (usr_bin) c("/usr/bin", "/bin")),
+                            collapse = .Platform$path.sep))
+## how rzig shows a path (check.zig's display(): `/` only on Windows), and
+## a comparison that ignores the drive letter's case there
+shown <- function(p) normalizePath(p, winslash = "/", mustWork = FALSE)
+same_path <- function(a, b) if (windows) tolower(a) == tolower(b) else a == b
+## a command's status and output through a file: a 127 through
+## system2(stdout = TRUE) is R's own error (sys-unix.c), not a status;
+## through a file R only warns that it is one
+run_to <- function(cmd, args) {
+    f <- tempfile(tmpdir = d); st <- suppressWarnings(system2(cmd, args, stdout = f, stderr = f))
+    list(status = st, out = readLines(f, warn = FALSE))
+}
+
 tc <- file.path(R.home(), "bin", "toolchain", if (windows) "gcc.exe" else "zig-cc")
 stopifnot(file.exists(tc))
-## The shipped tree alone: a dev shell's personal Makevars
-## (R_MAKEVARS_USER) and its extra environment for the compilers
-## (R_ZIG_EXTRA_ENV, pixi.toml) must not leak into this test.
-Sys.unsetenv(c("R_MAKEVARS_USER", "R_ZIG_EXTRA_ENV"))
-d <- tempfile("rzig-")
-## zig's cache and rzig's in the test's temporary dir, as scripts/env.sh
-## puts zig's in build/: the test leaves nothing in the user's caches
-## (%LOCALAPPDATA%\zig and \r-zig, ~/.cache/zig and ~/.cache/r-zig).
-Sys.setenv(ZIG_GLOBAL_CACHE_DIR = file.path(d, "zig-cache"),
-           ZIG_LOCAL_CACHE_DIR = file.path(d, "zig-cache"),
-           XDG_CACHE_HOME = file.path(d, "cache"))
+## zig's local cache in d too, as scripts/env.sh puts it in build/: the
+## test leaves nothing in the user's caches (%LOCALAPPDATA%\zig and
+## \r-zig, ~/.cache/zig and ~/.cache/r-zig)
+Sys.setenv(ZIG_LOCAL_CACHE_DIR = file.path(d, "zig-cache"))
+## Every install with this env's programs (PHASE4 Cg9), and on unix the
+## host's userland after them (B25): a run dependency the groups lack
+## fails here, instead of being covered by the caller's tools
+## (rattler-build's test env keeps its PATH: the pkg env's zig, flang and
+## make; on windows-latest also C:\mingw64\bin and Git's usr\bin). The
+## host's readelf and otool, which only inspect what was built, by their
+## path, found first.
+readelf <- Sys.which("readelf"); otool <- Sys.which("otool")
+narrow(usr_bin = TRUE)
 lib <- file.path(d, "lib")
 p <- file.path(d, "rzigc")
 dir.create(lib, recursive = TRUE)
@@ -159,10 +204,10 @@ if (!windows) {
     ## dependencies).
     so <- file.path(lib, "rzigz", "libs", "rzigz.so")
     if (Sys.info()[["sysname"]] == "Darwin") {
-        ol <- system2("otool", c("-l", shQuote(so)), stdout = TRUE)
+        ol <- system2(otool, c("-l", shQuote(so)), stdout = TRUE)
         rp <- sub("^ *path (.*) \\(offset [0-9]+\\)$", "\\1", ol[grep("cmd LC_RPATH", ol) + 2L])
-    } else if (nzchar(Sys.which("readelf"))) {
-        dyn <- system2("readelf", c("-d", shQuote(so)), stdout = TRUE)
+    } else if (nzchar(readelf)) {
+        dyn <- system2(readelf, c("-d", shQuote(so)), stdout = TRUE)
         stopifnot(!any(grepl("(RPATH)", dyn, fixed = TRUE)))
         rp <- unlist(strsplit(sub(".*\\[(.*)\\].*", "\\1", grep("(RUNPATH)", dyn, fixed = TRUE, value = TRUE)), ":"))
     } else {
@@ -211,25 +256,16 @@ cat("toolchain: AR and RANLIB are rzig; a static library built with them (make: 
 if (windows) {
     ## The binutils Makeconf.win names by path (NM, DLLTOOL, RESCOMP,
     ## OBJDUMP, STRIP_*) are conda-forge's MinGW copies in
-    ## R_HOME/bin/toolchain/binutils/, which this package owns, with the
-    ## records of where they come from: SOURCES names their package and its
-    ## sha256, LICENSES/ holds its licences (feat-standalone-toolchain B24,
-    ## B41). nm runs, loading zstd.dll from this env's Library/bin.
+    ## R_HOME/bin/toolchain/binutils/, r-zig-build-tools' files
+    ## (feat-standalone-toolchain B24, B41; their SOURCES and LICENSES are
+    ## test-build-tools.R's). nm runs, loading zstd.dll from this env's
+    ## Library/bin.
     nm <- cfg("NM")
     stopifnot(basename(nm) == "nm.exe", basename(dirname(nm)) == "binutils",
               basename(dirname(dirname(nm))) == "toolchain", file.exists(nm))
-    bu <- file.path(R.home(), "bin", "toolchain", "binutils")
-    stopifnot(file.exists(file.path(bu, paste0(c("nm", "dlltool", "as", "strip", "windres", "objdump"), ".exe"))))
-    src <- readLines(file.path(bu, "SOURCES"))
-    i <- match("package: binutils_impl_win-64", src)
-    stopifnot(!is.na(i))
-    blk <- src[i:length(src)]
-    blk <- blk[cumsum(blk == "") == 0L]
-    stopifnot(any(grepl("^sha256: [0-9a-f]{64}$", blk)),
-              length(list.files(file.path(bu, "LICENSES", "binutils_impl_win-64"), recursive = TRUE)) > 0L)
     out <- system2(nm, "--version", stdout = TRUE)
     stopifnot(grepl("GNU nm", out[1L], fixed = TRUE))
-    cat("toolchain: NM is", nm, "and binutils/ has its SOURCES (binutils_impl_win-64) and LICENSES: OK\n")
+    cat("toolchain: NM is", nm, ": OK\n")
     ## R CMD check's DLL check reads OBJDUMP as sotools.R's
     ## read_symbols_from_dll does: R CMD config's value, kept only when it
     ## plus ".exe" is a file (Makeconf.win names objdump without .exe).
@@ -275,9 +311,9 @@ install.packages(pfl, repos = NULL, type = "source", lib = lib)
 stopifnot(rzigfl::f(42L) == 42L)
 make_ref(pfl, "rzigfl")
 stopifnot(getExportedValue(loadNamespace("rzigfl", lib.loc = lib_make), "f")(42L) == 42L)
-if (!windows && Sys.info()[["sysname"]] != "Darwin" && nzchar(Sys.which("readelf"))) {
+if (!windows && Sys.info()[["sysname"]] != "Darwin" && nzchar(readelf)) {
     for (l in c(lib, lib_make)) {
-        dyn <- system2("readelf", c("-d", shQuote(file.path(l, "rzigfl", "libs", "rzigfl.so"))), stdout = TRUE)
+        dyn <- system2(readelf, c("-d", shQuote(file.path(l, "rzigfl", "libs", "rzigfl.so"))), stdout = TRUE)
         stopifnot(!any(grepl("flang_rt", dyn, fixed = TRUE)))
     }
 }

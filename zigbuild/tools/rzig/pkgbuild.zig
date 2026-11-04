@@ -519,7 +519,8 @@ const runner_idle_days = 7;
 /// command keeps conda-forge's and upstream's zig, both 0.16.0 with
 /// different std files, apart: the manifest's name is the same for both,
 /// so in one directory they would replace each other's runner whenever
-/// they alternate.
+/// they alternate. On Windows the command is keyed with `/` only
+/// (cache.command): kappa got two directories for one conda-forge zig.
 ///
 /// Each use writes the directory's `last-used` anew, which the sweep
 /// reads. That is also the check that rzig can create files there, which
@@ -529,7 +530,7 @@ const runner_idle_days = 7;
 /// [code-unwritable-cache]. null when the directory cannot be used.
 fn sharedRunner(ctx: *Ctx, zig: []const []const u8, build_file: []const u8) !?ZigBuildDirs {
     const source = Io.Dir.cwd().readFileAlloc(ctx.io, build_file, ctx.arena, .limited(1 << 20)) catch return null;
-    const command = try mem.join(ctx.arena, " ", zig);
+    const command = try cache.command(ctx, zig);
     const version = ctx.capture(try mem.concat(ctx.arena, []const u8, &.{ zig, &.{"version"} }));
     const cache_root = try cache.root(ctx);
     const dir = try ctx.fmt("{s}/build-runner-{s}", .{ cache_root, &cache.key(&.{ source, command, version.stdout }) });
@@ -953,6 +954,34 @@ test "zig build's build file and cache: tier 1 the build runner's directory in r
     const none = try zigBuildDirs(c, null, .makevars, root, &zig, t1);
     try testing.expectEqualStrings(f.path("out/.rzig/zig-cache"), none.cache_dir);
     try testing.expectEqualStrings(t1, none.build_file);
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "Windows: one zig, one build-runner directory, whichever separator its path is spelled with" {
+    // feat-shared-build-runner open decision 1 (b)
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    try f.env.put("XDG_CACHE_HOME", f.path("xdg"));
+    try f.write("r/build_t1.zig", "// t1\n", .default_file);
+    const t1 = f.path("r/build_t1.zig");
+    const root = f.path("out/.rzig");
+    // conda-forge's zig as PATH finds it, and as ZIG_BIN names it through
+    // MSYS (no zig there: `zig version` says nothing for either)
+    const back = [_][]const u8{"C:\\env\\Library\\bin\\x86_64-w64-mingw32-zig.exe"};
+    const fwd = [_][]const u8{"C:/env/Library/bin/x86_64-w64-mingw32-zig.exe"};
+    const dir = f.fmt("{s}/r-zig/build-runner-{s}", .{ f.path("xdg"), &cache.key(&.{ "// t1\n", fwd[0], "" }) });
+    try testing.expectEqualStrings(dir, (try zigBuildDirs(c, null, .makevars, root, &back, t1)).cache_dir);
+    try testing.expectEqualStrings(dir, (try zigBuildDirs(c, null, .makevars, root, &fwd, t1)).cache_dir);
+    var buf: [256]u8 = undefined;
+    try testing.expectEqualStrings(f.fmt("{s}\n\n", .{fwd[0]}), try Io.Dir.cwd().readFile(testing.io, f.fmt("{s}/last-used", .{dir}), &buf));
+    // other OSes key the command as spelled: `\` is a file name's character
+    c.os = .linux;
+    try testing.expectEqualStrings(
+        f.fmt("{s}/r-zig/build-runner-{s}", .{ f.path("xdg"), &cache.key(&.{ "// t1\n", back[0], "" }) }),
+        (try zigBuildDirs(c, null, .makevars, root, &back, t1)).cache_dir,
+    );
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 

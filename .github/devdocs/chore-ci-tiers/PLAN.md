@@ -47,7 +47,12 @@ them, and need no tags.
   windows-latest default (--verbose, 90 minutes): 15 legs.
 - **Publishing:** conda-package's last step, `if: github.ref ==
   'refs/heads/main' && (github.event_name == 'push' ||
-  github.event_name == 'workflow_dispatch')`. Unchanged.
+  github.event_name == 'workflow_dispatch')`. Unchanged. (2026-10-19:
+  feat-standalone-toolchain phase 4 adds `&& vars.CONDA_PUBLISH ==
+  'true'`, so main publishes nothing until the user sets that variable
+  after phase 7's build-number bump merges; build.yaml says why. Where
+  this record says a push to main or `ci-trigger` publishes, read it
+  with that switch.)
 - **paths-ignore:** `**/*.md`, `.github/devdocs/**` and `LICENSE`, on
   push and pull_request. Unchanged.
 - **Required checks:** none. main is not protected and has no rulesets

@@ -1,6 +1,6 @@
 S["LTLIBOBJS"]=""
 S["LIBS_PKGS"]="-L@ZR_CONDA@/lib -lbz2 -lz -ldl -lm -liconv"
-S["FC_VER"]="flang version 23.1.1 (https://github.com/luciorq/flang-pixi cf4a479f72e76ddc962144a0bd6f20225e1996f5)"
+S["FC_VER"]="flang version 23.1.1"
 S["REC_INSTALL_OPT"]=""
 S["CC_VER"]="clang version 21.1.8"
 S["BUILD_NEW_ACCELERATE_LAPACK_FALSE"]=""

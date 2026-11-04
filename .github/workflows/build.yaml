@@ -6,8 +6,11 @@ name: build-r
 #   leg on all 5 platforms and minimal on linux-64, the wheel's (6 legs);
 # - full, on a pull request labelled `full-ci` and on a manual dispatch,
 #   nothing else: all 15 legs (full, openblas and minimal too).
-# conda-package (5 jobs) runs on every push to main, which publishes, in
-# the full tier, and on a pull request that changes what it builds from.
+# conda-package (5 jobs) runs on every push to main, in the full tier,
+# and on a pull request that changes what it builds from. A push to main
+# publishes only while the repository variable CONDA_PUBLISH is `true`
+# (off from 2026-10-19 until phase 7's build-number bump merges; the
+# publish step says why).
 # Both tiers' legs wait for the toolchain job (5 jobs, one per
 # platform), whose group archives they unpack and test
 # (feat-standalone-toolchain B31). Docs-only changes never touch the
@@ -38,7 +41,8 @@ on:
     inputs:
       # A runner image before ubuntu-latest moves to it, e.g. ubuntu-26.04
       # (ubuntu-latest from 2026-10-19): `gh workflow run build.yaml
-      # --ref <branch> -f linux_runner=ubuntu-26.04`. Only main publishes.
+      # --ref <branch> -f linux_runner=ubuntu-26.04`. Only main publishes
+      # (and only with CONDA_PUBLISH set).
       linux_runner:
         description: Runner for the linux-64 legs
         type: string
@@ -47,7 +51,7 @@ on:
 # A newer push to a pull request cancels its older run (the group is the
 # pull request's number): the old commit's result no longer matters.
 # Runs on main are never cancelled, since each commit on main is tested
-# and publishes, and neither are manual dispatches: each such run has a
+# and can publish, and neither are manual dispatches: each such run has a
 # group of its own, its run id. So does a pull request event that runs
 # nothing here (another label added), so that it cannot cancel a run of
 # the legs.
@@ -240,7 +244,8 @@ jobs:
   # stored credentials on any runner. Requires this repo+workflow to be
   # registered as a Trusted Publisher in the `universe` channel's
   # settings on prefix.dev.
-  # It runs on every push to main (publishing needs it) and every manual
+  # It runs on every push to main (publishing needs it, when
+  # CONDA_PUBLISH allows it: the publish step) and every manual
   # dispatch; on a pull request, with `full-ci` or when packaging says
   # the pull request changes what it builds from. !cancelled(), because
   # packaging is skipped in all the other cases, and a job whose need was
@@ -287,26 +292,22 @@ jobs:
           cache: true
       - name: Build + test conda package
         run: pixi run -e pkg conda-package
-      # rattler-build's own test phase runs with a literal unexpanded
-      # %PREFIX% on PATH on Windows, so it can never exercise the
-      # Library/bin/{R,Rscript}.bat shims a real install relies on (see
-      # recipe/recipe.yaml's win test comment + build.zig's Library/bin/*.bat). This
-      # is the regression check for that: a genuinely fresh pixi project
-      # installing straight from the just-built local channel, invoking
-      # bare `Rscript` the same way a real user would. (Was disabled on
-      # the old self-hosted kappa runner, whose PATH put WSL's bash.exe
-      # first; hosted windows-latest has no WSL-bash-on-PATH problem.)
-      - name: Fresh-env consume test (Windows PATH shim)
-        if: matrix.name == 'win-64'
-        shell: bash
-        run: |
-          set -euo pipefail;
-          channel="$(cd dist/conda && pwd -W)";
-          consume_dir="$(mktemp -d)";
-          pixi init --channel "$channel" --channel conda-forge --channel https://prefix.dev/universe --platform win-64 "$consume_dir";
-          cd "$consume_dir";
-          pixi add r-zig-slim;
-          pixi run Rscript -e 'r_home <- R.home(); cat("R_HOME =", r_home, "\n"); stopifnot(grepl("Library", r_home, fixed = TRUE)); cat("consume test OK\n")';
+      # A fresh pixi workspace from this run's packages, one environment
+      # per group (scripts/conda-consume.sh): the recipe's tests through
+      # pixi's activation and bare Rscript (win-64: Library/bin/Rscript.bat,
+      # which rattler-build's test phase cannot run).
+      - name: Fresh-env consume test (each group alone)
+        run: pixi run -e pkg conda-consume
+      # Paused until phase 7's build-number bump merges (the user's
+      # decision, 2026-10-19: feat-standalone-toolchain phases 4, SHLIB
+      # routing, 5 and 6 keep build 8). Without a bump, a push to main
+      # would upload the new r-zig-compilers and r-zig-build-tools and a
+      # new-hash r-zig-toolchain at _8, while --skip-existing keeps
+      # universe's old r-zig-slim _8, which has no rzig: the coupling
+      # feat-zig-pkg-build's N5 records, and every compiled install would
+      # stop. Publishing resumes when the user sets the repository
+      # variable after that merge: `gh variable set CONDA_PUBLISH --body
+      # true`.
       - name: Publish to prefix.dev (OIDC trusted publishing)
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CONDA_PUBLISH == 'true'
         run: pixi run -e pkg conda-publish
