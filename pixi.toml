@@ -91,10 +91,11 @@ smoke = "bash scripts/zig-smoke.sh"
 # quadprog and unix minqa through `rzig build`, data.table and ps through
 # make, pak mixed: its embedded cli, lpSolve, pkgcache and yaml through
 # rzig build, keyring and zip through make [phase3-P3-4]; each asserted
-# from its log; Rcpp's evalCpp through R CMD SHLIB, make; + OpenMP), on
-# every OS (Windows: etc/x64/Makeconf and R.exe's CMD dispatcher), with
+# from its log; Rcpp's evalCpp through R CMD SHLIB, rzig build; + OpenMP),
+# on every OS (Windows: etc/x64/Makeconf and R.exe's CMD dispatcher), with
 # the compile tree (compile-tree below): the installed tree and the
-# toolchain tree's openmp/ and build tools.
+# toolchain tree's openmp/ and build tools; then, on the base with no make
+# on PATH, Rcpp, cpp11's R CMD SHLIB call and pak (feat-shlib-rzig-build).
 contract = { cmd = "bash scripts/zig-contract.sh", depends-on = ["compile-tree"] }
 # pkg-parity: R CMD INSTALL through `rzig build` (install.R's hook, no
 # make) against the make path, on the compile tree: cli, digest,

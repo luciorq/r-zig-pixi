@@ -46,7 +46,9 @@ native build of a package.
    libcxx_mirror, S1-S11). Pure-zig code goes through `b.addObject`.
 2. **Classification, Makeconf evaluation and the plan live in rzig**
    (zig code). R gets one hook before `run_shlib` and a shell-free
-   spawn primitive.
+   spawn primitive. (2026-10: the one hook moved into
+   `.shlib_internal`, which run_shlib calls, so that R CMD SHLIB uses it
+   too: feat-shlib-rzig-build.)
 3. **zig packages:** `src/build.zig` exporting
    `pub fn rbuild(comptime rpkg: type, b: *std.Build, opts: rpkg.Options) std.Build.LazyPath`;
    the root imports the package as a path dependency, so the package
@@ -213,7 +215,9 @@ for a week is removed (pkgbuild.zig's `zigBuildDirs`, `sharedRunner`,
 
 ### What must remain on the R side (small)
 
-- the hook before `run_shlib` (exit 3 falls through to make);
+- the hook before `run_shlib` (exit 3 falls through to make) (2026-10:
+  the one hook moved into `.shlib_internal`, which run_shlib calls, so
+  that R CMD SHLIB uses it too: feat-shlib-rzig-build);
 - a shell-free spawn primitive on unix (feat-no-host-paths S1 as its
   own patch: `posix_spawnp` in `src/unix/sys-unix.c` + `names.c`), used
   by the hook, by test-load `R_runR_deps_only`, and by
@@ -422,7 +426,7 @@ alone. New in `zigbuild/tools/rzig/` (2 577 lines with tests) and
 |---|---|
 | `makefile.zig` | the part of GNU make R's build reads without running a recipe: `=` `:=` `::=` `+=` `?=`, `#` comments and `\#`, backslash continuations, `$(VAR)` `${VAR}` `$x` `$$`, substitution references `$(V:a=b)` and `$(V:%.a=%.b)`, the functions `subst patsubst strip findstring filter filter-out sort word wordlist words firstword lastword dir notdir suffix basename addsuffix addprefix join wildcard if or and value origin flavor`, `ifdef ifndef ifeq ifneq else endif`, `include -include sinclude`, `export`, `override`; automatic variables expand to nothing (Makeconf.win's `$($*-CPPFLAGS)`). Precedence as make's: command line over files over environment, `override` over the command line, `?=` only when unset. Two modes: `makeconf` skips rules and recipes (Makeconf, shlib.mk, the site and user Makevars); `makevars` accepts assignments only. `$(shell)`, `foreach`, `call`, `eval`, `define`, `!=` and a reference loop are refused with a reason |
 | `shellwords.zig` | the words a POSIX shell hands the compiler from one recipe line: `'…'`, `"…"`, backslashes; an unquoted `$ \` \| & ; < > ( ) * ? [`, a `#` or `~` at a word's start, is refused |
-| `pkgplan.zig` | the tiers (`classify`) and the plan: install.R's `.shlib_internal` order (the package's Makevars, Makeconf, Makevars.site, shlib.mk / winshlib.mk, the user Makevars) and its command-line overrides (`SHLIB`, `OBJECTS` unless the Makevars sets it, the C++ standard from `CXX_STD`/`USE_CXXnn`/`R_PKG_CXX_STD` with `CXX=$(CXXnn) $(CXXnnSTD)` and the `SHLIB_CXXnnLD` link, the default C++ link, `USE_FC_TO_LINK`, `SHLIB_LIBADD` with `$(FLIBS) $(FCLIBS_XTRA)` for Fortran, `CCnn`/`CnnFLAGS`, `P_FCFLAGS`, `WIN=64 TCLBIN=`, `DEBUG=T`, `LTO`/`LTO_FC`), then `$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS)` and its siblings, `$(SHLIB_LINK)` (winshlib's `$(SHLIB_LD) $(SHLIB_LDFLAGS) $(LDFLAGS) $(DLLFLAGS)` on Windows), `$(ALL_LIBS)`, word-split. Every compiler on a line that is used must be a file of `R_HOME/bin/toolchain` (else: needs make, as with `CC = ccache gcc` in `~/.R/Makevars`). Objects map to sources in `.SUFFIXES` order; an object without a source needs make. macOS appends `-Wl,-install_name,<pkg>.so`; Windows sets `def` (or `win_def` when `<pkg>-win.def` exists) and `libs/x64` |
+| `pkgplan.zig` | the tiers (`classify`) and the plan: install.R's `.shlib_internal` order (the package's Makevars, Makeconf, Makevars.site, shlib.mk / winshlib.mk, the user Makevars) and its command-line overrides (`SHLIB`, `OBJECTS` unless the Makevars sets it, the C++ standard from `CXX_STD`/`USE_CXXnn`/`R_PKG_CXX_STD` with `CXX=$(CXXnn) $(CXXnnSTD)` and the `SHLIB_CXXnnLD` link, the default C++ link, `USE_FC_TO_LINK`, `SHLIB_LIBADD` with `$(FLIBS) $(FCLIBS_XTRA)` for Fortran, `CCnn`/`CnnFLAGS`, `P_FCFLAGS`, `WIN=64 TCLBIN=`, `DEBUG=T`, `LTO`/`LTO_FC`), then `$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS)` and its siblings, `$(SHLIB_LINK)` (winshlib's `$(SHLIB_LD) $(SHLIB_LDFLAGS) $(LDFLAGS) $(DLLFLAGS)` on Windows), `$(ALL_LIBS)`, word-split. Every compiler on a line that is used must be a file of `R_HOME/bin/toolchain` (else: needs make, as with `CC = ccache gcc` in `~/.R/Makevars`). Objects map to sources in `.SUFFIXES` order; an object without a source needs make. macOS appends `-Wl,-install_name,<pkg>.so` (2026-10: `-Xlinker -install_name -Xlinker <pkg>.so`, so a comma in R CMD SHLIB's output path stays one word: feat-shlib-rzig-build's review, code-3); Windows sets `def` (or `win_def` when `<pkg>-win.def` exists) and `libs/x64` |
 | `pkgbuild.zig` | `rzig build --pkg <dir> --out <dir> [--name] [--linkingto <dir>]… [--cxx-std NN] [--c-std NN] [--use-lto yes\|no] [--debug] [-j N] [--r-home] [--rpkg-dir] [--cache-dir] [--keep-root]`; `--plan-only` prints plan.zon, `--classify` the tier. Exit 0 built or nothing to build, **3 needs make** (why, on stderr), 2 usage, 1 failed. Writes `<out>/.rzig/plan.zon`; tier 2 also copies the three root files there as `build.zig`, `build_t1.zig`, `rpkg.zig` and writes `build.zig.zon` with `.pkg = .{ .path = "<relative src>" }`; runs `zig build --build-file … --cache-dir <cache>/zig-build --prefix <out> -Dplan=… [-jN]` with zig from find_zig; removes `.rzig` after success (`--keep-root`, `RZIG_KEEP_ROOT=1` keep it). Site and user Makevars found as install.R does (`R_MAKEVARS_SITE`, `etc<R_ARCH>/Makevars.site`; `R_MAKEVARS_USER`, `~/.R/Makevars.ucrt`/`.win64`/`.win` on Windows, `~/.R/Makevars-<R_PLATFORM>`, `~/.R/Makevars`) |
 | `def.zig` | `rzig def -o <pkg>.def <objects>`: winshlib.mk's `nm \| sed -n 's/^.* [BCDRT] / /p'` from the objects' COFF symbol tables (std.coff's records at the object's offsets; `Coff.init` reads images only): storage class EXTERNAL, defined in a CODE, INITIALIZED_DATA or UNINITIALIZED_DATA section that is not LNK_INFO/LNK_REMOVE/MEM_DISCARDABLE, or a common; not undefined, not weak; the compiler's `.refptr.*` / `.weak.*.default.*` globals left out, as CRAN's NM_FILTER (MkRules.rules' default, which fixed/Makefile writes into the installed Makeconf) leaves them out of make's tmp.def (kept from the consolidation to the follow-up, to match this tree's Makeconf.win, whose NM_FILTER was the template's empty line: a gap against CRAN, see "def.zig" in the consolidation and fix-zig-pkg-build-review's PLAN.md, menu 4 [records-REC-3]; M5's "make" reference on kappa was lld's auto-export, with no sed there); de-duplicated. Test object `testdata/win-syms.{c,o}` (zig cc, x86_64-windows-gnu) holds every kind |
 | `main.zig` | `rzig build` and `rzig def` dispatch only when rzig is started as itself (never through a compiler's name, where `build` could be a source file) |
@@ -714,7 +718,7 @@ and asked for one follow-up PR on the new main:
 | M7 | (a) patch 0010 (`R CMD config` needs the build tools) unchanged; its stated reason corrected (fact 1) |
 | M8 | (a) merge origin/main, no rebase |
 | N1 | (a) every install-based test asserts its builder, and each package shape keeps one make run |
-| N2 | (a) the build-tools scope is written as below; routing `R CMD SHLIB` through rzig is a later item |
+| N2 | (a) the build-tools scope is written as below; routing `R CMD SHLIB` through rzig is a later item (R CMD SHLIB routed by feat-shlib-rzig-build, published with feat-standalone-toolchain phase 7's bump) |
 | N3 | (a) a per-install zig build cache, removed with the install (tier 1 changed by feat-shared-build-runner, 2026-10-13: one shared build runner per content of build_t1.zig and zig, the steps writing into the build root; "Cache and cleanliness") |
 | N4 | (a) a variable assignment in MAKEFLAGS makes the package need make, with that reason |
 | N5 | (a) no build-number bump in this PR; phase 4's bump (8 to 9) publishes both packages (2026-10-19: phase 4 keeps build 8, the user's decision; the bump that publishes both comes with feat-standalone-toolchain phase 7's merge) |
@@ -787,7 +791,9 @@ tarball, 2026-10-13).
    rstan, TMB) still needs make, and so does pkgbuild's has_compiler
    probe (`R CMD SHLIB`), which pak runs before every compiled package:
    on base + compilers pak installs no compiled package, tier 1
-   included. remotes and devtools were not checked.
+   included. remotes and devtools were not checked. (R CMD SHLIB routed
+   by feat-shlib-rzig-build, published with feat-standalone-toolchain
+   phase 7's bump.)
 9. **The zig build cache grew without bound** [channels-C5]: measured,
    two new `o/` entries per install, never reused (FINDINGS.md's
    channels-C5 verifier note; CONSENSUS.md's fact 9 says only that
@@ -1016,13 +1022,19 @@ src/Makefile*, an Objective-C source, Makevars with rules, an
 `include`, conditionals, `$(shell)`, a foreign compiler, OBJECTS
 without a source, `MAKEFLAGS` setting a variable); any package whose
 configure script R runs (tier 0 or 2 can have one; `R CMD config` runs
-before it on unix, 0010); `R CMD SHLIB`, so run-time compilation
-(Rcpp's sourceCpp/cppFunction/evalCpp, cpp11::cpp_source, inline,
-rstan, TMB) and pkgbuild's has_compiler probe, through which pak
-refuses every compiled package, tier 1 included, before `R CMD
-INSTALL`; `R CMD config`'s direct callers (users, pkgbuild); `R CMD
-check`'s objdump (Windows); on Windows, cleanup.ucrt/cleanup.win under
-`--clean` or `--preclean` (without sh only a warning: the cleanup is
+before it on unix, 0010); `R CMD SHLIB` only for the shapes that
+need make [2026-10, feat-shlib-rzig-build: `rzig build --shlib`
+builds the rest, so run-time compilation (Rcpp's
+sourceCpp/cppFunction/evalCpp, cpp11::cpp_source, inline, rstan's
+compile, TMB) and pkgbuild's has_compiler probe, and so pak, no longer
+need the group; the shapes are the tier-3 ones above, a single quote
+in the linker words, and pkgload's compilation database]; installing
+pkgbuild, pak, devtools and their dependencies from source [2026-10,
+feat-shlib-rzig-build's K: processx has Makevars rules, ps and pak
+configure scripts]; `R CMD config`'s direct callers (users, pkgbuild,
+rstan on macOS); `R CMD check`'s objdump (Windows); on Windows,
+cleanup.ucrt/cleanup.win under `--clean` or `--preclean` (without sh
+only a warning: the cleanup is
 skipped) [coverage-C1, channels-C8, preflight-F7]. Not needed by tier 0
 to 2 installs without a configure script R runs, through `R CMD
 INSTALL` and install.packages() [records-REC-6]. Phase 7 (Windows
@@ -1032,8 +1044,9 @@ on unix and 30 on Windows, 30 and 29 of them through make in run_shlib,
 24 and 12 of those for a configure script, and Rhdf5lib through its
 configure script's CMake [stress-S9]; the table adds no evidence on
 B24, whose dlltool/as follow-up PR stands [stress-S2]). Later items:
-route `R CMD SHLIB` through rzig build (it would also clear pak's
-probe), or give it a preflight; revisit 0010 for pkgbuild's probe; a
+[2026-10: routing `R CMD SHLIB` through rzig build is done,
+feat-shlib-rzig-build] `R CMD config` through rzig, which revisits
+0010 (feat-shlib-rzig-build's H); a
 shared tier-1 build runner, still open: the stress dispatch shared one
 zig build cache, so it did not measure the per-install runner cost,
 and a dispatch with `shared_cache = false` decides it (CONSENSUS H;
@@ -1041,7 +1054,8 @@ and a dispatch with `shared_cache = false` decides it (CONSENSUS H;
 [stress-S1, records-REC-4] (done since: dispatch 38467907779 decided
 it, and feat-shared-build-runner shares the runner, its PLAN.md); a g1
 dispatch with trace (Rcpp, rstan),
-whose smokes compile at run time [stress-S6].
+whose smokes compile at run time [stress-S6] (feat-shlib-rzig-build's
+J: g1 and g2).
 
 ### The couplings to R's tree (from HANDOFF.md, updated for the merge)
 

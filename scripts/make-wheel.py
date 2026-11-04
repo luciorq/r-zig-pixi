@@ -308,8 +308,11 @@ pip install r-zig-toolchain
 
 r-zig-compilers brings the PyPI [`ziglang`](https://pypi.org/project/ziglang/)
 package as the C/C++ compiler, so no system compiler is needed; alone, it
-installs packages that have no configure script and no make rules.
-r-zig-build-tools brings GNU make, for the rest and for `R CMD SHLIB`.
+installs packages that have no configure script and no make rules, and
+compiles such code at run time (`R CMD SHLIB`: Rcpp's `sourceCpp()`,
+inline, TMB) with no make. r-zig-build-tools brings GNU make, for the
+rest: configure scripts, Makevars rules, Objective-C, `R CMD config`, and
+installing pkgbuild, pak or devtools from source once.
 Without a group, an install that needs it stops and names the wheel to
 add. PyPI has no Fortran compiler: packages with Fortran sources need
 LLVM flang on PATH.
@@ -330,8 +333,10 @@ compiler front in r-zig's R_HOME/bin/toolchain, runs as the C/C++
 compiler, and exactly the `r-zig` it was built with. It holds no files.
 
 With it, `install.packages()` compiles packages that have no configure
-script and no make rules. To compile packages, add r-zig-toolchain
-(r-zig-compilers and r-zig-build-tools):
+script and no make rules, and `R CMD SHLIB` compiles such code at run
+time (Rcpp's `sourceCpp()`, inline, TMB) with no make; once pkgbuild or
+pak is installed, their compiler check passes too. To compile packages,
+add r-zig-toolchain (r-zig-compilers and r-zig-build-tools):
 
 ```sh
 pip install r-zig-toolchain
@@ -345,9 +350,11 @@ flang on PATH.
 
 The build tools for the [`r-zig`](https://pypi.org/project/r-zig/) wheel
 (R {r_version}): GNU make, which R runs for configure scripts, Makevars
-rules and `R CMD SHLIB`. It requires exactly the `r-zig` it was built
-with. To compile packages, add r-zig-toolchain (r-zig-compilers and
-r-zig-build-tools):
+rules, Objective-C and `R CMD config`. Installing pkgbuild, pak or
+devtools from source needs it once: processx has Makevars rules, and ps
+and pak have configure scripts. It requires exactly the `r-zig` it was
+built with. To compile packages, add r-zig-toolchain (r-zig-compilers
+and r-zig-build-tools):
 
 ```sh
 pip install r-zig-toolchain

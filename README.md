@@ -40,17 +40,46 @@ pixi add r-zig-toolchain
 
 - `r-zig-compilers` (zig 0.16, LLVM flang, OpenMP) alone installs
   packages that have no configure script and whose Makevars only sets
-  variables: R builds them with `rzig build`, without make.
+  variables. It also compiles such code at run time (`R CMD SHLIB`:
+  Rcpp's `sourceCpp()`, inline, TMB, knitr's engines) with no make: R
+  builds both with `rzig build`. Once pkgbuild or pak is installed,
+  their compiler check passes too.
 - `r-zig-build-tools` (make; on Windows also sh, the MSYS2 tools,
-  pkg-config and the MinGW binutils) is for configure scripts and
-  Makevars rules, for `R CMD SHLIB` (`Rcpp::sourceCpp()`, inline), and
-  for pak, whose compiler check runs `R CMD SHLIB`.
+  pkg-config and the MinGW binutils) is for configure scripts, Makevars
+  rules, Objective-C and `R CMD config` (rstan on macOS calls it).
+  Installing pkgbuild, pak, devtools or the packages cpp11's
+  `cpp_source()` requires from source needs it once: processx has
+  Makevars rules, and ps and pak have configure scripts.
+  r-zig-toolchain has both groups from the start.
 
 Without a group, an install that needs it stops with a message naming the
 package to add. In an environment used without activation (an IDE
 pointed at `<env>/bin/R`), the build tools are not on `PATH`: activate
 the environment (`pixi shell`, `conda activate`) or start R with
 `pixi run`.
+
+- If pak or pkgbuild says it could not find the tools, run
+  `pkgbuild::check_build_tools(debug = TRUE)`: rzig's text names what to
+  install. A pak session that checked before r-zig-compilers was
+  installed keeps its answer: restart R.
+- pak checks for a compiler before every source package, R-only ones
+  too, so with `r-zig-slim` alone it installs no source package:
+  `install.packages()` does.
+- On Windows, Rtools is not needed: r-zig's build tools take its place.
+  pkgbuild's "Rtools is required" warning, printed by
+  `with_build_tools()` callers such as devtools, can be ignored.
+- A TMB installed by an earlier r-zig build (universe's build 8 or before)
+  keeps make, as it keeps a copy of R's own SHLIB code: reinstall it.
+  TMB's `precompile()` speeds up only the recompiles of one model name:
+  each new name compiles the precompiled library again (about 45 s on
+  linux-64) and keeps one more object (about 4 MB) in zig's cache. Where
+  the build tools are installed, `R_ZIG_PKG_BUILDER=make` restores make's
+  reuse. TMB 1.9.25's default `precompile()` does not compile, with GCC as
+  with zig; `precompile(all = FALSE)` does.
+
+`R_ZIG_PKG_BUILDER=make` sends every `R CMD INSTALL` and `R CMD SHLIB`
+to make (the build tools then are needed). Details:
+`.github/devdocs/feat-shlib-rzig-build/PLAN.md`.
 
 ### Build the conda packages yourself
 
@@ -170,8 +199,11 @@ r-zig-toolchain (r-zig-compilers and r-zig-build-tools). r-zig-compilers
 brings the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package
 as the C/C++ compiler, so no system compiler is needed; alone, it
 installs packages that have no configure script and whose Makevars only
-sets variables. r-zig-build-tools brings GNU make, for the rest and for
-`R CMD SHLIB`. None of the four is on PyPI yet: install them from
+sets variables, and compiles such code at run time (`R CMD SHLIB`:
+Rcpp's `sourceCpp()`, inline, TMB) with no make. r-zig-build-tools
+brings GNU make, for the rest: configure scripts, Makevars rules,
+Objective-C, `R CMD config`, and installing pkgbuild, pak or devtools
+from source once. None of the four is on PyPI yet: install them from
 `dist/wheel`, ziglang first, so that pip needs no index for the rest:
 
 ```bash

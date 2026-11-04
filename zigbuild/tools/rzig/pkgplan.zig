@@ -14,6 +14,15 @@
 //! 3 everything else (configure, src/Makefile, Objective C, rules,
 //! conditionals, $(shell), a compiler that is not R's toolchain, a shell
 //! metacharacter in a flag): error.NeedsMake with `reason`.
+//!
+//! SHLIB mode, `rzig build --shlib` (patch 0013's .rzig_build;
+//! feat-shlib-rzig-build): `R CMD SHLIB`'s call, planned as
+//! .shlib_internal and make would build it (`Shlib`). The inputs are the
+//! files R names, in argv order, not a directory listing, and the
+//! working directory's Makevars. There is no configure, src/Makefile or
+//! build.zig lookup: make runs its explicit `-f` files there. An
+//! Objective-C file, a ready `.o` with no source, or a single quote in the
+//! linker words needs make (`classifyShlib`).
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
@@ -95,6 +104,28 @@ pub const Options = struct {
     makevars_user: ?[]const u8 = null,
     /// The rzig binary the root runs for `rzig def` (Windows).
     rzig: []const u8 = "",
+    /// R CMD SHLIB's call: planned from these files in `src_dir`, the
+    /// working directory. null: the package's src/.
+    shlib: ?Shlib = null,
+    /// Say "Unknown C++ standard ... was ignored" for a Makevars CXX_STD R
+    /// does not know. R's own parse in .shlib_internal says it before the
+    /// hook asks rzig build (patch 0013), so only the install preflight,
+    /// which runs before that parse, asks (check.zig; feat-shlib-rzig-build
+    /// B iii, Am7).
+    warn_cxx_std: bool = false,
+};
+
+/// R CMD SHLIB's call, as .shlib_internal parsed it (patch 0013).
+pub const Shlib = struct {
+    /// argv's source and object files, in argv order, as given: relative
+    /// to the working directory, or absolute (cpp11, TMB)
+    files: []const []const u8,
+    /// -o / --output as given, else the first file's stem + SHLIB_EXT
+    /// (install.R's .shlib_internal), possibly with a directory
+    output: []const u8,
+    /// argv's other words, space-joined: make's command-line PKG_LIBS,
+    /// which overrides a Makevars' (install.R's makeargs)
+    pkg_libs: ?[]const u8 = null,
 };
 
 pub const Error = error{ NeedsMake, OutOfMemory };
@@ -144,23 +175,47 @@ pub const Planner = struct {
         for (configures) |c| if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ pkg_dir, c }))) return .{ .tier = .make, .reason = try ctx.fmt("a {s} script", .{c}) };
         if (src_makefile) |m| return .{ .tier = .make, .reason = try ctx.fmt("src/{s}", .{m}) };
         for (try p.listSources(src_dir)) |s| if (isObjC(s)) return .{ .tier = .make, .reason = try ctx.fmt("an Objective-C source, src/{s}", .{s}) };
-        const candidates: []const []const u8 = if (windows) &.{ "Makevars.ucrt", "Makevars.win", "Makevars" } else &.{"Makevars"};
-        var makevars: ?[]const u8 = null;
-        for (candidates) |m| if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ src_dir, m }))) {
-            makevars = m;
-            break;
-        };
-        return .{ .tier = .makevars, .makevars = makevars };
+        return .{ .tier = .makevars, .makevars = try p.makevarsIn(src_dir) };
+    }
+
+    /// The Makevars install.R reads in `dir` (a file name there), if any:
+    /// on Windows Makevars.ucrt, then Makevars.win, then Makevars;
+    /// elsewhere Makevars.
+    pub fn makevarsIn(p: *Planner, dir: []const u8) Error!?[]const u8 {
+        const candidates: []const []const u8 = if (p.ctx.os == .windows) &.{ "Makevars.ucrt", "Makevars.win", "Makevars" } else &.{"Makevars"};
+        for (candidates) |m| if (p.ctx.isFile(try p.ctx.fmt("{s}/{s}", .{ dir, m }))) return m;
+        return null;
+    }
+
+    /// R CMD SHLIB's call in `dir`, the working directory: tier 1 with the
+    /// Makevars there, or make. An Objective-C file needs make. So does a
+    /// single quote in the linker words (feat-shlib-rzig-build Cg9, Cc2):
+    /// R pastes them raw into make's `PKG_LIBS='...'`, so a `'` closes
+    /// R's quoting and passes words to make itself, as pkgload's and
+    /// RStudio's `' --always-make ... IGNORED='` do. A `"` stays inside
+    /// R's quotes and is the recipe shell's, which shellwords mirrors. The
+    /// files and the output go through R's shQuote. A ready object with no
+    /// source needs make too, which `plan` finds.
+    pub fn classifyShlib(p: *Planner, dir: []const u8, s: Shlib) Error!Classification {
+        for (s.files) |f| if (isObjC(f)) return .{ .tier = .make, .reason = try p.ctx.fmt("an Objective-C source, {s}", .{f}) };
+        if (s.pkg_libs) |l| if (mem.findScalar(u8, l, '\'') != null)
+            return .{ .tier = .make, .reason = try p.ctx.fmt("a single quote in the linker words ('{s}'): it changes make's own command line", .{l}) };
+        return .{ .tier = .makevars, .makevars = try p.makevarsIn(dir) };
     }
 
     /// The tier-1 plan, or error.NeedsMake with `reason`. `class` from
     /// `classify` (tier makevars or zig; for zig the compile flags and the
-    /// link are what a package's C sources and library get).
+    /// link are what a package's C sources and library get), or for
+    /// `opts.shlib` from `classifyShlib`.
     pub fn plan(p: *Planner, opts: Options, class: Classification) Error!Plan {
         const ctx = p.ctx;
         const a = ctx.arena;
         const windows = ctx.os == .windows;
         const src_dir = opts.src_dir orelse try ctx.fmt("{s}/src", .{opts.pkg_dir});
+        const shlib = opts.shlib;
+        // where the Makevars is, in messages: R CMD SHLIB's is in the
+        // working directory (feat-shlib-rzig-build Cc11)
+        const mv_dir: []const u8 = if (shlib != null) "" else "src/";
         const r_arch = ctx.getenv("R_ARCH") orelse if (windows) "/x64" else "";
         const etc = try ctx.fmt("{s}/etc{s}", .{ opts.r_home, r_arch });
         const makeconf_path = try ctx.fmt("{s}/Makeconf", .{etc});
@@ -172,9 +227,11 @@ pub const Planner = struct {
         var shlib_libadd: std.ArrayList([]const u8) = .empty;
         if (!windows) if (rawValue(makeconf_text, "SHLIB_LIBADD")) |v| if (v.len > 0) try shlib_libadd.append(a, v);
 
-        // the sources and the languages present (every source in src/, whether
-        // or not OBJECTS names it: install.R looks at the files)
-        const srcs = try p.listSources(src_dir);
+        // the sources and the languages present: a package's every source
+        // in src/, whether or not OBJECTS names it (install.R looks at the
+        // files); R CMD SHLIB's the files R names, where a ready object
+        // adds no language (.shlib_internal's argument loop)
+        const srcs = if (shlib) |s| s.files else try p.listSources(src_dir);
         var with = std.EnumSet(Lang).initEmpty();
         for (srcs) |s| if (langOf(s)) |l| with.insert(l);
 
@@ -192,7 +249,9 @@ pub const Planner = struct {
         try e.setEnvironment("R_INCLUDE_DIR", ctx.getenv("R_INCLUDE_DIR") orelse try ctx.fmt("{s}/include", .{opts.r_home}));
         try e.setEnvironment("R_SHARE_DIR", ctx.getenv("R_SHARE_DIR") orelse try ctx.fmt("{s}/share", .{opts.r_home}));
         try e.setEnvironment("R_DOC_DIR", ctx.getenv("R_DOC_DIR") orelse try ctx.fmt("{s}/doc", .{opts.r_home}));
-        try e.setEnvironment("R_PACKAGE_NAME", opts.name);
+        // R CMD INSTALL sets it for the package; under R CMD SHLIB make has
+        // only the environment's, which importEnvironment brought
+        if (shlib == null) try e.setEnvironment("R_PACKAGE_NAME", opts.name);
         const clink: []const u8 = if (opts.linkingto) |dirs| blk: {
             var parts: std.ArrayList([]const u8) = .empty;
             for (dirs) |d| try parts.append(a, try ctx.fmt("-I'{s}/include'", .{d}));
@@ -205,15 +264,18 @@ pub const Planner = struct {
         if (class.makevars) |mv| {
             const mv_path = try ctx.fmt("{s}/{s}", .{ src_dir, mv });
             makevars_text = Io.Dir.cwd().readFileAlloc(ctx.io, mv_path, a, .limited(4 * 1024 * 1024)) catch |err|
-                return p.needsMake("cannot read src/{s}: {t}", .{ mv, err });
+                return p.needsMake("cannot read {s}{s}: {t}", .{ mv_dir, mv, err });
         }
         const makevars_objects = class.makevars != null and lineStarting(makevars_text, "OBJECTS") != null;
 
         // install.R's command-line overrides, before the files (the
-        // command line wins)
-        const output = try ctx.fmt("{s}{s}", .{ opts.name, shlib_ext });
-        try e.setCommandLine("SHLIB", output);
+        // command line wins). R CMD SHLIB's SHLIB is the output as given;
+        // the library the root links is its file name
+        const output = if (shlib) |s| std.fs.path.basename(s.output) else try ctx.fmt("{s}{s}", .{ opts.name, shlib_ext });
+        try e.setCommandLine("SHLIB", if (shlib) |s| s.output else output);
         if (!makevars_objects) {
+            // each file's stem with its directory, plus .o, in argv order
+            // (R's sub("\\.[[:alnum:]]*$", "", a)) for R CMD SHLIB
             var objs: std.ArrayList([]const u8) = .empty;
             for (srcs) |s| try objs.append(a, try ctx.fmt("{s}.o", .{stem(s)}));
             try e.setCommandLine("OBJECTS", try mem.join(a, " ", objs.items));
@@ -226,7 +288,7 @@ pub const Planner = struct {
                 if (isCxxStandard(val)) {
                     use_cxxstd = val;
                     with.insert(.cxx);
-                } else ctx.warn("src/{s}: Unknown C++ standard '{s}' was ignored", .{ class.makevars.?, val });
+                } else if (opts.warn_cxx_std) ctx.warn("src/{s}: Unknown C++ standard '{s}' was ignored", .{ class.makevars.?, val });
             }
         }
         const use_fc_link = class.makevars != null and lineStarting(makevars_text, "USE_FC_TO_LINK") != null;
@@ -270,8 +332,15 @@ pub const Planner = struct {
             try e.setCommandLine("CC", try ctx.fmt("$(CC{s})", .{s}));
             try e.setCommandLine("CFLAGS", try ctx.fmt("$(C{s}FLAGS)", .{s}));
         }
+        // R CMD SHLIB's linker words: make's command-line PKG_LIBS, which
+        // overrides a Makevars' (install.R's makeargs)
+        if (shlib) |s| if (s.pkg_libs) |l| try e.setCommandLine("PKG_LIBS", l);
         if (shlib_libadd.items.len > 0) try e.setCommandLine("SHLIB_LIBADD", try mem.join(a, " ", shlib_libadd.items));
-        if (with.contains(.f9x) and class.makevars != null and lineStarting(makevars_text, "PKG_FCFLAGS") != null)
+        // install.R tests file.exists("Makevars") literally, then greps the
+        // chosen file's lines for `^\s*PKG_FCFLAGS`: on Windows a
+        // Makevars.win with PKG_FCFLAGS and no plain Makevars passes none
+        // (feat-shlib-rzig-build H8, Cc10)
+        if (with.contains(.f9x) and class.makevars != null and ctx.isFile(try ctx.fmt("{s}/Makevars", .{src_dir})) and indentedLine(makevars_text, "PKG_FCFLAGS"))
             try e.setCommandLine("P_FCFLAGS", "$(PKG_FCFLAGS)");
         if (windows and opts.debug) try e.setCommandLine("DEBUG", "T");
         if (windows and mem.eql(u8, r_arch, "/x64")) {
@@ -285,7 +354,7 @@ pub const Planner = struct {
 
         // the makefiles, in install.R's order
         if (class.makevars) |mv| e.load(makevars_text, .makevars, src_dir) catch |err| switch (err) {
-            error.Unsupported => return p.needsMake("src/{s} has {s}", .{ mv, e.reason }),
+            error.Unsupported => return p.needsMake("{s}{s} has {s}", .{ mv_dir, mv, e.reason }),
             error.OutOfMemory => return error.OutOfMemory,
         };
         e.load(makeconf_text, .makeconf, etc) catch |err| switch (err) {
@@ -312,7 +381,10 @@ pub const Planner = struct {
         // src/'s files a suffix rule would compile, for the compiler lines
         // reportCompilers prints, and a file none would (an Objective-C
         // source its build.zig compiles itself) is no reason for make
-        // [code-3].
+        // [code-3]. A source is named as OBJECTS names it: relative to
+        // src_dir, or absolute (R CMD SHLIB's files from cpp11 and TMB),
+        // and found in .SUFFIXES order, as make's suffix rules find it, so
+        // an argv foo.cpp with a stray foo.c beside it compiles foo.c.
         const objects = try p.wordsOf(&e, "$(OBJECTS)");
         var sources: std.ArrayList(Source) = .empty;
         for (objects) |o| {
@@ -320,10 +392,18 @@ pub const Planner = struct {
             const base = o[0 .. o.len - 2];
             const found: ?Source = for (source_exts) |ext| {
                 const candidate = try ctx.fmt("{s}{s}", .{ base, ext });
-                if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ src_dir, candidate }))) break .{ .lang = @tagName(langOf(candidate).?), .path = candidate, .obj = o };
+                const where = if (std.fs.path.isAbsolute(candidate)) candidate else try ctx.fmt("{s}/{s}", .{ src_dir, candidate });
+                if (ctx.isFile(where)) break .{ .lang = @tagName(langOf(candidate).?), .path = candidate, .obj = o };
             } else null;
-            if (found) |s| try sources.append(a, s) else if (class.tier != .zig) return p.needsMake("no source for {s} in src/ (a Makevars rule would have to make it)", .{o});
+            if (found) |s| try sources.append(a, s) else if (class.tier != .zig) return if (shlib != null)
+                p.needsMake("no source for {s} (a ready object: make links it)", .{o})
+            else
+                p.needsMake("no source for {s} in src/ (a Makevars rule would have to make it)", .{o});
         }
+        // the languages compiled: those present, and a source OBJECTS
+        // finds elsewhere (a subdirectory, R CMD SHLIB's stray foo.c)
+        var compiled = with;
+        for (sources.items) |s| compiled.insert(std.meta.stringToEnum(Lang, s.lang).?);
 
         // the command lines, as Makeconf's suffix rules and shlib.mk's link
         // compose them; the driver (first word) must be R's toolchain
@@ -337,17 +417,19 @@ pub const Planner = struct {
             .rzig = opts.rzig,
             .link_driver = "",
             .sources = sources.items,
-            .env = try a.dupe([]const u8, &.{ try ctx.fmt("R_PACKAGE_NAME={s}", .{opts.name}), try ctx.fmt("CLINK_CPPFLAGS={s}", .{clink}) }),
+            // R CMD SHLIB: none, the steps inherit rzig's environment as
+            // make's recipes do (CLINK_CPPFLAGS, any R_PACKAGE_NAME)
+            .env = if (shlib != null) &.{} else try a.dupe([]const u8, &.{ try ctx.fmt("R_PACKAGE_NAME={s}", .{opts.name}), try ctx.fmt("CLINK_CPPFLAGS={s}", .{clink}) }),
             .target = packageTarget(ctx),
             .r_include = e.value("R_INCLUDE_DIR") catch "",
         };
-        // a language that is present must compile with R's toolchain; the
+        // a language that is compiled must compile with R's toolchain; the
         // flags of one that is not are kept when they evaluate (the root
         // never runs them)
-        const need_c = with.contains(.c) or class.tier == .zig;
-        const need_f = with.contains(.f) or with.contains(.f9x);
+        const need_c = compiled.contains(.c) or class.tier == .zig;
+        const need_f = compiled.contains(.f) or compiled.contains(.f9x);
         const cc_line = try p.toolLine(&e, toolchain, "$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS)", "CC", need_c);
-        const cxx_line = try p.toolLine(&e, toolchain, "$(CXX) $(ALL_CPPFLAGS) $(ALL_CXXFLAGS)", "CXX", with.contains(.cxx));
+        const cxx_line = try p.toolLine(&e, toolchain, "$(CXX) $(ALL_CPPFLAGS) $(ALL_CXXFLAGS)", "CXX", compiled.contains(.cxx));
         const fc_line = try p.toolLine(&e, toolchain, "$(FC) $(ALL_FFLAGS)", "FC", need_f);
         const f9x_line = try p.toolLine(&e, toolchain, "$(FC) $(ALL_FCFLAGS)", "FC", need_f);
         if (cc_line.tool) |t| out.cc_tool = t;
@@ -361,14 +443,24 @@ pub const Planner = struct {
         out.link_driver = try p.toolName(toolchain, link, "SHLIB_LD");
         var link_args: std.ArrayList([]const u8) = .empty;
         try link_args.appendSlice(a, link[1..]);
-        // macOS: make's link names the output by its relative path, so the
-        // dylib's install name is `<pkg>.so`; zig build links at an absolute
-        // path and would record that (step 4 of the design record)
-        if (ctx.os == .macos) try link_args.append(a, try ctx.fmt("-Wl,-install_name,{s}", .{output}));
+        // macOS: make links with `-o $(SHLIB)` as R passed it (`<pkg>.so`,
+        // R CMD SHLIB's `sourceCpp_2.so` or `src/model.so`), and zig's
+        // linker, the linker on both paths, records the -o path as given as
+        // the dylib's install name; zig build links at an absolute path and
+        // would record that (step 4 of the design record;
+        // feat-shlib-rzig-build Cc5). Through -Xlinker, not -Wl,: the
+        // driver splits -Wl, at every comma, and R CMD SHLIB's output may
+        // have one (TMB::compile("/Users/me/a,b/model.cpp")), where make
+        // passes no install name [shlib-code-3]
+        if (ctx.os == .macos) try link_args.appendSlice(a, &.{ "-Xlinker", "-install_name", "-Xlinker", if (shlib) |s| s.output else output });
         out.link = link_args.items;
         out.libs = try p.wordsOf(&e, "$(ALL_LIBS)");
         if (windows) {
-            const win_def = try ctx.fmt("{s}-win.def", .{opts.name});
+            // winshlib.mk's BASE, $(shell basename $(SHLIB) .dll): the
+            // package's name, or R CMD SHLIB's output file name without a
+            // trailing .dll (an x.so stays x.so) (feat-shlib-rzig-build Am4)
+            const base = if (shlib) |s| dllBase(s.output) else opts.name;
+            const win_def = try ctx.fmt("{s}-win.def", .{base});
             if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ src_dir, win_def }))) out.win_def = win_def else out.def = true;
         }
         return out;
@@ -497,7 +589,7 @@ fn isCxxStandard(v: []const u8) bool {
 /// the object.
 const source_exts = [_][]const u8{ ".c", ".cc", ".cpp", ".f", ".f90", ".f95" };
 
-fn langOf(name: []const u8) ?Lang {
+pub fn langOf(name: []const u8) ?Lang {
     if (mem.endsWith(u8, name, ".c")) return .c;
     if (mem.endsWith(u8, name, ".cc") or mem.endsWith(u8, name, ".cpp")) return .cxx;
     if (mem.endsWith(u8, name, ".f")) return .f;
@@ -512,6 +604,22 @@ fn isObjC(name: []const u8) bool {
 fn stem(name: []const u8) []const u8 {
     const dot = mem.findScalarLast(u8, name, '.') orelse return name;
     return name[0..dot];
+}
+
+/// `basename path .dll`: the file name, without a trailing `.dll` unless
+/// that is all of it.
+pub fn dllBase(path: []const u8) []const u8 {
+    const name = std.fs.path.basename(path);
+    if (name.len > 4 and mem.endsWith(u8, name, ".dll")) return name[0 .. name.len - 4];
+    return name;
+}
+
+/// Whether a line of `text` starts with `name` after spaces (install.R's
+/// `^\s*NAME`, a bare prefix).
+fn indentedLine(text: []const u8, name: []const u8) bool {
+    var it = mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| if (mem.startsWith(u8, mem.trimStart(u8, line, " \t\r\x0b\x0c"), name)) return true;
+    return false;
 }
 
 fn byteOrder(_: void, x: []const u8, y: []const u8) bool {
@@ -921,7 +1029,7 @@ test "macOS adds the install name" {
     try f.touch("p/src/a.c");
     var p: Planner = .{ .ctx = &f.ctx };
     const plan = try p.plan(.{ .r_home = r, .pkg_dir = f.path("p"), .name = "p", .linkingto = &.{} }, try p.classify(f.path("p"), f.path("p/src")));
-    try expectWords(&.{ "-std=gnu23", "-shared", f.fmt("-L{s}/lib", .{r}), "-Wl,-install_name,p.so" }, plan.link);
+    try expectWords(&.{ "-std=gnu23", "-shared", f.fmt("-L{s}/lib", .{r}), "-Xlinker", "-install_name", "-Xlinker", "p.so" }, plan.link);
     try testing.expect(mem.endsWith(u8, plan.target, "-native.13.0"));
 }
 
@@ -965,4 +1073,267 @@ test rawValue {
     try testing.expectEqualStrings(".so", rawValue("X = 1\nSHLIB_EXT = .so\n", "SHLIB_EXT").?);
     try testing.expectEqualStrings("", rawValue("SHLIB_LIBADD = \n", "SHLIB_LIBADD").?);
     try testing.expect(rawValue("SHLIB_EXTRA = x\n", "SHLIB_EXT") == null);
+}
+
+// R CMD SHLIB's calls (`Shlib`; feat-shlib-rzig-build)
+
+/// The small R_HOME as a Windows R has it: etc/x64/Makeconf, winshlib.mk
+/// (pkgbuild's tests use it too).
+pub fn winHome(f: *testutil.Fixture) ![]const u8 {
+    try f.write("R/etc/x64/Makeconf", test_makeconf, .default_file);
+    try f.write("R/share/make/vars.mk", "R_PKGS_BASE = base tools\n", .default_file);
+    try f.write("R/share/make/winshlib.mk", "all: $(SHLIB)\n\nBASE = $(shell basename $(SHLIB) .dll)\n", .default_file);
+    return f.path("R");
+}
+
+/// R CMD SHLIB's plan in `dir`, as `rzig build --shlib` decides it
+/// (pkgbuild.zig's decide): classifyShlib, then plan.
+fn shlibPlan(p: *Planner, r: []const u8, dir: []const u8, s: Shlib) Error!Plan {
+    const class = try p.classifyShlib(dir, s);
+    if (class.tier == .make) {
+        p.reason = class.reason;
+        return error.NeedsMake;
+    }
+    return p.plan(.{ .r_home = r, .pkg_dir = dir, .src_dir = dir, .name = std.fs.path.stem(std.fs.path.basename(s.output)), .shlib = s }, class);
+}
+
+test "shlib: argv's files only" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try rHome(&f);
+    try f.write("w/foo.c", "int foo(void) { return 1; }\n", .default_file);
+    try f.write("w/junk.c", "this is not C\n", .default_file);
+    try f.touch("w/bar.cpp");
+    var p: Planner = .{ .ctx = &f.ctx };
+    const plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"foo.c"}, .output = "foo.so" });
+    try testing.expectEqual(1, plan.sources.len);
+    try testing.expectEqualStrings("foo.c", plan.sources[0].path);
+    try testing.expectEqualStrings("foo.o", plan.sources[0].obj);
+    try testing.expectEqualStrings("zig-cc", plan.link_driver);
+    try testing.expectEqualStrings("foo.so", plan.output);
+    try testing.expectEqualStrings(f.path("w"), plan.srcdir);
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "shlib: argv order, an output with a directory, the macOS install name" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.macos);
+    defer f.deinit();
+    const r = try rHome(&f);
+    try f.touchExe("R/bin/toolchain/zig-cxx");
+    try f.touch("w/a.c");
+    try f.touch("w/b.cpp");
+    var p: Planner = .{ .ctx = &f.ctx };
+    const plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{ "b.cpp", "a.c" }, .output = "sub/x.so" });
+    try testing.expectEqual(2, plan.sources.len);
+    try testing.expectEqualStrings("b.o", plan.sources[0].obj);
+    try testing.expectEqualStrings("a.o", plan.sources[1].obj);
+    try testing.expectEqualStrings("zig-cxx", plan.link_driver);
+    try testing.expectEqualStrings("x.so", plan.output);
+    // zig's linker records the -o path as given, which make passes
+    try expectWords(&.{ "-std=gnu++20", "-shared", f.fmt("-L{s}/lib", .{r}), "-Xlinker", "-install_name", "-Xlinker", "sub/x.so" }, plan.link);
+    // a comma in the output's path: one word, which -Wl, would split
+    // [shlib-code-3]
+    const comma = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"a.c"}, .output = "a,b/x.so" });
+    try expectWords(&.{ "-std=gnu23", "-shared", f.fmt("-L{s}/lib", .{r}), "-Xlinker", "-install_name", "-Xlinker", "a,b/x.so" }, comma.link);
+}
+
+test "shlib: absolute sources" {
+    // cpp11's and TMB's calls name a source outside the working directory
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try rHome(&f);
+    try f.touchExe("R/bin/toolchain/zig-cxx");
+    try f.touch("w/model.cpp");
+    try f.touch("tmb/libs/libTMB.cpp");
+    var p: Planner = .{ .ctx = &f.ctx };
+    const lib = f.path("tmb/libs/libTMB.cpp");
+    const plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{ "model.cpp", lib }, .output = "model.so" });
+    try testing.expectEqual(2, plan.sources.len);
+    try testing.expectEqualStrings("model.cpp", plan.sources[0].path);
+    try testing.expectEqualStrings(lib, plan.sources[1].path);
+    try testing.expectEqualStrings(f.path("tmb/libs/libTMB.o"), plan.sources[1].obj);
+    try testing.expectEqualStrings("cxx", plan.sources[1].lang);
+}
+
+test "shlib: the working directory's Makevars" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try rHome(&f);
+    try f.touchExe("R/bin/toolchain/zig-cxx");
+    var p: Planner = .{ .ctx = &f.ctx };
+    // CXX_STD with PKG_CPPFLAGS: the CXX17 overrides
+    try f.write("s/Makevars", "CXX_STD = CXX17\nPKG_CPPFLAGS = -I.\n", .default_file);
+    try f.touch("s/a.cpp");
+    const plan = try shlibPlan(&p, r, f.path("s"), .{ .files = &.{"a.cpp"}, .output = "a.so" });
+    try expectWords(&.{ "-std=gnu++17", f.fmt("-I{s}/include", .{r}), "-DNDEBUG", "-I.", "-fpic", "-O2" }, plan.cxx);
+    try expectWords(&.{ "-std=gnu++17", "-shared", f.fmt("-L{s}/lib", .{r}) }, plan.link);
+    // OBJECTS in the Makevars drops the command line's
+    try f.write("o/Makevars", "OBJECTS = b.o\n", .default_file);
+    try f.touch("o/a.c");
+    try f.touch("o/b.c");
+    const plan_o = try shlibPlan(&p, r, f.path("o"), .{ .files = &.{"a.c"}, .output = "a.so" });
+    try testing.expectEqual(1, plan_o.sources.len);
+    try testing.expectEqualStrings("b.c", plan_o.sources[0].path);
+    // a rule needs make, the Makevars named as it is, in the working
+    // directory
+    try f.write("m/Makevars", "all: $(SHLIB) extra\n", .default_file);
+    try f.touch("m/x.c");
+    try testing.expectError(error.NeedsMake, shlibPlan(&p, r, f.path("m"), .{ .files = &.{"x.c"}, .output = "x.so" }));
+    try testing.expectEqualStrings("Makevars has a rule or target line: 'all: $(SHLIB) extra'", p.reason);
+    // an unknown C++ standard: R's own parse says so (warn_cxx_std unset)
+    try f.write("u/Makevars", "CXX_STD = CXX99\n", .default_file);
+    try f.touch("u/a.cpp");
+    _ = try shlibPlan(&p, r, f.path("u"), .{ .files = &.{"a.cpp"}, .output = "a.so" });
+    try testing.expectEqualStrings("", f.takeWarnings());
+    // Windows: Makevars.win wins over Makevars
+    try f.write("R/etc/x64/Makeconf", test_makeconf, .default_file);
+    try f.write("R/share/make/winshlib.mk", "all: $(SHLIB)\n", .default_file);
+    f.ctx.os = .windows;
+    try f.write("w/Makevars", "PKG_CPPFLAGS = -Dunix\n", .default_file);
+    try f.write("w/Makevars.win", "PKG_CPPFLAGS = -Dwin\n", .default_file);
+    try f.touch("w/a.c");
+    try testing.expectEqualStrings("Makevars.win", (try p.classifyShlib(f.path("w"), .{ .files = &.{"a.c"}, .output = "a.dll" })).makevars.?);
+    const plan_w = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"a.c"}, .output = "a.dll" });
+    try testing.expect(mem.indexOf(u8, try mem.join(f.ctx.arena, " ", plan_w.cc), "-Dwin") != null);
+    try testing.expect(mem.indexOf(u8, try mem.join(f.ctx.arena, " ", plan_w.cc), "-Dunix") == null);
+}
+
+test "shlib: argv's PKG_LIBS overrides the Makevars'" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try rHome(&f);
+    try f.write("w/Makevars", "PKG_LIBS = -lfoo\n", .default_file);
+    try f.touch("w/p.c");
+    var p: Planner = .{ .ctx = &f.ctx };
+    const plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"p.c"}, .output = "p.so", .pkg_libs = "-lm" });
+    try expectWords(&.{ "-lm", f.fmt("-L{s}/lib", .{r}), "-lR" }, plan.libs);
+}
+
+test "shlib: Objective-C and a ready object need make" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try rHome(&f);
+    try f.touch("w/a.c");
+    try f.touch("w/b.m");
+    var p: Planner = .{ .ctx = &f.ctx };
+    try testing.expectError(error.NeedsMake, shlibPlan(&p, r, f.path("w"), .{ .files = &.{ "a.c", "b.m" }, .output = "a.so" }));
+    try testing.expectEqualStrings("an Objective-C source, b.m", p.reason);
+    // a ready object with no source: make links it
+    try testing.expectError(error.NeedsMake, shlibPlan(&p, r, f.path("w"), .{ .files = &.{ "a.c", "lib.o" }, .output = "a.so" }));
+    try testing.expectEqualStrings("no source for lib.o (a ready object: make links it)", p.reason);
+    // with its source beside it, the source compiles, as make's suffix
+    // rule makes the object
+    try f.touch("w/lib.c");
+    const plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{ "a.c", "lib.o" }, .output = "a.so" });
+    try testing.expectEqualStrings("lib.c", plan.sources[1].path);
+}
+
+test "shlib: a single quote in pkg_libs needs make; a double quote does not" {
+    // [feat-shlib-rzig-build Cg9, Cc2]: pkgload's compilation database
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try rHome(&f);
+    try f.touch("w/a.c");
+    var p: Planner = .{ .ctx = &f.ctx };
+    const pkgload = "' --always-make -I\"/x\" IGNORED='";
+    try testing.expectError(error.NeedsMake, shlibPlan(&p, r, f.path("w"), .{ .files = &.{"a.c"}, .output = "a.so", .pkg_libs = pkgload }));
+    try testing.expectEqualStrings("a single quote in the linker words ('" ++ pkgload ++ "'): it changes make's own command line", p.reason);
+    const plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"a.c"}, .output = "a.so", .pkg_libs = "-L\"/a b\" -lfoo" });
+    try expectWords(&.{ "-L/a b", "-lfoo", f.fmt("-L{s}/lib", .{r}), "-lR" }, plan.libs);
+}
+
+test "shlib: no R_PACKAGE_NAME; empty env" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try rHome(&f);
+    try f.write("w/Makevars", "PKG_CPPFLAGS = -DP=$(R_PACKAGE_NAME)\n", .default_file);
+    try f.touch("w/a.c");
+    var p: Planner = .{ .ctx = &f.ctx };
+    const s: Shlib = .{ .files = &.{"a.c"}, .output = "a.so" };
+    var plan = try shlibPlan(&p, r, f.path("w"), s);
+    try testing.expectEqual(0, plan.env.len);
+    try expectWords(&.{ "-std=gnu23", f.fmt("-I{s}/include", .{r}), "-DNDEBUG", "-DP=", "-fpic", "-O2" }, plan.cc);
+    // the environment's, as make has it; and its CLINK_CPPFLAGS (Rcpp's
+    // sourceCpp sets it)
+    try f.env.put("R_PACKAGE_NAME", "xyz");
+    try f.env.put("CLINK_CPPFLAGS", "-I'/x y/include'");
+    plan = try shlibPlan(&p, r, f.path("w"), s);
+    try expectWords(&.{ "-std=gnu23", f.fmt("-I{s}/include", .{r}), "-DNDEBUG", "-DP=xyz", "-I/x y/include", "-fpic", "-O2" }, plan.cc);
+    try testing.expectEqual(0, plan.env.len);
+}
+
+test "shlib: Windows .def as winshlib.mk's BASE names it" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const r = try winHome(&f);
+    try f.touch("w/x.c");
+    var p: Planner = .{ .ctx = &f.ctx };
+    var plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"x.c"}, .output = "x.dll" });
+    try testing.expect(plan.def);
+    try testing.expectEqualStrings("x.dll", plan.output);
+    try f.touch("w/x-win.def");
+    plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"x.c"}, .output = "sub/x.dll" });
+    try testing.expect(!plan.def);
+    try testing.expectEqualStrings("x-win.def", plan.win_def);
+    // an output x.so looks for x.so-win.def, as make does
+    plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"x.c"}, .output = "x.so" });
+    try testing.expect(plan.def);
+    try f.touch("w/x.so-win.def");
+    plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"x.c"}, .output = "x.so" });
+    try testing.expectEqualStrings("x.so-win.def", plan.win_def);
+    try testing.expectEqualStrings("x", dllBase("C:/a/x.dll"));
+    try testing.expectEqualStrings(".dll", dllBase(".dll"));
+}
+
+test "shlib: a stray foo.c beside the named foo.cpp" {
+    // make's suffix rules find foo.c first (.SUFFIXES order): so does rzig
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try rHome(&f);
+    try f.touchExe("R/bin/toolchain/zig-cxx");
+    try f.touch("w/foo.cpp");
+    try f.touch("w/foo.c");
+    var p: Planner = .{ .ctx = &f.ctx };
+    const plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"foo.cpp"}, .output = "foo.so" });
+    try testing.expectEqual(1, plan.sources.len);
+    try testing.expectEqualStrings("foo.c", plan.sources[0].path);
+    try testing.expectEqualStrings("c", plan.sources[0].lang);
+    try testing.expectEqualStrings("zig-cc", plan.cc_tool);
+    // the C++ link, as R decides from argv
+    try testing.expectEqualStrings("zig-cxx", plan.link_driver);
+}
+
+test "P_FCFLAGS as R tests it" {
+    // [feat-shlib-rzig-build H8, Cc10]: file.exists("Makevars"), then
+    // `^\s*PKG_FCFLAGS` in the chosen file
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const r = try winHome(&f);
+    var p: Planner = .{ .ctx = &f.ctx };
+    try f.write("pf/src/Makevars.win", "PKG_FFLAGS = -ff\nPKG_FCFLAGS = -fc\n", .default_file);
+    try f.touch("pf/src/a.f90");
+    var plan = try p.plan(.{ .r_home = r, .pkg_dir = f.path("pf"), .name = "pf", .linkingto = &.{} }, try p.classify(f.path("pf"), f.path("pf/src")));
+    try expectWords(&.{ "-ff", "-fpic", "-O2" }, plan.f9x);
+    // a plain Makevars beside it: the chosen file's (Makevars.win) line counts
+    try f.touch("pf/src/Makevars");
+    plan = try p.plan(.{ .r_home = r, .pkg_dir = f.path("pf"), .name = "pf", .linkingto = &.{} }, try p.classify(f.path("pf"), f.path("pf/src")));
+    try expectWords(&.{ "-fc", "-fpic", "-O2" }, plan.f9x);
+    // an indented line counts, in SHLIB mode as well
+    f.ctx.os = .linux;
+    _ = try rHome(&f);
+    try f.write("w/Makevars", "PKG_FFLAGS = -ff\n  PKG_FCFLAGS = -fc\n", .default_file);
+    try f.touch("w/m.f90");
+    plan = try shlibPlan(&p, r, f.path("w"), .{ .files = &.{"m.f90"}, .output = "m.so" });
+    try expectWords(&.{ "-fc", "-fpic", "-O2" }, plan.f9x);
 }

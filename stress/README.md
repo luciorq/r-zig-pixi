@@ -109,7 +109,9 @@ The inputs are the runners (a JSON list), the targets, rows to skip, the
 distribution (tree, conda or both), the conda channel (local: this run's
 `conda-package`; universe), the job count, the zig (conda-forge's, or
 upstream's from `pixi run fetch-zig`), `trace` (`--trace`), the builder
-(`R_ZIG_PKG_BUILDER`: auto, or make for a make reference) and
+(`R_ZIG_PKG_BUILDER`: auto, R CMD INSTALL and R CMD SHLIB through rzig
+build where the call qualifies, patch 0013; or make, the make path for
+every package and shared object, a make reference) and
 `shared_cache` (true by default; false passes `--no-shared-cache`). Each
 OS and distribution is one job.
 Jobs never stop each other (`fail-fast: false`) and may take up to 6 hours.

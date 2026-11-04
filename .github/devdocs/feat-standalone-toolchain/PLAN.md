@@ -269,8 +269,8 @@ wants a really slim Windows slim later ("Later and future checks").
 | Tier | Covers | Standalone | conda | PyPI |
 |---|---|---|---|---|
 | 0 Run, 1 Install without compiling | `R`, `Rscript`, `library()`, R-only source and binary packages, `install.packages(Ncpus > 1)` | base archive | r-zig-slim | r-zig |
-| 2 Compile, compilers alone | `src/` that `rzig build` installs: no configure script R runs, a Makevars that only sets variables (feat-zig-pkg-build N2); not `R CMD SHLIB`, `R CMD config`, pak or pkgbuild's probe | base + compilers archives | + r-zig-compilers | + r-zig-compilers (zig only, no Fortran) |
-| 2 Compile | `src/`, `configure`, `R CMD SHLIB`, `R CMD config` | base + compilers + build-tools archives in one directory (unix: build-tools optional where the host has make) | + r-zig-toolchain (r-zig-compilers and r-zig-build-tools) | + r-zig-toolchain (r-zig-compilers and r-zig-build-tools) |
+| 2 Compile, compilers alone | `src/` and run-time compiles (`R CMD SHLIB`) that `rzig build` builds: no configure script R runs, a Makevars that only sets variables, no Objective-C (feat-zig-pkg-build N2; feat-shlib-rzig-build, 2026-10); pkgbuild's probe, so pak, once they are installed (installing them from source needs the build tools once); not `R CMD config` | base + compilers archives | + r-zig-compilers | + r-zig-compilers (zig only, no Fortran) |
+| 2 Compile | `configure`, Makevars rules, `R CMD config`, and installing pkgbuild, pak and their dependencies from source | base + compilers + build-tools archives in one directory (unix: build-tools optional where the host has make) | + r-zig-toolchain (r-zig-compilers and r-zig-build-tools) | + r-zig-toolchain (r-zig-compilers and r-zig-build-tools) |
 | 3 Develop | `R CMD check`, `Rd2pdf`, vignettes | host tools found on PATH when used (unchanged) | the same | the same |
 
 verify-bundle's three scenarios follow these tiers: base alone; base +

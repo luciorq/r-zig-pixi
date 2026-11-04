@@ -453,7 +453,9 @@ In feat-standalone-toolchain TODO.md unless named:
 - Done in feat-standalone-toolchain phase 4: open decision 1 (b), the
   key change and a kappa rerun.
 - Route `R CMD SHLIB` through rzig build, or give it a preflight;
-  revisit 0010 for pkgbuild's probe (as before).
+  revisit 0010 for pkgbuild's probe (as before). Done in
+  feat-shlib-rzig-build (its PLAN.md); 0010 stays, and `R CMD config`
+  through rzig is its open point H's TODO.md item.
 
 ## Files
 

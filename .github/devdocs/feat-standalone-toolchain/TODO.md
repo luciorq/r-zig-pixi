@@ -612,6 +612,10 @@ phase4/ beside these files.
       note "published as `_N`, <date>" in feat-zig-pkg-build's N5 and
       fix-zig-pkg-build-review's status (Cc19)
 
+Taken before phase 5: R CMD SHLIB through rzig build
+(feat-shlib-rzig-build, its PLAN.md), from "Later" (its open point A a,
+the user, 2026-10-15).
+
 ## Phase 5 — zig in the compilers group
 
 Needs (answered): B4; B6 (both cases are tested either way); B13 (sizes
@@ -785,10 +789,18 @@ Needs (answered): B14 (a), with B37 (a).
 - [ ] Depend less on make for package installs (Windows needs sh/make
       for now): done for `R CMD INSTALL` of tier 0 to 2 packages by
       feat-zig-pkg-build (rzig build; its PLAN.md, "What the build-tools
-      group is for"). Left: route `R CMD SHLIB` through rzig build (it
-      would also clear pkgbuild's has_compiler probe, and so pak, which
-      today refuses every compiled package on base + compilers), or give
-      it a preflight; revisit 0010 for pkgbuild's probe. The shared
+      group is for"). R CMD SHLIB is done by feat-shlib-rzig-build
+      (its PLAN.md; it publishes with phase 7's bump): run-time
+      compiles, pkgbuild's has_compiler probe and so pak need no make
+      where the code needs none. Left:
+      `R CMD config` through rzig (unix src/scripts/config; Windows with
+      phase 7's rcmdfn.c). That would serve rstan on macOS, which runs
+      `R CMD config CXX17` after each `stan_model()` compile, and
+      pkgbuild's Windows `has_rtools()`, which warns "Rtools is
+      required" on base + compilers (feat-shlib-rzig-build's open point
+      H), and would also free the `R CMD config` run before a configure
+      script for tier 0 and 2 packages on unix (feat-zig-pkg-build fact
+      3). The shared
       tier-1 build runner is done by feat-shared-build-runner's PR (its
       PLAN.md) [stress-S1, records-REC-4, phase3-P3-8]: stress dispatch
       38467907779 (`shared_cache = false`, main ea7e6ee) measured the
@@ -826,8 +838,33 @@ Needs (answered): B14 (a), with B37 (a).
       stan_model): run-time compilation, `R CMD SHLIB`, which the g3 g4
       dispatch of 2026-10-12 did not exercise (no smoke compiled)
       [stress-S6, records-REC-9]. The smoke's result is the evidence, not
-      a trace line: R CMD SHLIB goes through make, and sourceCpp keeps
-      its output (a local Rcpp run, 2026-10-13)
+      a trace line: R CMD SHLIB went through make then, and sourceCpp keeps
+      its output (a local Rcpp run, 2026-10-13). Now feat-shlib-rzig-build's
+      dispatch (its open point J a): g1 and g2 (RcppArmadillo's and
+      RcppParallel's configure scripts run SHLIB) with trace on its
+      branch, Rcpp's smoke with `showOutput = TRUE`, so its log carries
+      `rzig build: R CMD SHLIB, tier 1`; ticked with that run
+- [ ] pkgbuild's Windows `has_rtools()` on base + compilers
+      (feat-shlib-rzig-build's open point H, (a): no change to 0010 now,
+      the README says Rtools is not needed and the warning can be
+      ignored). Seen on kappa, 2026-10-15: with no sh, `R CMD config CC`
+      says "'sh' is not recognized" and exits 1, so pkgbuild's
+      `cc_path` is empty; `has_rtools()` answered TRUE there only from
+      stale registry entries for Rtools 4.4 and 4.5, while
+      `has_compiler()` and `check_build_tools()` were TRUE through rzig
+      build. Clears with `R CMD config` through rzig (the item above)
+- [ ] TMB's precompile across model names (feat-shlib-rzig-build's open
+      point D): under rzig build each new model name compiles libTMB.cpp
+      again (about 45 s and 4 MB of zig cache on linux-64), where make
+      reused one libTMB.o; only if users ask
+- [ ] The build root of R CMD INSTALL's package mode under
+      `R_SESSION_TMPDIR` too, as SHLIB mode's (feat-shlib-rzig-build's
+      open point M c), if a killed install's `src/.rzig` is seen
+- [ ] macOS `zig cc --version` writes an empty `a.o` in the working
+      directory (conda-forge's zig and upstream 0.16.0): rzig's driver
+      adds `-c` to a version query (compiler.zig; feat-shlib-rzig-build's
+      "Host fixes, round 1"). Drop it when a zig writes none; no upstream
+      report (L)
 - [ ] Tier 2's own compile flags: an optional `cflags` in rpkg's
       LibraryOptions, appended to each C/C++ source's flags, when a zig
       package needs its own include paths or defines (tier 2 does not

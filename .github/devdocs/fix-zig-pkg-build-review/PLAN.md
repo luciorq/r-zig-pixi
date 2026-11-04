@@ -498,10 +498,14 @@ In feat-standalone-toolchain TODO.md unless named:
   feat-shared-build-runner shares the runner (B1).
 - A g1 dispatch with trace (Rcpp's cppFunction, rstan's stan_model):
   run-time compilation; the smoke's result is the evidence [stress-S6].
+  Taken by feat-shlib-rzig-build's dispatch (its open point J: g1 and
+  g2, with trace).
 - Tier 2's own compile flags (an optional `cflags` in rpkg's
   LibraryOptions), when a zig package needs them [code-4].
 - Route `R CMD SHLIB` through rzig build, or give it a preflight;
-  revisit 0010 for pkgbuild's probe (as before).
+  revisit 0010 for pkgbuild's probe (as before). Done in
+  feat-shlib-rzig-build (its PLAN.md); 0010 stays, and `R CMD config`
+  through rzig is its open point H's TODO.md item.
 - With open decision 1 at (a): 0009 tells the check's exit 1 (a package
   that cannot be built) from 127 (the toolchain incomplete) and words
   its stop for each. Done in feat-standalone-toolchain phase 4 (its open

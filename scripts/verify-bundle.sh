@@ -23,10 +23,12 @@
 #      flavor's capabilities, the vendored libraries loading from there;
 #      R puts the build-tools group's usr/bin first on PATH (B25, C27);
 #      rzig's check mode exits 127 for each group with what is missing
-#      and the group's text (B26, B35); hermetic-check.sh's tier 0/1 on
-#      the extracted tree, where the install preflight stops a compiled
-#      package with the compilers' text; TLS trust with the shipped CA
-#      bundle and nothing from the build env (unix).
+#      and the group's text (B26, B35); R CMD SHLIB stops with the
+#      compilers' text, and of a Makevars rule with both groups' texts,
+#      the compilers' first (feat-shlib-rzig-build); hermetic-check.sh's
+#      tier 0/1 on the extracted tree, where the install preflight stops a
+#      compiled package with the compilers' text; TLS trust with the
+#      shipped CA bundle and nothing from the build env (unix).
 #   2. + compilers: rzig's check mode finds zig and flang; the
 #      preflight's other branches (zig from ZIG_BIN, no make, no flang;
 #      feat-zig-pkg-build M4; Windows too [phase3-P3-9]): a C package
@@ -36,19 +38,26 @@
 #      stops with rzig's reason and the build tools' text; unix also an
 #      R-only package with a configure script, with "a configure script
 #      R runs" and the same text, and a Fortran one with no flang and
-#      the compilers' text (C26); the C compiler compiles for the arch's
-#      baseline CPU, not this machine's, also when told -mtune=native
-#      (LLVM IR's target-cpu); packages compiled with the tree build and
-#      load.
+#      the compilers' text (C26); R CMD SHLIB with no make, every OS
+#      (feat-shlib-rzig-build, patch 0013's one hook): pkgbuild's probe,
+#      Rcpp's sourceCpp, Fortran, cpp11's and TMB's shapes, the dry run
+#      Rcpp's macOS OpenMP plugin parses and an OpenMP library build
+#      through rzig build and load, and a Makevars rule stops with rzig's
+#      reason and the build tools' text; the C compiler compiles for the
+#      arch's baseline CPU, not this machine's, also when told
+#      -mtune=native (LLVM IR's target-cpu); packages compiled with the
+#      tree build and load.
 #      unix, under env -i: C++, Fortran, USE_FC_TO_LINK, $(FLIBS)
 #      without flang (or make), zig-fc with no flang, OpenMP (C, and
 #      Fortran with `use omp_lib`) with the group's openmp/ where the base
 #      has libomp and openmp/ left alone on minimal (B40), decoy
 #      CONDA_PREFIX runs (the C++ and, where offered, the OpenMP shape):
-#      each shape through R CMD SHLIB (make, the run-time compile path)
-#      and as a package through R CMD INSTALL (rzig build, asserted from
-#      its log), with the same checks on both libraries, and on rzig
-#      build's objects, kept in its build root, the macOS floor.
+#      each shape through R CMD SHLIB, make by R_ZIG_PKG_BUILDER=make (R
+#      CMD SHLIB's default is rzig build since patch 0013's one hook,
+#      feat-shlib-rzig-build), and as a package through R CMD INSTALL
+#      (rzig build, asserted from its log), with the same checks on both
+#      libraries, and on rzig build's objects, kept in its build root,
+#      the macOS floor.
 #      Windows, where make is a build tool: rzig's dry runs (-L from
 #      where the tree now is, the group's openmp/, CONDA_PREFIX ignored),
 #      and an OpenMP DLL compiled and linked by gcc.exe alone, loaded
@@ -64,12 +73,12 @@
 #      B43), R CMD check's DLL check runs the group's objdump, a tools.mk
 #      runs each of the binutils (C10, C11), CMake's ar and ranlib beside
 #      CC are rzig, and the OpenMP C and Fortran packages (through R CMD
-#      SHLIB, make, and as packages through rzig build [phase3-P3-1]),
-#      the static-library package and a package with a .rc file (make)
-#      and a plain C one (rzig build) build and load with only bin\x64 and
-#      System32 on PATH; LTO is recorded, not checked (B43-2, C9), with
-#      a tier-1 twin that MAKEFLAGS' assignment sends to make (N4). Every
-#      OS, with no ZIG_BIN (no zig: phase 5):
+#      SHLIB, make by R_ZIG_PKG_BUILDER=make, and as packages through rzig
+#      build [phase3-P3-1]), the static-library package and a package
+#      with a .rc file (make) and a plain C one (rzig build) build and
+#      load with only bin\x64 and System32 on PATH; LTO is recorded, not
+#      checked (B43-2, C9), with a tier-1 twin that MAKEFLAGS' assignment
+#      sends to make (N4). Every OS, with no ZIG_BIN (no zig: phase 5):
 #      a package with a configure script stops in the preflight with the
 #      compilers' text, and with R_ZIG_NO_PREFLIGHT=1 gets past it, runs
 #      its configure and fails in the compile (C26).
@@ -294,6 +303,7 @@ if [ "$OS" = windows ]; then
   R_BIN="$R_BINDIR/Rscript.exe"
   R_EXE="$R_BINDIR/R.exe"
   RSCRIPT="$R_BIN"
+  SO=dll
   cc="$TC/gcc.exe"
   fc="$TC/zig-fc.exe"
   sysdir="$(cygpath -u "${SYSTEMROOT:-C:\Windows}")"
@@ -311,6 +321,7 @@ else
   R_BINDIR="$BUNDLE_DIR/bin"
   R_BIN="$R_BINDIR/R"
   RSCRIPT="$R_BINDIR/Rscript"
+  SO=so
   cc="$TC/zig-cc"
   fc="$TC/zig-fc"
   base_env=(HOME="$home" TMPDIR="${TMPDIR:-/tmp}")
@@ -452,6 +463,42 @@ for chk in --rzig-check --rzig-check=build-tools; do
   checked="$checked $chk"
 done
 [ -z "$checked" ] || echo "== check mode with the base alone: ${cc##*/}$checked exit 127, each with what is missing and its group's text"
+
+# R CMD SHLIB with the base alone (feat-shlib-rzig-build Cg5, Cg13): R
+# asks rzig build first (patch 0013's one hook), which stops with the
+# compilers' text, the text pkgbuild's check_build_tools(debug = TRUE)
+# shows for its probe, and builds nothing; with a Makevars rule as well,
+# both groups' texts in one stop, the compilers' first, then rzig's
+# reason and the build tools'. No zig and no make: unix the tree's bin
+# alone on PATH, Windows bin\x64 and System32 (no ZIG_BIN either way).
+s1="$VERIFY_DIR/shlib-base"
+mkdir -p "$s1/probe" "$s1/rule"
+printf 'void foo(int *bar) { *bar = 1; }\n' > "$s1/probe/foo.c"
+printf 'void x(int *n) { *n = 1; }\n' > "$s1/rule/x.c"
+printf '%s\n' 'all: $(SHLIB) extra' 'extra:' '	@echo extra' > "$s1/rule/Makevars"
+if [ "$OS" = windows ]; then s1_r="$R_EXE"; s1_path="$R_BINDIR:$sys32"; else s1_r="$R_BIN"; s1_path="$BUNDLE_DIR/bin"; fi
+for d in probe rule; do
+  rc=0; why=""; bt=""
+  src=foo.c; [ "$d" = probe ] || src=x.c
+  (cd "$s1/$d" && env -i "${base_env[@]}" PATH="$s1_path" "$s1_r" CMD SHLIB "$src") > "$s1/$d.log" 2>&1 || rc=$?
+  comp="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "$compilers_head" | cut -d: -f1 || true)"
+  bad=""
+  [ "$rc" != 0 ] && [ -n "$comp" ] || bad=1
+  [ -z "$(cd "$s1/$d" && ls ./*.o ./*."$SO" 2> /dev/null)" ] || bad=1
+  if [ "$d" = rule ]; then
+    why="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "x.$SO needs make: Makevars has a rule or target line" | cut -d: -f1 || true)"
+    bt="$(tr -d '\r' < "$s1/$d.log" | grep -n -m1 -F "$build_tools_head" | cut -d: -f1 || true)"
+    { [ -n "$why" ] && [ -n "$bt" ] && [ -n "$comp" ] && [ "$comp" -lt "$why" ] && [ "$why" -lt "$bt" ]; } || bad=1
+  fi
+  if [ -n "$bad" ]; then
+    cat "$s1/$d.log" >&2
+    want="the compilers' text"
+    [ "$d" = probe ] || want="the compilers' text, rzig's reason and the build tools' text, in that order"
+    echo "error: R CMD SHLIB $src with the base alone (PATH=$s1_path): exit $rc, or not $want, or something built" >&2
+    exit 1
+  fi
+done
+echo "== R CMD SHLIB with the base alone: stops with the compilers' text, nothing built; with a Makevars rule, the compilers' text, rzig's reason and the build tools' text, in that order"
 
 # TLS trust (unix): the bundle must verify HTTPS without the build env's
 # trust anchors. conda-forge's libcurl/OpenSSL carry $CONDA/ssl compiled
@@ -644,6 +691,254 @@ if [ -n "$ZIG" ]; then
   fi
 fi
 
+# A library's objects and the library itself at or below the macOS floor
+# (every OS calls it; it checks only on macOS): zig stamps the link, so
+# only the objects show a compiler that ignored it (flang defaults to the
+# host SDK's version).
+check_minos() {
+  [ "$OS" = macos ] || return 0
+  for f in "$@"; do
+    if m="$(minos_over_floor "$f")"; then
+      echo "error: ${f##*/} minos $m > $MACOS_MIN" >&2
+      exit 1
+    fi
+  done
+}
+
+# R CMD SHLIB with no make (feat-shlib-rzig-build), every OS: the
+# run-time compiles of Rcpp, cpp11, TMB, inline and knitr, and pkgbuild's
+# compiler probe, which R CMD SHLIB now builds through rzig build (patch
+# 0013's one hook in .shlib_internal; rzig build --shlib), with zig from
+# ZIG_BIN=$ZIG and the build tools not extracted: PATH unix the tree's bin
+# alone, Windows bin\x64 and System32; for Fortran also a directory
+# holding the env's flang alone (Windows: copies of flang.exe,
+# flang-new.exe and their .cfg files, as pkg-parity's no-make install
+# has them, and flang's runtime archive where the copy looks for it).
+# RZIG_TRACE=1: each log says `rzig build: R CMD SHLIB, tier
+# 1` and holds no recipe make echoed. The shapes: pkgbuild's probe (foo.c
+# beside an invalid junk.c, no -o), Rcpp's sourceCpp (-o
+# sourceCpp_1.<ext>, a header through CLINK_CPPFLAGS; RZIG_KEEP_ROOT=1
+# keeps its build root beside the output, out of R's session directory,
+# which R CMD SHLIB's R removes when it exits [shlib-code-1], to read its
+# object from, and then it is removed), inline's Fortran, cpp11's
+# cpp_source (a Makevars in the working directory, absolute sources,
+# --output=), TMB's compile (in process, its library's source in another
+# directory, the flags in a user Makevars), the dry run Rcpp's macOS
+# OpenMP plugin parses, an OpenMP library where Makeconf offers OpenMP,
+# and a Makevars rule, which needs make: rzig's reason, "no make on
+# PATH" and the build tools' text, nothing built. Each library loads with
+# nothing but the tree on PATH; none leaves an object or a build root
+# (.rzig.*) beside its sources.
+if [ -n "$ZIG" ]; then
+  sn="$VERIFY_DIR/shlib-nomake"
+  mkdir -p "$sn/fc"
+  if [ "$OS" = windows ]; then
+    sn_r="$R_EXE"; sn_path="$R_BINDIR:$sys32"; sn_load=(PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla)
+    for f in flang.exe flang-new.exe flang.cfg flang-compile.cfg; do
+      [ ! -f "$fc_dir/$f" ] || cp "$fc_dir/$f" "$sn/fc/"
+    done
+    # and flang's runtime where the copy's -print-resource-dir names it
+    # (<bin>/../lib/clang/<major>/lib/<triple>/), which rzig links
+    # (flang_rt.zig); without it rzig drops -lflang_rt.runtime and a
+    # Fortran I/O statement is an undefined symbol at the link
+    rt="$(cd "$fc_dir/.." && ls lib/clang/*/lib/*/libflang_rt.runtime.a 2> /dev/null | head -1 || true)"
+    if [ -n "$rt" ]; then mkdir -p "$sn/${rt%/*}"; cp "$fc_dir/../$rt" "$sn/$rt"; fi
+    # a path R reads: C:/... on Windows
+    mp() { cygpath -m "$1"; }
+  else
+    sn_r="$R_BIN"; sn_path="$BUNDLE_DIR/bin"; sn_load=(PATH=/usr/bin:/bin "$R_BIN" --vanilla --no-echo)
+    [ ! -x "$fc_dir/flang" ] || ln -s "$fc_dir/flang" "$sn/fc/flang"
+    mp() { printf '%s\n' "$1"; }
+  fi
+  # sn_run <dir> <log> [VAR=value...] -- <program and arguments>: in
+  # <dir>, under env -i with the variables above, traced
+  sn_run() {
+    local d="$1" log="$2" vars=()
+    shift 2
+    while [ "$1" != -- ]; do vars+=("$1"); shift; done
+    shift
+    (cd "$d" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$sn_path" RZIG_TRACE=1 "${vars[@]}" "$@") > "$log" 2>&1
+  }
+  # sn_built <name> <log> <dir>: the call went through rzig build, no
+  # recipe make echoed, and nothing beside the sources in <dir>
+  sn_built() {
+    starts_line "$2" "rzig build: R CMD SHLIB, tier 1" ||
+      { cat "$2" >&2; echo "error: R CMD SHLIB ($1) with no make did not build through rzig build (no 'rzig build: R CMD SHLIB, tier 1')" >&2; exit 1; }
+    if [ -n "$(make_recipes "$2")" ]; then cat "$2" >&2; echo "error: a recipe make echoed in R CMD SHLIB's log ($1)" >&2; exit 1; fi
+    local left
+    left="$(cd "$3" && find . -name '*.o' -o -name '.rzig*' | head -3)"
+    [ -z "$left" ] || { echo "error: R CMD SHLIB ($1) left $left beside its sources in $3" >&2; exit 1; }
+  }
+  # sn_loads <name> <dir> <R expression>: TRUE once the library loads
+  sn_loads() {
+    (cd "$2" && env -i "${base_env[@]}" "${sn_load[@]}" -e "stopifnot(isTRUE($3))") ||
+      { echo "error: R CMD SHLIB's library ($1, through rzig build with no make) did not load or return its value" >&2; exit 1; }
+  }
+  sn_shapes="probe"
+
+  # pkgbuild's has_compiler(): R CMD SHLIB foo.c in a directory with
+  # other sources, which rzig build must leave alone
+  mkdir -p "$sn/probe"
+  printf 'void foo(int *bar) { *bar = 1; }\n' > "$sn/probe/foo.c"
+  printf 'this is not C (\n' > "$sn/probe/junk.c"
+  sn_run "$sn/probe" "$sn/probe.log" -- "$sn_r" CMD SHLIB foo.c ||
+    { cat "$sn/probe.log" >&2; echo "error: R CMD SHLIB foo.c (pkgbuild's probe) failed with the compilers and no make" >&2; exit 1; }
+  sn_built probe "$sn/probe.log" "$sn/probe"
+  if grep -q 'junk\.c' "$sn/probe.log"; then cat "$sn/probe.log" >&2; echo "error: R CMD SHLIB foo.c compiled junk.c" >&2; exit 1; fi
+  sn_loads probe "$sn/probe" "{dyn.load('foo.$SO'); .C('foo', 0L)[[1]] == 1L}"
+
+  # Rcpp's sourceCpp: C++ (an exception thrown and caught: the static
+  # C++ runtime), a header from CLINK_CPPFLAGS; no rpath and no shared
+  # C++ runtime (unix), the macOS floor on the library and on its object
+  mkdir -p "$sn/cxx/inc"
+  printf '#define RZIG_RP_LEN 6\n' > "$sn/cxx/inc/rzigrp.h"
+  cat > "$sn/cxx/rp.cpp" <<'CPP'
+#include <R.h>
+#include <Rinternals.h>
+#include <stdexcept>
+#include <string>
+#include <rzigrp.h>
+extern "C" SEXP rp(void)
+{
+    std::string s("r-zig");
+    try { throw std::runtime_error("!"); } catch (const std::exception &e) { s += e.what(); }
+    return ScalarInteger(s.size() == RZIG_RP_LEN ? (int) s.size() : -1);
+}
+CPP
+  sn_run "$sn/cxx" "$sn/cxx.log" RZIG_KEEP_ROOT=1 CLINK_CPPFLAGS="-I\"$(mp "$sn/cxx/inc")\"" -- "$sn_r" CMD SHLIB -o "sourceCpp_1.$SO" rp.cpp ||
+    { cat "$sn/cxx.log" >&2; echo "error: the sourceCpp shape (C++, CLINK_CPPFLAGS) failed with the compilers and no make" >&2; exit 1; }
+  kept=("$sn/cxx"/.rzig.*)
+  [ "${#kept[@]}" = 1 ] && cp "${kept[0]}/obj/0/rp.o" "$sn/kept-rp.o" ||
+    { echo "error: the sourceCpp shape kept no single build root with obj/0/rp.o beside its output (RZIG_KEEP_ROOT=1): ${kept[*]}" >&2; exit 1; }
+  rm -rf "${kept[0]}"
+  sn_built sourceCpp "$sn/cxx.log" "$sn/cxx"
+  if [ "$OS" != windows ]; then
+    so_rp="$(rpaths_of "$sn/cxx/sourceCpp_1.$SO" | tr '\n' ' ')"
+    cxx_dep="$(cxx_deps "$sn/cxx/sourceCpp_1.$SO")"
+    [ -z "$so_rp$cxx_dep" ] || { echo "error: sourceCpp_1.$SO records rpaths ($so_rp) or needs a shared C++ runtime ($cxx_dep)" >&2; exit 1; }
+  fi
+  check_minos "$sn/cxx/sourceCpp_1.$SO" "$sn/kept-rp.o"
+  sn_loads sourceCpp "$sn/cxx" "{dyn.load('sourceCpp_1.$SO'); .Call('rp') == 6L}"
+  sn_shapes="$sn_shapes, sourceCpp"
+
+  # inline's and knitr's Fortran, where FLIBS names the static flang
+  # runtime (minimal has none)
+  if grep -q '^FLIBS = .*flang_rt' "$mk" && [ -n "$(ls "$sn/fc")" ]; then
+    mkdir -p "$sn/fortran"
+    cat > "$sn/fortran/fs.f" <<'FORTRAN'
+      subroutine fsum(n, x, s)
+      integer n, i
+      double precision x(n), s
+      s = 0d0
+      do 10 i = 1, n
+         s = s + x(i)
+   10 continue
+      end
+      subroutine fw(n, r)
+      integer n, r
+      character(len=12) buf
+      write(buf,'(i0)') n
+      read(buf,'(i12)') r
+      end
+FORTRAN
+    sn_path="$sn/fc:$sn_path"
+    sn_run "$sn/fortran" "$sn/fortran.log" -- "$sn_r" CMD SHLIB -o "fs.$SO" fs.f ||
+      { cat "$sn/fortran.log" >&2; echo "error: R CMD SHLIB of a Fortran file failed with the compilers, flang and no make" >&2; exit 1; }
+    sn_path="${sn_path#"$sn/fc:"}"
+    sn_built fortran "$sn/fortran.log" "$sn/fortran"
+    f_dep="$(needed_of "$sn/fortran/fs.$SO" | grep flang_rt || true)"
+    [ -z "$f_dep" ] || { echo "error: fs.$SO (R CMD SHLIB through rzig build) needs a shared flang runtime: $f_dep" >&2; exit 1; }
+    sn_loads fortran "$sn/fortran" "{dyn.load('fs.$SO'); .Fortran('fsum', 3L, c(1, 2, 3), s = 0)\$s == 6 && .Fortran('fw', 42L, r = 0L)\$r == 42L}"
+    sn_shapes="$sn_shapes, Fortran"
+  fi
+
+  # cpp11's cpp_source: a Makevars in the working directory, absolute
+  # sources, --output=
+  mkdir -p "$sn/cpp11/inc" "$sn/cpp11/src"
+  printf 'inline int c11v() { return 11; }\n' > "$sn/cpp11/inc/rzigc11.h"
+  printf '%s\n' 'CXX_STD = CXX11' "PKG_CPPFLAGS = -I'$(mp "$sn/cpp11/inc")'" > "$sn/cpp11/src/Makevars"
+  printf '%s\n' '#include <rzigc11.h>' 'int c11a() { return c11v(); }' > "$sn/cpp11/src/a.cpp"
+  printf '%s\n' '#include <R.h>' '#include <Rinternals.h>' 'int c11a();' 'extern "C" SEXP c11(void) { return ScalarInteger(c11a() + 1); }' > "$sn/cpp11/src/cpp11.cpp"
+  sn_run "$sn/cpp11/src" "$sn/cpp11.log" -- "$sn_r" CMD SHLIB "$(mp "$sn/cpp11/src/a.cpp")" "$(mp "$sn/cpp11/src/cpp11.cpp")" "--output=pkg.$SO" ||
+    { cat "$sn/cpp11.log" >&2; echo "error: the cpp11 shape (absolute sources, --output=, a Makevars) failed with the compilers and no make" >&2; exit 1; }
+  sn_built cpp11 "$sn/cpp11.log" "$sn/cpp11"
+  sn_loads cpp11 "$sn/cpp11/src" "{dyn.load('pkg.$SO'); .Call('c11') == 12L}"
+  sn_shapes="$sn_shapes, cpp11"
+
+  # TMB's compile(): .shlib_internal in process, its precompiled
+  # library's source in another directory, the flags in a user Makevars;
+  # nothing written beside that source
+  mkdir -p "$sn/tmb/inc" "$sn/tmb/tmblib" "$sn/tmb/model"
+  printf '#define RZIG_TMB 5\n' > "$sn/tmb/inc/rzigtmb.h"
+  printf '%s\n' '#include <R.h>' '#include <Rinternals.h>' '#include <R_ext/Rdynload.h>' '#include <rzigtmb.h>' \
+    'int tmb_lib(void) { return RZIG_TMB; }' 'extern "C" void LIB_UNLOAD(DllInfo *dll) { (void) dll; }' > "$sn/tmb/tmblib/lib.cpp"
+  printf '%s\n' '#include <R.h>' '#include <Rinternals.h>' 'int tmb_lib(void);' 'extern "C" SEXP tmbv(void) { return ScalarInteger(2 * tmb_lib()); }' > "$sn/tmb/model/model.cpp"
+  printf '%s\n' "PKG_CPPFLAGS = -I\"$(mp "$sn/tmb/inc")\" -DLIB_UNLOAD=R_unload_model" 'PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS)' > "$sn/tmb/Makevars.user"
+  sn_run "$sn/tmb/model" "$sn/tmb.log" R_MAKEVARS_USER="$(mp "$sn/tmb/Makevars.user")" -- "$RSCRIPT" --vanilla -e \
+    "stopifnot(tools:::.shlib_internal(c('model.cpp', '$(mp "$sn/tmb/tmblib/lib.cpp")')) == 0L)" ||
+    { cat "$sn/tmb.log" >&2; echo "error: the TMB shape (.shlib_internal in process, a source in another directory) failed with the compilers and no make" >&2; exit 1; }
+  sn_built TMB "$sn/tmb.log" "$sn/tmb"
+  sn_loads TMB "$sn/tmb/model" "{dyn.load('model.$SO'); .Call('tmbv') == 10L && is.loaded('R_unload_model')}"
+  sn_shapes="$sn_shapes, TMB"
+
+  # The dry run: R's own "make would use", then rzig's compile line, which
+  # Rcpp's macOS OpenMP plugin reads its compiler from: Makeconf's C++
+  # compiler, R_HOME/bin/toolchain/zig-cxx (Windows g++.exe, with /),
+  # where R_HOME is what R RHOME prints (bin/R's physical path, cd -P);
+  # nothing built
+  mkdir -p "$sn/dry"
+  cp "$sn/cxx/rp.cpp" "$sn/dry/"
+  sn_run "$sn/dry" "$sn/dry.log" -- "$sn_r" CMD SHLIB --dry-run rp.cpp ||
+    { cat "$sn/dry.log" >&2; echo "error: R CMD SHLIB --dry-run failed with the compilers and no make" >&2; exit 1; }
+  if [ "$OS" = windows ]; then
+    rh="$(env -i "${base_env[@]}" PATH="$R_BINDIR:$sys32" "$R_EXE" RHOME | tr -d '\r' | tr '\\' '/')"; cxx_name=g++
+  else
+    rh="$(env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" RHOME)"; cxx_name=zig-cxx
+  fi
+  after="$(tr -d '\r' < "$sn/dry.log" | awk 'f == 1 { print; f = 2 } /^make would use/ && !f { f = 1 }' | tr '\\' '/')"
+  low() { tr '[:upper:]' '[:lower:]'; }
+  if [ "$OS" = windows ]; then want_dry="$(printf '%s' "$rh/bin/toolchain/$cxx_name" | low)"; got_dry="$(printf '%s' "$after" | low)"
+  else want_dry="$rh/bin/toolchain/$cxx_name"; got_dry="$after"; fi
+  case "$got_dry" in
+    "$want_dry"*) ;;
+    *) cat "$sn/dry.log" >&2; echo "error: R CMD SHLIB --dry-run's line after 'make would use' is '$after', which does not start with $rh/bin/toolchain/$cxx_name (Rcpp's macOS OpenMP plugin reads its compiler there)" >&2; exit 1 ;;
+  esac
+  [ -z "$(cd "$sn/dry" && find . -name '*.o' -o -name "*.$SO" -o -name '.rzig*')" ] ||
+    { echo "error: R CMD SHLIB --dry-run built something in $sn/dry" >&2; exit 1; }
+  sn_shapes="$sn_shapes, --dry-run"
+
+  # OpenMP, where Makeconf offers it: $(SHLIB_OPENMP_CFLAGS) on the
+  # compile and the link, the library links libomp, and a num_threads(2)
+  # region runs on two threads
+  if grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
+    mkdir -p "$sn/omp"
+    printf '%s\n' '#include <omp.h>' 'void omp2(int *t) {' '  int n = 0;' '#pragma omp parallel num_threads(2) reduction(+:n)' '  n += 1;' '  *t = n + 0 * omp_get_max_threads();' '}' > "$sn/omp/omp2.c"
+    printf '%s\n' 'PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$sn/omp/Makevars"
+    sn_run "$sn/omp" "$sn/omp.log" -- "$sn_r" CMD SHLIB omp2.c ||
+      { cat "$sn/omp.log" >&2; echo "error: an OpenMP library (SHLIB_OPENMP_CFLAGS) failed with the compilers and no make" >&2; exit 1; }
+    sn_built OpenMP "$sn/omp.log" "$sn/omp"
+    needed_of "$sn/omp/omp2.$SO" | grep -qi 'libomp\.' || { needed_of "$sn/omp/omp2.$SO" >&2; echo "error: omp2.$SO (R CMD SHLIB through rzig build) does not link libomp" >&2; exit 1; }
+    sn_loads OpenMP "$sn/omp" "{dyn.load('omp2.$SO'); .C('omp2', t = 0L)\$t == 2L}"
+    sn_shapes="$sn_shapes, OpenMP"
+  fi
+
+  # A Makevars rule needs make: rzig's reason, no make on PATH and the
+  # build tools' text (feat-shlib-rzig-build F a); nothing built
+  mkdir -p "$sn/rule"
+  printf 'void x(int *n) { *n = 1; }\n' > "$sn/rule/x.c"
+  printf '%s\n' 'all: $(SHLIB) extra' 'extra:' '	@echo extra' > "$sn/rule/Makevars"
+  rc=0
+  sn_run "$sn/rule" "$sn/rule.log" -- "$sn_r" CMD SHLIB x.c || rc=$?
+  if [ "$rc" = 0 ] || ! grep -qF "x.$SO needs make: Makevars has a rule or target line" "$sn/rule.log" ||
+     ! grep -qF "no make on PATH" "$sn/rule.log" || ! starts_line "$sn/rule.log" "$build_tools_head" ||
+     [ -n "$(cd "$sn/rule" && find . -name '*.o' -o -name "*.$SO")" ]; then
+    cat "$sn/rule.log" >&2
+    echo "error: R CMD SHLIB of a Makevars rule with no make: exit $rc, or not rzig's reason, 'no make on PATH' and the build tools' text, or something built" >&2
+    exit 1
+  fi
+  echo "== R CMD SHLIB with the compilers and no make (rzig build): $sn_shapes build, load and leave nothing beside their sources; a Makevars rule stops with rzig's reason and the build tools' text"
+fi
+
 # The CPU packages are compiled for, every OS: the baseline of this
 # machine's arch, not its own CPU. rzig passes -mcpu=baseline
 # (zigbuild/tools/rzig/compiler.zig), so a package compiled here also
@@ -764,19 +1059,6 @@ fi
 # own binaries is relative is verify-tree.sh's. Skipped without zig, as on
 # a user machine.
 if [ "$OS" != windows ]; then
-  # A package's objects and .so at or below the floor too: zig stamps the
-  # link, so only the objects show a compiler that ignored it (flang
-  # defaults to the host SDK's version).
-  check_minos() {
-    [ "$OS" = macos ] || return 0
-    for f in "$@"; do
-      if m="$(minos_over_floor "$f")"; then
-        echo "error: ${f##*/} minos $m > $MACOS_MIN" >&2
-        exit 1
-      fi
-    done
-  }
-
   # What a compile needs under env -i, as on a user machine: zig through
   # zig_env, make and flang from PATH, their own directories (the env's
   # bin); flang's decides whether the Fortran checks run. Every env -i
@@ -802,12 +1084,15 @@ if [ "$OS" != windows ]; then
     echo "== the bundle's compilers run the build's zig, $ZIG"
 
     # Each shape below is built twice: through R CMD SHLIB, which is make
-    # (and the path run-time compilation takes: Rcpp's sourceCpp, inline),
-    # and as a package through R CMD INSTALL, which builds these shapes
-    # through rzig build (patch 0013, the default builder; feat-zig-pkg-build
-    # N1), with the same checks on both libraries. shape_pkg <name>
-    # <source>... [-- <Makevars line>...] makes the package (useDynLib, no R
-    # code) under $shapes/<name>, installs it with the SHLIB runs' env -i
+    # here by R_ZIG_PKG_BUILDER=make, the make reference (R CMD SHLIB's
+    # default, the path run-time compilation takes: Rcpp's sourceCpp,
+    # inline, is rzig build since patch 0013's one hook,
+    # feat-shlib-rzig-build), and as a package through R CMD INSTALL,
+    # which builds these shapes through rzig build (patch 0013, the
+    # default builder; feat-zig-pkg-build N1), with the same checks on
+    # both libraries. shape_pkg <name> <source>... [-- <Makevars
+    # line>...] makes the package (useDynLib, no R code) under
+    # $shapes/<name>, installs it with the SHLIB runs' env -i
     # (PATH $shape_path, $pkg_path unless set; shape_env adds variables)
     # plus RZIG_TRACE=1, requires `rzig build: tier 1` in its log and no
     # recipe make echoed, and sets shape_so to its library. RZIG_KEEP_ROOT=1
@@ -867,7 +1152,7 @@ extern "C" SEXP rp(void)
     return ScalarInteger((int) s.size());
 }
 CPP
-    (cd "$pkg_dir" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" \
+    (cd "$pkg_dir" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
       "$R_BIN" CMD SHLIB -o rp.so rp.cpp > shlib.log 2>&1) || { cat "$pkg_dir/shlib.log" >&2; echo "error: R CMD SHLIB failed with the bundle" >&2; exit 1; }
     pkg_rp="$(rpaths_of "$pkg_dir/rp.so" | tr '\n' ' ')"
     if [ -n "$pkg_rp" ]; then
@@ -919,7 +1204,7 @@ CPP
       read(buf,'(i12)') r
       end
 FORTRAN
-      (cd "$pkg_dir" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" \
+      (cd "$pkg_dir" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
         "$R_BIN" CMD SHLIB -o fs.so fs.f > fshlib.log 2>&1) || { cat "$pkg_dir/fshlib.log" >&2; echo "error: R CMD SHLIB of a Fortran file failed with the bundle" >&2; exit 1; }
       check_minos "$pkg_dir/fs.o" "$pkg_dir/fs.so"
       f_dep="$(needed_of "$pkg_dir/fs.so" | grep flang_rt || true)"
@@ -945,7 +1230,7 @@ FORTRAN
       mkdir -p "$pkg_dir/fl"
       cp "$pkg_dir/fs.f" "$pkg_dir/fl/fl.f"
       echo 'USE_FC_TO_LINK =' > "$pkg_dir/fl/Makevars"
-      (cd "$pkg_dir/fl" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" \
+      (cd "$pkg_dir/fl" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
         "$R_BIN" CMD SHLIB -o fl.so fl.f > shlib.log 2>&1) || { cat "$pkg_dir/fl/shlib.log" >&2; echo "error: a USE_FC_TO_LINK Fortran package failed to link with the bundle" >&2; exit 1; }
       grep -Eq 'toolchain/zig-fc (-shared|-dynamiclib) .*-o fl\.so' "$pkg_dir/fl/shlib.log" || { cat "$pkg_dir/fl/shlib.log" >&2; echo "error: the USE_FC_TO_LINK link did not run zig-fc" >&2; exit 1; }
       check_minos "$pkg_dir/fl/fl.o" "$pkg_dir/fl/fl.so"
@@ -999,7 +1284,7 @@ FORTRAN
     ln -sf "$(command -v make)" "$pkg_dir/cf/bin/make"
     printf '%s\n' '#include <R.h>' 'void cfl(int *n) { *n = 7; }' > "$pkg_dir/cf/cf.c"
     printf '%s\n' 'PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)' > "$pkg_dir/cf/Makevars"
-    (cd "$pkg_dir/cf" && env -i "${base_env[@]}" PATH="$pkg_dir/cf/bin:/usr/bin:/bin" "${zig_env[@]}" \
+    (cd "$pkg_dir/cf" && env -i "${base_env[@]}" PATH="$pkg_dir/cf/bin:/usr/bin:/bin" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
       "$R_BIN" CMD SHLIB -o cf.so cf.c > shlib.log 2>&1) || { cat "$pkg_dir/cf/shlib.log" >&2; echo "error: a C package using \$(FLIBS) failed to link with no flang on PATH" >&2; exit 1; }
     (cd "$pkg_dir/cf" && env -i "${base_env[@]}" PATH=/usr/bin:/bin \
       "$R_BIN" --vanilla --no-echo -e 'dyn.load("cf.so"); stopifnot(.C("cfl", n = 0L)$n == 7L)')
@@ -1062,11 +1347,11 @@ FORTRAN
       printf '%s\n' '#include <omp.h>' 'int ompprobe(void) { return 0; }' > "$pkg_dir/omp/probe.c"
       printf '%s\n' 'extern int omp_get_max_threads(void);' 'void lompn(int *n) { *n = omp_get_max_threads(); }' > "$pkg_dir/lomp/lomp.c"
       printf '%s\n' 'PKG_LIBS = -lomp' > "$pkg_dir/lomp/Makevars"
-      (cd "$pkg_dir/omp" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" \
+      (cd "$pkg_dir/omp" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
         "$R_BIN" CMD SHLIB -o omp.so omp.c > shlib.log 2>&1 && rm Makevars &&
-        env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" \
+        env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
         "$R_BIN" CMD SHLIB -o probe.so probe.c >> shlib.log 2>&1 && cd "$pkg_dir/lomp" &&
-        env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" \
+        env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
         "$R_BIN" CMD SHLIB -o lomp.so lomp.c >> "$pkg_dir/omp/shlib.log" 2>&1) || { cat "$pkg_dir/omp/shlib.log" >&2; echo "error: an OpenMP package failed to build with the bundle" >&2; exit 1; }
       check_minos "$pkg_dir/omp/omp.so" "$pkg_dir/lomp/lomp.so"
       omp_rp="$(rpaths_of "$pkg_dir/omp/omp.so" | tr '\n' ' ')$(rpaths_of "$pkg_dir/lomp/lomp.so" | tr '\n' ' ')"
@@ -1106,7 +1391,7 @@ FORTRAN
     if grep -q '^SHLIB_OPENMP_FFLAGS = *-' "$mk" && [ -x "$fc_dir/flang" ]; then
       fomp_src "$pkg_dir"
       for d in fomp fompfc; do
-        (cd "$pkg_dir/$d" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" \
+        (cd "$pkg_dir/$d" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make \
           "$R_BIN" CMD SHLIB -o "$d.so" "$d.f" > shlib.log 2>&1) || { cat "$pkg_dir/$d/shlib.log" >&2; echo "error: the Fortran OpenMP package $d failed to build with the bundle" >&2; exit 1; }
         check_minos "$pkg_dir/$d/$d.o" "$pkg_dir/$d/$d.so"
         f_dep="$(needed_of "$pkg_dir/$d/$d.so" | grep flang_rt || true)"
@@ -1153,12 +1438,12 @@ FORTRAN
     printf 'junk' > "$decoy/lib/libomp.so"; cp "$decoy/lib/libomp.so" "$decoy/lib/libz.so"
     for cpfx in "$decoy" ${CONDA_PREFIX:+"$CONDA_PREFIX"}; do
       rm -f "$pkg_dir/rp.so" "$pkg_dir/rp.o" "$pkg_dir/omp/omp.so" "$pkg_dir/omp/omp.o"
-      (cd "$pkg_dir" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" CONDA_PREFIX="$cpfx" \
+      (cd "$pkg_dir" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make CONDA_PREFIX="$cpfx" \
         "$R_BIN" CMD SHLIB -o rp.so rp.cpp > decoy.log 2>&1) || { cat "$pkg_dir/decoy.log" >&2; echo "error: R CMD SHLIB failed with CONDA_PREFIX=$cpfx" >&2; exit 1; }
       sos="$pkg_dir/rp.so"
       if [ -f "$pkg_dir/omp/omp.c" ]; then
         printf '%s\n' 'PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$pkg_dir/omp/Makevars"
-        (cd "$pkg_dir/omp" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" CONDA_PREFIX="$cpfx" \
+        (cd "$pkg_dir/omp" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make CONDA_PREFIX="$cpfx" \
           "$R_BIN" CMD SHLIB -o omp.so omp.c > decoy.log 2>&1) || { cat "$pkg_dir/omp/decoy.log" >&2; echo "error: the OpenMP package failed with CONDA_PREFIX=$cpfx" >&2; exit 1; }
         sos="$sos $pkg_dir/omp/omp.so"
       fi
@@ -1512,7 +1797,7 @@ RCODE
     for d in probe $pkgs; do
       src="$d.c"; p="$bt_path"
       if [ ! -f "$ow/$d/$src" ]; then src="$d.f"; p="$bt_path:$fc_dir"; fi
-      (cd "$ow/$d" && env -i "${base_env[@]}" "${zig_env[@]}" CONDA_PREFIX="$(cygpath -w "$decoy")" PATH="$p" \
+      (cd "$ow/$d" && env -i "${base_env[@]}" "${zig_env[@]}" R_ZIG_PKG_BUILDER=make CONDA_PREFIX="$(cygpath -w "$decoy")" PATH="$p" \
         "$R_EXE" CMD SHLIB -o "$d.dll" "$src" > shlib.log 2>&1) || { cat "$ow/$d/shlib.log" >&2; echo "error: the OpenMP package $d failed to build with the base and the groups" >&2; exit 1; }
       [ "$d" = probe ] && continue
       needed_of "$ow/$d/$d.dll" | grep -qix 'libomp\.dll' || { needed_of "$ow/$d/$d.dll" >&2; echo "error: $d.dll does not import libomp.dll" >&2; exit 1; }

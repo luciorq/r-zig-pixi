@@ -56,9 +56,10 @@
 //! that did not run (it could not start, or a signal ended it; the line
 //! says why), exits 1, after a line that says so and the compilers group's
 //! text. R's zig is rzig's own (builtin.zig_version), since the same zig
-//! builds both. Compiles do not check the version. R_ZIG_NO_PREFLIGHT
-//! (non-empty, as the preflight's nzchar test), which skips the preflight,
-//! skips this comparison too. `=package` also exits 1 for a tier-2
+//! builds both. Compiles do not check the version (`rzig build
+//! --shlib` does, below). R_ZIG_NO_PREFLIGHT (non-empty, as the
+//! preflight's nzchar test), which skips the preflight, skips this
+//! comparison too. `=package` also exits 1 for a tier-2
 //! package whose plan needs make, after "<pkg>: src/build.zig cannot be
 //! built by make: <reason>" and "<pkg>: the r-zig toolchain is complete:
 //! change what the line above names", no group's text, since no group
@@ -68,6 +69,13 @@
 //! R_HOME or the working directory does not resolve (a line names the
 //! path and why).
 //! Any other `--rzig-check=` value: a usage line and exit 2 (main.zig).
+//!
+//! `rzig build --shlib` (pkgbuild.zig) stops through `groupsFor`, the
+//! check `=package` makes, when an R CMD SHLIB call needs make and a group
+//! is missing (feat-shlib-rzig-build F a); and before it builds one, it
+//! makes the compilers check through `shlibCompilers`, version included,
+//! since R CMD SHLIB has no preflight: a zig that is not R's is make's
+//! (exit 3) when the build tools are there [shlib-r-2].
 //!
 //! On Windows the paths in these lines have `/` only, as rzig's own path
 //! has (main.zig's selfExe), where find_zig joins a directory and a name
@@ -124,8 +132,21 @@ fn fail(ctx: *Ctx, code: u8, what: []const u8, g: groups.Group) !Result {
 }
 
 fn compilers(ctx: *Ctx, fortran: bool) !Result {
-    const zig = (try find_zig.find(ctx)) orelse return fail(ctx, 127, groups.no_zig, .compilers);
-    const fc: ?[]const u8 = if (fortran) (try flang_rt.flang(ctx)) orelse return fail(ctx, 127, groups.no_flang, .compilers) else null;
+    return switch (try compilersFound(ctx, fortran)) {
+        .ok => |line| .{ .code = 0, .line = line },
+        .missing => |what| fail(ctx, 127, what, .compilers),
+        .not_r_zig => |what| fail(ctx, 1, try notRZig(ctx, what), .compilers),
+    };
+}
+
+/// The compilers check, without its report: what it found (one line), a
+/// tool that is missing (127), or a zig that is not R's (1: another
+/// major.minor, no version, or it did not run), each as its line says it.
+const CompilersFound = union(enum) { ok: []const u8, missing: []const u8, not_r_zig: []const u8 };
+
+fn compilersFound(ctx: *Ctx, fortran: bool) !CompilersFound {
+    const zig = (try find_zig.find(ctx)) orelse return .{ .missing = groups.no_zig };
+    const fc: ?[]const u8 = if (fortran) (try flang_rt.flang(ctx)) orelse return .{ .missing = groups.no_flang } else null;
     // zig's command with the file found: python3's path for python3 -m ziglang
     const cmd = try mem.concat(ctx.arena, []const u8, &.{ &.{zig.file}, zig.argv[1..] });
     const shown = try display(ctx, try mem.join(ctx.arena, " ", cmd));
@@ -134,14 +155,41 @@ fn compilers(ctx: *Ctx, fortran: bool) !Result {
     const v: ?std.SemanticVersion = if (out.ok) std.SemanticVersion.parse(version) catch null else null;
     if (ctx.getenv("R_ZIG_NO_PREFLIGHT") == null) {
         const r = builtin.zig_version;
-        if (out.not_run) |why| return fail(ctx, 1, try ctx.fmt("{s} did not run: {s} (R_ZIG_NO_PREFLIGHT=1 skips this check)", .{ shown, why }), .compilers);
-        if (v == null) return fail(ctx, 1, try ctx.fmt("{s} does not say its zig version (R_ZIG_NO_PREFLIGHT=1 skips this check)", .{shown}), .compilers);
+        if (out.not_run) |why| return .{ .not_r_zig = try ctx.fmt("{s} did not run: {s}", .{ shown, why }) };
+        if (v == null) return .{ .not_r_zig = try ctx.fmt("{s} does not say its zig version", .{shown}) };
         if (v.?.major != r.major or v.?.minor != r.minor) {
-            return fail(ctx, 1, try ctx.fmt("{s} is zig {s}, not R's zig {s} (R_ZIG_NO_PREFLIGHT=1 skips this check)", .{ shown, version, groups.this.zig }), .compilers);
+            return .{ .not_r_zig = try ctx.fmt("{s} is zig {s}, not R's zig {s}", .{ shown, version, groups.this.zig }) };
         }
     }
     const line = try ctx.fmt("compilers ok: zig {s} at {s}", .{ if (v != null) version else "(version unknown)", shown });
-    return .{ .code = 0, .line = if (fc) |p| try ctx.fmt("{s}; flang at {s}", .{ line, try display(ctx, p) }) else line };
+    return .{ .ok = if (fc) |p| try ctx.fmt("{s}; flang at {s}", .{ line, try display(ctx, p) }) else line };
+}
+
+/// A zig that is not R's, as the failing line says it: with how to skip
+/// the check.
+fn notRZig(ctx: *Ctx, what: []const u8) ![]const u8 {
+    return ctx.fmt("{s} (R_ZIG_NO_PREFLIGHT=1 skips this check)", .{what});
+}
+
+/// `rzig build --shlib`'s check before it builds an R CMD SHLIB call
+/// (pkgbuild.zig): the compilers check the install preflight makes for a
+/// package (patch 0009), which R CMD SHLIB has none of. Without it a zig
+/// that is not R's failed in build_t1.zig's compile, where make, with
+/// zig-cc, built, and pkgbuild's probe turned FALSE [shlib-r-2]. 0: build;
+/// 127 after the compilers group's text: zig or flang is missing; a zig
+/// that is not R's: with the build tools there, "<label> needs make:
+/// <why>" and 3, so R runs make as with no rzig build; without them, 1
+/// after the line and the compilers group's text. R_ZIG_NO_PREFLIGHT
+/// skips the version comparison, as for the preflight.
+pub fn shlibCompilers(ctx: *Ctx, label: []const u8, fortran: bool) !u8 {
+    return switch (try compilersFound(ctx, fortran)) {
+        .ok => 0,
+        .missing => |what| (try fail(ctx, 127, what, .compilers)).code,
+        .not_r_zig => |what| if (try buildToolsFound(ctx) == .ok) blk: {
+            ctx.warn("{s} needs make: {s}", .{ label, what });
+            break :blk pkgbuild.exit_needs_make;
+        } else (try fail(ctx, 1, try notRZig(ctx, what), .compilers)).code,
+    };
 }
 
 /// The binutils Makeconf.win names by path, R_HOME/bin/toolchain/binutils/
@@ -261,6 +309,9 @@ fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
             .name = name,
             .c_std = envValue(ctx, "R_ZIG_C_STD"),
             .rzig = ctx.self_exe orelse "rzig",
+            // before R's own parse, which says it under rzig build's hook
+            // (patch 0013; feat-shlib-rzig-build Am7)
+            .warn_cxx_std = true,
         });
     // a tier-2 package make cannot build: no tool would help, stop as
     // `rzig build` stops, before asking for any [preflight-PF-1]. One more
@@ -291,21 +342,11 @@ fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
         .zig => false,
         .make, .r_only => topLevelFortran(ctx, src_dir),
     };
-    const comp = try compilers(ctx, fortran);
-    // a zig that is not R's (1): no group would help
-    if (comp.code != 0 and comp.code != 127) return comp;
-    // make, or a configure R runs: the build tools, with the reason first.
-    // With the compilers missing too, every missing group in one stop, the
-    // compilers' text first, so the user installs what the package needs
-    // in one round (PHASE4 open point H a)
+    // make, or a configure R runs: the build tools too, with the reason
     const needs_make = configure or d.tier == .make;
-    const why = if (configure) "a configure script R runs" else d.reason;
-    const bt: ?Found = if (needs_make) try buildToolsFound(ctx) else null;
-    if (bt) |b| switch (b) {
-        .ok => {},
-        .missing => |what| return fail(ctx, 127, try ctx.fmt("{s} needs make: {s}; {s}", .{ name, why, what }), .build_tools),
-    };
-    if (comp.code != 0) return comp;
+    const why: ?[]const u8 = if (configure) "a configure script R runs" else if (d.tier == .make) d.reason else null;
+    const res = try groupsFor(ctx, name, why, fortran);
+    if (res.code != 0) return res;
     const tier: []const u8 = switch (d.tier) {
         .r_only => "no src/",
         .makevars => "tier 1 (rzig build)",
@@ -313,8 +354,30 @@ fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
         .make => "needs make",
     };
     const line = try ctx.fmt("package ok: {s} {s}", .{ name, tier });
-    if (bt) |b| return .{ .code = 0, .line = try ctx.fmt("{s} ({s}); {s}; {s}", .{ line, why, comp.line, b.ok }) };
-    return .{ .code = 0, .line = try ctx.fmt("{s}; {s}", .{ line, comp.line }) };
+    if (needs_make) return .{ .code = 0, .line = try ctx.fmt("{s} ({s}); {s}", .{ line, why.?, res.line }) };
+    return .{ .code = 0, .line = try ctx.fmt("{s}; {s}", .{ line, res.line }) };
+}
+
+/// The groups what `label` builds needs: the compilers (flang too when
+/// `fortran`), and when `why` says it needs make, the build tools, whose
+/// failing line is "<label> needs make: <why>; <what is missing>". Every
+/// missing group in one stop, the compilers' text first, so the user
+/// installs what is needed in one round (PHASE4 open point H a). 0 with
+/// the found lines; 127 when a group is missing; 1 for a zig that is not
+/// R's, where no group would help. The install preflight's check
+/// (`packageIn`), and `rzig build --shlib` for an R CMD SHLIB call that
+/// needs make (pkgbuild.zig; feat-shlib-rzig-build F a, Cg5, Cc9).
+pub fn groupsFor(ctx: *Ctx, label: []const u8, why: ?[]const u8, fortran: bool) !Result {
+    const comp = try compilers(ctx, fortran);
+    if (comp.code != 0 and comp.code != 127) return comp;
+    const bt: ?Found = if (why != null) try buildToolsFound(ctx) else null;
+    if (bt) |b| switch (b) {
+        .ok => {},
+        .missing => |what| return fail(ctx, 127, try ctx.fmt("{s} needs make: {s}; {s}", .{ label, why.?, what }), .build_tools),
+    };
+    if (comp.code != 0) return comp;
+    if (bt) |b| return .{ .code = 0, .line = try ctx.fmt("{s}; {s}", .{ comp.line, b.ok }) };
+    return comp;
 }
 
 /// A path as the check's lines show it: with `/` only on Windows.

@@ -2,7 +2,9 @@
 ## in the base (feat-standalone-toolchain B19, phase 4), and nothing writes
 ## R_ZIG_TOOLCHAIN_HINT (B35). An R-only package installs; one with
 ## compiled code stops in the preflight (patch 0009) with rzig's text,
-## which names r-zig-compilers, and installs nothing; one with a configure
+## which names r-zig-compilers, and installs nothing; R CMD SHLIB stops
+## with that text too, and of a Makevars rule with both groups' texts
+## (feat-shlib-rzig-build); one with a configure
 ## script gets both groups' texts in that stop; a user's own
 ## R_ZIG_TOOLCHAIN_HINT follows rzig's text; a zig that is not R's stops
 ## as a package that cannot be built, with no hint.
@@ -108,6 +110,38 @@ stopifnot(r$status != 0L,
           !any(startsWith(r$out, "hint:")),
           !dir.exists(file.path(lib, "rzigsrc")))
 cat("base: a compiled package stops in the preflight, naming r-zig-compilers: OK\n")
+
+## R CMD SHLIB (feat-shlib-rzig-build Cg5, Cg13): R asks rzig build first
+## (patch 0013's one hook), which stops with the compilers' text, the
+## text pkgbuild's check_build_tools(debug = TRUE) shows for its probe,
+## and builds nothing; with a Makevars rule as well, both groups' texts,
+## the compilers' first, then rzig's reason and the build tools'
+ext <- .Platform$dynlib.ext
+shlib <- function(dir, args) {
+    owd <- setwd(dir); on.exit(setwd(owd))
+    run_to(file.path(R.home("bin"), if (windows) "Rcmd.exe" else "R"), c(if (!windows) "CMD", "SHLIB", args))
+}
+p <- file.path(d, "shlib-probe"); dir.create(p)
+writeLines("void foo(int *bar) { *bar = 1; }", file.path(p, "foo.c"))
+r <- shlib(p, "foo.c"); cat(r$out, sep = "\n")
+stopifnot(r$status != 0L,
+          any(startsWith(r$out, "rzig build: no zig (")),
+          any(startsWith(r$out, "Compiling needs the r-zig compilers for R ")),
+          any(startsWith(r$out, "  conda, pixi: pixi add r-zig-compilers (or conda install r-zig-compilers); r-zig-toolchain installs every group")),
+          any(startsWith(r$out, pip)),
+          !file.exists(file.path(p, c("foo.o", paste0("foo", ext)))))
+cat("base: R CMD SHLIB foo.c stops with the compilers' text, nothing built: OK\n")
+p <- file.path(d, "shlib-rule"); dir.create(p)
+writeLines("void x(int *n) { *n = 1; }", file.path(p, "x.c"))
+writeLines(c("all: $(SHLIB) extra", "extra:", "\t@echo extra"), file.path(p, "Makevars"))
+r <- shlib(p, "x.c"); cat(r$out, sep = "\n")
+comp <- which(startsWith(r$out, "Compiling needs the r-zig compilers for R "))
+why <- which(grepl(paste0("x", ext, " needs make: Makevars has a rule or target line"), r$out, fixed = TRUE))
+bt <- which(startsWith(r$out, "Building packages needs the r-zig build tools for R "))
+stopifnot(r$status != 0L, length(comp) == 1L, length(why) == 1L, length(bt) == 1L, comp < why, why < bt,
+          any(startsWith(r$out, "  conda, pixi: pixi add r-zig-build-tools (or conda install r-zig-build-tools); r-zig-toolchain installs every group")),
+          !file.exists(file.path(p, c("x.o", paste0("x", ext)))))
+cat("base: R CMD SHLIB of a Makevars rule stops with both groups' texts, the compilers' first: OK\n")
 
 ## a configure script R runs needs both groups: both texts in one stop,
 ## the compilers' first, and the script does not run (PHASE4 open point

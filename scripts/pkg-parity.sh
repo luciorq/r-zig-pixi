@@ -29,8 +29,8 @@
 #     make's do: an absolute source would key zig's global cache per
 #     install [tests-T1, tests-T7]. The known
 #     differences are normalised away: on macOS the
-#     `-Wl,-install_name,<pkg>.so` only rzig passes (make's linker derives
-#     the same name from -o), on Windows the .def file's name (`tmp.def`
+#     `-Xlinker -install_name -Xlinker <pkg>.so` only rzig passes (make's
+#     linker derives the same name from -o), on Windows the .def file's name (`tmp.def`
 #     from nm | sed, `<pkg>.def` from `rzig def`), and the directories of
 #     the paths (the zig path's objects and output are in its build root,
 #     obj/<n>/ and <root>/<output>; Windows: rzig's
@@ -55,6 +55,14 @@
 #     build root still goes [preflight-PF-8]; two tier-1 packages
 #     installed at once by install.packages(Ncpus = 2), from a cold rzig
 #     cache, both build, with one build runner between them.
+# Then R CMD SHLIB (feat-shlib-rzig-build: the same hook, rzig build's
+# SHLIB mode), on the compile tree, for the shapes run-time compilation
+# takes (pkgbuild's probe, Rcpp's sourceCpp, cpp11, TMB in process,
+# Fortran, Fortran modules, argv's PKG_LIBS, an output in a subdirectory),
+# each with the default builder and with R_ZIG_PKG_BUILDER=make, compared
+# as the packages are; pkgload's compilation-database dry run (its
+# injected quote goes to make -n; rzig's own dry run parses the same),
+# R_ZIG_PKG_BUILDER=zig on a call that needs make, and two calls at once.
 # Then the tier-2 fixture (.github/devdocs/feat-zig-pkg-build/proto/
 # zighello, a zig package: `rzig build: tier 2`, `hello(21L)` is 42), its
 # twin with a URL dependency in src/build.zig.zon (refused: tier 2 builds
@@ -63,7 +71,8 @@
 # with a foreign CC in a user Makevars (`src/build.zig cannot be built by
 # make`, a failure, never the make path [preflight-PF-1]), the tier-3
 # negative (cli with a `configure` script falls through to make; with
-# R_ZIG_PKG_BUILDER=zig that is an error), all on the compile tree; and,
+# R_ZIG_PKG_BUILDER=zig that is an error; rzig build is asked once), all
+# on the compile tree; and,
 # on the base alone ($PREFIX: rzig and nothing else in
 # R_HOME/bin/toolchain), an install with no make on PATH (unix: a
 # directory holding only sh, zig and flang; Windows: System32 plus a copy
@@ -152,7 +161,7 @@ argv_of() {
     | grep -v -E -- '^zig-(cc|cxx|fc): (self|environment) |(^| )--version( |$)' \
     | sed -E 's/^(zig-(cc|cxx|fc): )ZIG_LIB_DIR=[^ ]+ /\1/' \
     | tr -d "'\"" \
-    | sed -E 's#(^| )(-[IL]|-Wl,([^ ,]*,)*(--?[A-Za-z-]+=)?|--?[A-Za-z-]+=)?[^ ]*[\\/]([^\\/ ]+)#\1\2\5#g; s/ -Wl,-install_name,[^ ]+//; s/[^ ]*\.def( |$)/X.def\1/' \
+    | sed -E 's#(^| )(-[IL]|-Wl,([^ ,]*,)*(--?[A-Za-z-]+=)?|--?[A-Za-z-]+=)?[^ ]*[\\/]([^\\/ ]+)#\1\2\5#g; s/ -Xlinker -install_name -Xlinker [^ ]+//; s/[^ ]*\.def( |$)/X.def\1/' \
     | LC_ALL=C sort
 }
 # The zig path's compiles in traced install log $1 that name their source
@@ -256,6 +265,244 @@ for l in zig make; do
 done
 cmp -s "$WORK/logs/smoke-zig.out" "$WORK/logs/smoke-make.out" || { diff "$WORK/logs/smoke-zig.out" "$WORK/logs/smoke-make.out" >&2; fail "the smoke outputs differ between the two libraries"; }
 echo "   smoke: $(grep -c . "$WORK/logs/smoke-zig.out") lines identical on both libraries"
+
+# --- R CMD SHLIB: through rzig build and through make -----------------------
+# R CMD SHLIB's call reaches rzig build through the same hook as R CMD
+# INSTALL's package (patch 0013's .rzig_build in .shlib_internal;
+# feat-shlib-rzig-build). Each shape is what a caller runs at run time:
+# pkgbuild's compiler probe, Rcpp's sourceCpp, cpp11's cpp_source, TMB's
+# in-process .shlib_internal with its precompiled library, inline's and
+# knitr's Fortran, a Fortran module used by a second file (rzig compiles
+# Fortran in OBJECTS order, Cc3) and argv's linker words over a Makevars'
+# PKG_LIBS. Each runs in a fresh directory twice, traced: with the
+# default builder and with R_ZIG_PKG_BUILDER=make. The rzig run's log
+# says `rzig build: R CMD SHLIB, tier 1` with no recipe make echoed, the
+# make run's no `rzig build:` line and make's compiles; rzig received the
+# same command lines on both paths (argv_of; the TMB shape's absolute -c
+# operand is there on both, so abs_sources does not apply); the exports
+# are identical; each library loads and returns its value; and the rzig
+# run left no object and no build root (.rzig.*) beside the sources: its
+# root was in that R's session directory, gone with it (parity-test.sh
+# checks the root itself) (Cc5).
+echo "== R CMD SHLIB: through rzig build and through make ($OS/$FLAVOR, the compile tree)"
+SH="$WORK/work/shlib"; rm -rf "$SH"; mkdir -p "$SH"
+# A path R reads, with forward slashes on Windows (C:/...); unchanged
+# elsewhere.
+mpath() { if [ "$OS" = windows ]; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
+# The shapes: sh_<shape> <dir> writes the fixture into <dir> and runs the
+# call there; R_ZIG_PKG_BUILDER and MAKEFLAGS come from sh_pair.
+sh_probe() { # pkgbuild's has_compiler(): foo.c beside other sources
+  printf 'void foo(int *bar) { *bar = 1; }\n' > "$1/foo.c"
+  printf 'this is not C (\n' > "$1/junk.c"
+  printf 'int x_old;\n' > "$1/x.cpp"
+  (cd "$1" && "$R_EXE" CMD SHLIB foo.c)
+}
+sh_sourcecpp() { # Rcpp's sourceCpp: -o, LinkingTo through CLINK_CPPFLAGS
+  mkdir -p "$1/inc"; printf '#define RZIG_SC 6\n' > "$1/inc/rzigsc.h"
+  printf '%s\n' '#include <vector>' '#include <R.h>' '#include <Rinternals.h>' '#include <rzigsc.h>' \
+    'extern "C" SEXP sc(void) { std::vector<int> v(RZIG_SC, 1); int n = 0; for (int x : v) n += x; return ScalarInteger(n); }' > "$1/file1.cpp"
+  (cd "$1" && CLINK_CPPFLAGS="-I\"$(mpath "$1/inc")\"" "$R_EXE" CMD SHLIB -o "sourceCpp_1.$SO" file1.cpp)
+}
+sh_cpp11() { # cpp11's cpp_source: absolute sources, --output=, src/Makevars
+  mkdir -p "$1/inc" "$1/src"; printf 'inline int c11v() { return 11; }\n' > "$1/inc/rzigc11.h"
+  printf '%s\n' 'CXX_STD = CXX11' "PKG_CPPFLAGS = -I'$(mpath "$1/inc")'" > "$1/src/Makevars"
+  printf '%s\n' '#include <rzigc11.h>' 'int c11a() { return c11v(); }' > "$1/src/a.cpp"
+  printf '%s\n' '#include <R.h>' '#include <Rinternals.h>' 'int c11a();' 'extern "C" SEXP c11(void) { return ScalarInteger(c11a() + 1); }' > "$1/src/cpp11.cpp"
+  (cd "$1/src" && "$R_EXE" CMD SHLIB "$(mpath "$1/src/a.cpp")" "$(mpath "$1/src/cpp11.cpp")" "--output=pkg.$SO")
+}
+sh_tmb() { # TMB's compile(): in process, its library's source elsewhere,
+  # the flags in a user Makevars (TMB.R)
+  mkdir -p "$1/inc" "$1/tmblib" "$1/model"; printf '#define RZIG_TMB 5\n' > "$1/inc/rzigtmb.h"
+  printf '%s\n' '#include <R.h>' '#include <Rinternals.h>' '#include <R_ext/Rdynload.h>' '#include <rzigtmb.h>' \
+    'int tmb_lib(void) { return RZIG_TMB; }' 'extern "C" void LIB_UNLOAD(DllInfo *dll) { (void) dll; }' > "$1/tmblib/lib.cpp"
+  printf '%s\n' '#include <R.h>' '#include <Rinternals.h>' 'int tmb_lib(void);' 'extern "C" SEXP tmbv(void) { return ScalarInteger(2 * tmb_lib()); }' > "$1/model/model.cpp"
+  printf '%s\n' "PKG_CPPFLAGS = -I\"$(mpath "$1/inc")\" -DLIB_UNLOAD=R_unload_model" 'PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS)' > "$1/Makevars.user"
+  (cd "$1/model" && R_MAKEVARS_USER="$(wpath "$1/Makevars.user")" "$RSCRIPT" --vanilla -e \
+    "stopifnot(tools:::.shlib_internal(c('model.cpp', '$(mpath "$1/tmblib/lib.cpp")')) == 0)")
+}
+fs_src() { printf '%s\n' '      subroutine fs(n)' '      integer n' '      n = 42' '      end' > "$1"; }
+sh_fortran() { # inline's and knitr's Fortran
+  fs_src "$1/fs.f"
+  (cd "$1" && "$R_EXE" CMD SHLIB -o "fs.$SO" fs.f)
+}
+sh_fclink() { # the same, linked by the Fortran compiler
+  fs_src "$1/fs.f"; printf 'USE_FC_TO_LINK =\n' > "$1/Makevars"
+  (cd "$1" && "$R_EXE" CMD SHLIB -o "fs.$SO" fs.f)
+}
+sh_fmod() { # a module, then its user: OBJECTS order (Cc3)
+  printf '%s\n' 'module m' '  implicit none' '  integer, parameter :: seven = 7' 'end module m' > "$1/mod_m.f90"
+  printf '%s\n' 'subroutine fmv(n)' '  use m' '  integer :: n' '  n = seven' 'end subroutine fmv' > "$1/use_m.f90"
+  (cd "$1" && "$R_EXE" CMD SHLIB -o "fm.$SO" mod_m.f90 use_m.f90)
+}
+sh_pkglibs() { # argv's linker words are make's command-line PKG_LIBS
+  printf 'PKG_LIBS = -lnosuchlib\n' > "$1/Makevars"
+  printf '%s\n' '#include <math.h>' 'void pv(double *x) { *x = sqrt(*x); }' > "$1/p.c"
+  (cd "$1" && "$R_EXE" CMD SHLIB p.c -lm)
+}
+sh_subdir() { # an output in a subdirectory (TMB's src/model.so): macOS
+  # compares the install names, which argv_of drops (Cc5)
+  mkdir -p "$1/sub"; printf 'void sd(int *x) { *x = 3; }\n' > "$1/sd.c"
+  (cd "$1" && "$R_EXE" CMD SHLIB -o "sub/sd.$SO" sd.c)
+}
+# sh_pair <shape> <library, relative to its directory> <R expression,
+# TRUE when the loaded library works>
+sh_pair() {
+  local shape="$1" out="$2" expr="$3" b d log n a lz lm v left
+  for b in zig make; do
+    d="$SH/$shape-$b"; log="$WORK/logs/shlib-$shape-$b.log"
+    rm -rf "$d"; mkdir -p "$d"
+    (if [ "$b" = make ]; then export R_ZIG_PKG_BUILDER=make; elif [ "$shape" = fmod ]; then export MAKEFLAGS=-j8; fi
+     "sh_$shape" "$d") > "$log" 2>&1 || { tail -30 "$log" >&2; fail "R CMD SHLIB, $shape: the $b run failed (logs/shlib-$shape-$b.log)"; }
+    test -f "$d/$out" || fail "R CMD SHLIB, $shape: the $b run made no $out"
+    v=$("$RSCRIPT" --vanilla -e "dyn.load('$(mpath "$d/$out")'); cat(isTRUE($expr), '\n')" 2>&1 | tail -1 | tr -d ' \r')
+    [ "$v" = TRUE ] || fail "R CMD SHLIB, $shape: the $b run's $out did not load or return its value ($v)"
+  done
+  lz="$WORK/logs/shlib-$shape-zig.log"; lm="$WORK/logs/shlib-$shape-make.log"
+  grep -q "rzig build: R CMD SHLIB, tier 1" "$lz" || { tail -20 "$lz" >&2; fail "R CMD SHLIB, $shape: the default builder did not report 'rzig build: R CMD SHLIB, tier 1' (logs/shlib-$shape-zig.log)"; }
+  [ -z "$(make_recipes "$lz")" ] || fail "R CMD SHLIB, $shape: a recipe make echoed in the rzig run's log"
+  if grep -q "rzig build:" "$lm"; then fail "R CMD SHLIB, $shape: R_ZIG_PKG_BUILDER=make still ran rzig build"; fi
+  [ -n "$(make_recipes "$lm")" ] || fail "R CMD SHLIB, $shape: no compile make echoed in the make run's log"
+  argv_of "$lz" > "$WORK/logs/shlib-$shape-argv-zig"; argv_of "$lm" > "$WORK/logs/shlib-$shape-argv-make"
+  a=$(wc -l < "$WORK/logs/shlib-$shape-argv-zig" | tr -d ' ')
+  [ "$a" -gt 1 ] && [ "$(wc -l < "$WORK/logs/shlib-$shape-argv-make" | tr -d ' ')" -gt 1 ] || fail "R CMD SHLIB, $shape: fewer than two rzig command lines in a run's log (RZIG_TRACE)"
+  cmp -s "$WORK/logs/shlib-$shape-argv-zig" "$WORK/logs/shlib-$shape-argv-make" || { diff "$WORK/logs/shlib-$shape-argv-zig" "$WORK/logs/shlib-$shape-argv-make" | head -20 >&2; fail "R CMD SHLIB, $shape: rzig's command lines differ between rzig build and make"; }
+  exports_of "$SH/$shape-zig/$out" > "$WORK/logs/shlib-$shape-exports-zig"; exports_of "$SH/$shape-make/$out" > "$WORK/logs/shlib-$shape-exports-make"
+  n=$(wc -l < "$WORK/logs/shlib-$shape-exports-zig" | tr -d ' ')
+  [ "$n" -gt 0 ] || fail "R CMD SHLIB, $shape: no exported symbol read from the rzig run's $out"
+  cmp -s "$WORK/logs/shlib-$shape-exports-zig" "$WORK/logs/shlib-$shape-exports-make" || { diff "$WORK/logs/shlib-$shape-exports-zig" "$WORK/logs/shlib-$shape-exports-make" | head -20 >&2; fail "R CMD SHLIB, $shape: the exported symbols differ between rzig build and make"; }
+  left="$(cd "$SH/$shape-zig" && find . -name '*.o' -o -name '.rzig*' | head -3)"
+  [ -z "$left" ] || fail "R CMD SHLIB, $shape: the rzig run left $left beside the sources"
+  printf '   %-10s %s exports and %s rzig command lines identical, loads on both paths, nothing left beside the sources\n' "$shape" "$n" "$a"
+}
+sh_pair probe "foo.$SO" '.C("foo", 0L)[[1]] == 1L'
+sh_pair sourcecpp "sourceCpp_1.$SO" '.Call("sc") == 6L'
+sh_pair cpp11 "src/pkg.$SO" '.Call("c11") == 12L'
+sh_pair tmb "model/model.$SO" '.Call("tmbv") == 10L && is.loaded("R_unload_model")'
+test -z "$(find "$SH/tmb-zig/tmblib" -name '*.o')" || fail "R CMD SHLIB, tmb: the rzig run wrote an object beside lib.cpp"
+sh_pair fortran "fs.$SO" '.Fortran("fs", n = 0L)$n == 42L'
+sh_pair fclink "fs.$SO" '.Fortran("fs", n = 0L)$n == 42L'
+grep -Eq 'zig-fc: .* (-shared|-dynamiclib) ' "$WORK/logs/shlib-fclink-zig.log" || fail "R CMD SHLIB, fclink: the USE_FC_TO_LINK link did not run zig-fc on the rzig path"
+sh_pair fmod "fm.$SO" '.Fortran("fmv", n = 0L)$n == 7L'
+sh_pair pkglibs "p.$SO" '.C("pv", 4)[[1]] == 2'
+sh_pair subdir "sub/sd.$SO" '.C("sd", 0L)[[1]] == 3L'
+if [ "$OS" = macos ]; then
+  iz="$(otool -D "$SH/subdir-zig/sub/sd.$SO" | sed -n 2p)"; im="$(otool -D "$SH/subdir-make/sub/sd.$SO" | sed -n 2p)"
+  [ -n "$iz" ] && [ "$iz" = "$im" ] || fail "R CMD SHLIB, subdir: the install names differ: rzig build '$iz', make '$im'"
+  echo "   subdir: the install name is '$iz' on both paths"
+fi
+runner_same "R CMD SHLIB"
+
+# pkgload's compilation database (Cg9, Cc2): its dry run with a single
+# quote injected into make's command line (compilation-db.R), on a tier-1
+# src/. rzig build declines it (the quote rewrites make's own command
+# line), so the output is make -n's, as with R_ZIG_PKG_BUILDER=make; and
+# pkgload's filter (lines that start with a compiler, the compilers' first
+# words from make's print-compilers) and its -c extraction agree, there
+# and on rzig's own dry run with nothing injected, whose link block (make
+# -n's form of shlib.mk's recipe) has no line that starts with a compiler.
+pl="$SH/pkgload"; rm -rf "$pl"; mkdir -p "$pl/inc"; tar -xzf "$(tarball_of digest)" -C "$pl"
+pls="$pl/digest/src"
+nsrc=$(cd "$pls" && ls *.c *.cpp 2> /dev/null | wc -l | tr -d ' ')
+plfiles=(); for f in $(cd "$pls" && ls *.c *.cpp 2> /dev/null); do plfiles+=("$(mpath "$pls/$f")"); done
+lt="-I\"$(mpath "$pl/inc")\""
+printf '%s\n' 'print-compilers:' '	@echo $(CC)' '	@echo $(CXX)' '	@echo $(CXX14)' '	@echo $(CXX17)' '	@echo $(CXX20)' '	@echo $(CXX23)' '	@echo $(FC)' '	@echo $(OBJC)' > "$pl/print-var.mk"
+mk="$RH/bin/toolchain/usr/bin/make"; [ -x "$mk" ] || mk="$(command -v make)"
+if [ "$OS" = windows ]; then mconf="$RH/etc/x64/Makeconf"; else mconf="$RH/etc/Makeconf"; fi
+# with the variables pkgload sets "just in case": Makeconf includes
+# $(R_SHARE_DIR)/make/vars.mk. Its R.home() has forward slashes on
+# Windows, R RHOME backslashes, which no make -n line starts with
+# (feat-shlib-rzig-build round 1, kappa)
+plrh="$("$R_EXE" RHOME | tr -d '\r' | tr '\\' /)"
+R_HOME="$plrh" R_INCLUDE_DIR="$plrh/include" R_SHARE_DIR="$plrh/share" "$mk" -s -f "$mconf" -f "$pl/print-var.mk" print-compilers | awk 'NF {print $1}' | sort -u > "$WORK/logs/shlib-pkgload-compilers"
+[ -s "$WORK/logs/shlib-pkgload-compilers" ] || fail "pkgload: make print-compilers printed no compiler"
+# pkgload's two steps on a dry run's output: the lines kept, then those of
+# them with a `-c <source>`; prints both counts
+pl_counts() {
+  tr -d '\r' < "$1" | awk -v f="$WORK/logs/shlib-pkgload-compilers" -v q="'" '
+    BEGIN { while ((getline c < f) > 0) cs[c] = 1; re = "-c +[" q "\"]?[^ ]+[.](cc|cpp|f90|f95|mm|[cfmM])" }
+    { for (c in cs) if (index($0, c) == 1) { k++; if ($0 ~ re) e++; break } }
+    END { print k + 0, e + 0 }'
+}
+for b in zig make; do
+  (cd "$pls" && if [ "$b" = make ]; then export R_ZIG_PKG_BUILDER=make; fi
+   CLINK_CPPFLAGS="$lt" "$R_EXE" CMD SHLIB --dry-run -o "digest.$SO" "' --always-make $lt IGNORED='" "${plfiles[@]}") \
+    > "$WORK/logs/shlib-pkgload-$b.out" 2> "$WORK/logs/shlib-pkgload-$b.err" || { cat "$WORK/logs/shlib-pkgload-$b.err" >&2; fail "pkgload: the injected dry run failed ($b)"; }
+done
+grep -q "needs make: a single quote in the linker words" "$WORK/logs/shlib-pkgload-zig.err" || { cat "$WORK/logs/shlib-pkgload-zig.err" >&2; fail "pkgload: rzig build did not decline the injected single quote"; }
+cmp -s "$WORK/logs/shlib-pkgload-zig.out" "$WORK/logs/shlib-pkgload-make.out" || { diff "$WORK/logs/shlib-pkgload-zig.out" "$WORK/logs/shlib-pkgload-make.out" | head -20 >&2; fail "pkgload: the injected dry run's output differs from make's"; }
+(cd "$pls" && "$R_EXE" CMD SHLIB --dry-run -o "digest.$SO" "${plfiles[@]}") > "$WORK/logs/shlib-pkgload-plain.out" 2> "$WORK/logs/shlib-pkgload-plain.err" ||
+  { cat "$WORK/logs/shlib-pkgload-plain.err" >&2; fail "pkgload: the plain dry run failed"; }
+if grep -q "needs make" "$WORK/logs/shlib-pkgload-plain.err"; then cat "$WORK/logs/shlib-pkgload-plain.err" >&2; fail "pkgload: rzig build declined the plain dry run"; fi
+grep -q '^if test "z' "$WORK/logs/shlib-pkgload-plain.out" || fail "pkgload: the plain dry run has no link block in make -n's form (rzig's printCommands)"
+ci="$(pl_counts "$WORK/logs/shlib-pkgload-make.out")"; cp="$(pl_counts "$WORK/logs/shlib-pkgload-plain.out")"
+[ "$ci" = "$nsrc $nsrc" ] || fail "pkgload: on make -n's output (injected), the filter and -c extraction give '$ci', not $nsrc $nsrc"
+[ "$cp" = "$nsrc $nsrc" ] || fail "pkgload: on rzig's dry run, the filter and -c extraction give '$cp', not $nsrc $nsrc"
+test -z "$(cd "$pls" && find . -name '*.o' -o -name "*.$SO" -o -name '.rzig*')" || fail "pkgload: a dry run built something in digest/src"
+echo "   pkgload: the injected dry run is make -n's ($nsrc compiles kept and extracted), rzig's plain dry run gives the same $nsrc"
+
+# R_ZIG_PKG_BUILDER=zig (Am8): a call that needs make is an error, and
+# nothing is built.
+zd="$SH/builder-zig"; rm -rf "$zd"; mkdir -p "$zd"
+printf 'void x(int *n) { *n = 1; }\n' > "$zd/x.c"
+printf '%s\n' 'all: $(SHLIB) extra' 'extra:' '	@echo extra' > "$zd/Makevars"
+if (cd "$zd" && R_ZIG_PKG_BUILDER=zig "$R_EXE" CMD SHLIB x.c) > "$WORK/logs/shlib-builder-zig.log" 2>&1; then fail "R_ZIG_PKG_BUILDER=zig: R CMD SHLIB of a Makevars with a rule succeeded"; fi
+grep -q "x.$SO needs make: Makevars has a rule or target line" "$WORK/logs/shlib-builder-zig.log" &&
+  tr -d '\r' < "$WORK/logs/shlib-builder-zig.log" | grep -x "ERROR: this shared object needs make, and R_ZIG_PKG_BUILDER is 'zig'" > /dev/null ||
+  { cat "$WORK/logs/shlib-builder-zig.log" >&2; fail "R_ZIG_PKG_BUILDER=zig: R CMD SHLIB failed without rzig's reason and R's error (logs/shlib-builder-zig.log)"; }
+test ! -e "$zd/x.$SO" && test ! -e "$zd/x.o" || fail "R_ZIG_PKG_BUILDER=zig: something was built in $zd"
+echo "   R_ZIG_PKG_BUILDER=zig: a Makevars rule is an error, with rzig's reason, nothing built"
+
+# Two calls at once in one directory, RZIG_KEEP_ROOT=1 (SZ H2, Cc12): each
+# has its own build root. A kept root is beside the output, outside R's
+# session directory, which R CMD SHLIB's R removes when it exits
+# [shlib-code-1], so both roots are in this one directory, where only
+# their unique names keep them apart [shlib-tests-2]. unix: forked in one
+# R (parallel::mclapply over .shlib_internal, as TMB calls it); Windows
+# (no fork): two R CMD SHLIB at once, whose traces name the two roots.
+cc="$SH/concurrent"; rm -rf "$cc"; mkdir -p "$cc"
+printf 'void ca(int *n) { *n = 1; }\n' > "$cc/a.c"; printf 'void cb(int *n) { *n = 2; }\n' > "$cc/b.c"
+if [ "$OS" = windows ]; then
+  (cd "$cc" && RZIG_KEEP_ROOT=1 "$R_EXE" CMD SHLIB -o "a.$SO" a.c > "$WORK/logs/shlib-conc-a.log" 2>&1) & ca=$!
+  (cd "$cc" && RZIG_KEEP_ROOT=1 "$R_EXE" CMD SHLIB -o "b.$SO" b.c > "$WORK/logs/shlib-conc-b.log" 2>&1) & cb=$!
+  wait "$ca" && wait "$cb" || fail "two R CMD SHLIB at once: one failed (logs/shlib-conc-a.log, -b.log)"
+  r1="$(tr -d '\r' < "$WORK/logs/shlib-conc-a.log" | sed -n 's/^rzig build: R CMD SHLIB, tier 1, root //p')"
+  r2="$(tr -d '\r' < "$WORK/logs/shlib-conc-b.log" | sed -n 's/^rzig build: R CMD SHLIB, tier 1, root //p')"
+  [ -n "$r1" ] && [ -n "$r2" ] && [ "${r1%/*}" = "${r2%/*}" ] && [ "${r1##*/}" != "${r2##*/}" ] &&
+    [ -f "$r1/plan.zon" ] && [ -f "$r2/plan.zon" ] || fail "two R CMD SHLIB at once: not two build roots in one directory ('$r1', '$r2')"
+  rm -rf "$r1" "$r2"
+else
+  (cd "$cc" && RZIG_KEEP_ROOT=1 "$RSCRIPT" --vanilla -e '
+    st <- unlist(parallel::mclapply(c("a", "b"), function(n) tools:::.shlib_internal(c("-o", paste0(n, ".so"), paste0(n, ".c"))), mc.cores = 2))
+    roots <- list.files(".", pattern = "^[.]rzig[.][0-9a-f]{16}$", all.files = TRUE, full.names = TRUE)
+    cat("status", st, "roots", length(roots), "plans", sum(file.exists(file.path(roots, "plan.zon"))), "\n")
+    stopifnot(identical(st, c(0L, 0L)), length(roots) == 2L, all(file.exists(file.path(roots, "plan.zon"))))
+    unlink(roots, recursive = TRUE)') > "$WORK/logs/shlib-conc.log" 2>&1 ||
+    { tail -20 "$WORK/logs/shlib-conc.log" >&2; fail "two .shlib_internal at once (mclapply): not both built with a root each (logs/shlib-conc.log)"; }
+fi
+v=$("$RSCRIPT" --vanilla -e "dyn.load('$(mpath "$cc/a.$SO")'); dyn.load('$(mpath "$cc/b.$SO")'); cat(.C('ca', 0L)[[1]] + .C('cb', 0L)[[1]], '\n')" 2>&1 | tail -1 | tr -d ' \r')
+[ "$v" = 3 ] || fail "two R CMD SHLIB at once: the libraries did not load or return their values ($v)"
+test -z "$(cd "$cc" && find . -name '*.o' -o -name '.rzig*')" || fail "two R CMD SHLIB at once: objects or a build root left beside the sources"
+echo "   two calls at once in one directory: both built and load, two build roots"
+# Windows, H8 (Cc10): a package whose Makevars.win sets PKG_FCFLAGS, and
+# no file named Makevars. R passes P_FCFLAGS='$(PKG_FCFLAGS)' only when
+# "Makevars" exists (.shlib_internal's literal test), so make compiles the
+# .f90 without it; rzig build follows the same test, and both paths' command
+# lines are identical.
+if [ "$OS" = windows ]; then
+  h8="$SH/h8/rzigh8"; rm -rf "$SH/h8"; mkdir -p "$h8/src" "$SH/h8/lib-zig" "$SH/h8/lib-make"
+  printf 'Package: rzigh8\nVersion: 0.1\nTitle: H8\nDescription: PKG_FCFLAGS in Makevars.win alone.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\n' > "$h8/DESCRIPTION"
+  printf 'useDynLib(rzigh8)\n' > "$h8/NAMESPACE"
+  printf '%s\n' 'subroutine h8v(n)' '  integer :: n' '  n = 8' 'end subroutine h8v' > "$h8/src/h8.f90"
+  printf 'PKG_FCFLAGS = -fimplicit-none\n' > "$h8/src/Makevars.win"
+  install_pkg "$SH/h8/lib-zig" "$h8" "h8-zig" > /dev/null || { tail -20 "$WORK/logs/h8-zig.log" >&2; fail "H8: rzigh8 failed through rzig build"; }
+  R_ZIG_PKG_BUILDER=make install_pkg "$SH/h8/lib-make" "$h8" "h8-make" > /dev/null || { tail -20 "$WORK/logs/h8-make.log" >&2; fail "H8: rzigh8 failed through make"; }
+  grep -q "rzig build: tier 1" "$WORK/logs/h8-zig.log" || fail "H8: rzigh8 did not build through rzig build (logs/h8-zig.log)"
+  argv_of "$WORK/logs/h8-zig.log" > "$WORK/logs/h8-argv-zig"; argv_of "$WORK/logs/h8-make.log" > "$WORK/logs/h8-argv-make"
+  [ "$(wc -l < "$WORK/logs/h8-argv-zig" | tr -d ' ')" -gt 1 ] || fail "H8: no rzig command lines in the rzig build log"
+  cmp -s "$WORK/logs/h8-argv-zig" "$WORK/logs/h8-argv-make" || { diff "$WORK/logs/h8-argv-zig" "$WORK/logs/h8-argv-make" | head -20 >&2; fail "H8: the command lines differ between rzig build and make"; }
+  if grep -q -- "-fimplicit-none" "$WORK/logs/h8-argv-zig"; then fail "H8: rzig build passed Makevars.win's PKG_FCFLAGS with no Makevars"; fi
+  echo "   H8: Makevars.win's PKG_FCFLAGS with no Makevars, the same command lines on both paths"
+fi
 
 # --- the caches: nothing per install outlives it ----------------------------
 echo "== caches: one build runner for every tier-1 install; a kept build root; a second install of a tarball adds nothing to zig's global cache; ZIG_LOCAL_CACHE_DIR; two installs at once"
@@ -394,11 +641,15 @@ printf '#!/bin/sh\nexit 0\n' > "$WORK/work/neg/cli/$cfg"; chmod +x "$WORK/work/n
 rm -rf "$WORK/work/lib-neg"; mkdir -p "$WORK/work/lib-neg"
 install_pkg "$WORK/work/lib-neg" "$WORK/work/neg/cli" "neg-auto" --no-test-load > /dev/null || { tail -20 "$WORK/logs/neg-auto.log" >&2; fail "tier 3: the fall-through to make failed"; }
 grep -q "rzig build: cli needs make: a $cfg script" "$WORK/logs/neg-auto.log" || fail "tier 3: the log does not say why rzig build declined (logs/neg-auto.log)"
+# asked once (SZ H1): the one hook in .shlib_internal asks for the package,
+# and the make path that follows does not ask again for R CMD SHLIB's files
+[ "$(grep -c "rzig build: cli needs make: " "$WORK/logs/neg-auto.log")" = 1 ] || fail "tier 3: rzig build was asked more than once for cli (logs/neg-auto.log)"
+if grep -q "rzig build: R CMD SHLIB" "$WORK/logs/neg-auto.log"; then fail "tier 3: rzig build's SHLIB mode ran for cli's make path (logs/neg-auto.log)"; fi
 test -f "$WORK/work/lib-neg/cli/$LIBSUB/cli.$SO" || fail "tier 3: make did not build cli"
 rm -rf "$WORK/work/lib-neg"; mkdir -p "$WORK/work/lib-neg"
 if R_ZIG_PKG_BUILDER=zig install_pkg "$WORK/work/lib-neg" "$WORK/work/neg/cli" "neg-zig" --no-test-load > /dev/null; then fail "tier 3: R_ZIG_PKG_BUILDER=zig installed a package that needs make"; fi
 grep -q "needs make, and R_ZIG_PKG_BUILDER is 'zig'" "$WORK/logs/neg-zig.log" || { tail -5 "$WORK/logs/neg-zig.log" >&2; fail "tier 3: R_ZIG_PKG_BUILDER=zig failed without the expected message"; }
-echo "   configure: falls through to make under auto, refused under zig"
+echo "   configure: falls through to make under auto, rzig build asked once, refused under zig"
 
 # --- the base alone, no make (unix: sh, zig and flang only) -----------------
 echo "== the base alone ($BASE_RH), no make on PATH"
@@ -427,4 +678,4 @@ grep -q "rzig build: tier 1" "$WORK/logs/nomake-$pkg.log" || fail "$pkg on the b
 test -f "$WORK/lib-nomake/$pkg/$LIBSUB/$pkg.$SO" || fail "no $pkg.$SO from the no-make install"
 echo "   $pkg: installed on the base in $((e - s))s with PATH = $(ls "$NOMAKE" | tr '\n' ' ')$([ "$OS" = windows ] && echo '+ System32 (zig through ZIG_BIN)')"
 
-echo "== pkg-parity verified ($OS/$FLAVOR): $PKGS through rzig build match make on the compile tree; tier 2 (its URL refusal, MAKEFLAGS, a plan that needs make), tier 3, the caches and the no-make install on the base behave"
+echo "== pkg-parity verified ($OS/$FLAVOR): $PKGS through rzig build match make on the compile tree; R CMD SHLIB's shapes through rzig build match make, pkgload's dry run, R_ZIG_PKG_BUILDER=zig and two calls at once; tier 2 (its URL refusal, MAKEFLAGS, a plan that needs make), tier 3, the caches and the no-make install on the base behave"

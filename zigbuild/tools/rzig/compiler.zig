@@ -60,6 +60,20 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     args = try flang_rt.resolve(ctx, args);
     args = try archives.rename(ctx, args);
     if (ctx.os == .windows) args = try windows.objSuffix(ctx, args);
+    // zig cc --version on macOS writes an empty a.o in the working
+    // directory (conda-forge's zig and upstream 0.16.0; linux's writes
+    // none). R's `make compilers` and rzig build's "using C compiler" line
+    // left it beside R CMD SHLIB's sources, where on make's path it stood
+    // for a source named a.c or a.cpp, and Rcpp's macOS OpenMP plugin in
+    // its caller's directory (feat-shlib-rzig-build round 1, omicron). A
+    // version query compiles nothing: with -c zig prints the same text
+    // and writes nothing.
+    if (ctx.os == .macos and !cmdline.compileOnly(args)) {
+        for (args) |x| if (mem.eql(u8, x, "--version")) {
+            args = try mem.concat(a, []const u8, &.{ args, &.{"-c"} });
+            break;
+        };
+    }
     // the caller's arguments decide these, not a directory's name
     const soname = try sonameFlag(ctx, args);
     const undefined_version = ctx.os == .linux and !cmdline.compileOnly(args) and cmdline.anyContains(args, "-version-script");
@@ -692,6 +706,11 @@ test "macOS: target, SONAME, -l de-duplicated with the environment's, SDK -L las
     try expectArgs(
         &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", l, rp, inc, "-L/SDK/usr/lib" },
         try argv(c, .c, &.{ "-dynamiclib", "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", "-lomp" }),
+    );
+    // a version query: -c, so zig writes no a.o, and no link flags
+    try expectArgs(
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "--version", "-c", inc },
+        try argv(c, .c, &.{"--version"}),
     );
     // a standalone tree: its -L before the SDK's, so its libz wins
     c.self_exe = try tree(&f, "tree", false, false);

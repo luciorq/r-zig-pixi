@@ -47,7 +47,7 @@ on:
         type: boolean
         default: false
       builder:
-        description: 'R_ZIG_PKG_BUILDER: auto, R CMD INSTALL builds through rzig build where the package qualifies (patch 0013); make, the make path for every package (a make reference)'
+        description: 'R_ZIG_PKG_BUILDER: auto, R CMD INSTALL and R CMD SHLIB build through rzig build where the call qualifies (patch 0013); make, the make path for every package and shared object (a make reference)'
         type: choice
         options: [auto, make]
         default: auto

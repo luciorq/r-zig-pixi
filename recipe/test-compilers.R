@@ -3,7 +3,11 @@
 ## package that has no configure script and no make rules, which rzig
 ## build compiles with zig and flang alone (feat-zig-pkg-build, patch
 ## 0013). One that needs make stops in the preflight (patch 0009), naming
-## r-zig-build-tools.
+## r-zig-build-tools. R CMD SHLIB of such code needs no make either
+## (feat-shlib-rzig-build: patch 0013's one hook, rzig build --shlib):
+## pkgbuild's probe, Rcpp's sourceCpp, inline's Fortran and cpp11's
+## cpp_source shapes build and load; one with a Makevars rule stops,
+## naming r-zig-build-tools.
 windows <- .Platform$OS.type == "windows"
 d <- tempfile("rzig-"); dir.create(d)
 ## the caller's settings (pixi run, conda run, wheel-test; rattler-build's
@@ -132,6 +136,74 @@ stopifnot(r$status != 0L,
           !any(grepl("is installed in R's environment", r$out, fixed = TRUE)),
           !dir.exists(file.path(lib, "rzigmk")))
 cat("compilers: a package that needs make stops, naming r-zig-build-tools: OK\n")
+
+## R CMD SHLIB, the run-time compiles (feat-shlib-rzig-build): each in a
+## fresh directory, through R CMD SHLIB (Rcmd.exe on Windows), with no
+## make on PATH, so rzig build builds it; then the library loads.
+## shlib(<dir>, <arguments>) runs it there
+ext <- .Platform$dynlib.ext
+shlib <- function(dir, args) {
+    owd <- setwd(dir); on.exit(setwd(owd))
+    run_to(file.path(R.home("bin"), if (windows) "Rcmd.exe" else "R"), c(if (!windows) "CMD", "SHLIB", args))
+}
+shlib_ok <- function(r, what) if (r$status != 0L) { cat(r$out, sep = "\n"); stop(what, ": R CMD SHLIB failed") }
+fresh <- function(name) { p <- file.path(d, name); dir.create(p); normalizePath(p, "/") }
+## pkgbuild's has_compiler(): foo.c beside a source that does not compile
+p <- fresh("shlib-probe")
+writeLines("void foo(int *bar) { *bar = 1; }", file.path(p, "foo.c"))
+writeLines("this is not C (", file.path(p, "junk.c"))
+shlib_ok(shlib(p, "foo.c"), "the probe")
+dyn.load(file.path(p, paste0("foo", ext)))
+stopifnot(.C("foo", 0L)[[1]] == 1L, !file.exists(file.path(p, "foo.o")))
+cat("compilers: R CMD SHLIB foo.c (pkgbuild's probe), no make: OK\n")
+## Rcpp's sourceCpp: -o, a header through CLINK_CPPFLAGS
+p <- fresh("shlib-cxx"); dir.create(file.path(p, "inc"))
+writeLines("#define RZIG_SC 6", file.path(p, "inc", "rzigsc.h"))
+writeLines(c("#include <vector>", "#include <R.h>", "#include <Rinternals.h>", "#include <rzigsc.h>",
+             'extern "C" SEXP sc(void) { std::vector<int> v(RZIG_SC, 1); int n = 0; for (int x : v) n += x; return ScalarInteger(n); }'),
+           file.path(p, "file1.cpp"))
+Sys.setenv(CLINK_CPPFLAGS = paste0('-I"', file.path(p, "inc"), '"'))
+r <- shlib(p, c("-o", paste0("sourceCpp_1", ext), "file1.cpp"))
+Sys.unsetenv("CLINK_CPPFLAGS")
+shlib_ok(r, "sourceCpp's shape")
+dyn.load(file.path(p, paste0("sourceCpp_1", ext)))
+stopifnot(.Call("sc") == 6L)
+cat("compilers: R CMD SHLIB -o sourceCpp_1", ext, " (Rcpp's sourceCpp, C++), no make: OK\n", sep = "")
+## inline's and knitr's Fortran, with the env's flang
+p <- fresh("shlib-fortran")
+writeLines(c("      subroutine fw(n, r)", "      integer n, r", "      character(len=12) buf",
+             "      write(buf,'(i0)') n", "      read(buf,'(i12)') r", "      end"), file.path(p, "fs.f"))
+shlib_ok(shlib(p, c("-o", paste0("fs", ext), "fs.f")), "the Fortran shape")
+dyn.load(file.path(p, paste0("fs", ext)))
+stopifnot(.Fortran("fw", 42L, r = 0L)$r == 42L)
+cat("compilers: R CMD SHLIB of a Fortran file, no make: OK\n")
+## cpp11's cpp_source: a Makevars in the working directory, absolute
+## sources, --output=
+p <- fresh("shlib-cpp11"); dir.create(file.path(p, "inc")); dir.create(file.path(p, "src"))
+writeLines("inline int c11v() { return 11; }", file.path(p, "inc", "rzigc11.h"))
+writeLines(c("CXX_STD = CXX11", paste0("PKG_CPPFLAGS = -I'", file.path(p, "inc"), "'")), file.path(p, "src", "Makevars"))
+writeLines(c("#include <rzigc11.h>", "int c11a() { return c11v(); }"), file.path(p, "src", "a.cpp"))
+writeLines(c("#include <R.h>", "#include <Rinternals.h>", "int c11a();",
+             'extern "C" SEXP c11(void) { return ScalarInteger(c11a() + 1); }'), file.path(p, "src", "cpp11.cpp"))
+shlib_ok(shlib(file.path(p, "src"), c(file.path(p, "src", c("a.cpp", "cpp11.cpp")), paste0("--output=pkg", ext))),
+         "cpp11's shape")
+dyn.load(file.path(p, "src", paste0("pkg", ext)))
+stopifnot(.Call("c11") == 12L)
+cat("compilers: R CMD SHLIB of cpp11's shape (absolute sources, --output=, a Makevars), no make: OK\n")
+## a Makevars rule needs make: rzig's reason and the build tools' text,
+## naming r-zig-build-tools, and nothing built
+p <- fresh("shlib-rule")
+writeLines("void x(int *n) { *n = 1; }", file.path(p, "x.c"))
+writeLines(c("all: $(SHLIB) extra", "extra:", "\t@echo extra"), file.path(p, "Makevars"))
+r <- shlib(p, "x.c"); cat(r$out, sep = "\n")
+stopifnot(r$status != 0L,
+          any(grepl(paste0("x", ext, " needs make: Makevars has a rule or target line"), r$out, fixed = TRUE)),
+          any(startsWith(r$out, "Building packages needs the r-zig build tools for R ")),
+          any(grepl("pixi add r-zig-build-tools (or conda install r-zig-build-tools)", r$out, fixed = TRUE)),
+          ## no make where r-zig-build-tools would put it (open point I a)
+          !any(grepl("is installed in R's environment", r$out, fixed = TRUE)),
+          !file.exists(file.path(p, c("x.o", paste0("x", ext)))))
+cat("compilers: R CMD SHLIB of a Makevars rule stops, naming r-zig-build-tools: OK\n")
 
 ## R CMD config evaluates Makeconf through make: patch 0010 stops first
 ## with rzig's text. Windows: rcmdfn.c runs `sh config.sh`, so with no sh
