@@ -265,7 +265,13 @@ outputs:
         - liblzma-devel
         - pcre2
         - libcurl
-        - icu
+        # <79 while conda-forge's zig 0.16 needs libxml2-16, which is built
+        # against icu 78 only: with icu 79 in this host (79.1, 2026-10-22)
+        # r-zig-slim's run export becomes icu >=79.1,<80, and no test env
+        # that holds r-zig-slim and zig (r-zig-toolchain's, for one) can
+        # solve. Lift it, with a build-number bump, when conda-forge's
+        # libxml2-16 is built against icu 79.
+        - icu <79
         - tzdata
         # <1.26 while conda-forge's libgdal-core needs <1.26: libdeflate's
         # run export pins r-zig-slim to the host's minor version, and builds
