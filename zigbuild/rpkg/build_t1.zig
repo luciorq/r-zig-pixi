@@ -157,7 +157,7 @@ fn isFortran(lang: []const u8) bool {
 }
 
 /// The one link: `SHLIB_LINK -o out [def] objects ALL_LIBS`, as shlib.mk
-/// and winshlib.mk write it.
+/// and winshlib.mk write it, the objects in a response file (objectsFile).
 pub fn link(b: *std.Build, plan: *const Plan, objs: []const std.Build.LazyPath) std.Build.LazyPath {
     const run = b.addSystemCommand(&.{b.pathJoin(&.{ plan.toolchain, plan.link_driver })});
     run.setName(b.fmt("link {s}", .{plan.output}));
@@ -166,6 +166,7 @@ pub fn link(b: *std.Build, plan: *const Plan, objs: []const std.Build.LazyPath) 
     run.addArgs(plan.link);
     run.addArg("-o");
     const out = outputFile(b, run, b.fmt("{s}/{s}", .{ plan.root, plan.output }));
+    const rsp = objectsFile(b, plan, objs);
     if (plan.win_def.len > 0) {
         // relative to srcdir too, as winshlib.mk names it (compileAll)
         run.addArg(plan.win_def);
@@ -174,13 +175,100 @@ pub fn link(b: *std.Build, plan: *const Plan, objs: []const std.Build.LazyPath) 
         // winshlib.mk's tmp.def, from the objects' symbol tables
         const def = b.addSystemCommand(&.{ plan.rzig, "def", "-o" });
         def.setName(b.fmt("def {s}", .{plan.output}));
+        def.setCwd(.{ .cwd_relative = plan.srcdir });
         const def_file = outputFile(b, def, b.fmt("{s}/{s}.def", .{ plan.root, std.fs.path.stem(plan.output) }));
-        for (objs) |o| def.addFileArg(o);
+        addObjects(b, def, objs, rsp);
         run.addFileArg(def_file);
     }
-    for (objs) |o| run.addFileArg(o);
+    addObjects(b, run, objs, rsp);
     run.addArgs(plan.libs);
     return out;
+}
+
+/// The objects on `run`'s command line: objs[0..first] by name, then
+/// `@<root>/objects.rsp` for the rest, each still an input of the step
+/// (addFileInput), so zig build runs the compiles first and tracks the
+/// objects as before; without a response file, every object by name.
+fn addObjects(b: *std.Build, run: *std.Build.Step.Run, objs: []const std.Build.LazyPath, rsp: ?Rsp) void {
+    const first = if (rsp) |r| r.first else objs.len;
+    for (objs[0..first]) |o| run.addFileArg(o);
+    const r = rsp orelse return;
+    run.addArg(b.fmt("@{s}", .{r.path}));
+    run.addFileInput(.{ .cwd_relative = r.path });
+    for (objs[first..]) |o| run.addFileInput(o);
+}
+
+/// <root>/objects.rsp, and the first object it names.
+const Rsp = struct { path: []const u8, first: usize };
+
+/// The objects' response file, for `rzig def` and the link
+/// (feat-win-link-fixes item 1): every object on their command lines made
+/// a package with a few hundred objects fail on Windows, whose command
+/// lines end at 32,767 characters (libgeos with its unix Makevars, about
+/// 390 objects: a 42,743-character `rzig def`, NameTooLong). zig cc reads
+/// `@file` with both zigs, rzig def and rzig's other readers too
+/// (zigbuild/tools/rzig/response.zig). Written here, at build() time:
+/// every tier-1 object, and tier 2's C and C++ ones, has its path now
+/// (outputFile). One code path on every OS.
+///
+/// Each object is named relative to srcdir, where both steps run (`./`
+/// first unless it starts with `.`, so never with `-`: rspName), `/`
+/// between its parts, one per line in double quotes, as zig reads them
+/// (response.zig: std.process.Args.IteratorGeneral). Relative, because
+/// the file cannot hold a `'` (zig's reader pairs it with `"`), and a
+/// directory every name shares, as C:/Users/O'Brien/..., drops out. A
+/// name that would still hold a `'`, `"` or `\` (legal in a POSIX name)
+/// means no response file: every object on the command line, as before
+/// (only more than 32,767 characters of objects then fail).
+///
+/// Objects whose path zig build knows only once it has built them (tier
+/// 2's zig object, rpkg.zig) stay on the command line, before `@`, as
+/// they come first in objs; any other order means no response file.
+fn objectsFile(b: *std.Build, plan: *const Plan, objs: []const std.Build.LazyPath) ?Rsp {
+    var first: usize = 0;
+    while (first < objs.len and knownPath(objs[first]) == null) first += 1;
+    if (first == objs.len) return null;
+    var names = std.ArrayList([]const u8).empty;
+    for (objs[first..]) |o| {
+        const p = knownPath(o) orelse return null;
+        names.append(b.allocator, rspName(b.allocator, b.graph.cache.cwd, &b.graph.environ_map, plan.srcdir, p) catch @panic("OOM")) catch @panic("OOM");
+    }
+    const text = (rspText(b.allocator, names.items) catch @panic("OOM")) orelse return null;
+    const path = b.fmt("{s}/objects.rsp", .{plan.root});
+    std.Io.Dir.cwd().writeFile(b.graph.io, .{ .sub_path = path, .data = text }) catch @panic("cannot write the build root's objects.rsp");
+    return .{ .path = path, .first = first };
+}
+
+/// The path of an object that outputFile names, else null.
+fn knownPath(o: std.Build.LazyPath) ?[]const u8 {
+    return switch (o) {
+        .generated => |g| if (g.up == 0 and g.sub_path.len == 0) g.file.path else null,
+        else => null,
+    };
+}
+
+/// `obj` relative to `srcdir` (std.fs.path.relative, as std.Build.Step.Run
+/// makes a file argument relative to a step's cwd), with `/` on Windows,
+/// and `./` before a name that does not start with `.`: as Run's
+/// convertPathArg, so a name never starts with `-`, which zig cc would
+/// take for an option (a build root under src/-tmp: `Unknown Clang
+/// option`). On another Windows drive: the absolute path.
+pub fn rspName(gpa: std.mem.Allocator, cwd: []const u8, env: ?*const std.process.Environ.Map, srcdir: []const u8, obj: []const u8) ![]const u8 {
+    var rel = try std.fs.path.relative(gpa, cwd, env, srcdir, obj);
+    if (!std.fs.path.isAbsolute(rel) and !std.mem.startsWith(u8, rel, ".")) rel = try std.fs.path.join(gpa, &.{ ".", rel });
+    if (windows) std.mem.replaceScalar(u8, rel, '\\', '/');
+    return rel;
+}
+
+/// The response file's text: `"<name>"` and a newline per name; null when
+/// a name holds a `'`, `"` or `\`, which the file cannot give back.
+pub fn rspText(gpa: std.mem.Allocator, names: []const []const u8) !?[]const u8 {
+    var out = std.ArrayList(u8).empty;
+    for (names) |n| {
+        if (std.mem.findAny(u8, n, "'\"\\") != null) return null;
+        try out.print(gpa, "\"{s}\"\n", .{n});
+    }
+    return out.items;
 }
 
 /// "libs" or "libs/x64" under the prefix; "" (rzig build --flat) the
@@ -194,4 +282,64 @@ pub fn build(b: *std.Build) void {
     if (plan.sources.len == 0) return; // make: `if test "z$(OBJECTS)" != "z"`
     const lib = link(b, plan, compileAll(b, plan));
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(lib, installDir(plan.libs_dir), plan.output).step);
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests: zigbuild/tools/rzig/build.zig's test step runs them with
+// rzig's (`zig build --build-file zigbuild/tools/rzig/build.zig test`).
+
+const testing = std.testing;
+
+/// zig cc's reader of response files (zigbuild/tools/rzig/response.zig).
+const Words = std.process.Args.IteratorGeneral(.{ .comments = true, .single_quotes = true });
+
+fn expectWords(text: []const u8, want: []const []const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var it = try Words.init(arena.allocator(), text);
+    for (want) |w| try testing.expectEqualStrings(w, it.next() orelse return error.TestExpectedEqual);
+    try testing.expect(it.next() == null);
+}
+
+test "rspText: every name back from zig's reader, LF or CRLF; none for a ', \" or \\" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // relative names as objectsFile writes them: a space, UTF-8, a `#` at
+    // a part's start and at the name's, an `@`, CRLF made of the LF text
+    const names = [_][]const u8{ "../../tmp/RtmpX/R.INSTALL1/.rzig/obj/0/a.o", "../rz wf ção/obj/1/b c.o", "../#x/obj/2/d.o", "#e.o", "../@f/obj/3/g.o", "C:/Users/a b/obj/4/h.o" };
+    const text = (try rspText(a, &names)).?;
+    try testing.expectEqualStrings("\"../../tmp/RtmpX/R.INSTALL1/.rzig/obj/0/a.o\"\n", text[0 .. std.mem.indexOfScalar(u8, text, '\n').? + 1]);
+    try expectWords(text, &names);
+    const crlf = try std.mem.replaceOwned(u8, a, text, "\n", "\r\n");
+    try expectWords(crlf, &names);
+    try expectWords((try rspText(a, &.{})).?, &.{});
+    // what the file cannot hold: no file, the objects on the command line
+    for ([_][]const u8{ "../O'Brien/obj/0/a.o", "a\"b.o", "dir\\a.o" }) |bad| {
+        try testing.expect(try rspText(a, &.{ "ok.o", bad }) == null);
+    }
+}
+
+test "rspName: relative to srcdir, wherever the root is; never a leading -" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    if (windows) {
+        // `/` between the parts; a `'` the two share drops out; another drive: absolute
+        try testing.expectEqualStrings("../.rzig/obj/0/a.o", try rspName(a, "C:\\w", null, "C:\\Users\\O'Brien\\pkg\\src", "C:/Users/O'Brien/pkg/.rzig/obj/0/a.o"));
+        try testing.expectEqualStrings("../../Temp/RtmpX/.rzig.0123/obj/0/f.o", try rspName(a, "C:\\w", null, "C:\\Users\\me\\proj\\src", "C:/Users/me/Temp/RtmpX/.rzig.0123/obj/0/f.o"));
+        try testing.expectEqualStrings("D:/t/.rzig/obj/0/a.o", try rspName(a, "C:\\w", null, "C:\\pkg\\src", "D:/t/.rzig/obj/0/a.o"));
+        try testing.expectEqualStrings("./-tmp/.rzig/obj/0/a.o", try rspName(a, "C:\\w", null, "C:\\pkg\\src", "C:/pkg/src/-tmp/.rzig/obj/0/a.o"));
+    } else {
+        try testing.expectEqualStrings("../.rzig/obj/0/a.o", try rspName(a, "/w", null, "/home/O'Brien/pkg/src", "/home/O'Brien/pkg/.rzig/obj/0/a.o"));
+        try testing.expectEqualStrings("../../tmp/RtmpX/.rzig.0123/obj/0/f.o", try rspName(a, "/w", null, "/home/me/src", "/home/tmp/RtmpX/.rzig.0123/obj/0/f.o"));
+        // a relative srcdir, from the build runner's cwd
+        try testing.expectEqualStrings("../.rzig/obj/0/a.o", try rspName(a, "/home/me", null, "pkg/src", "/home/me/pkg/.rzig/obj/0/a.o"));
+        // a `'` the two do not share: kept, so no response file (rspText)
+        try testing.expectEqualStrings("../O'Brien/t/obj/0/a.o", try rspName(a, "/w", null, "/home/me", "/home/O'Brien/t/obj/0/a.o"));
+        // a root below srcdir: `./` first, so `-tmp` is not an option; a `.` name as it is
+        try testing.expectEqualStrings("./-tmp/RtmpX/.rzig.0123/obj/0/f.o", try rspName(a, "/w", null, "/home/me/src", "/home/me/src/-tmp/RtmpX/.rzig.0123/obj/0/f.o"));
+        try testing.expectEqualStrings("./obj/0/a.o", try rspName(a, "/w", null, "/home/me/src", "/home/me/src/obj/0/a.o"));
+        try testing.expectEqualStrings(".rzig/obj/0/a.o", try rspName(a, "/w", null, "/home/me/src", "/home/me/src/.rzig/obj/0/a.o"));
+    }
 }

@@ -2,7 +2,7 @@
 
 conda-forge's m2 packages (MSYS2's binary packages, repackaged by
 m2-binary-packages-feedstock) ship no `info/licenses/`. The Windows
-build-tools group copies files of 17 of them into
+build-tools group copies files of 18 of them into
 `R_HOME/bin/toolchain/usr/bin` (zigbuild/toolchain/build.zig, the `usr`
 directory), and every group directory carries its packages' licence texts
 in `LICENSES/<package>/`. For a package whose `info/licenses/` is missing or
@@ -49,6 +49,7 @@ build until its directory is taken again ("... does not hold its texts").
 | m2-gawk | gawk-5.3.2.tar.gz | COPYING |
 | m2-which | which-2.23.tar.gz | COPYING |
 | m2-findutils | findutils-4.9.0.tar.xz | COPYING |
+| m2-patch | patch-2.7.6.tar.xz | COPYING |
 | m2-msys2-runtime | none: a bare git clone of newlib-cygwin (`msys2-runtime/`); `git --git-dir=msys2-runtime show cygwin-<ver>:<file>`, the PKGBUILD's tag | winsup/CYGWIN_LICENSE, winsup/COPYING, winsup/COPYING.LIB, COPYING.NEWLIB, COPYING.LIBGLOSS |
 | m2-libintl | gettext-0.22.5.tar.gz | gettext-runtime/intl/COPYING.LIB, COPYING |
 | m2-libiconv | libiconv-1.18.tar.gz | COPYING.LIB, COPYING |
@@ -59,6 +60,8 @@ build until its directory is taken again ("... does not hold its texts").
 | m2-ncurses | ncurses-6.5-20240831.tgz | COPYING |
 | m2-gcc-libs | gcc-13.3.0.tar.xz (GCC's whole source, about 90 MB) | COPYING.RUNTIME, COPYING3.LIB, COPYING3, COPYING.LIB, COPYING |
 
-Taken on 2026-10-20 for the `hc364b38_6` builds (pixi.lock fbb64b7b...).
+Taken on 2026-10-20 for the `hc364b38_6` builds (pixi.lock fbb64b7b...);
+m2-patch's on 2026-10-21 (feat-win-link-fixes item 4), from
+repo.msys2.org.
 grep's and findutils' archives were no longer on repo.msys2.org then (404)
 and came from the mirror, with the same sha256.

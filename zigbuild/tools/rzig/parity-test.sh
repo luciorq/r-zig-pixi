@@ -39,8 +39,11 @@
 #     compile-only flag), and reported as "ok+". The zig stand-ins write
 #     the object rzig asks them to compile. A Windows link also names its
 #     import library under the stub's rule (windows.implib: the lines
-#     `-Xlinker` and `--out-implib=<output>.rzig.lib`), checked and taken
-#     out the same way;
+#     `-Xlinker` and `--out-implib=<output>.rzig.lib`), and a Windows DLL
+#     link its default system library (windows.defaultLibs: a last
+#     `-lws2_32` when -shared is a word, no compile-only flag, no
+#     -nostdlib or -nodefaultlibs; feat-win-link-fixes item 2), checked
+#     and taken out the same way;
 #   - what a case's CASE_DELIBERATE sed script does to the bash side, with
 #     CASE_WHY: F3b's other differences (rzig never reads CONDA_PREFIX; the
 #     tree's headers on every call, -idirafter on Windows), the message
@@ -191,6 +194,11 @@ implib_re='^--out-implib=.*\.rzig\.lib$'
 drop_implib() {
   awk '{ l[NR] = $0 } END { for (i = 1; i <= NR; i++) { if (l[i] == "-Xlinker" && i < NR && l[i + 1] ~ /^--out-implib=.*\.rzig\.lib$/) { i++; continue }; print l[i] } }'
 }
+# a Windows DLL link's default system library (windows.defaultLibs): the
+# last line -lws2_32, which drop_ws2 takes out when $1 is 1
+drop_ws2() {
+  awk -v drop="$1" '{ l[NR] = $0; if ($0 == "-lws2_32") last = NR } END { for (i = 1; i <= NR; i++) if (!(drop == 1 && i == last)) print l[i] }'
+}
 why_tree="rzig names the tree it is installed in as such, not as the shim's <its dir>/../../../.."
 why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not installed in adds nothing"
 
@@ -204,7 +212,7 @@ why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not instal
 #   CASE_DELIBERATE  sed script for the bash side's output, and CASE_WHY
 run_case() {
   local name=$1 os=$2 tool=$3; shift 3
-  local shim=$tool uname_s side status ok=1 t=${CASE_TREE:-tree} obj_want=0 implib_want=0 n a
+  local shim=$tool uname_s side status ok=1 t=${CASE_TREE:-tree} obj_want=0 implib_want=0 ws2_want=0 n a
   case $tool in gcc) shim=zig-cc ;; g++) shim=zig-cxx ;; gcc-ar|ar) shim=zig-ar ;; gcc-ranlib|ranlib) shim=zig-ranlib ;; esac
   case $os in linux) uname_s=Linux ;; macos) uname_s=Darwin ;; windows) uname_s=MINGW64_NT-10.0-26100 ;; esac
   local -a env=(HOME="$W/home" LC_ALL=C)
@@ -223,6 +231,11 @@ run_case() {
     for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) obj_want=0 ;; esac; done
   fi
   [ "$os" = windows ] && implib_want=$obj_want
+  if [ "$os" = windows ] && [ "$shim" != zig-ar ] && [ "$shim" != zig-ranlib ] &&
+    [[ " $* " == *" -shared "* && " $* " != *" -nostdlib "* && " $* " != *" -nodefaultlibs "* ]]; then
+    ws2_want=1
+    for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) ws2_want=0 ;; esac; done
+  fi
   local -a sides=(bash dry)
   [ "$os" = linux ] && sides+=(real)
   for side in "${sides[@]}"; do
@@ -244,8 +257,9 @@ run_case() {
   # always: the shim's unnormalized "<its dir>/../../../.." is rzig's tree
   sed -e "s|$W/$t/lib/R/bin/bash/\.\./\.\./\.\./\.\.|$W/$t|g" ${CASE_DELIBERATE:+-e "$CASE_DELIBERATE"} "$W/out.bash" > "$W/want"
   # always: rzig's -L into its own environment (F3b), the object it
-  # compiles (dso_fini.zig, cfguard.zig) and a Windows link's import
-  # library (windows.implib), taken out of its side
+  # compiles (dso_fini.zig, cfguard.zig), a Windows link's import library
+  # (windows.implib) and a Windows DLL link's -lws2_32
+  # (windows.defaultLibs), taken out of its side
   local own_l="-L$W/$t/lib" own_added=0
   for side in "${sides[@]:1}"; do
     grep -qxF -- "$own_l" "$W/out.$side" && own_added=1
@@ -254,7 +268,10 @@ run_case() {
     [ "$n" = "$obj_want" ] || { ok=0; echo "    $side: $n objects rzig compiled, want $obj_want" >> "$W/report"; }
     n=$(grep -cE -- "$implib_re" "$W/out.$side" || :)
     [ "$n" = "$implib_want" ] || { ok=0; echo "    $side: $n import libraries named, want $implib_want" >> "$W/report"; }
-    grep -vxF -- "$own_l" "$W/out.$side" | { grep -vE -- "$obj_re" || :; } | drop_implib > "$W/cmp.$side"
+    n=$(( $(grep -cxF -- -lws2_32 "$W/out.$side" || :) - $(grep -cxF -- -lws2_32 "$W/want" || :) ))
+    [ "$n" = "$ws2_want" ] || { ok=0; echo "    $side: $n default -lws2_32 added, want $ws2_want" >> "$W/report"; }
+    [ "$ws2_want" = 0 ] || own_added=1
+    grep -vxF -- "$own_l" "$W/out.$side" | { grep -vE -- "$obj_re" || :; } | drop_implib | drop_ws2 "$ws2_want" > "$W/cmp.$side"
     cmp -s "$W/want" "$W/cmp.$side" || { ok=0; diff -u "$W/want" "$W/cmp.$side" | sed 's/^/    /' >> "$W/report" || :; }
   done
   if [ "$ok" = 1 ] && ! cmp -s "$W/out.bash" "$W/cmp.dry"; then
@@ -825,7 +842,7 @@ if [ -n "$real_zig" ]; then
   rb_build() { # <n> [<rpkg dir>]: pb copied to $W/rb/<n>/pb, built into $W/rb/<n>/out, the root kept
     rm -rf "$W/rb/$1"; mkdir -p "$W/rb/$1"; cp -R "$W/pkgs/pb" "$W/rb/$1/"
     env -i R_HOME="$rb" HOME="$W/rbhome" XDG_CACHE_HOME="$W/rbcache" ZIG_BIN="$real_zig" ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-$W/zig-global}" \
-      PATH="$W/nothing" RZIG_KEEP_ROOT=1 RZIG_TRACE=1 "$RZIG" build --pkg "$W/rb/$1/pb" --out "$W/rb/$1/out" --rpkg-dir "${2:-$here/../../rpkg}" > "$W/check.out" 2> "$W/check.err"
+      ${rb_env:+"$rb_env"} PATH="$W/nothing" RZIG_KEEP_ROOT=1 RZIG_TRACE=1 "$RZIG" build --pkg "$W/rb/$1/pb" --out "$W/rb/$1/out" --rpkg-dir "${2:-$here/../../rpkg}" > "$W/check.out" 2> "$W/check.err"
   }
   # the files in rzig's cache's build-runner directories (their names
   # included); pb's object or library is not among them (the runner's own
@@ -843,6 +860,20 @@ if [ -n "$real_zig" ]; then
     bash -c "$pc rb_build 2 && [ -f '$W/rb/2/out/libs/pb.so' ] && runner_files > '$W/rb/state2' && cmp -s '$W/rb/state1' '$W/rb/state2'"
   check "rzig build: tier 1 from another R with the same build_t1.zig, the same build runner, no file added to it" \
     bash -c "$pc rb_build 3 '$W/rpkg2' && [ -f '$W/rb/3/out/libs/pb.so' ] && runner_files > '$W/rb/state3' && cmp -s '$W/rb/state1' '$W/rb/state3'"
+  # The link's objects in the build root's objects.rsp, one a line in
+  # double quotes, named from src/ (build_t1.zig's objectsFile;
+  # feat-win-link-fixes item 1); RZIG_TRACE's line names them in its
+  # place, as make's link does (response.zig). A -g compile with no -g on
+  # the link (pkgbuild's compile_dll(debug = TRUE)): strip.zig reads the
+  # objects in the file and the library keeps its .debug_info.
+  check "rzig build: tier 1 links through objects.rsp in the build root, the object named from src/; the traced link names it" \
+    bash -c "$pc rb_build 4 && [ \"\$(cat '$W/rb/4/out/.rzig/objects.rsp')\" = '\"../../out/.rzig/obj/0/a.o\"' ] &&
+      grep -qE -- '^zig-cc: .* -o $W/rb/4/out/\\.rzig/pb\\.so \\.\\./\\.\\./out/\\.rzig/obj/0/a\\.o( |\$)' '$W/check.err' &&
+      ! grep -qaF .debug_info '$W/rb/4/out/libs/pb.so'"
+  printf 'CFLAGS = -g -O2\n' > "$W/debug.mk"
+  check "rzig build: tier 1 compiled with -g, linked without: the library keeps .debug_info (objects.rsp read)" \
+    bash -c "$pc rb_env=R_MAKEVARS_USER='$W/debug.mk' rb_build 5 && grep -q -- ' -g -O2 ' '$W/check.err' &&
+      grep -qaF .debug_info '$W/rb/5/out/.rzig/obj/0/a.o' && grep -qaF .debug_info '$W/rb/5/out/libs/pb.so'"
 fi
 # --- rzig build --shlib: R CMD SHLIB's call (feat-shlib-rzig-build) ----------
 # The real binary and the repo's rpkg, each case in its own $W/sh/<n>, with
@@ -932,6 +963,12 @@ if [ -n "$real_zig" ]; then
       [ -f '$W/sh/7/foo.so' ] && [ ! -e '$W/sh/7/foo.o' ] && no_root 7 &&
       grep -q '^rzig build: R CMD SHLIB, tier 1, root $W/sh/7.tmp/\.rzig\.[0-9a-f]\{16\}\$' '$W/check.err' &&
       ! grep -q junk '$W/check.err' && runner_files > '$W/sh/state7' && cmp -s '$W/rb/state1' '$W/sh/state7'"
+  # R's session directory below the sources, in a directory named -tmp:
+  # objects.rsp names each object `./-tmp/...`, not as an option
+  # (build_t1.zig's rspName; feat-win-link-fixes review R1)
+  check "rzig build --shlib: the root under ./-tmp, the link reads its objects, the root gone" \
+    bash -c "$pc sh_dir 14 && mkdir '$W/sh/14/-tmp' && sh_build 14 \$sh_env R_SESSION_TMPDIR='$W/sh/14/-tmp' -- --output foo.so -- foo.c &&
+      [ -f '$W/sh/14/foo.so' ] && [ -z \"\$(ls -A '$W/sh/14/-tmp')\" ]"
   check "rzig build --shlib: an absolute source outside the directory, its object not beside it" \
     bash -c "$pc sh_dir 8 && mkdir -p '$W/sh/8ext' && printf 'int ext(void) { return 2; }\n' > '$W/sh/8ext/ext.c' &&
       sh_build 8 \$sh_env -- --output sub/ab.so -- foo.c '$W/sh/8ext/ext.c' &&
@@ -976,5 +1013,5 @@ check "a compile with no zig: 127, the compilers group" \
   bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' -c a.c > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
     grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err'"
 
-echo "== $pass identical, $own identical but for rzig's own-environment -L, compiled object or import library, $deliberate deliberate differences, $fail failed"
+echo "== $pass identical, $own identical but for rzig's own-environment -L, compiled object, import library or default system library, $deliberate deliberate differences, $fail failed"
 [ "$fail" = 0 ]

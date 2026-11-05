@@ -29,7 +29,7 @@
 //!                           (B7, B23); Windows: B39's tools in usr/bin/,
 //!                           every file of conda-forge's m2 packages'
 //!                           usr/bin/ (MSYS2's bash, make, coreutils, sed,
-//!                           grep, gawk, which, findutils) with the MSYS
+//!                           grep, gawk, which, findutils, patch) with the MSYS
 //!                           DLLs they import, and conda-forge's native
 //!                           pkg-config with the DLLs it loads (B11;
 //!                           PHASE7 open points A-C)
@@ -238,6 +238,10 @@ const windows_dirs = [_]Dir{
             m2Tool("m2-gawk"),
             m2Tool("m2-which"),
             m2Tool("m2-findutils"),
+            // patch.exe (feat-win-link-fixes item 4): a configure script
+            // that patches its sources (hdf5r's unix configure: "patch:
+            // command not found"). It imports msys-2.0.dll alone.
+            m2Tool("m2-patch"),
         },
     },
 };

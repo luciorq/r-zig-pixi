@@ -1999,6 +1999,57 @@ FORTRAN
   fi
 fi
 
+# btMany (feat-win-link-fixes item 1): a package of 300 C sources with
+# 96-character names, one that sums their functions and mkpkg's f.c (302
+# objects), through rzig
+# build (tier 1, no make), on every OS. Its objects' absolute names make
+# more than 32,767 characters, where a Windows command line ends: `rzig
+# def` and the link named them all and stopped with NameTooLong before
+# (libgeos with its unix Makevars, about 390 objects). Now both read them
+# from the build root's objects.rsp (build_t1.zig), itself over 32,767
+# bytes. Kept root (RZIG_KEEP_ROOT=1): objects.rsp and the objects' names
+# measured; f() is the sum, 44850, and each of the 300 functions is in
+# the library's exports (on Windows rzig def wrote them from the file).
+if [ -n "$pass_zig" ]; then
+  bm="$VERIFY_DIR/btmany"
+  rm -rf "$bm"; mkdir -p "$bm/lib"
+  mkpkg "$bm/pk" btMany 0
+  bms="$bm/pk/btMany/src"
+  rm "$bms/val.c"
+  {
+    for i in $(seq 0 299); do printf 'int m%03d(void);\n' "$i"; done
+    printf 'int btMany_val(void) { return 0'
+    for i in $(seq 0 299); do printf ' + m%03d()' "$i"; done
+    printf '; }\n'
+  } > "$bms/sum.c"
+  for i in $(seq 0 299); do
+    printf 'int m%03d(void) { return %d; }\n' "$i" "$i" > "$bms/$(printf 'm%03d' "$i")_a_long_source_file_name_standing_in_for_a_vendored_library_with_many_objects_in_deep_dirs.c"
+  done
+  if [ "$OS" = windows ]; then
+    (cd "$bm" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$R_BINDIR:$sys32" RZIG_TRACE=1 RZIG_KEEP_ROOT=1 \
+      "$R_EXE" CMD INSTALL -l lib pk/btMany) > "$bm/install.log" 2>&1
+  else
+    (cd "$bm" && env -i "${base_env[@]}" PATH="$pkg_path" "${zig_env[@]}" RZIG_TRACE=1 RZIG_KEEP_ROOT=1 \
+      "$R_BIN" CMD INSTALL -l lib pk/btMany) > "$bm/install.log" 2>&1
+  fi || { tail -40 "$bm/install.log" >&2; echo "error: btMany (300 objects) did not install through rzig build (zig from $pass_what)" >&2; exit 1; }
+  starts_line "$bm/install.log" "rzig build: tier 1" ||
+    { tail -40 "$bm/install.log" >&2; echo "error: btMany did not build through rzig build (no 'rzig build: tier 1' line)" >&2; exit 1; }
+  bm_rsp="$bms/.rzig/objects.rsp"
+  [ -f "$bm_rsp" ] || { echo "error: btMany's build root has no objects.rsp ($bm_rsp, RZIG_KEEP_ROOT=1)" >&2; exit 1; }
+  bm_lines="$(grep -c . "$bm_rsp")"
+  bm_bytes="$(wc -c < "$bm_rsp" | tr -d ' ')"
+  bm_abs="$(find "$bms/.rzig/obj" -name '*.o' | { if [ "$OS" = windows ]; then cygpath -m -f -; else cat; fi; } | awk '{ s += length($0) + 1 } END { print s + 0 }')"
+  [ "$bm_lines" = 302 ] && [ "$bm_bytes" -gt 32767 ] && [ "$bm_abs" -gt 32767 ] ||
+    { echo "error: btMany: objects.rsp has $bm_lines lines and $bm_bytes bytes, the objects' absolute names $bm_abs characters (want 302 lines, both over 32,767)" >&2; exit 1; }
+  (cd "$bm" && env -i "${base_env[@]}" PATH="$(if [ "$OS" = windows ]; then echo "$R_BINDIR:$sys32"; else echo /usr/bin:/bin; fi)" "$RSCRIPT" --vanilla -e '
+    ns <- loadNamespace("btMany", lib.loc = "lib")
+    stopifnot(getExportedValue(ns, "f")() == 44850L,
+              all(vapply(sprintf("m%03d", 0:299), is.loaded, NA, PACKAGE = "btMany")))') ||
+    { echo "error: btMany did not load, f() is not 44850, or a function is not exported" >&2; exit 1; }
+  rm -rf "$bms/.rzig"
+  echo "== btMany: 302 objects through rzig build (tier 1, zig from $pass_what), named in objects.rsp ($bm_bytes bytes; their absolute names, the command line before, $bm_abs characters); f() = 44850, the 300 functions exported"
+fi
+
 # --- Scenario 3: base + compilers + build-tools -----------------------------
 extract "${archives[2]}" "$lists/build-tools"
 echo "== scenario 3: base + compilers + build-tools"
@@ -2481,7 +2532,8 @@ RCODE
 
     # btTools (B39; PHASE7 step 4): a configure.win that runs, through the
     # group's sh, the tools R's makefiles and configure scripts call
-    # (coreutils, sed, grep, gawk, awk, expr, find and xargs, which), each
+    # (coreutils, sed, grep, gawk, awk, expr, find and xargs, which, and
+    # patch -p0 with a two-line diff: feat-win-link-fixes item 4), each
     # step checked, and writes src/Makevars.win with the count as
     # BTTOOLS and a rule of its own, so make builds it; its cleanup.win
     # (find | xargs rm, which R CMD INSTALL --preclean runs first) removes
@@ -2518,6 +2570,7 @@ chmod +x tt/e && touch tt/t && ls tt > /dev/null && ok || no chmod/touch/ls
 test "`find . -name '*.c' | xargs grep -l BTTOOLS | wc -l | tr -d ' '`" = 1 && ok || no find/xargs
 which sh > /dev/null && ok || no which
 printf '%s\n' x > /dev/null && env > /dev/null && ok || no printf/env
+printf 'a\n' > tt/pf && printf -- '--- tt/pf\n+++ tt/pf\n@@ -1 +1 @@\n-a\n+b\n' | patch -p0 > /dev/null && test "`cat tt/pf`" = b && ok || no patch
 rm -rf tt
 echo "btTools: configure.win: all tools ran ($n steps)"
 printf 'PKG_CPPFLAGS = -DBTTOOLS=%s\nall: $(SHLIB) stamp\nstamp: ; @touch $@ && rm -f $@\n' "$n" > src/Makevars.win
@@ -2595,7 +2648,7 @@ CONFIGURE
         { echo "error: btTools (f() == $n) or btPc (f() == 7) did not load with PATH = bin\\x64 + System32" >&2; exit 1; }
     }
     tools_pc_install "$bt_path" "$VERIFY_DIR/tools-pc"
-    echo "== B39's tools: btTools' configure.win ran $n steps through the group's sh (awk, gawk, sed, grep, expr, tr, sort, uniq, cut, head, tail, basename, dirname, uname, mktemp, mkdir, cat, cp, mv, ln, chmod, touch, ls, find | xargs, which, printf, env), its cleanup.win under --preclean, its Makevars rule through make; loads, f() = $n"
+    echo "== B39's tools: btTools' configure.win ran $n steps through the group's sh (awk, gawk, sed, grep, expr, tr, sort, uniq, cut, head, tail, basename, dirname, uname, mktemp, mkdir, cat, cp, mv, ln, chmod, touch, ls, find | xargs, which, printf, env, patch -p0), its cleanup.win under --preclean, its Makevars rule through make; loads, f() = $n"
     echo "   btPc: $(tr -d '\r' < "$VERIFY_DIR/tools-pc/btPc.log" | grep '^btPc: pkg-config --\(libs\|static\|cflags\)' | sed 's/^btPc: //' | tr '\n' ';')"
     echo "== pkg-config (the group's, 0.29.2): btPc's configure.win under a path with a space: the public libraries, the private ones with --static, the prefix the .pc file's, --cflags escaped and compiled through make and sh; loads, f() = 7"
 

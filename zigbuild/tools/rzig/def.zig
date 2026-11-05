@@ -25,6 +25,7 @@ const mem = std.mem;
 const Io = std.Io;
 const coff = std.coff;
 const Ctx = @import("Ctx.zig");
+const response = @import("response.zig");
 
 pub const Error = error{ BadObject, OutOfMemory };
 
@@ -94,7 +95,10 @@ pub fn text(a: mem.Allocator, objects: []const []const u8) ![]const u8 {
 }
 
 /// `rzig def -o out.def a.o b.o ...`: 0, or 1 with the reason on stderr.
-pub fn run(ctx: *Ctx, args: []const []const u8) u8 {
+/// An `@file` stands for the objects in it (response.zig): rzig build's
+/// links name theirs so, `@<root>/objects.rsp` (build_t1.zig).
+pub fn run(ctx: *Ctx, all: []const []const u8) u8 {
+    const args = response.expand(ctx, all) catch return 1;
     var out_path: ?[]const u8 = null;
     var objs: std.ArrayList([]const u8) = .empty;
     var i: usize = 0;
@@ -109,7 +113,7 @@ pub fn run(ctx: *Ctx, args: []const []const u8) u8 {
         } else objs.append(ctx.arena, args[i]) catch return 1;
     }
     const out = out_path orelse {
-        ctx.warn("usage: rzig def -o <file>.def <object>...", .{});
+        ctx.warn("usage: rzig def -o <file>.def <object>|@<file>...", .{});
         return 2;
     };
     var names: std.ArrayList([]const u8) = .empty;
@@ -132,6 +136,7 @@ pub fn run(ctx: *Ctx, args: []const []const u8) u8 {
 }
 
 const testing = std.testing;
+const testutil = @import("testutil.zig");
 
 // testdata/win-syms.c compiled with `zig cc -target x86_64-windows-gnu -O2 -c`
 const win_syms = @embedFile("testdata/win-syms.o");
@@ -165,4 +170,22 @@ test "exports: nm's [BCDRT] set, then CRAN's NM_FILTER" {
     // the seds match anywhere in the name, not only at its start
     for ([_][]const u8{ ".refptr.x", "a.refptr.b", ".weak.f.default.g", "x.weak.y" }) |n| try testing.expect(filtered(n));
     for ([_][]const u8{ "refptr", "x.weak", "weak.x", "a_refptr_b", "R_init_pkg" }) |n| try testing.expect(!filtered(n));
+}
+
+test "run: the objects from a response file (rzig build's objects.rsp), as on the command line" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    try f.write("sp ace/ção.o", win_syms, .default_file);
+    try f.write("b.o", win_syms, .default_file);
+    try f.write("objects.rsp", f.fmt("\"{s}\"\r\n\"{s}\"\r\n", .{ f.path("sp ace/ção.o"), f.path("b.o") }), .default_file);
+    try testing.expectEqual(0, run(c, &.{ "-o", f.path("argv.def"), f.path("sp ace/ção.o"), f.path("b.o") }));
+    try testing.expectEqual(0, run(c, &.{ "-o", f.path("rsp.def"), f.fmt("@{s}", .{f.path("objects.rsp")}) }));
+    const want = try f.tmp.dir.readFileAlloc(testing.io, "argv.def", c.arena, .limited(4096));
+    try testing.expect(std.mem.startsWith(u8, want, "EXPORTS\n") and std.mem.indexOf(u8, want, "\nexported_fn\n") != null);
+    try testing.expectEqualStrings(want, try f.tmp.dir.readFileAlloc(testing.io, "rsp.def", c.arena, .limited(4096)));
+    // a missing response file: kept as a name, which cannot be read
+    try testing.expectEqual(1, run(c, &.{ "-o", f.path("x.def"), f.fmt("@{s}", .{f.path("nowhere.rsp")}) }));
+    try testing.expect(std.mem.indexOf(u8, f.takeWarnings(), "def: cannot read @") != null);
 }

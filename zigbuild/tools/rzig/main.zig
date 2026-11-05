@@ -58,7 +58,8 @@
 //!                      runs; a standalone R plus an env of libraries is
 //!                      the other use.
 //!   RZIG_TRACE=1       print the command rzig runs to stderr (one line,
-//!                      shell-quoted), then run it: R CMD INSTALL's log
+//!                      shell-quoted, a response file's words in place of
+//!                      its @file), then run it: R CMD INSTALL's log
 //!                      then shows every flag rzig added. Under `rzig
 //!                      build`, zig build echoes each step whose rzig wrote
 //!                      to stderr, headed "failed command:" although it
@@ -101,6 +102,7 @@ const environment = @import("environment.zig");
 const libcxx_mirror = @import("libcxx_mirror.zig");
 const pkgbuild = @import("pkgbuild.zig");
 const def = @import("def.zig");
+const response = @import("response.zig");
 const check = @import("check.zig");
 const groups = @import("groups.zig");
 const testutil = @import("testutil.zig");
@@ -153,7 +155,7 @@ const usage =
     \\       rzig <one of those names> [args...]
     \\       rzig build --pkg <dir> --out <dir> [options]   (rzig build --help)
     \\       rzig build --shlib --output <lib> [options] -- <file>...
-    \\       rzig def -o <file>.def <object>...
+    \\       rzig def -o <file>.def <object>|@<file>...
     \\
 ;
 
@@ -280,7 +282,10 @@ pub fn main(init: std.process.Init) !u8 {
         for (try environment.list(&ctx)) |e| ctx.warn("environment {s}{s}", .{ e.dir, if (e.conda) " (conda)" else "" });
         for (blocks.items) |b| {
             const lib_dir = if (env_changed and b.zig) try ctx.fmt("ZIG_LIB_DIR={f} ", .{shellQuoted(env.get("ZIG_LIB_DIR") orelse "")}) else "";
-            ctx.warn("{s}{f}", .{ lib_dir, shellCommand(b.argv) });
+            // a response file's words in its place, as zig reads it: rzig
+            // build's links name their objects in one (response.zig), and
+            // the line shows them as make's link does
+            ctx.warn("{s}{f}", .{ lib_dir, shellCommand(try response.expand(&ctx, b.argv)) });
         }
     }
     return switch (cmd) {
@@ -596,6 +601,7 @@ test {
     _ = @import("flang_rt.zig");
     _ = @import("makefile.zig");
     _ = @import("shellwords.zig");
+    _ = response;
     _ = @import("pkgplan.zig");
     _ = pkgbuild;
     _ = def;

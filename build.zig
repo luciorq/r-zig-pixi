@@ -522,7 +522,9 @@ pub fn build(b: *std.Build) !void {
         const inst = installRzig(&ctx);
         b.getInstallStep().dependOn(inst);
         b.step("rzig", "Build rzig and install it as the compilers in R_HOME/bin/toolchain").dependOn(inst);
-        b.step("rzig-test", "Run rzig's unit tests").dependOn(&b.addRunArtifact(rz.tests).step);
+        const rzt = b.step("rzig-test", "Run rzig's unit tests");
+        rzt.dependOn(&b.addRunArtifact(rz.tests).step);
+        rzt.dependOn(&b.addRunArtifact(rz.t1_tests).step);
     }
 
     try checkConfigFreshness(b, io, config_dir);

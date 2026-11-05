@@ -164,8 +164,9 @@ test "an archive without zig's extension: a copy named .a, keyed by its bytes; e
     try expectArgs(&.{ "-dynamiclib", "-o", "V8.so", fat_copy }, try rename(c, &.{ "-dynamiclib", "-o", "V8.so", f.path("deps/fat_monolith") }));
     try testing.expectEqualStrings(fat, try Io.Dir.cwd().readFile(testing.io, fat_copy, &buf));
     // not archives, a name zig takes, no file, an option's value, a
-    // compile: unchanged
-    const same: Args = &.{ "-shared", "-o", f.path("deps/v8_monolith"), f.path("deps/notar"), f.path("deps/short"), f.path("deps/Main"), f.path("deps/libok.a"), f.path("deps/dir"), f.path("nowhere"), "-include", v8 };
+    // response file (rzig build's links name their objects so; `@` and
+    // an archive's path is no file), a compile: unchanged
+    const same: Args = &.{ "-shared", "-o", f.path("deps/v8_monolith"), f.path("deps/notar"), f.path("deps/short"), f.path("deps/Main"), f.path("deps/libok.a"), f.path("deps/dir"), f.path("nowhere"), "-include", v8, f.fmt("@{s}", .{v8}) };
     try expectArgs(same, try rename(c, same));
     const compile: Args = &.{ "-c", v8 };
     try expectArgs(compile, try rename(c, compile));

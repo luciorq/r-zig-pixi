@@ -343,7 +343,7 @@ echo "== OpenMP verified: $omp (in $tc)"
 # and says the env's root and /tmp (seen on kappa, 2026-10-20).
 if [ "$OS" = windows ] && [ -d "$TREE/$tc/usr" ]; then
   ub="$TREE/$tc/usr/bin"
-  names="sh bash make sed grep gawk awk which find xargs pkg-config
+  names="sh bash make sed grep gawk awk which find xargs patch pkg-config
     basename rm cp mv mkdir cat tr sort uname chmod ln ls expr touch head
     tail wc env printf mktemp test ["
   mkdir -p "$WORK/run" "$WORK/temp"
