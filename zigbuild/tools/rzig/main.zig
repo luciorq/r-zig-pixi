@@ -58,8 +58,12 @@
 //!                      build`, zig build echoes each step whose rzig wrote
 //!                      to stderr, headed "failed command:" although it
 //!                      passed (build_runner.zig reports stderr that way).
-//!   RZIG_KEEP_ROOT=1   rzig build: keep <out>/.rzig (the plan and the zig
-//!                      build root) after a successful build
+//!   RZIG_KEEP_ROOT=1   rzig build: keep the build root (the plan, the
+//!                      objects, the library) after the build, whatever
+//!                      its exit: <out>/.rzig for a package; for R CMD
+//!                      SHLIB a .rzig.<16 hex> beside the output, not in R's
+//!                      session directory, which that R removes when it
+//!                      exits [shlib-code-1]
 //!
 //! Test hooks (not for builds):
 //!   RZIG_PRINT_ARGV=1  print what would run instead of running it: the
@@ -139,6 +143,7 @@ const usage =
     \\       <one of those names> --rzig-check[=fortran|build-tools|package]
     \\       rzig <one of those names> [args...]
     \\       rzig build --pkg <dir> --out <dir> [options]   (rzig build --help)
+    \\       rzig build --shlib --output <lib> [options] -- <file>...
     \\       rzig def -o <file>.def <object>...
     \\
 ;

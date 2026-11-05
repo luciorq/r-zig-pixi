@@ -29,7 +29,41 @@
 //! --rzig-check=package) decides through `decide` below. Whatever the
 //! exit, the build root <out>/.rzig is gone afterwards unless kept
 //! (--keep-root, RZIG_KEEP_ROOT=1); zig build's cache, for tier 1 its
-//! build runner alone, is shared in rzig's cache (`zigBuildDirs`).
+//! build runner alone, is shared in rzig's cache (`zigBuildDirs`). A
+//! tier-1 build whose R_HOME/share/zig/rpkg/build_t1.zig is missing exits
+//! 3: a damaged tree, which make builds, as with no rzig
+//! (feat-shlib-rzig-build Cc8).
+//!
+//!   rzig build --shlib --output <lib> [--pkg-libs <words>] [--use-lto yes|no] [--c-std NN]
+//!              [--debug] [-j N] [--dry-run] [--plan-only]
+//!              [--r-home <dir>] [--rpkg-dir <dir>] [--cache-dir <dir>] [--keep-root] -- <file>...
+//!
+//! SHLIB mode (feat-shlib-rzig-build): R CMD SHLIB's call from
+//! .shlib_internal (patch 0013's .rzig_build), run in R's working
+//! directory: the files R names, in argv order, the output as given
+//! (-o), argv's other words as make's command-line PKG_LIBS, and the
+//! working directory's Makevars (pkgplan.zig's `Shlib`). The library goes
+//! to <lib>; nothing else is written beside the sources but the .mod
+//! files flang writes there, as under make. The build root is
+//! .rzig.<16 hex> in R's session directory (R_SESSION_TMPDIR), else beside
+//! <lib>, unique per call and gone after it (open point M b); a kept one
+//! (--keep-root, RZIG_KEEP_ROOT=1) is beside <lib>, since R CMD SHLIB's
+//! own R removes its session directory when it exits [shlib-code-1].
+//! Before the root, the compilers check the install preflight makes
+//! (check.zig's shlibCompilers; R CMD SHLIB has no preflight): a missing
+//! zig or flang exits 127 after the compilers group's text, and a zig
+//! that is not R's, which could not compile build_t1.zig, exits 3 when
+//! make is there (R's make path with zig-cc, as before), else 1
+//! [shlib-r-2]. A call that
+//! needs make exits 3, or, when a group it needs is missing (make, zig,
+//! flang), 127 after every missing group's text, compilers first
+//! (check.zig's groupsFor; open point F a), and R does not run make.
+//! --dry-run prints the commands it would run, as `make -n` prints them,
+//! with no zig and no build root (open point C a); a call that needs make
+//! exits 3 there, and R runs `make -n`. There is no --clean or --preclean:
+//! no object is written beside the sources (open point E a). TMB keeps an
+//! R's .shlib_internal body, and with it the arguments .rzig_build passes:
+//! flags are added, never removed or renamed (feat-shlib-rzig-build Cc4).
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
@@ -39,6 +73,8 @@ const pkgplan = @import("pkgplan.zig");
 const find_zig = @import("find_zig.zig");
 const groups = @import("groups.zig");
 const cache = @import("cache.zig");
+const check = @import("check.zig");
+const shellwords = @import("shellwords.zig");
 
 pub const exit_needs_make: u8 = 3;
 
@@ -48,6 +84,9 @@ const usage =
     \\                  [--debug] [-j N] [--r-home <dir>] [--rpkg-dir <dir>] [--cache-dir <dir>]
     \\                  [--keep-root]
     \\       rzig build --pkg <dir> --plan-only | --classify
+    \\       rzig build --shlib --output <lib> [--pkg-libs <words>] [--use-lto yes|no] [--c-std NN]
+    \\                  [--debug] [-j N] [--dry-run] [--plan-only]
+    \\                  [--r-home <dir>] [--rpkg-dir <dir>] [--cache-dir <dir>] [--keep-root] -- <file>...
     \\
 ;
 
@@ -69,6 +108,13 @@ const Args = struct {
     keep_root: bool = false,
     plan_only: bool = false,
     classify: bool = false,
+    /// SHLIB mode: R CMD SHLIB's call (the header)
+    shlib: bool = false,
+    output: ?[]const u8 = null,
+    pkg_libs: ?[]const u8 = null,
+    dry_run: bool = false,
+    /// after `--`
+    files: std.ArrayList([]const u8) = .empty,
 };
 
 fn parseArgs(ctx: *Ctx, argv: []const []const u8) !?Args {
@@ -78,7 +124,7 @@ fn parseArgs(ctx: *Ctx, argv: []const []const u8) !?Args {
         const x = argv[i];
         const takes_value = mem.eql(u8, x, "--pkg") or mem.eql(u8, x, "--src") or mem.eql(u8, x, "--out") or mem.eql(u8, x, "--name") or mem.eql(u8, x, "--linkingto") or
             mem.eql(u8, x, "--cxx-std") or mem.eql(u8, x, "--c-std") or mem.eql(u8, x, "--use-lto") or mem.eql(u8, x, "-j") or
-            mem.eql(u8, x, "--r-home") or mem.eql(u8, x, "--rpkg-dir") or mem.eql(u8, x, "--cache-dir");
+            mem.eql(u8, x, "--r-home") or mem.eql(u8, x, "--rpkg-dir") or mem.eql(u8, x, "--cache-dir") or mem.eql(u8, x, "--output") or mem.eql(u8, x, "--pkg-libs");
         if (takes_value) {
             if (i + 1 >= argv.len) {
                 ctx.warn("build: {s} needs a value", .{x});
@@ -91,7 +137,10 @@ fn parseArgs(ctx: *Ctx, argv: []const []const u8) !?Args {
                     ctx.warn("build: --use-lto takes yes or no, not '{s}'", .{v});
                     return null;
                 };
-            } else if (mem.eql(u8, x, "-j")) a.jobs = v else if (mem.eql(u8, x, "--r-home")) a.r_home = v else if (mem.eql(u8, x, "--rpkg-dir")) a.rpkg_dir = v else if (mem.eql(u8, x, "--cache-dir")) a.cache_dir = v;
+            } else if (mem.eql(u8, x, "-j")) a.jobs = v else if (mem.eql(u8, x, "--r-home")) a.r_home = v else if (mem.eql(u8, x, "--rpkg-dir")) a.rpkg_dir = v else if (mem.eql(u8, x, "--cache-dir")) a.cache_dir = v else if (mem.eql(u8, x, "--output")) a.output = v else if (mem.eql(u8, x, "--pkg-libs")) a.pkg_libs = v;
+        } else if (mem.eql(u8, x, "--")) {
+            try a.files.appendSlice(ctx.arena, argv[i + 1 ..]);
+            break;
         } else if (mem.startsWith(u8, x, "-j") and x.len > 2) {
             a.jobs = x[2..];
         } else if (mem.eql(u8, x, "--flat")) {
@@ -104,6 +153,10 @@ fn parseArgs(ctx: *Ctx, argv: []const []const u8) !?Args {
             a.plan_only = true;
         } else if (mem.eql(u8, x, "--classify")) {
             a.classify = true;
+        } else if (mem.eql(u8, x, "--shlib")) {
+            a.shlib = true;
+        } else if (mem.eql(u8, x, "--dry-run")) {
+            a.dry_run = true;
         } else if (mem.eql(u8, x, "-h") or mem.eql(u8, x, "--help")) {
             std.debug.print("{s}", .{usage});
             return null;
@@ -221,12 +274,18 @@ pub const Inputs = struct {
     debug: bool = false,
     /// rzig's own path, for `rzig def` in the plan.
     rzig: []const u8,
+    /// R CMD SHLIB's call (`rzig build --shlib`), in src_dir, the working
+    /// directory. The install preflight (check.zig) never sets it.
+    shlib: ?pkgplan.Shlib = null,
+    /// pkgplan's Options.warn_cxx_std: the preflight's.
+    warn_cxx_std: bool = false,
 };
 
 pub fn decide(ctx: *Ctx, in: Inputs) error{OutOfMemory}!Decision {
     const r_arch = ctx.getenv("R_ARCH") orelse if (ctx.os == .windows) "/x64" else "";
     var planner: pkgplan.Planner = .{ .ctx = ctx };
-    const class = planner.classify(in.pkg_dir, in.src_dir) catch |err| switch (err) {
+    const classified = if (in.shlib) |s| planner.classifyShlib(in.src_dir, s) else planner.classify(in.pkg_dir, in.src_dir);
+    const class = classified catch |err| switch (err) {
         error.NeedsMake => return .{ .tier = .make, .reason = planner.reason, .class = .{ .tier = .make, .reason = planner.reason } },
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -248,6 +307,8 @@ pub fn decide(ctx: *Ctx, in: Inputs) error{OutOfMemory}!Decision {
         .makevars_site = try makevarsSite(ctx, in.r_home, r_arch),
         .makevars_user = try makevarsUser(ctx, r_arch),
         .rzig = in.rzig,
+        .shlib = in.shlib,
+        .warn_cxx_std = in.warn_cxx_std,
     }, class) catch |err| switch (err) {
         error.NeedsMake => return .{ .tier = .make, .reason = planner.reason, .class = class },
         error.OutOfMemory => return error.OutOfMemory,
@@ -271,6 +332,11 @@ pub fn buildZigNeedsMake(ctx: *Ctx, name: []const u8, d: Decision) bool {
 pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     ctx.name = "rzig build";
     const args = (try parseArgs(ctx, argv)) orelse return 2;
+    if (args.shlib) return runShlib(ctx, args);
+    if (args.output != null or args.pkg_libs != null or args.dry_run or args.files.items.len > 0) {
+        ctx.warn("--output, --pkg-libs, --dry-run and files after -- go with --shlib\n{s}", .{usage});
+        return 2;
+    }
     const pkg_in = args.pkg orelse {
         ctx.warn("--pkg <dir> is required\n{s}", .{usage});
         return 2;
@@ -330,6 +396,9 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         ctx.warn("--out <dir> is required\n{s}", .{usage});
         return 2;
     };
+    const rpkg_dir = args.rpkg_dir orelse try ctx.fmt("{s}/share/zig/rpkg", .{r_home});
+    const t1_file = try ctx.fmt("{s}/build_t1.zig", .{rpkg_dir});
+    if (class.tier == .makevars and !ctx.isFile(t1_file)) return missingRoot(ctx, t1_file);
     Io.Dir.cwd().createDirPath(ctx.io, out_in) catch |err| {
         ctx.warn("cannot create {s}: {t}", .{ out_in, err });
         return 1;
@@ -338,7 +407,6 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
 
     // the build root: the plan, and for tier 2 the root files with the
     // package as a path dependency
-    const rpkg_dir = args.rpkg_dir orelse try ctx.fmt("{s}/share/zig/rpkg", .{r_home});
     const root = try ctx.fmt("{s}/.rzig", .{out});
     Io.Dir.cwd().createDirPath(ctx.io, root) catch |err| {
         ctx.warn("cannot create {s}: {t}", .{ root, err });
@@ -347,22 +415,14 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     // from here every return removes the root, a refusal, no zig or a
     // failed write as much as a build: under install.R it is the
     // package's src/.rzig, which R CMD build would ship [preflight-PF-3]
-    const keep = args.keep_root or isSet(ctx, "RZIG_KEEP_ROOT");
+    const keep = keepRoot(ctx, args);
     defer if (!keep) {
         Io.Dir.cwd().deleteTree(ctx.io, root) catch |err| ctx.warn("cannot remove {s}: {t}", .{ root, err });
     };
-    const plan_path = try ctx.fmt("{s}/plan.zon", .{root});
-    {
-        var w: Io.Writer.Allocating = .init(ctx.arena);
-        try pkgplan.writeZon(&plan, &w.writer);
-        Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = plan_path, .data = w.written() }) catch |err| {
-            ctx.warn("cannot write {s}: {t}", .{ plan_path, err });
-            return 1;
-        };
-    }
+    if (!try writePlan(ctx, &plan, root)) return 1;
     var build_file: []const u8 = undefined;
     switch (class.tier) {
-        .makevars => build_file = try ctx.fmt("{s}/build_t1.zig", .{rpkg_dir}),
+        .makevars => build_file = t1_file,
         .zig => {
             const files = [_][2][]const u8{ .{ "build_t2.zig", "build.zig" }, .{ "build_t1.zig", "build_t1.zig" }, .{ "rpkg.zig", "rpkg.zig" } };
             for (files) |f| {
@@ -407,13 +467,39 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         },
         else => unreachable,
     }
-    if (!ctx.isFile(build_file)) {
-        ctx.warn("{s} is missing: R_HOME/share/zig/rpkg is not installed", .{build_file});
-        return 1;
-    }
+    return zigBuild(ctx, args, &plan, class.tier, root, build_file, out, if (class.tier == .zig) "tier 2" else "tier 1");
+}
 
+/// tier 1's root file missing: a damaged tree, as one with no rzig, so
+/// make builds this; exit 3 (feat-shlib-rzig-build Cc8). Tier 2 has no
+/// make to fall back to: a missing root file fails it (1).
+fn missingRoot(ctx: *Ctx, build_file: []const u8) u8 {
+    ctx.warn("{s} is missing: R_HOME/share/zig/rpkg is not installed; make builds this", .{build_file});
+    return exit_needs_make;
+}
+
+fn keepRoot(ctx: *const Ctx, args: Args) bool {
+    return args.keep_root or isSet(ctx, "RZIG_KEEP_ROOT");
+}
+
+/// The plan as <root>/plan.zon; false (and why) when it cannot be written.
+fn writePlan(ctx: *Ctx, plan: *const pkgplan.Plan, root: []const u8) !bool {
+    const plan_path = try ctx.fmt("{s}/plan.zon", .{root});
+    var w: Io.Writer.Allocating = .init(ctx.arena);
+    try pkgplan.writeZon(plan, &w.writer);
+    Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = plan_path, .data = w.written() }) catch |err| {
+        ctx.warn("cannot write {s}: {t}", .{ plan_path, err });
+        return false;
+    };
+    return true;
+}
+
+/// zig build on the build root `root`, which holds plan.zon (and for tier
+/// 2 the root files), installing into `out`: one path for both modes and
+/// both tiers. `label` names the build in RZIG_TRACE's line.
+fn zigBuild(ctx: *Ctx, args: Args, plan: *const pkgplan.Plan, tier: pkgplan.Tier, root: []const u8, build_file: []const u8, out: []const u8, label: []const u8) !u8 {
     const no_packages = try ctx.fmt("{s}/no-packages", .{root});
-    if (class.tier == .zig) Io.Dir.cwd().createDirPath(ctx.io, no_packages) catch |err| {
+    if (tier == .zig) Io.Dir.cwd().createDirPath(ctx.io, no_packages) catch |err| {
         ctx.warn("cannot create {s}: {t}", .{ no_packages, err });
         return 1;
     };
@@ -430,23 +516,19 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     // source as named (relative to src/, as make names it: build_t1.zig)
     // and its contents, so a reinstall of the same sources adds none, as
     // on make's path [tests-T1].
-    const dirs = try zigBuildDirs(ctx, args.cache_dir, class.tier, root, zig.argv, build_file);
-    try reportCompilers(ctx, &plan, class.tier, zig.argv);
+    const dirs = try zigBuildDirs(ctx, args.cache_dir, tier, root, zig.argv, build_file);
+    try reportCompilers(ctx, plan, tier, zig.argv);
     // zig build makes an (empty) .zig-cache in a path dependency's directory,
     // the package's src/ here; leave src/ as it was found
-    const dep_cache = try ctx.fmt("{s}/.zig-cache", .{src_dir});
-    const dep_cache_existed = class.tier == .zig and ctx.exists(dep_cache);
+    const dep_cache = try ctx.fmt("{s}/.zig-cache", .{plan.srcdir});
+    const dep_cache_existed = tier == .zig and ctx.exists(dep_cache);
     var cmd: std.ArrayList([]const u8) = .empty;
     try cmd.appendSlice(ctx.arena, zig.argv);
-    try cmd.appendSlice(ctx.arena, &.{ "build", "--build-file", dirs.build_file, "--cache-dir", dirs.cache_dir, "--prefix", out, try ctx.fmt("-Dplan={s}", .{plan_path}) });
-    if (class.tier == .zig) try cmd.appendSlice(ctx.arena, &.{ "--system", no_packages });
+    try cmd.appendSlice(ctx.arena, &.{ "build", "--build-file", dirs.build_file, "--cache-dir", dirs.cache_dir, "--prefix", out, try ctx.fmt("-Dplan={s}/plan.zon", .{root}) });
+    if (tier == .zig) try cmd.appendSlice(ctx.arena, &.{ "--system", no_packages });
     if (args.jobs) |j| try cmd.append(ctx.arena, try ctx.fmt("-j{s}", .{j}));
     if (isSet(ctx, "RZIG_TRACE")) {
-        ctx.warn("tier {s}, root {s}", .{ switch (class.tier) {
-            .makevars => "1",
-            .zig => "2",
-            else => "?",
-        }, root });
+        ctx.warn("{s}, root {s}", .{ label, root });
         ctx.warn("{s}", .{try mem.join(ctx.arena, " ", cmd.items)});
     }
     var child = std.process.spawn(ctx.io, .{ .argv = cmd.items }) catch |err| {
@@ -461,11 +543,165 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         .exited => |c| c,
         else => 1,
     };
-    if (class.tier == .zig and !dep_cache_existed) Io.Dir.cwd().deleteTree(ctx.io, dep_cache) catch {};
+    if (tier == .zig and !dep_cache_existed) Io.Dir.cwd().deleteTree(ctx.io, dep_cache) catch {};
     if (code != 0) {
-        if (keep) ctx.warn("zig build failed ({d}); the build root is kept in {s}", .{ code, root }) else ctx.warn("zig build failed ({d})", .{code});
+        if (keepRoot(ctx, args)) ctx.warn("zig build failed ({d}); the build root is kept in {s}", .{ code, root }) else ctx.warn("zig build failed ({d})", .{code});
     }
     return if (code != 0) 1 else 0;
+}
+
+/// `rzig build --shlib` (the header): R CMD SHLIB's call, in the working
+/// directory.
+fn runShlib(ctx: *Ctx, args: Args) !u8 {
+    if (args.pkg != null or args.src != null or args.out != null or args.flat or args.name != null or args.linkingto.items.len > 0 or args.cxx_std != null or args.classify) {
+        ctx.warn("--shlib takes none of --pkg, --src, --out, --flat, --name, --linkingto, --cxx-std, --classify\n{s}", .{usage});
+        return 2;
+    }
+    if (args.output == null or args.files.items.len == 0) {
+        ctx.warn("--shlib needs --output <lib> and the files after --\n{s}", .{usage});
+        return 2;
+    }
+    const r_home_in = args.r_home orelse ctx.getenv("R_HOME") orelse {
+        ctx.warn("R_HOME is not set and no --r-home given", .{});
+        return 2;
+    };
+    const r_home = canonical(ctx, r_home_in) catch return 2;
+    const cwd = canonical(ctx, ".") catch return 2;
+    var buf: [4096]u8 = undefined;
+    var w = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const code = try shlibIn(ctx, args, r_home, cwd, &w.interface);
+    try w.interface.flush();
+    return code;
+}
+
+/// runShlib's work in `cwd` (canonical), where the unit tests call it;
+/// --plan-only's and --dry-run's text go to `stdout`.
+fn shlibIn(ctx: *Ctx, args: Args, r_home: []const u8, cwd: []const u8, stdout: *Io.Writer) !u8 {
+    const output = args.output.?;
+    const files = args.files.items;
+    const out_abs = if (std.fs.path.isAbsolute(output)) try slashes(ctx, output) else try ctx.fmt("{s}/{s}", .{ cwd, output });
+    const out_dir = std.fs.path.dirname(out_abs) orelse cwd;
+    const d = try decide(ctx, .{
+        .r_home = r_home,
+        .pkg_dir = cwd,
+        .src_dir = cwd,
+        .name = std.fs.path.stem(std.fs.path.basename(output)),
+        .c_std = args.c_std,
+        .use_lto = args.use_lto,
+        .debug = args.debug,
+        .rzig = ctx.self_exe orelse "rzig",
+        .shlib = .{ .files = files, .output = output, .pkg_libs = args.pkg_libs },
+    });
+    var fortran = false;
+    for (files) |f| if (pkgplan.langOf(f)) |l| {
+        if (l == .f or l == .f9x) fortran = true;
+    };
+    if (d.tier == .make) {
+        if (args.dry_run or args.plan_only) return needsMake(ctx, output, d.reason);
+        // what make would need: when a group is missing, every missing
+        // group's text, and R does not run make (open point F a)
+        const res = try check.groupsFor(ctx, output, d.reason, fortran);
+        if (res.code != 0) return res.code;
+        return needsMake(ctx, output, d.reason);
+    }
+    var plan = d.plan.?;
+    plan.libs_dir = "";
+    if (args.plan_only) {
+        try pkgplan.writeZon(&plan, stdout);
+        return 0;
+    }
+    if (args.dry_run) {
+        try printCommands(ctx, &plan, output, stdout);
+        return 0;
+    }
+    const rpkg_dir = args.rpkg_dir orelse try ctx.fmt("{s}/share/zig/rpkg", .{r_home});
+    const build_file = try ctx.fmt("{s}/build_t1.zig", .{rpkg_dir});
+    if (!ctx.isFile(build_file)) return missingRoot(ctx, build_file);
+    // the compilers check the install preflight (patch 0009) makes for a
+    // package, which R CMD SHLIB has none of: a zig that is not R's failed
+    // in build_t1.zig's compile where make, with zig-cc, built [shlib-r-2]
+    const comp = try check.shlibCompilers(ctx, output, fortran);
+    if (comp != 0) return comp;
+    Io.Dir.cwd().createDirPath(ctx.io, out_dir) catch |err| {
+        ctx.warn("cannot create {s}: {t}", .{ out_dir, err });
+        return 1;
+    };
+    // the build root: unique per call, as R CMD SHLIB runs in parallel in
+    // one directory (SZ H2); in R's session directory, which R removes
+    // when it exits, so a killed call leaves nothing beside the sources
+    // (open point M b). A kept root goes beside the output: it has to
+    // outlive the R that started rzig, and R CMD SHLIB's R removes its
+    // session directory when it exits, before the user could look
+    // [shlib-code-1]
+    const keep = keepRoot(ctx, args);
+    const root_parent = if (keep) out_dir else sessionDir(ctx) orelse out_dir;
+    const root = try ctx.fmt("{s}/{s}", .{ root_parent, try cache.tempName(ctx, ".rzig", "") });
+    Io.Dir.cwd().createDirPath(ctx.io, root) catch |err| {
+        ctx.warn("cannot create {s}: {t}", .{ root, err });
+        return 1;
+    };
+    defer if (!keep) {
+        Io.Dir.cwd().deleteTree(ctx.io, root) catch |err| ctx.warn("cannot remove {s}: {t}", .{ root, err });
+    };
+    if (!try writePlan(ctx, &plan, root)) return 1;
+    // not "tier 1, ...": pkg-parity's and verify-bundle's greps for a
+    // package's tier never take a configure script's SHLIB for it
+    return zigBuild(ctx, args, &plan, .makevars, root, build_file, out_dir, "R CMD SHLIB, tier 1");
+}
+
+/// R's session directory, R_SESSION_TMPDIR, which unix R sets for its
+/// children (src/main/sysutils.c) and patch 0013's .rzig_build for rzig
+/// on Windows, whose R sets none, when it names one; canonical.
+fn sessionDir(ctx: *Ctx) ?[]const u8 {
+    const t = ctx.getenv("R_SESSION_TMPDIR") orelse return null;
+    if (!ctx.isDir(t)) return null;
+    return canonical(ctx, t) catch null;
+}
+
+/// What `make -n` would print for R CMD SHLIB's plan (open point C a;
+/// feat-shlib-rzig-build Cc2): a compile line per source, in plan order,
+/// `<toolchain>/<tool> <flags> -c <source> -o <object>`, the object named
+/// as make names it; then the link inside the wrapper shlib.mk's recipe
+/// has (winshlib.mk's, with the .def), as make -n prints it. Rcpp's macOS
+/// OpenMP plugin reads the first line after "make would use", the first
+/// compile; pkgload-style filters keep lines that start with a compiler
+/// and expect one -c in each, so no line that runs the linker starts with
+/// it. Each word is quoted for a shell (shellwords.quote).
+pub fn printCommands(ctx: *Ctx, plan: *const pkgplan.Plan, output: []const u8, w: *Io.Writer) !void {
+    const a = ctx.arena;
+    const tool_path = struct {
+        fn f(c: *Ctx, p: *const pkgplan.Plan, tool: []const u8) ![]const u8 {
+            return shellwords.quote(c.arena, try c.fmt("{s}/{s}", .{ p.toolchain, tool }));
+        }
+    }.f;
+    var objs: std.ArrayList([]const u8) = .empty;
+    for (plan.sources) |s| {
+        const lang = std.meta.stringToEnum(pkgplan.Lang, s.lang).?;
+        const tool, const flags = switch (lang) {
+            .c => .{ plan.cc_tool, plan.cc },
+            .cxx => .{ plan.cxx_tool, plan.cxx },
+            .f => .{ plan.fc_tool, plan.fc },
+            .f9x => .{ plan.fc_tool, plan.f9x },
+        };
+        try w.writeAll(try tool_path(ctx, plan, tool));
+        for (flags) |x| try w.print(" {s}", .{try shellwords.quote(a, x)});
+        try w.print(" -c {s} -o {s}\n", .{ try shellwords.quote(a, s.path), try shellwords.quote(a, s.obj) });
+        try objs.append(a, s.obj);
+    }
+    var link: std.ArrayList(u8) = .empty;
+    try link.appendSlice(a, try tool_path(ctx, plan, plan.link_driver));
+    for (plan.link) |x| try link.print(a, " {s}", .{try shellwords.quote(a, x)});
+    try link.print(a, " -o {s}", .{try shellwords.quote(a, output)});
+    const base = pkgplan.dllBase(output);
+    if (plan.win_def.len > 0) try link.print(a, " {s}", .{try shellwords.quote(a, plan.win_def)});
+    if (plan.def) try link.print(a, " {s}", .{try shellwords.quote(a, try ctx.fmt("{s}.def", .{base}))});
+    var quoted_objs: std.ArrayList(u8) = .empty;
+    for (objs.items) |o| try quoted_objs.print(a, " {s}", .{try shellwords.quote(a, o)});
+    try link.appendSlice(a, quoted_objs.items);
+    for (plan.libs) |x| try link.print(a, " {s}", .{try shellwords.quote(a, x)});
+    try w.print("if test \"z{s}\" != \"z\"; then \\\n", .{try mem.join(a, " ", objs.items)});
+    if (plan.def) try w.print("  {s} def -o {s}{s}; \\\n", .{ try shellwords.quote(a, plan.rzig), try shellwords.quote(a, try ctx.fmt("{s}.def", .{base})), quoted_objs.items });
+    try w.print("  echo {s}; \\\n  {s}; \\\nfi\n", .{ link.items, link.items });
 }
 
 /// zig build's --build-file and --cache-dir.
@@ -1065,4 +1301,263 @@ fn setMtime(path: []const u8, t: Io.Timestamp) !void {
     var file = try Io.Dir.cwd().openFile(testing.io, path, .{ .mode = .write_only });
     defer file.close(testing.io);
     try file.setTimestamps(testing.io, .{ .modify_timestamp = .{ .new = t } });
+}
+
+// R CMD SHLIB's calls, `rzig build --shlib` (feat-shlib-rzig-build)
+
+/// shlibIn for `argv` (rzig build's arguments) in `cwd`; what it would
+/// print on stdout goes to `out`.
+fn shlibTest(f: *testutil.Fixture, r: []const u8, cwd: []const u8, argv: []const []const u8, out: *Io.Writer.Allocating) !u8 {
+    const args = (try parseArgs(&f.ctx, argv)).?;
+    return shlibIn(&f.ctx, args, r, cwd, &out.writer);
+}
+
+/// The names in `dir` that start with `.rzig.`.
+fn roots(f: *testutil.Fixture, dir: []const u8) ![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    var d = Io.Dir.cwd().openDir(testing.io, dir, .{ .iterate = true }) catch return out.items;
+    defer d.close(testing.io);
+    var it = d.iterate();
+    while (try it.next(testing.io)) |e| if (mem.startsWith(u8, e.name, ".rzig.")) try out.append(f.ctx.arena, try f.ctx.arena.dupe(u8, e.name));
+    return out.items;
+}
+
+test "shlib: arguments" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const a = (try parseArgs(c, &.{ "--shlib", "--output", "sub/x.so", "--pkg-libs", "-lm -L\"/a b\"", "-j", "4", "--dry-run", "--", "a.c", "--", "-o" })).?;
+    try testing.expect(a.shlib and a.dry_run);
+    try testing.expectEqualStrings("sub/x.so", a.output.?);
+    try testing.expectEqualStrings("-lm -L\"/a b\"", a.pkg_libs.?);
+    try testing.expectEqualStrings("4", a.jobs.?);
+    // after --, every word is a file
+    try testutil.expectArgs(&.{ "a.c", "--", "-o" }, a.files.items);
+    try f.env.put("R_HOME", f.root);
+    // usage errors, 2: a package's flags, no --output, no file; and SHLIB's
+    // flags without --shlib
+    try testing.expectEqual(2, try run(c, &.{ "--shlib", "--pkg", "/p", "--output", "x.so", "--", "a.c" }));
+    try testing.expectEqual(2, try run(c, &.{ "--shlib", "--classify", "--output", "x.so", "--", "a.c" }));
+    try testing.expectEqual(2, try run(c, &.{ "--shlib", "--", "a.c" }));
+    try testing.expectEqual(2, try run(c, &.{ "--shlib", "--output", "x.so" }));
+    try testing.expectEqual(2, try run(c, &.{ "--shlib", "--output", "x.so", "--" }));
+    try testing.expectEqual(2, try run(c, &.{ "--pkg", "/p", "--dry-run" }));
+    try testing.expectEqual(2, try run(c, &.{ "--pkg", "/p", "--", "a.c" }));
+    _ = f.takeWarnings();
+}
+
+test "shlib: the build root, in R's session directory, else beside the output; unique, gone after; a kept one beside the output" {
+    // open point M (b); SZ H2; [shlib-code-1, shlib-tests-1]
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    try f.touch("rpkg/build_t1.zig");
+    try f.touch("w/foo.c");
+    try f.tmp.dir.createDirPath(testing.io, "sess");
+    try f.env.put("R_SESSION_TMPDIR", f.path("sess"));
+    // a zig that zig build cannot run (an empty program), past the version
+    // check (R_ZIG_NO_PREFLIGHT): each call fails, 1, after the root was made
+    try f.env.put("ZIG_BIN", try f.touchProgram("bin/zig"));
+    try f.env.put("R_ZIG_NO_PREFLIGHT", "1");
+    var out: Io.Writer.Allocating = .init(c.arena);
+    const call = struct {
+        fn go(fx: *testutil.Fixture, rh: []const u8, o: *Io.Writer.Allocating, output: []const u8) !void {
+            try testing.expectEqual(1, try shlibTest(fx, rh, fx.path("w"), &.{ "--shlib", "--output", output, "--rpkg-dir", fx.path("rpkg"), "--cache-dir", fx.path("zc"), "--", "foo.c" }, o));
+            try testing.expect(mem.startsWith(u8, fx.takeWarnings(), "rzig-test: cannot run "));
+        }
+    }.go;
+    // in R's session directory, gone after
+    try call(&f, r, &out, "foo.so");
+    try testing.expectEqual(0, (try roots(&f, f.path("sess"))).len);
+    try testing.expectEqual(0, (try roots(&f, f.path("w"))).len);
+    // kept (RZIG_KEEP_ROOT): .rzig.<16 hex> beside the output, with the
+    // plan, never in R's session directory, which R CMD SHLIB's R removes
+    // when it exits; another call, another root
+    try f.env.put("RZIG_KEEP_ROOT", "1");
+    try call(&f, r, &out, "foo.so");
+    try call(&f, r, &out, "foo.so");
+    const kept = try roots(&f, f.path("w"));
+    try testing.expectEqual(2, kept.len);
+    try testing.expect(!mem.eql(u8, kept[0], kept[1]));
+    for (kept) |k| {
+        try testing.expectEqual(".rzig.".len + 16, k.len);
+        try testing.expect(c.isFile(f.fmt("{s}/{s}/plan.zon", .{ f.path("w"), k })));
+        try f.tmp.dir.deleteTree(testing.io, f.fmt("w/{s}", .{k}));
+    }
+    try testing.expectEqual(0, (try roots(&f, f.path("sess"))).len);
+    _ = f.env.swapRemove("RZIG_KEEP_ROOT");
+    // no session directory (unset, or one that does not exist): beside the
+    // output, which is made, and gone after
+    for ([_]?[]const u8{ null, f.path("no-such-dir") }) |sess| {
+        if (sess) |s| try f.env.put("R_SESSION_TMPDIR", s) else _ = f.env.swapRemove("R_SESSION_TMPDIR");
+        try f.tmp.dir.deleteTree(testing.io, "w/sub");
+        try call(&f, r, &out, "sub/foo.so");
+        try testing.expect(c.isDir(f.path("w/sub")));
+        try testing.expectEqual(0, (try roots(&f, f.path("w/sub"))).len);
+    }
+    // and kept there
+    try f.env.put("RZIG_KEEP_ROOT", "1");
+    try call(&f, r, &out, "sub/foo.so");
+    try testing.expectEqual(1, (try roots(&f, f.path("w/sub"))).len);
+    _ = f.env.swapRemove("RZIG_KEEP_ROOT");
+    try testing.expectEqual(0, (try roots(&f, f.path("w"))).len);
+    // --plan-only and --dry-run make none
+    try f.tmp.dir.deleteTree(testing.io, "w/sub");
+    try testing.expectEqual(0, try shlibTest(&f, r, f.path("w"), &.{ "--shlib", "--output", "sub/foo.so", "--dry-run", "--", "foo.c" }, &out));
+    try testing.expectEqual(0, try shlibTest(&f, r, f.path("w"), &.{ "--shlib", "--output", "sub/foo.so", "--plan-only", "--", "foo.c" }, &out));
+    try testing.expect(!c.exists(f.path("w/sub")));
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "shlib: a zig that is not R's: make's (3) with the build tools, else 1 and the compilers' text; zig build never runs" {
+    // [shlib-r-2]: R CMD SHLIB has no install preflight to say so
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-ins
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    try f.touch("rpkg/build_t1.zig");
+    try f.touch("w/foo.c");
+    try f.env.put("PATH", f.path("nothing"));
+    // another minor version, and a mark when zig build runs
+    const other = std.fmt.comptimePrint("{d}.{d}.0", .{ builtin.zig_version.major, builtin.zig_version.minor + 1 });
+    try f.write("bin/zig", f.fmt("#!/bin/sh\n[ \"$1\" = version ] && echo '{s}' && exit 0\n[ \"$1\" = build ] && : > '{s}'\nexit 0\n", .{ other, f.path("built") }), .fromMode(0o755));
+    const zig = f.path("bin/zig");
+    try f.env.put("ZIG_BIN", zig);
+    const argv = [_][]const u8{ "--shlib", "--output", "foo.so", "--rpkg-dir", f.path("rpkg"), "--cache-dir", f.path("zc"), "--", "foo.c" };
+    var out: Io.Writer.Allocating = .init(c.arena);
+    const what = f.fmt("{s} is zig {s}, not R's zig {s}", .{ zig, other, groups.this.zig });
+    // no make: 1, the line and the compilers group's text
+    try testing.expectEqual(1, try shlibTest(&f, r, f.path("w"), &argv, &out));
+    try testing.expectEqualStrings(f.fmt("rzig-test: {s} (R_ZIG_NO_PREFLIGHT=1 skips this check)\n{s}", .{ what, try groups.text(c.arena, .compilers, groups.this) }), f.takeWarnings());
+    // make: 3, and R's make path compiles with zig-cc, as before
+    _ = try f.touchProgram("mk/make");
+    try f.env.put("PATH", f.path("mk"));
+    try testing.expectEqual(exit_needs_make, try shlibTest(&f, r, f.path("w"), &argv, &out));
+    try testing.expectEqualStrings(f.fmt("rzig-test: foo.so needs make: {s}\n", .{what}), f.takeWarnings());
+    try testing.expect(!c.exists(f.path("built")));
+    try testing.expectEqual(0, (try roots(&f, f.path("w"))).len);
+    // R_ZIG_NO_PREFLIGHT skips the comparison: zig build runs
+    try f.env.put("R_ZIG_NO_PREFLIGHT", "1");
+    try testing.expectEqual(0, try shlibTest(&f, r, f.path("w"), &argv, &out));
+    try testing.expect(c.exists(f.path("built")));
+    try testing.expectEqual(0, (try roots(&f, f.path("w"))).len);
+    try testing.expectEqualStrings("", out.written());
+    _ = f.takeWarnings();
+}
+
+test "shlib: a missing build_t1.zig, 3: a damaged tree, make builds it" {
+    // feat-shlib-rzig-build Cc8
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try pkgplan.rHome(&f);
+    try f.touch("w/foo.c");
+    try f.tmp.dir.createDirPath(testing.io, "empty");
+    var out: Io.Writer.Allocating = .init(f.ctx.arena);
+    try testing.expectEqual(exit_needs_make, try shlibTest(&f, r, f.path("w"), &.{ "--shlib", "--output", "foo.so", "--rpkg-dir", f.path("empty"), "--", "foo.c" }, &out));
+    try testing.expectEqualStrings(f.fmt("rzig-test: {s}/build_t1.zig is missing: R_HOME/share/zig/rpkg is not installed; make builds this\n", .{f.path("empty")}), f.takeWarnings());
+    try testing.expectEqual(0, (try roots(&f, f.path("w"))).len);
+    // a package's tier 1 too
+    try f.env.put("R_HOME", r);
+    try f.write("t/DESCRIPTION", "Package: t\n", .default_file);
+    try f.touch("t/src/a.c");
+    try testing.expectEqual(exit_needs_make, try run(&f.ctx, &.{ "--pkg", f.path("t"), "--out", f.path("out-t"), "--rpkg-dir", f.path("empty") }));
+    try testing.expectEqualStrings(f.fmt("rzig build: {s}/build_t1.zig is missing: R_HOME/share/zig/rpkg is not installed; make builds this\n", .{f.path("empty")}), f.takeWarnings());
+    try testing.expect(!f.ctx.exists(f.path("out-t")));
+}
+
+test "shlib: --dry-run prints make -n's commands" {
+    // open point C (a); feat-shlib-rzig-build Cc2
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    try f.touchExe("R/bin/toolchain/zig-cxx");
+    try f.touch("w/a.c");
+    try f.touch("w/b.cpp");
+    try f.write("w/Makevars", "PKG_CPPFLAGS = -I'/inc dir' -DX=\"a b\"\n", .default_file);
+    var out: Io.Writer.Allocating = .init(c.arena);
+    try testing.expectEqual(0, try shlibTest(&f, r, f.path("w"), &.{ "--shlib", "--output", "sub/x.so", "--pkg-libs", "-lm", "--dry-run", "--", "b.cpp", "a.c" }, &out));
+    const tc = f.fmt("{s}/bin/toolchain", .{r});
+    const inc = f.fmt("-I{s}/include", .{r});
+    const lib = f.fmt("-L{s}/lib", .{r});
+    try testing.expectEqualStrings(f.fmt(
+        \\{s}/zig-cxx -std=gnu++20 {s} -DNDEBUG '-I/inc dir' '-DX=a b' -fpic -O2 -c b.cpp -o b.o
+        \\{s}/zig-cc -std=gnu23 {s} -DNDEBUG '-I/inc dir' '-DX=a b' -fpic -O2 -c a.c -o a.o
+        \\if test "zb.o a.o" != "z"; then \
+        \\  echo {s}/zig-cxx -std=gnu++20 -shared {s} -o sub/x.so b.o a.o -lm {s} -lR; \
+        \\  {s}/zig-cxx -std=gnu++20 -shared {s} -o sub/x.so b.o a.o -lm {s} -lR; \
+        \\fi
+        \\
+    , .{ tc, inc, tc, inc, tc, lib, lib, tc, lib, lib }), out.written());
+    // pkgload's filter (lines that start with a compiler) and its -c
+    // extraction count the same lines, one per source
+    var it = mem.splitScalar(u8, out.written(), '\n');
+    var kept: usize = 0;
+    var with_c: usize = 0;
+    while (it.next()) |line| {
+        if (!(mem.startsWith(u8, line, f.fmt("{s}/zig-cc -std=gnu23", .{tc})) or mem.startsWith(u8, line, f.fmt("{s}/zig-cxx -std=gnu++20", .{tc})))) continue;
+        kept += 1;
+        if (mem.indexOf(u8, line, " -c ") != null) with_c += 1;
+    }
+    try testing.expectEqual(2, kept);
+    try testing.expectEqual(kept, with_c);
+    // a call that needs make: 3, and R runs make -n; nothing on stdout
+    out.clearRetainingCapacity();
+    try testing.expectEqual(exit_needs_make, try shlibTest(&f, r, f.path("w"), &.{ "--shlib", "--output", "x.so", "--pkg-libs", "' --always-make IGNORED='", "--dry-run", "--", "a.c" }, &out));
+    try testing.expectEqualStrings("", out.written());
+    try testing.expectEqualStrings("rzig-test: x.so needs make: a single quote in the linker words ('' --always-make IGNORED=''): it changes make's own command line\n", f.takeWarnings());
+    // Windows: rzig def's .def, winshlib.mk's BASE
+    _ = try pkgplan.winHome(&f);
+    c.os = .windows;
+    out.clearRetainingCapacity();
+    try testing.expectEqual(0, try shlibTest(&f, r, f.path("w"), &.{ "--shlib", "--output", "x.dll", "--dry-run", "--", "a.c" }, &out));
+    try testing.expect(mem.indexOf(u8, out.written(), "\n  rzig def -o x.def a.o; \\\n  echo ") != null);
+    try testing.expect(mem.indexOf(u8, out.written(), f.fmt(" -o x.dll x.def a.o {s} -lR; \\\nfi\n", .{lib})) != null);
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "shlib: a call that needs make, with no make: every missing group, 127; with both, 3" {
+    // open point F (a); feat-shlib-rzig-build Cg5, Cc9
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-ins
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    try f.touch("rpkg/build_t1.zig");
+    try f.write("w/Makevars", "all: $(SHLIB) extra\n", .default_file);
+    try f.touch("w/x.c");
+    try f.env.put("PATH", f.path("nothing"));
+    const argv = [_][]const u8{ "--shlib", "--output", "x.so", "--rpkg-dir", f.path("rpkg"), "--", "x.c" };
+    var out: Io.Writer.Allocating = .init(c.arena);
+    const why = "x.so needs make: Makevars has a rule or target line: 'all: $(SHLIB) extra'";
+    const comp = f.fmt("rzig-test: " ++ groups.no_zig ++ "\n{s}", .{try groups.text(c.arena, .compilers, groups.this)});
+    const bt = f.fmt("rzig-test: {s}; no make on PATH\n{s}", .{ why, try groups.text(c.arena, .build_tools, groups.this) });
+    // no zig, no make: the compilers' text, then the line and the build
+    // tools' text
+    try testing.expectEqual(127, try shlibTest(&f, r, f.path("w"), &argv, &out));
+    try testing.expectEqualStrings(f.fmt("{s}{s}", .{ comp, bt }), f.takeWarnings());
+    // R's zig, no make: the build tools' text alone
+    const zig = f.path("bin/zig");
+    try f.write("bin/zig", f.fmt("#!/bin/sh\n[ \"$1\" = version ] && echo '{d}.{d}.0'\nexit 0\n", .{ builtin.zig_version.major, builtin.zig_version.minor }), .fromMode(0o755));
+    try f.env.put("ZIG_BIN", zig);
+    try testing.expectEqual(127, try shlibTest(&f, r, f.path("w"), &argv, &out));
+    try testing.expectEqualStrings(bt, f.takeWarnings());
+    // and make: 3, the line, and R runs make
+    _ = try f.touchProgram("mk/make");
+    try f.env.put("PATH", f.path("mk"));
+    try testing.expectEqual(exit_needs_make, try shlibTest(&f, r, f.path("w"), &argv, &out));
+    try testing.expectEqualStrings("rzig-test: " ++ why ++ "\n", f.takeWarnings());
+    // Fortran asks for flang too
+    try f.touch("w/y.f90");
+    try testing.expectEqual(127, try shlibTest(&f, r, f.path("w"), &.{ "--shlib", "--output", "x.so", "--", "x.c", "y.f90" }, &out));
+    try testing.expect(mem.startsWith(u8, f.takeWarnings(), "rzig-test: " ++ groups.no_flang ++ "\n"));
+    try testing.expectEqualStrings("", out.written());
 }

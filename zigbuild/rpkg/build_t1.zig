@@ -112,9 +112,23 @@ fn outputFile(b: *std.Build, run: *std.Build.Step.Run, path: []const u8) std.Bui
 /// <root>/obj/<n>/<its file name>, a directory per source as zig build's
 /// cache had one per step: OBJECTS may name two files of one name
 /// (util.o, sub/util.o) or one outside src/ (../x.o), and rpkg names a
-/// tier-2 source's object by its stem.
+/// tier-2 source's object by its stem. A source outside srcdir (R CMD
+/// SHLIB's absolute paths: cpp11, TMB) is named as R named it; make names
+/// it so too.
+///
+/// Fortran compiles one after another, in OBJECTS order, when there is
+/// more than one (feat-shlib-rzig-build Cc3): flang writes a module's .mod
+/// into the working directory, srcdir, and a later `use` reads it there.
+/// R runs make with no -j (install.R), so make compiles OBJECTS in order,
+/// where zig build would run them at once. Fixed form (.f) can hold a
+/// module too. C and C++ compiles stay parallel.
 pub fn compileAll(b: *std.Build, plan: *const Plan) []std.Build.LazyPath {
     var objs = std.ArrayList(std.Build.LazyPath).empty;
+    var fortran: usize = 0;
+    for (plan.sources) |s| {
+        if (isFortran(s.lang)) fortran += 1;
+    }
+    var prev_fortran: ?*std.Build.Step = null;
     for (plan.sources, 0..) |s, n| {
         const d = driverFor(plan, s.lang);
         const run = b.addSystemCommand(&.{b.pathJoin(&.{ plan.toolchain, d.tool })});
@@ -124,13 +138,22 @@ pub fn compileAll(b: *std.Build, plan: *const Plan) []std.Build.LazyPath {
         run.addArgs(d.flags);
         run.addArg("-c");
         run.addArg(s.path);
-        run.addFileInput(.{ .cwd_relative = b.pathJoin(&.{ plan.srcdir, s.path }) });
+        // pathJoin joins naively: an absolute path is the file itself
+        run.addFileInput(.{ .cwd_relative = if (std.fs.path.isAbsolute(s.path)) s.path else b.pathJoin(&.{ plan.srcdir, s.path }) });
         run.addArg("-o");
         const dir = b.fmt("{s}/obj/{d}", .{ plan.root, n });
         std.Io.Dir.cwd().createDirPath(b.graph.io, dir) catch @panic("cannot create the build root's obj/");
         objs.append(b.allocator, outputFile(b, run, b.fmt("{s}/{s}", .{ dir, std.fs.path.basename(s.obj) }))) catch @panic("OOM");
+        if (fortran > 1 and isFortran(s.lang)) {
+            if (prev_fortran) |prev| run.step.dependOn(prev);
+            prev_fortran = &run.step;
+        }
     }
     return objs.items;
+}
+
+fn isFortran(lang: []const u8) bool {
+    return std.mem.eql(u8, lang, "f") or std.mem.eql(u8, lang, "f9x");
 }
 
 /// The one link: `SHLIB_LINK -o out [def] objects ALL_LIBS`, as shlib.mk

@@ -1,123 +1,57 @@
-R CMD INSTALL: build the native library with rzig build (zig build alone)
+R CMD INSTALL and R CMD SHLIB: build with rzig build (zig build alone)
 
-Before the make path, run_shlib asks R_HOME/bin/toolchain/rzig to build
-the package's library: `rzig build` classifies the package (no
+.shlib_internal asks R_HOME/bin/toolchain/rzig before its make path,
+for R CMD SHLIB's files and for R CMD INSTALL's package, which
+run_shlib names (pkg =): one hook. `rzig build` (a package: no
 src/Makefile, which install.R runs with make before it gets here, and
 its own src/build.zig, or no configure and a Makevars of assignments
-only [code-2]), derives from etc/Makeconf and the Makevars the compile
-and link lines make would have run, and runs them as zig build steps
-that call the same compilers (zig-cc, zig-cxx, zig-fc). The library
-lands in src/ as make's does, and shlib_install() takes it from there
-(install.libs.R, strip, dSYM as before). Exit 3 means the package needs
-make, and the make path runs unchanged. On unix rzig is started with
-.Internal(spawnWait()) (patch 0012), no shell; on Windows system2()
-spawns without one already. R_ZIG_PKG_BUILDER=auto|zig|make chooses
-(zig: an error where the hook would hand the package to make, a tier-3
-package or a toolchain with no rzig [preflight-PF-4]; make: rzig is
-never asked), for parity runs and bisecting. R_ZIG_JOBS, else
-MAKEFLAGS' -j, is the job count; a variable assignment in MAKEFLAGS
-makes rzig build decline a package make can build (make's build would
-differ). A src/build.zig package has no make build: one whose build
-would need make anyway fails, exit 1, after rzig's line "<pkg>:
-src/build.zig cannot be built by make: <reason>", instead of a make
-path that ignores build.zig [preflight-PF-1]. rzig reads the user
-Makevars R found: the hook passes makevars_user() as R_MAKEVARS_USER
-when it names a file, since R's `~` falls back to the passwd home when
-HOME is unset and rzig's does not [code-5]. A src/build.zig alone (a
-zig package, no C source) counts as compiled code. patch_rpaths reads
-the OS from Sys.info() instead of `uname -a`. The install preflight
-(patch 0009) decides the tier the same way, before configure, through
-`--rzig-check=package`.
-.github/devdocs/feat-zig-pkg-build/PLAN.md, milestone 3 and the
-consolidation with phase 3.
+only [code-2]) or `rzig build --shlib` (the files named, the output,
+the other words as make's PKG_LIBS, the working directory's Makevars)
+derives from etc/Makeconf, the site and user Makevars and the
+environment what make would have run, and runs it as zig build steps
+that call the same compilers. Exit 3 means it needs make, and the
+make path runs unchanged; with no make on PATH rzig says so and names
+the missing groups (exit 127). A src/build.zig package that make
+cannot build fails, exit 1 [preflight-PF-1]. The top-level
+.rzig_build holds every rule: R_ZIG_PKG_BUILDER=auto|zig|make (zig:
+an error where make would run [preflight-PF-4]; make: never rzig),
+R_ZIG_JOBS else MAKEFLAGS' -j, the user Makevars R found as
+R_MAKEVARS_USER [code-5], and the spawn without a shell
+(.Internal(spawnWait()), patch 0012, on unix; system2() on Windows,
+which also gets R_SESSION_TMPDIR, the session directory unix R names
+to every child and Windows R does not, and no "Exit code was 127"
+warning, R's reading of rzig's 127 as a failed launch).
+.shlib_internal passes R's parsed values only: TMB keeps that body
+from the R that installed it, so .rzig_build's arguments are added,
+never removed or renamed, and a missing .rzig_build is the make path.
+--dry-run prints R's make command as before, then the commands rzig
+would run in make -n's form (Rcpp's macOS OpenMP plugin reads the
+first). --clean and --preclean act on the make path only: rzig keeps
+no object beside the sources. symbols.rds is not made on the rzig
+path. A child a signal ends reads as its raw wait status (sys-unix.c):
+SIGQUIT reads as 3, make; Ctrl-C's SIGINT, which R forwards to rzig,
+reads as 2, which fails, as every status but 0 and 3 does (a usage
+error included), so it never starts make [shlib-r-1]. patch_rpaths
+reads the OS from Sys.info() instead of `uname -a`. A src/build.zig
+alone counts as compiled code. The install preflight (patch 0009)
+decides the tier the same way, through `--rzig-check=package`.
+.github/devdocs/feat-zig-pkg-build/PLAN.md,
+.github/devdocs/feat-shlib-rzig-build/PLAN.md.
 
 --- a/src/library/tools/R/install.R
 +++ b/src/library/tools/R/install.R
-@@ -683,12 +683,83 @@
-             }
-         }
- 
-+        ## r-zig: the native library through zig build alone, no make and
-+        ## no shell, when the package qualifies (no configure, no
-+        ## src/Makefile, a Makevars of assignments only, or its own
-+        ## src/build.zig): `rzig build` in R_HOME/bin/toolchain classifies
-+        ## the package, derives from Makeconf and the Makevars what make
-+        ## would have run, and runs it as zig build steps that call the same
-+        ## compilers. Exit 3 means the package needs make, and the make
-+        ## path below runs as before; a src/build.zig package that make
-+        ## cannot build (make ignores build.zig) exits 1, a failure, after
-+        ## rzig's line saying why [preflight-PF-1]. R_ZIG_PKG_BUILDER =
-+        ## auto (default), zig (an error where this hook would hand the
-+        ## package to make: a tier-3 package, or no rzig [preflight-PF-4];
-+        ## a src/Makefile package goes to make without coming here), make
-+        ## (never rzig). R_ZIG_JOBS, else MAKEFLAGS' -j, sets the
-+        ## parallelism.
-+        ## .github/devdocs/feat-zig-pkg-build/PLAN.md.
-+        rzig_build <- function(pkg_name, instdir, arch, use_LTO)
-+        {
-+            builder <- Sys.getenv("R_ZIG_PKG_BUILDER", "auto")
-+            if (builder == "make") return(NA)
-+            rzig <- file.path(R.home(), "bin", "toolchain",
-+                              if (WINDOWS) "rzig.exe" else "rzig")
-+            if (!file.exists(rzig)) {
-+                ## no rzig: a damaged tree, since every channel ships it
-+                ## with R (feat-standalone-toolchain phase 4); the make
-+                ## path, unless R_ZIG_PKG_BUILDER=zig, which means no make
-+                ## path, here too, where there is no rzig to ask
-+                ## [preflight-PF-4]
-+                if (builder == "zig")
-+                    pkgerrmsg("R_ZIG_PKG_BUILDER is 'zig' and R_HOME/bin/toolchain has no rzig",
-+                              pkg_name)
-+                return(NA)
-+            }
-+            args <- c("build", "--pkg", "..", "--src", ".", "--out", ".",
-+                      "--flat", "--name", pkg_name)
-+            if (isTRUE(use_LTO)) args <- c(args, "--use-lto", "yes")
-+            else if (isFALSE(use_LTO)) args <- c(args, "--use-lto", "no")
-+            if (!is.na(use_C)) args <- c(args, "--c-std", as.character(use_C))
-+            if (WINDOWS && debug) args <- c(args, "--debug")
-+            jobs <- Sys.getenv("R_ZIG_JOBS")
-+            if (!nzchar(jobs))
-+                jobs <- regmatches(Sys.getenv("MAKEFLAGS"),
-+                                   regexpr("(?<=-j)[0-9]+", Sys.getenv("MAKEFLAGS"),
-+                                           perl = TRUE))
-+            if (length(jobs) == 1L && grepl("^[0-9]+$", jobs))
-+                args <- c(args, "-j", jobs)
-+            ## the user Makevars R found, which rzig then reads in place of
-+            ## its own lookup: R's `~` falls back to the passwd home when
-+            ## HOME is unset (unix), rzig's does not [code-5]. When R found
-+            ## none, neither does rzig (Windows could not hold the empty
-+            ## value that says so). The caller's value comes back after.
-+            mu <- makevars_user()
-+            mu_was <- Sys.getenv("R_MAKEVARS_USER", NA_character_)
-+            if (length(mu)) Sys.setenv(R_MAKEVARS_USER = mu)
-+            status <- if (WINDOWS) system2(rzig, shQuote(args))
-+                      else .Internal(spawnWait(c(rzig, args), 0L))
-+            if (is.na(mu_was)) Sys.unsetenv("R_MAKEVARS_USER")
-+            else Sys.setenv(R_MAKEVARS_USER = mu_was)
-+            if (identical(status, 3L)) {
-+                if (builder == "zig")
-+                    pkgerrmsg("this package needs make, and R_ZIG_PKG_BUILDER is 'zig'",
-+                              pkg_name)
-+                return(NA)
-+            }
-+            if (status != 0L) return(TRUE)
-+            shlib_install(instdir, arch)
-+            FALSE
-+        }
-+
-         ## This is only called for Makevars[.win], so assume it
-         ## does create a shlib: not so reliably reported on Windows
-         ## Note though that it may not create pkg_name.dll, and
-         ## graph does not.
-         run_shlib <- function(pkg_name, srcs, instdir, arch, use_LTO = NA)
-         {
-+            zig <- rzig_build(pkg_name, instdir, arch, use_LTO)
-+            if (!is.na(zig)) return(zig)
-             args <- c(shargs,
-                       if(isTRUE(use_LTO)) "--use-LTO",
-                       if(isFALSE(use_LTO)) "--no-use-LTO",
-@@ -746,8 +817,8 @@
+@@ -702,7 +702,9 @@
+             if (debug) message("about to run ",
+                                "R CMD SHLIB ", paste(args, collapse = " "),
+                                domain = NA)
+-            if (.shlib_internal(args) == 0L) {
++            ## r-zig: rzig build decides for the package first (patch 0013,
++            ## .rzig_build)
++            if (.shlib_internal(args, pkg = pkg_name) == 0L) {
+                 if(WINDOWS && !file.exists("install.libs.R")
+                    && !length(Sys.glob("*.dll"))) {
+                     message("no DLL was created")
+@@ -746,8 +748,8 @@
  
              starsmsg(stars, "checking absolute paths in shared objects and dynamic libraries")
  
@@ -128,14 +62,186 @@ consolidation with phase 3.
              have_chrpath <- nzchar(Sys.which("chrpath"))
              have_patchelf <- nzchar(Sys.which("patchelf"))
              have_readelf <- nzchar(Sys.which("readelf"))
-@@ -1550,7 +1621,9 @@
+@@ -1550,7 +1552,9 @@
                      srcs <- dir(pattern = "\\.([cfmM]|cc|cpp|f90|f95|mm)$",
                                  all.files = TRUE)
                      ## This allows Makevars to set OBJECTS or its own targets.
 -                    allfiles <- if (file.exists("Makevars")) c("Makevars", srcs) else srcs
-+                    ## r-zig: a src/build.zig is a native build too (rzig_build)
++                    ## r-zig: a src/build.zig is a native build too (.rzig_build)
 +                    allfiles <- if (file.exists("Makevars") || file.exists("build.zig"))
 +                                    c("Makevars", srcs) else srcs
                      wd2 <- setwd(file.path(R.home("bin"), "exec"))
                      archs <- Sys.glob("*")
                      setwd(wd2)
+@@ -2589,7 +2593,9 @@
+ }
+ 
+ ## for .SHLIB and R CMD INSTALL on all platforms
+-.shlib_internal <- function(args)
++## r-zig: `pkg`, R CMD INSTALL's package from run_shlib, for rzig build's
++## package mode (patch 0013, .rzig_build)
++.shlib_internal <- function(args, pkg = NULL)
+ {
+     Usage <- function()
+         cat("Usage: R CMD SHLIB [options] files | linker options",
+@@ -2666,6 +2672,7 @@
+     ## user Makevars
+     ## and similarly elsewhere
+     objs <- character()
++    files <- character() # r-zig: the files as named, for rzig build (patch 0013)
+     shlib <- ""
+     makefiles <-
+         c(file.path(paste0(R.home("etc"), rarch), "Makeconf"),
+@@ -2763,7 +2770,10 @@
+                 if (nzchar(nobj) && !nzchar(shlib))
+                     shlib <- paste0(nobj, SHLIB_EXT)
+             }
+-            if (nzchar(nobj)) objs <- c(objs, nobj)
++            if (nzchar(nobj)) {
++                objs <- c(objs, nobj)
++                files <- c(files, a) # r-zig: the file as named (patch 0013)
++            }
+             else pkg_libs <- c(pkg_libs, a)
+         }
+         args <- args[-1L]
+@@ -2951,11 +2961,25 @@
+ 
+     cmd <- paste(MAKE, p1(paste("-f", shQuote(makefiles))), p1(makeargs),
+                  p1(makeobjs))
++    ## r-zig (patch 0013): rzig build first (.rzig_build); NA is the make
++    ## path below. This body passes R's parsed values only: TMB keeps a
++    ## copy of it (TMB.R), and the rules are .rzig_build's, in the R that
++    ## runs. --clean and --preclean act on the make path alone: rzig keeps
++    ## no object beside the sources (open point E a).
++    rzig_first <- function(dry)
++        if (exists(".rzig_build", mode = "function"))
++            .rzig_build(pkg = pkg, files = files, output = shlib,
++                        pkg_libs = pkg_libs, use_lto = use_lto,
++                        use_C = use_C, debug = WINDOWS && debug,
++                        dry_run = dry)
++        else NA
+     if (dry_run) {
+         cat("make cmd is\n  ", cmd, "\n\nmake would use\n", sep = "")
+-        system(paste(cmd, "-n"))
++        if (!identical(rzig_first(TRUE), 0L)) system(paste(cmd, "-n"))
+         res <- 0
+     } else {
++        res <- rzig_first(FALSE)
++        if (!is.na(res)) return(res)
+         ## first report versions of involved compilers
+         lines <- system(paste(MAKE, p1(paste("-f", shQuote(makefiles))),
+                               "compilers"), intern = TRUE)
+@@ -3472,6 +3496,113 @@
+     m
+ }
+ 
++## r-zig (patch 0013; feat-zig-pkg-build, feat-shlib-rzig-build): the
++## native library through zig build alone, before .shlib_internal's make
++## path: `rzig build` for R CMD INSTALL's package (`pkg`, from
++## run_shlib), `rzig build --shlib` for R CMD SHLIB's files. NA: the make
++## path (R_ZIG_PKG_BUILDER=make, no rzig, or rzig's exit 3 = needs make);
++## otherwise rzig's status, which .shlib_internal returns: any other
++## non-zero status fails, never runs make [shlib-r-1].
++## Every rule lives here: TMB keeps .shlib_internal's body from the R
++## that installed it (TMB.R), so arguments are added, with defaults,
++## never removed or renamed. R_ZIG_PKG_BUILDER = auto (default), zig (an
++## error where make would run: a call that needs make, or no rzig
++## [preflight-PF-4]; a src/Makefile package goes to make without coming
++## here), make (never rzig). R_ZIG_JOBS, else MAKEFLAGS' -j, sets the
++## parallelism. .github/devdocs/feat-zig-pkg-build/PLAN.md,
++## .github/devdocs/feat-shlib-rzig-build/PLAN.md.
++.rzig_build <- function(pkg = NULL, files = character(), output = "",
++                        pkg_libs = character(), use_lto = NA, use_C = "",
++                        debug = FALSE, dry_run = FALSE)
++{
++    builder <- Sys.getenv("R_ZIG_PKG_BUILDER", "auto")
++    if (builder == "make" || (is.null(pkg) && !length(files))) return(NA)
++    zig_only <- builder == "zig" && !dry_run
++    stop_zig <- function(msg) {
++        message("ERROR: ", msg,
++                if (!is.null(pkg)) paste(" for package", sQuote(pkg)) else "",
++                domain = NA)
++        1L
++    }
++    windows <- .Platform$OS.type == "windows"
++    rzig <- file.path(R.home(), "bin", "toolchain",
++                      if (windows) "rzig.exe" else "rzig")
++    ## no rzig: a damaged tree, since every channel ships it with R
++    ## (feat-standalone-toolchain phase 4); the make path, unless
++    ## R_ZIG_PKG_BUILDER=zig, which means no make path [preflight-PF-4]
++    if (!file.exists(rzig))
++        return(if (zig_only)
++                   stop_zig("R_ZIG_PKG_BUILDER is 'zig' and R_HOME/bin/toolchain has no rzig")
++               else NA)
++    args <- if (is.null(pkg))
++                c("build", "--shlib", "--output", output,
++                  if (length(pkg_libs))
++                      c("--pkg-libs", paste(pkg_libs, collapse = " ")),
++                  if (dry_run) "--dry-run")
++            else c("build", "--pkg", "..", "--src", ".", "--out", ".",
++                   "--flat", "--name", pkg)
++    if (isTRUE(use_lto)) args <- c(args, "--use-lto", "yes")
++    else if (isFALSE(use_lto)) args <- c(args, "--use-lto", "no")
++    if (!is.na(use_C) && nzchar(use_C))
++        args <- c(args, "--c-std", as.character(use_C))
++    if (windows && debug) args <- c(args, "--debug")
++    jobs <- Sys.getenv("R_ZIG_JOBS")
++    if (!nzchar(jobs))
++        jobs <- regmatches(Sys.getenv("MAKEFLAGS"),
++                           regexpr("(?<=-j)[0-9]+", Sys.getenv("MAKEFLAGS"),
++                                   perl = TRUE))
++    if (length(jobs) == 1L && grepl("^[0-9]+$", jobs))
++        args <- c(args, "-j", jobs)
++    if (is.null(pkg)) args <- c(args, "--", files)
++    ## the user Makevars R found, which rzig then reads in place of its
++    ## own lookup: R's `~` falls back to the passwd home when HOME is unset
++    ## (unix), rzig's does not [code-5]. When R found none, neither does
++    ## rzig (Windows could not hold the empty value that says so). The
++    ## caller's value comes back after.
++    mu <- makevars_user()
++    mu_was <- Sys.getenv("R_MAKEVARS_USER", NA_character_)
++    if (length(mu)) Sys.setenv(R_MAKEVARS_USER = mu)
++    on.exit(if (is.na(mu_was)) Sys.unsetenv("R_MAKEVARS_USER")
++            else Sys.setenv(R_MAKEVARS_USER = mu_was))
++    ## R's session directory, where R CMD SHLIB's build root goes (open
++    ## point M b): unix R names it to every child in R_SESSION_TMPDIR,
++    ## Windows R sets none (sysutils.c, #ifndef Win32), so this one names
++    ## it there, and the caller's value comes back after
++    ## (feat-shlib-rzig-build round 1, kappa)
++    if (windows) {
++        st_was <- Sys.getenv("R_SESSION_TMPDIR", NA_character_)
++        Sys.setenv(R_SESSION_TMPDIR = tempdir())
++        on.exit(if (is.na(st_was)) Sys.unsetenv("R_SESSION_TMPDIR")
++                else Sys.setenv(R_SESSION_TMPDIR = st_was), add = TRUE)
++    }
++    ## what R printed comes first: the dry run's "make would use", which
++    ## Rcpp's macOS OpenMP plugin reads the next line after, through a pipe
++    ## (system() flushes too; spawnWait does not)
++    flush(stdout())
++    ## R's Windows system() reads exit status 127 as a failed launch
++    ## (run.h's NOLAUNCH) and warns "Exit code was 127", which only
++    ## repeats rzig's own text (no zig; a call that needs make, and no
++    ## make); a launch that really failed keeps its warning
++    no127 <- function(w)
++        if (identical(conditionMessage(w),
++                      gettextf("Exit code was %d", 127L, domain = "R")))
++            invokeRestart("muffleWarning")
++    status <- if (windows)
++                  withCallingHandlers(system2(rzig, shQuote(args)),
++                                      warning = no127)
++              else .Internal(spawnWait(c(rzig, args), 0L))
++    ## a child a signal ends reads as its raw wait status (sys-unix.c):
++    ## Ctrl-C (SIGINT, forwarded to rzig) reads as 2, a failure, so no
++    ## status but 3 starts make [shlib-r-1]; SIGQUIT reads as 3
++    if (identical(status, 3L))
++        return(if (zig_only)
++                   stop_zig(paste(if (is.null(pkg)) "this shared object"
++                                  else "this package",
++                                  "needs make, and R_ZIG_PKG_BUILDER is 'zig'"))
++               else NA)
++    status
++}
++
+ cxx_standards <- c("26", "23", "20", "17", "14", "11", "98")
+ 
+ ### Local variables: ***

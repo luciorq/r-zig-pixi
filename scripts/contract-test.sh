@@ -10,9 +10,11 @@
 # (Makevars rules) through make. Each install's log (RZIG_TRACE=1,
 # keep_outputs) must say so: `rzig build: tier 1`, `needs make`, or both
 # for pak. Rcpp's evalCpp compiles at run time through R CMD SHLIB,
-# which is make on every OS.
+# which patch 0013's one hook sends to rzig build first; make is on PATH
+# here, and the no-make program below proves rzig build alone
+# [shlib-tests-4].
 #   Rcpp       — C++ compile (rzig build) + runtime evalCpp (R CMD SHLIB:
-#                compiles C++ through Makeconf and make)
+#                compiles C++ through Makeconf, rzig build first)
 #   data.table — plain C package (configure: make)
 #   minqa      — depends on Rcpp AND compiles Fortran: full mixed-toolchain
 #                test (zig C/C++ + flang) through R's package build (unix:
@@ -35,7 +37,24 @@
 #                straight into that compiled code; on linux/windows ps
 #                has no Objective-C to exercise, so only the plain
 #                load + a basic call is asserted there.
-# (The R program is written to a file, not passed with -e: see below.)
+#   cpp11, callr, processx, R6 — for the no-make program below: cpp11's
+#                headers and callr::rcmd, cpp_source's own SHLIB call.
+#                They install here, with the build tools, as ps and pak
+#                do (processx has Makevars rules; feat-shlib-rzig-build
+#                K). cpp11's Suggests, which cpp_source itself requires,
+#                are not installed (Cc1).
+# Then the run-time compiles with no make (feat-shlib-rzig-build Cc1,
+# Cc6): the base tree, the installed one with no build tools (env.sh's
+# R_HOME_DIR; the compile tree's etc/Renviron puts its make first on
+# PATH), runs a program with the test library under env -i, zig through
+# ZIG_BIN and on PATH only a directory holding sh, cp (R CMD build's,
+# for pak's install) and flang: Rcpp's cppFunction (a C++ exception
+# caught) and evalCpp, on macOS its OpenMP plugin's dry-run parse (and
+# its compile where Makeconf offers OpenMP), cpp11's SHLIB call through
+# callr::rcmd, pak's compiler probe in its worker, and pak's install of
+# a package with C code. No make on PATH is the evidence that rzig built
+# each one.
+# (The R programs are written to files, not passed with -e: see below.)
 . "$(dirname "$0")/env.sh"
 
 if [ "$OS" = windows ]; then
@@ -73,13 +92,13 @@ else
 fi
 
 echo "Contract test (variant: $VARIANT, os: $OS)"
-echo "Compiling Rcpp + data.table + minqa + quadprog + pak + ps from source..."
+echo "Compiling Rcpp + data.table + minqa + quadprog + pak + ps (+ cpp11, callr, processx, R6) from source..."
 # The program goes through a file: R's front end omits a `-e` expression
 # over 10000 bytes once bin/R has encoded it (spaces as `~+~`), with a
 # warning and exit 0, which would make this test vacuous.
 cat > "$LIB/contract.R" <<'RCODE'
   lib <- Sys.getenv("R_CONTRACT_LIB")
-  pkgs <- c("Rcpp", "data.table", "minqa", "quadprog", "pak", "ps")
+  pkgs <- c("Rcpp", "data.table", "minqa", "quadprog", "pak", "ps", "cpp11", "callr", "processx", "R6")
   # the builder each took, from its kept install log (keep_outputs)
   outs <- file.path(lib, "install-logs")
   dir.create(outs, showWarnings = FALSE)
@@ -204,7 +223,7 @@ cat > "$LIB/contract.R" <<'RCODE'
     stopifnot(file.exists(nm))
     cat("R CMD config NM:", nm, "exists: OK\n")
   }
-  cat("Rcpp (rzig build) evalCpp (runtime C++ compile via Makeconf and make): OK\n")
+  cat("Rcpp (rzig build) evalCpp (runtime C++ compile through R CMD SHLIB; R_ZIG_PKG_BUILDER=auto with make on PATH here, the no-make run is below): OK\n")
   cat("data.table (make) grouped aggregation: OK\n")
   cat("minqa (Rcpp-dependent + package Fortran;", builders[["minqa"]], ") bobyqa: OK\n")
   cat("quadprog (pure Fortran: zig-fc compile, FLIBS link through rzig; rzig build) solve.QP: OK\n")
@@ -215,6 +234,118 @@ cat > "$LIB/contract.R" <<'RCODE'
 RCODE
 R_CONTRACT_LIB="$LIB" R_CONTRACT_VARIANT="$VARIANT" RZIG_TRACE=1 "$R_BIN" --vanilla "$LIB/contract.R" | tee "$LIB/contract.out"
 grep -q '^contract program ran to the end$' "$LIB/contract.out" || { echo "error: the contract program did not run to its end" >&2; exit 1; }
+
+# Run-time compiles with no make (feat-shlib-rzig-build, patch 0013's one
+# hook in .shlib_internal; Cc1, Cc6): the base tree (env.sh's
+# R_HOME_DIR), which has no build tools, with the packages installed
+# above (R_LIBS), under env -i as pkg-parity's no-make install: zig
+# through ZIG_BIN, with env.sh's global cache and rzig's cache above
+# (XDG_CACHE_HOME), and on PATH only a directory holding sh, flang and,
+# on unix, cp, which R CMD build runs for pak's install (Windows: System32
+# and copies of flang and its .cfg files). pak's worker lists the
+# system's packages before an install (pkgdepends'
+# sysreqs_lookup_system, dpkg-query on Debian and Ubuntu); with that tool
+# off PATH its worker spins instead of failing, so the lookup is off
+# (PKG_SYSREQS_LOOKUP_SYSTEM=false). It reads system requirements only,
+# not what this tests.
+NM="$LIB/nomake"
+rm -rf "$NM"; mkdir -p "$NM/bin" "$NM/home" "$NM/tmp"
+if [ "$OS" = windows ]; then
+  base_rscript="$R_HOME_DIR/bin/x64/Rscript.exe"
+  fl="$(command -v flang.exe || command -v flang || true)"
+  if [ -n "$fl" ]; then
+    for f in flang.exe flang-new.exe flang.cfg flang-compile.cfg; do
+      [ ! -f "$(dirname "$fl")/$f" ] || cp "$(dirname "$fl")/$f" "$NM/bin/"
+    done
+  fi
+  sysdir="$(cygpath -u "${SYSTEMROOT:-C:\Windows}")"
+  # zig's own cache needs a home too (LOCALAPPDATA), as pkg-parity's.
+  # Windows always sets PROCESSOR_ARCHITECTURE, and cli's exit-time stop
+  # of its tick thread strcmp()s its getenv unchecked (cli's
+  # src/thread.c), so pak:::remote() under env -i without it crashes R
+  # as it exits (feat-shlib-rzig-build round 1, kappa)
+  nm_env=(SYSTEMROOT="$SYSTEMROOT" WINDIR="${WINDIR:-$SYSTEMROOT}"
+    PROCESSOR_ARCHITECTURE="${PROCESSOR_ARCHITECTURE:-AMD64}" HOME="$(cygpath -w "$NM/home")"
+    USERPROFILE="$(cygpath -w "$NM/home")" LOCALAPPDATA="$(cygpath -w "$NM/home")"
+    TMPDIR="$(cygpath -w "$NM/tmp")" TMP="$(cygpath -w "$NM/tmp")" TEMP="$(cygpath -w "$NM/tmp")"
+    PATH="$NM/bin:$sysdir/System32" ZIG_BIN="$(cygpath -m "$ZIG")"
+    ZIG_GLOBAL_CACHE_DIR="$(cygpath -m "$ZIG_GLOBAL_CACHE_DIR")" XDG_CACHE_HOME="$XDG_CACHE_HOME"
+    R_LIBS="$(cygpath -m "$LIB")")
+else
+  base_rscript="$R_HOME_DIR/bin/Rscript"
+  ln -s "$(command -v sh)" "$NM/bin/sh"; ln -s "$(command -v cp)" "$NM/bin/cp"
+  fl="$(command -v flang || command -v flang-new || true)"
+  [ -z "$fl" ] || ln -s "$fl" "$NM/bin/flang"
+  nm_env=(HOME="$NM/home" TMPDIR="$NM/tmp" PATH="$NM/bin" ZIG_BIN="$ZIG"
+    ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" R_LIBS="$LIB")
+fi
+test -x "$base_rscript" || { echo "error: no base tree at $R_HOME_DIR: run 'pixi run build'" >&2; exit 1; }
+test ! -e "$R_HOME_DIR/bin/toolchain/usr" || { echo "error: $R_HOME_DIR/bin/toolchain has usr/: not the base alone" >&2; exit 1; }
+test -n "$ZIG" || { echo "error: no zig for the no-make program (ZIG_BIN, or zig on PATH)" >&2; exit 1; }
+cat > "$NM/nomake.R" <<'RCODE'
+  windows <- .Platform$OS.type == "windows"
+  so <- .Platform$dynlib.ext
+  if (nzchar(Sys.which("make"))) stop("make is on PATH: ", Sys.which("make"))
+  library(Rcpp)
+  f <- cppFunction('int f(int x) { if (x < 0) throw std::range_error("neg"); return x; }')
+  stopifnot(f(2L) == 2L, inherits(try(f(-1L), silent = TRUE), "try-error"), evalCpp("2 + 2") == 4)
+  cat("no make: Rcpp cppFunction (a C++ exception caught) and evalCpp (R CMD SHLIB, rzig build): OK\n")
+  # macOS: Rcpp's OpenMP plugin reads the compiler from R CMD SHLIB
+  # --dry-run's line after "make would use", now rzig's first compile
+  # line; with nothing there it stops with a subscript error (Cc6). The
+  # compile only where Makeconf offers OpenMP (not minimal).
+  if (Sys.info()[["sysname"]] == "Darwin") {
+    p <- Rcpp:::.openmpPluginDarwin()
+    stopifnot(identical(p$env$PKG_CXXFLAGS, "-fopenmp"))
+    mk <- readLines(file.path(R.home("etc"), "Makeconf"))
+    if (any(grepl("^SHLIB_OPENMP_CXXFLAGS *= *-", mk))) {
+      g <- cppFunction("int g() { return 1; }", plugins = "openmp")
+      stopifnot(g() == 1L)
+    }
+    cat("no make: Rcpp's macOS OpenMP plugin parses R CMD SHLIB --dry-run: OK\n")
+  }
+  # cpp11's cpp_source call without its code generator (cpp11
+  # R/source.R): a Makevars in the working directory, an absolute
+  # source, --output=, through callr::rcmd
+  d <- normalizePath(tempfile("cpp11-"), "/", mustWork = FALSE)
+  dir.create(file.path(d, "src"), recursive = TRUE)
+  writeLines(c("CXX_STD = CXX11",
+               paste0("PKG_CPPFLAGS = -I'", normalizePath(system.file("include", package = "cpp11"), "/"), "'")),
+             file.path(d, "src", "Makevars"))
+  writeLines(c('#include "cpp11/as.hpp"', '#include "cpp11/declarations.hpp"',
+               'extern "C" SEXP rzig_twice(SEXP x) {', '  BEGIN_CPP11',
+               '  return cpp11::as_sexp(2 * cpp11::as_cpp<int>(x));', '  END_CPP11', '}'),
+             file.path(d, "src", "code.cpp"))
+  r <- callr::rcmd("SHLIB", c(file.path(d, "src", "code.cpp"), paste0("--output=pkg", so)), wd = file.path(d, "src"))
+  if (r$status != 0L) { cat(r$stdout, r$stderr, sep = "\n"); stop("cpp11's SHLIB call failed with no make") }
+  dyn.load(file.path(d, "src", paste0("pkg", so)))
+  stopifnot(.Call("rzig_twice", 21L, PACKAGE = "pkg") == 42L)
+  cat("no make: cpp11's SHLIB call through callr::rcmd: OK\n")
+  # pak's own probe, pkgbuild's has_compiler() in pak's worker: R CMD
+  # SHLIB foo.c (feat-shlib-rzig-build section 4)
+  stopifnot(isTRUE(pak:::remote(function() pkgbuild::check_build_tools())))
+  cat("no make: pak's compiler probe (pkgbuild::check_build_tools in its worker): OK\n")
+  if (windows)
+    print(pak:::remote(function() pkgbuild::has_rtools(debug = TRUE)))  # open point H: printed only
+  # pak's install of a package with C code: R CMD build, then R CMD
+  # INSTALL through rzig build (patch 0013)
+  p <- file.path(d, "rzigpak")
+  dir.create(file.path(p, "src"), recursive = TRUE); dir.create(file.path(p, "R"))
+  writeLines(c("Package: rzigpak", "Version: 0.1", "Title: Test", "Description: Test package.", "License: MIT",
+               "Author: r-zig", "Maintainer: r-zig <r-zig@example.org>"), file.path(p, "DESCRIPTION"))
+  writeLines(c("useDynLib(rzigpak)", "export(f)"), file.path(p, "NAMESPACE"))
+  writeLines('f <- function() .Call("rzig_one")', file.path(p, "R", "f.R"))
+  writeLines(c("#include <Rinternals.h>", "SEXP rzig_one(void) { return ScalarInteger(1L); }"),
+             file.path(p, "src", "one.c"))
+  tl <- file.path(d, "lib"); dir.create(tl)
+  pak::local_install(p, lib = tl, dependencies = FALSE, ask = FALSE)
+  stopifnot(getExportedValue(loadNamespace("rzigpak", lib.loc = tl), "f")() == 1L)
+  cat("no make: pak's install of a package with C code: OK\n")
+  cat("no-make program ran to the end\n")
+RCODE
+(cd "$NM" && env -i "${nm_env[@]}" PKG_SYSREQS_LOOKUP_SYSTEM=false "$base_rscript" --vanilla nomake.R) 2>&1 | tee "$NM/nomake.out"
+grep -q '^no-make program ran to the end' "$NM/nomake.out" ||
+  { echo "error: the no-make program (Rcpp, cpp11's SHLIB call, pak's probe and install on the base tree, no make on PATH) did not run to its end" >&2; exit 1; }
 # The environments rzig compiled those against (feat-no-host-paths F3b):
 # the tree's own (R_HOME/../..), then the pixi env, which pixi.toml names
 # in R_ZIG_EXTRA_ENV. A link line as rzig would run it: both -L after the

@@ -12,8 +12,10 @@
 #     recipe/test-preflight.R, r-zig-slim's own test, with this R (PHASE4
 #     Cg10): an R-only package installs, and a compiled one stops in the
 #     preflight with `zig-cc: no zig (` and the compilers group's text,
-#     whose pip line names r-zig-compilers. It narrows PATH to R's bin
-#     itself, so no host zig, and no python3 with ziglang, is reachable
+#     whose pip line names r-zig-compilers, and R CMD SHLIB stops with that
+#     text too, and of a Makevars rule with both groups' texts
+#     (feat-shlib-rzig-build). It narrows PATH to R's bin itself, so no
+#     host zig, and no python3 with ziglang, is reachable
 #   - + r-zig-compilers (which brings ziglang, and no make): zig-fc with no
 #     flang stops with exit 127 and the compilers group's text, whose pip
 #     line says PyPI has no Fortran compiler (B35; PHASE4 Cg3); R CMD
@@ -27,10 +29,16 @@
 #     CONDA_PREFIX and honour R_ZIG_EXTRA_ENV (an env's header, -L and
 #     rpath), feat-no-host-paths F3b; a package whose Makevars has a rule
 #     (a static library through $(AR)) needs make, and stops in the
-#     preflight naming r-zig-build-tools
+#     preflight naming r-zig-build-tools; R CMD SHLIB with no make
+#     (feat-shlib-rzig-build, patch 0013's one hook): pkgbuild's probe
+#     shape and a C++ file build through rzig build and load (no shared
+#     C++ runtime), and a Makevars rule stops with rzig's reason, "no make
+#     on PATH" and the build tools' pip line, building nothing
 #   - + r-zig-build-tools: make is its R_HOME/bin/toolchain/usr/bin/make,
 #     which etc/Renviron puts first on PATH, and MAKE is plain `make`
-#     (B23, B25); the Makevars-rule package builds with it, and so does
+#     (B23, B25); the Makevars-rule package builds with it, the
+#     Makevars-rule R CMD SHLIB too (rzig build's reason, then make's
+#     echoed compile), and so does
 #     the C/C++ package through the bundled bin/R with ZIG_BIN unset (the
 #     path an embedder such as rpy2 takes: Renviron.site finds ziglang
 #     next door) and R_ZIG_PKG_BUILDER=make
@@ -301,6 +309,45 @@ if ! grep -qF 'rzigwheelar needs make: src/Makevars has a rule or target line' "
 fi
 echo "ok: stops naming r-zig-build-tools"
 
+# R CMD SHLIB with no make (feat-shlib-rzig-build): R builds the call
+# through rzig build (patch 0013's one hook), compiled by the PyPI
+# ziglang: pkgbuild's probe (foo.c beside an invalid junk.c) and a C++
+# file, which loads with no shared C++ runtime; a Makevars rule stops with
+# rzig's reason, "no make on PATH" and the build tools' pip line, and
+# builds nothing.
+echo "== R CMD SHLIB with no make on PATH: rzig build"
+S="$T/shlib"
+mkdir -p "$S/probe" "$S/cx" "$S/rule"
+printf 'void foo(int *bar) { *bar = 1; }\n' > "$S/probe/foo.c"
+printf 'this is not C (\n' > "$S/probe/junk.c"
+printf '%s\n' '#include <string>' '#include <R.h>' '#include <Rinternals.h>' \
+  'extern "C" SEXP cx(void) { std::string s("r-zig"); return ScalarInteger((int) s.size()); }' > "$S/cx/cx.cpp"
+(cd "$S/probe" && run_venv RZIG_TRACE=1 R CMD SHLIB foo.c) > "$S/probe.log" 2>&1 || { cat "$S/probe.log" >&2; echo "error: R CMD SHLIB foo.c failed with r-zig-compilers and no make" >&2; exit 1; }
+(cd "$S/cx" && run_venv RZIG_TRACE=1 R CMD SHLIB -o cx.so cx.cpp) > "$S/cx.log" 2>&1 || { cat "$S/cx.log" >&2; echo "error: R CMD SHLIB -o cx.so cx.cpp failed with r-zig-compilers and no make" >&2; exit 1; }
+for l in probe cx; do
+  grep -q 'rzig build: R CMD SHLIB, tier 1' "$S/$l.log" || { cat "$S/$l.log" >&2; echo "error: R CMD SHLIB ($l) did not build through rzig build" >&2; exit 1; }
+done
+[ ! -e "$S/probe/foo.o" ] && [ ! -e "$S/cx/cx.o" ] || { echo "error: R CMD SHLIB through rzig build left an object beside its sources" >&2; exit 1; }
+run Rscript -e "
+  dyn.load('$S/probe/foo.so'); dyn.load('$S/cx/cx.so')
+  stopifnot(.C('foo', 0L)[[1]] == 1L, .Call('cx') == 5L)
+  cat('R CMD SHLIB libraries load\n')
+"
+if command -v readelf > /dev/null 2>&1; then cxx="$(readelf -d "$S/cx/cx.so" | grep -E 'NEEDED.*lib(c\+\+|stdc\+\+)' || true)"
+else cxx="$(otool -L "$S/cx/cx.so" | tail -n +2 | grep -E 'lib(c\+\+|stdc\+\+)' || true)"; fi
+[ -z "$cxx" ] || { echo "error: cx.so (R CMD SHLIB through rzig build) needs a shared C++ runtime: $cxx" >&2; exit 1; }
+printf 'void x(int *n) { *n = 1; }\n' > "$S/rule/x.c"
+printf '%s\n' 'all: $(SHLIB) extra' 'extra:' '	@echo extra' > "$S/rule/Makevars"
+if (cd "$S/rule" && run_venv R CMD SHLIB x.c) > "$S/rule.log" 2>&1; then
+  cat "$S/rule.log" >&2; echo "error: R CMD SHLIB of a Makevars rule succeeded with no make" >&2; exit 1
+fi
+if ! grep -qF 'x.so needs make: Makevars has a rule or target line' "$S/rule.log" || ! grep -qF 'no make on PATH' "$S/rule.log" ||
+  ! grep -qF '  pip:         pip install r-zig-build-tools; r-zig-toolchain installs every group' "$S/rule.log" ||
+  [ -e "$S/rule/x.so" ] || [ -e "$S/rule/x.o" ]; then
+  cat "$S/rule.log" >&2; echo "error: R CMD SHLIB of a Makevars rule did not stop with rzig's reason and the build tools' pip line, or built something" >&2; exit 1
+fi
+echo "ok: foo.c and a C++ file build through rzig build and load (static C++ runtime); a Makevars rule stops naming r-zig-build-tools"
+
 echo "== + $(basename "$bt_wheel")"
 pip_ install --quiet "$bt_wheel"
 listed
@@ -319,6 +366,15 @@ echo "== the Makevars-rule package, built by the wheel's make"
 run RZIG_TRACE=1 R CMD INSTALL -l "$T/lib6" "$A" > "$T/install6.log" 2>&1 || { cat "$T/install6.log" >&2; exit 1; }
 grep -q 'rzig build: rzigwheelar needs make: src/Makevars has a rule or target line' "$T/install6.log" || { cat "$T/install6.log" >&2; echo "error: the Makevars-rule package did not go to make with rzig build's reason" >&2; exit 1; }
 run Rscript -e "library(rzigwheelar, lib.loc = '$T/lib6'); stopifnot(f() == 42L); cat('needs-make package built by the wheel\'s make OK\n')"
+
+echo "== R CMD SHLIB of the Makevars rule, built by the wheel's make"
+# rzig build declines it (exit 3, its reason in the trace), and R runs
+# make, which echoes its compile
+(cd "$S/rule" && run RZIG_TRACE=1 R CMD SHLIB x.c) > "$S/rule-make.log" 2>&1 || { cat "$S/rule-make.log" >&2; exit 1; }
+grep -q 'rzig build: x.so needs make: Makevars has a rule or target line' "$S/rule-make.log" &&
+  [ -n "$(make_recipes "$S/rule-make.log")" ] && [ -f "$S/rule/x.so" ] ||
+  { cat "$S/rule-make.log" >&2; echo "error: R CMD SHLIB of the Makevars rule did not go to the wheel's make with rzig build's reason" >&2; exit 1; }
+echo "ok: rzig build's reason, then make built it"
 
 echo "== R CMD INSTALL via bundled bin/R, ZIG_BIN unset (Renviron.site -> sibling ziglang), through the bundled make (R_ZIG_PKG_BUILDER=make)"
 run R_ZIG_PKG_BUILDER=make RZIG_TRACE=1 "$r_home/bin/R" CMD INSTALL --preclean -l "$T/lib2" "$P" > "$T/install2.log" 2>&1 || { cat "$T/install2.log" >&2; exit 1; }

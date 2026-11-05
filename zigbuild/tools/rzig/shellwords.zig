@@ -88,6 +88,23 @@ pub fn split(a: Allocator, text: []const u8, reason: *[]const u8) Error![]const 
     return out.items;
 }
 
+/// `word` as a POSIX shell reads it back as that one word: itself when
+/// it holds only characters no shell treats specially, else in single
+/// quotes, each `'` written `'\''`. `rzig build --shlib --dry-run` prints
+/// its commands so (pkgbuild.zig's printCommands): `split` of the line
+/// gives the words back.
+pub fn quote(a: Allocator, word: []const u8) error{OutOfMemory}![]const u8 {
+    const plain = for (word) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or mem.findScalar(u8, "_@%+=:,./-", c) != null)) break false;
+    } else word.len > 0;
+    if (plain) return word;
+    var out: std.ArrayList(u8) = .empty;
+    try out.append(a, '\'');
+    for (word) |c| if (c == '\'') try out.appendSlice(a, "'\\''") else try out.append(a, c);
+    try out.append(a, '\'');
+    return out.items;
+}
+
 fn refuse(reason: *[]const u8, a: Allocator, comptime f: []const u8, args: anytype) Error {
     reason.* = std.fmt.allocPrint(a, f, args) catch "out of memory";
     return error.Unsupported;
@@ -121,4 +138,26 @@ test split {
         try testing.expectError(error.Unsupported, split(arena.allocator(), bad, &reason));
         try testing.expect(reason.len > 0);
     }
+}
+
+test quote {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try testing.expectEqualStrings("-I/R/include", try quote(a, "-I/R/include"));
+    try testing.expectEqualStrings("-Wl,-install_name,sub/x.so", try quote(a, "-Wl,-install_name,sub/x.so"));
+    try testing.expectEqualStrings("'-L/a b'", try quote(a, "-L/a b"));
+    try testing.expectEqualStrings("''", try quote(a, ""));
+    try testing.expectEqualStrings("'it'\\''s'", try quote(a, "it's"));
+    // split(join(quote(w))) gives the words back
+    const words = [_][]const u8{ "/R/bin/toolchain/zig-cc", "-DX=\"a b\"", "-L/opt/my R/lib", "", "it's", "$(HOME)", "a\\b", "~x", "#c", "*.o", "-DY=1;2", "tab\there" };
+    var line: std.ArrayList(u8) = .empty;
+    for (words, 0..) |w, i| {
+        if (i > 0) try line.append(a, ' ');
+        try line.appendSlice(a, try quote(a, w));
+    }
+    var reason: []const u8 = "";
+    const back = try split(a, line.items, &reason);
+    try testing.expectEqual(words.len, back.len);
+    for (words, back) |w, b| try testing.expectEqualStrings(w, b);
 }

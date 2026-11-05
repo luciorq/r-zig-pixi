@@ -844,6 +844,132 @@ if [ -n "$real_zig" ]; then
   check "rzig build: tier 1 from another R with the same build_t1.zig, the same build runner, no file added to it" \
     bash -c "$pc rb_build 3 '$W/rpkg2' && [ -f '$W/rb/3/out/libs/pb.so' ] && runner_files > '$W/rb/state3' && cmp -s '$W/rb/state1' '$W/rb/state3'"
 fi
+# --- rzig build --shlib: R CMD SHLIB's call (feat-shlib-rzig-build) ----------
+# The real binary and the repo's rpkg, each case in its own $W/sh/<n>, with
+# an R_HOME whose Makeconf has no libR to link (as rb's) and the C++ and
+# Fortran 9x lines; a case that checks the build root sets
+# R_SESSION_TMPDIR=$W/sh/<n>.tmp. The builds use the real zig and rb's
+# rzig cache, whose build runner they share.
+tree shtree
+sh_rh=$W/shtree/lib/R
+sh_tc=$sh_rh/bin/toolchain
+cp "$RZIG" "$sh_tc/zig-fc"
+mkdir -p "$sh_rh/etc" "$sh_rh/share/make" "$W/sh/empty-rpkg"
+grep -v '^LIBR' "$rh/etc/Makeconf" > "$sh_rh/etc/Makeconf"
+cat >> "$sh_rh/etc/Makeconf" <<'MK'
+CXXFLAGS = -O2
+CXXPICFLAGS = -fpic
+FCFLAGS = -O2
+ALL_CXXFLAGS = $(PKG_CXXFLAGS) $(CXXPICFLAGS) $(CXXFLAGS)
+ALL_FCFLAGS = $(PKG_FCFLAGS) $(FPICFLAGS) $(FCFLAGS)
+SHLIB_CXXLD = $(CXX)
+SHLIB_CXXLDFLAGS = -shared
+MK
+cp "$rh/share/make/shlib.mk" "$sh_rh/share/make/"
+# sh_dir <n>: $W/sh/<n> with foo.c and an invalid junk.c beside it, and
+# an empty $W/sh/<n>.tmp
+sh_dir() {
+  rm -rf "$W/sh/$1" "$W/sh/$1.tmp"; mkdir -p "$W/sh/$1" "$W/sh/$1.tmp"
+  printf 'void foo(int *x) { *x = 1; }\n' > "$W/sh/$1/foo.c"
+  printf 'this is not C\n' > "$W/sh/$1/junk.c"
+}
+# sh_build <n> [<env>...] -- <rzig build --shlib's arguments>: in $W/sh/<n>,
+# PATH $W/nothing unless the env says, stdout and stderr to $W/check.out
+# and $W/check.err
+sh_build() {
+  local n=$1 envs=(); shift
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done; shift
+  (cd "$W/sh/$n" && env -i R_HOME="$sh_rh" PATH="$W/nothing" "${envs[@]}" "$RZIG" build --shlib --rpkg-dir "$here/../../rpkg" "$@" > "$W/check.out" 2> "$W/check.err")
+}
+# no root left beside the sources, beside an output in another directory
+# ($2, under $W/sh/<n>) or in R's session directory [shlib-tests-1]
+no_root() { ! ls -d "$W/sh/$1"/.rzig.* > /dev/null 2>&1 && [ -z "$(ls -A "$W/sh/$1.tmp")" ] &&
+  { [ -z "${2:-}" ] || ! ls -d "$W/sh/$1/$2"/.rzig.* > /dev/null 2>&1; }; }
+pc="$pc sh_rh='$sh_rh'; sh_tc='$sh_tc'; $(declare -f sh_dir sh_build no_root);"
+check "rzig build --shlib --plan-only: argv's files only, not the directory's" \
+  bash -c "$pc sh_dir 1 && sh_build 1 -- --output foo.so --plan-only -- foo.c &&
+    grep -qF '.path = \"foo.c\"' '$W/check.out' && ! grep -q junk '$W/check.out' && no_root 1"
+check "rzig build --shlib --dry-run: no zig needed, make -n's compile line and link block, no root" \
+  bash -c "$pc sh_dir 2 && sh_build 2 R_SESSION_TMPDIR='$W/sh/2.tmp' -- --output foo.so --dry-run -- foo.c &&
+    head -1 '$W/check.out' | grep -q '^$sh_tc/zig-cc .* -c foo\.c -o foo\.o\$' &&
+    sed -n 2p '$W/check.out' | grep -qxF 'if test \"zfoo.o\" != \"z\"; then \\' &&
+    sed -n 3p '$W/check.out' | grep -q '^  echo $sh_tc/zig-cc .* -o foo\.so foo\.o; \\\\\$' &&
+    [ \"\$(tail -1 '$W/check.out')\" = fi ] && [ ! -e '$W/sh/2/foo.so' ] && no_root 2"
+check "rzig build --shlib: pkgload's injected word in the linker words, 3, a single quote" \
+  bash -c "$pc sh_dir 3; sh_build 3 -- --output foo.so --pkg-libs \"' --always-make -I\\\"/x\\\" IGNORED='\" --dry-run -- foo.c; [ \$? = 3 ] &&
+    grep -qF 'rzig build: foo.so needs make: a single quote in the linker words' '$W/check.err' && [ ! -s '$W/check.out' ]"
+check "rzig build --shlib: no zig, 127, the compilers group, the root gone" \
+  bash -c "$pc sh_dir 4; sh_build 4 R_SESSION_TMPDIR='$W/sh/4.tmp' -- --output foo.so -- foo.c; [ \$? = 127 ] &&
+    grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err' && no_root 4"
+printf 'all: $(SHLIB) extra\n' > "$W/sh/rule.mk"
+check "rzig build --shlib: a Makevars rule, no zig, no make: 127, the compilers' text, then the reason and the build tools' text" \
+  bash -c "$pc sh_dir 5 && cp '$W/sh/rule.mk' '$W/sh/5/Makevars'; sh_build 5 -- --output foo.so -- foo.c; [ \$? = 127 ] &&
+    c=\$(grep -n '^Compiling needs the r-zig compilers for R ' '$W/check.err' | cut -d: -f1) &&
+    l=\$(grep -n '^rzig build: foo.so needs make: Makevars has a rule or target line: .all: .(SHLIB) extra.; no make on PATH\$' '$W/check.err' | cut -d: -f1) &&
+    b=\$(grep -n '^Building packages needs the r-zig build tools for R ' '$W/check.err' | cut -d: -f1) &&
+    [ \"\$c\" -lt \"\$l\" ] && [ \"\$l\" -lt \"\$b\" ] && [ ! -e '$W/sh/5/foo.so' ]"
+check "rzig build --shlib: a missing build_t1.zig, 3: a damaged tree, make builds it" \
+  bash -c "$pc sh_dir 6; sh_build 6 -- --output foo.so --rpkg-dir '$W/sh/empty-rpkg' -- foo.c; [ \$? = 3 ] &&
+    grep -qxF 'rzig build: $W/sh/empty-rpkg/build_t1.zig is missing: R_HOME/share/zig/rpkg is not installed; make builds this' '$W/check.err' && no_root 6"
+# a zig that is not R's (another minor version; R CMD SHLIB has no
+# preflight): make's, 3, when make is there, else 1 and the compilers'
+# text; zig build never runs [shlib-r-2]
+prog "$W/sh/otherzig/zig" "[ \"\$1\" = version ] && echo 0.99.0 && exit 0; : > '$W/sh/otherzig/built'"
+prog "$W/sh/mkonly/make" 'exit 0'
+check "rzig build --shlib: a zig that is not R's: 3 with make, 1 without, no zig build" \
+  bash -c "$pc sh_dir 13; sh_build 13 ZIG_BIN='$W/sh/otherzig/zig' -- --output foo.so -- foo.c; [ \$? = 1 ] &&
+    grep -q '^rzig build: $W/sh/otherzig/zig is zig 0.99.0, not R.s zig .* (R_ZIG_NO_PREFLIGHT=1 skips this check)\$' '$W/check.err' &&
+    grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err' &&
+    { sh_build 13 ZIG_BIN='$W/sh/otherzig/zig' PATH='$W/sh/mkonly' -- --output foo.so -- foo.c; [ \$? = 3 ]; } &&
+    grep -qx 'rzig build: foo.so needs make: $W/sh/otherzig/zig is zig 0.99.0, not R.s zig .*' '$W/check.err' &&
+    [ ! -e '$W/sh/otherzig/built' ] && [ ! -e '$W/sh/13/foo.so' ] && no_root 13"
+if [ -n "$real_zig" ]; then
+  # the real builds, with rb's rzig cache and zig's global cache
+  sh_env="HOME=$W/rbhome XDG_CACHE_HOME=$W/rbcache ZIG_BIN=$real_zig ZIG_GLOBAL_CACHE_DIR=${ZIG_GLOBAL_CACHE_DIR:-$W/zig-global}"
+  pc="$pc sh_env='$sh_env';"
+  check "rzig build --shlib: a real build, the library and nothing beside it, junk.c not compiled, no file added to the build runner" \
+    bash -c "$pc sh_dir 7 && sh_build 7 \$sh_env RZIG_TRACE=1 R_SESSION_TMPDIR='$W/sh/7.tmp' -- --output foo.so -- foo.c &&
+      [ -f '$W/sh/7/foo.so' ] && [ ! -e '$W/sh/7/foo.o' ] && no_root 7 &&
+      grep -q '^rzig build: R CMD SHLIB, tier 1, root $W/sh/7.tmp/\.rzig\.[0-9a-f]\{16\}\$' '$W/check.err' &&
+      ! grep -q junk '$W/check.err' && runner_files > '$W/sh/state7' && cmp -s '$W/rb/state1' '$W/sh/state7'"
+  check "rzig build --shlib: an absolute source outside the directory, its object not beside it" \
+    bash -c "$pc sh_dir 8 && mkdir -p '$W/sh/8ext' && printf 'int ext(void) { return 2; }\n' > '$W/sh/8ext/ext.c' &&
+      sh_build 8 \$sh_env -- --output sub/ab.so -- foo.c '$W/sh/8ext/ext.c' &&
+      [ -f '$W/sh/8/sub/ab.so' ] && [ ! -e '$W/sh/8ext/ext.o' ] && no_root 8 sub"
+  check "rzig build --shlib: a Makevars rule, R's zig, no make: 127, the build tools' text alone" \
+    bash -c "$pc sh_dir 9 && cp '$W/sh/rule.mk' '$W/sh/9/Makevars'; sh_build 9 \$sh_env -- --output foo.so -- foo.c; [ \$? = 127 ] &&
+      grep -q '^rzig build: foo.so needs make: Makevars has a rule or target line: .*; no make on PATH\$' '$W/check.err' &&
+      grep -q '^Building packages needs the r-zig build tools for R ' '$W/check.err' && ! grep -q '^Compiling needs' '$W/check.err'"
+  prog "$W/mkstub/make" 'exit 0'
+  check "rzig build --shlib: a Makevars rule, zig and make: 3, R runs make" \
+    bash -c "$pc sh_dir 10 && cp '$W/sh/rule.mk' '$W/sh/10/Makevars'; sh_build 10 \$sh_env PATH='$W/mkstub' -- --output foo.so -- foo.c; [ \$? = 3 ] &&
+      grep -qx 'rzig build: foo.so needs make: Makevars has a rule or target line: .all: .(SHLIB) extra.' '$W/check.err' && [ ! -e '$W/sh/10/foo.so' ]"
+  # two calls at once in one directory (R CMD SHLIB under mclapply): a
+  # build root each (SZ H2; feat-shlib-rzig-build Cc12), kept, so beside
+  # the outputs, in one directory [shlib-code-1]
+  sh_dir 11; printf 'int b(void) { return 2; }\n' > "$W/sh/11/b.c"
+  check "rzig build --shlib: two calls at once in one directory, two roots" \
+    bash -c "$pc cd '$W/sh/11' &&
+      { env -i R_HOME='$sh_rh' PATH='$W/nothing' \$sh_env RZIG_KEEP_ROOT=1 R_SESSION_TMPDIR='$W/sh/11.tmp' '$RZIG' build --shlib --rpkg-dir '$here/../../rpkg' --output a.so -- foo.c > '$W/sh/11.a' 2>&1 & pa=\$!; } &&
+      { env -i R_HOME='$sh_rh' PATH='$W/nothing' \$sh_env RZIG_KEEP_ROOT=1 R_SESSION_TMPDIR='$W/sh/11.tmp' '$RZIG' build --shlib --rpkg-dir '$here/../../rpkg' --output b.so -- b.c > '$W/sh/11.b' 2>&1 & pb=\$!; } &&
+      wait \$pa && wait \$pb && [ -f a.so ] && [ -f b.so ] &&
+      [ \$(ls -d '$W/sh/11'/.rzig.* | wc -l) = 2 ] && [ \$(ls '$W/sh/11'/.rzig.*/plan.zon | wc -l) = 2 ] &&
+      [ -z \"\$(ls -A '$W/sh/11.tmp')\" ] && rm -rf '$W/sh/11'/.rzig.*"
+  # Fortran modules: use_m.f90 uses mod_m.f90's module, so their compiles
+  # run in OBJECTS order, as R's serial make runs them; at -j 8, five times,
+  # each with no .mod left from the one before (feat-shlib-rzig-build Cc3)
+  real_flang=$(command -v flang || :)
+  if [ -n "$real_flang" ]; then
+    mkdir -p "$W/sh/flang"; ln -sf "$real_flang" "$W/sh/flang/flang"
+    sh_dir 12
+    printf 'module mod_m\n  implicit none\ncontains\n  subroutine twice(x)\n    double precision, intent(inout) :: x\n    x = 2 * x\n  end subroutine\nend module\n' > "$W/sh/12/mod_m.f90"
+    printf 'subroutine use_twice(x)\n  use mod_m\n  double precision, intent(inout) :: x\n  call twice(x)\nend subroutine\n' > "$W/sh/12/use_m.f90"
+    check "rzig build --shlib: Fortran modules in OBJECTS order at -j 8, five times, no root left beside the output" \
+      bash -c "$pc for i in 1 2 3 4 5; do rm -f '$W/sh/12'/*.mod '$W/sh/12/fm.so';
+        sh_build 12 \$sh_env PATH='$W/sh/flang' -- --output fm.so -j 8 -- mod_m.f90 use_m.f90 && [ -f '$W/sh/12/fm.so' ] &&
+        ! ls -d '$W/sh/12'/.rzig.* > /dev/null 2>&1 || exit 1; done"
+  fi
+fi
 check "--rzig-check=other: usage, 2" \
   bash -c "env -i '$tc/zig-cc' --rzig-check=other 2> /dev/null; [ \$? = 2 ]"
 check "a compile with no zig: 127, the compilers group" \
