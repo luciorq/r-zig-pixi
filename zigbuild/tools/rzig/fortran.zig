@@ -667,33 +667,35 @@ test "linux: a shared link of objects goes through zig cc, as zig-cc's, with the
     defer f.deinit();
     const c = &f.ctx;
     const a = try runtimeFlang(&f, "x86_64-unknown-linux-gnu");
-    // installed in a conda env: its -L and rpath, as zig-cc adds them
-    try f.tmp.dir.createDirPath(testing.io, "env/lib/R/bin/toolchain");
+    // installed in a conda env: its -L and rpath, and the finalization
+    // object beside rzig (compiler.zig's linkObject), as zig-cc adds them
+    try f.touch("env/lib/R/bin/toolchain/dso_fini.o");
     try f.tmp.dir.createDirPath(testing.io, "env/conda-meta");
     c.self_exe = f.path("env/lib/R/bin/toolchain/zig-fc");
+    const fini = f.path("env/lib/R/bin/toolchain/dso_fini.o");
     const l = f.fmt("-L{s}", .{f.path("env/lib")});
     const rp = f.fmt("-Wl,-rpath,{s}", .{f.path("env/lib")});
     const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", linux_target };
     // R CMD SHLIB under USE_FC_TO_LINK: $(SHLIB_FCLD) $(SHLIB_FCLDFLAGS)
     // $(LIBR0) $(LDFLAGS) -o pkg.so <objects> $(PKG_LIBS) $(SHLIB_LIBADD)
     try expectZig(
-        pre ++ &[_][]const u8{ "-Wl,--strip-debug", "-shared", "-L/r/lib", "-o", "pkg.so", "a.o", "b.o", "-L/opt/lib", "-lfoo", a, "-lm", l, rp },
+        pre ++ &[_][]const u8{ "-Wl,--strip-debug", fini, "-shared", "-L/r/lib", "-o", "pkg.so", "a.o", "b.o", "-L/opt/lib", "-lfoo", a, "-lm", l, rp },
         try command(c, &.{ "-shared", "-L/r/lib", "-o", "pkg.so", "a.o", "b.o", "-L/opt/lib", "-lfoo" }),
     );
     // a package that also asks for $(FLIBS): the runtime once; a SONAME for lib*.so
     try expectZig(
-        pre ++ &[_][]const u8{ "-Wl,-soname,libfx.so", "-Wl,--strip-debug", "-shared", "-o", "libfx.so", "a.o", a, "-lm", "-lm", l, rp },
+        pre ++ &[_][]const u8{ "-Wl,-soname,libfx.so", "-Wl,--strip-debug", fini, "-shared", "-o", "libfx.so", "a.o", a, "-lm", "-lm", l, rp },
         try command(c, &.{ "-shared", "-o", "libfx.so", "a.o", "-lflang_rt.runtime", "-lm" }),
     );
     // a -mtune= on the link (zig cc's: dropped, compiler.zig dropTune)
     try expectZig(
-        pre ++ &[_][]const u8{ "-Wl,--strip-debug", "-shared", "-O2", "-o", "pkg.so", "a.o", a, "-lm", l, rp },
+        pre ++ &[_][]const u8{ "-Wl,--strip-debug", fini, "-shared", "-O2", "-o", "pkg.so", "a.o", a, "-lm", l, rp },
         try command(c, &.{ "-shared", "-O2", "-mtune=native", "-o", "pkg.so", "a.o" }),
     );
     // OpenMP, as zig-cc: -lomp when an environment has omp.h
     try f.touch("env/include/omp.h");
     try expectZig(
-        pre ++ &[_][]const u8{ "-Wl,--strip-debug", "-shared", "-fopenmp", "-o", "p.so", "a.o", a, "-lm", l, rp, f.fmt("-I{s}", .{f.path("env/include")}), "-lomp" },
+        pre ++ &[_][]const u8{ "-Wl,--strip-debug", fini, "-shared", "-fopenmp", "-o", "p.so", "a.o", a, "-lm", l, rp, f.fmt("-I{s}", .{f.path("env/include")}), "-lomp" },
         try command(c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }),
     );
     try testing.expectEqualStrings("", f.takeWarnings());

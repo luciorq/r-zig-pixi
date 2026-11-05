@@ -13,9 +13,10 @@
 # Everything here reads files, headers and load commands (the tree's own
 # Rscript reads its compressed files), so the answer does not depend on
 # where the tree sits:
-#   - R_HOME/bin/toolchain holds rzig and nothing else, under the names
-#     Makeconf and the compile preflight use (one binary, no scripts; in a
-#     macOS conda env, the same bytes once unsigned):
+#   - R_HOME/bin/toolchain holds rzig, under the names Makeconf and the
+#     compile preflight use (one binary, no scripts; in a macOS conda env,
+#     the same bytes once unsigned), and its link object (linux, Windows;
+#     feat-r-home-link-objects), nothing else:
 #     the groups' files are the toolchain tree's (feat-standalone-toolchain
 #     B19, B30; verify-toolchain.sh), a conda env's win-64 binutils/
 #     excepted (B41);
@@ -148,6 +149,7 @@ done
 # A conda env is the exception: on win-64 r-zig-build-tools carries
 # binutils/ here (B41). zig's install never removes a file, so a tree
 # built before phase 3 still has the files that left it (PHASE3 C25).
+lo="$(link_object)"
 bad=""
 while IFS= read -r f; do
   n="${f##*/}"
@@ -155,14 +157,28 @@ while IFS= read -r f; do
     if [ -n "$conda_tree" ] && [ "$OS" = windows ] && [ "$n" = binutils ]; then continue; fi
     bad="$bad $n/"
   else
-    case " $tc_names " in *" $n "*) ;; *) bad="$bad $n" ;; esac
+    case " $tc_names $lo " in *" $n "*) ;; *) bad="$bad $n" ;; esac
   fi
 done < <(find "$TREE/$tc_dir" -mindepth 1 -maxdepth 1)
 if [ -n "$bad" ]; then
-  echo "error: $tc_dir holds more than rzig:$bad (the toolchain groups' files are the toolchain tree's now, and zig's install removes no file, so a tree built before phase 3 keeps them): remove the tree and build again" >&2
+  echo "error: $tc_dir holds more than rzig and its link object:$bad (the toolchain groups' files are the toolchain tree's now, and zig's install removes no file, so a tree built before phase 3 keeps them): remove the tree and build again" >&2
   exit 1
 fi
-echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig, and nothing else is there"
+# rzig's link object (zigbuild/tools/rzig/build.zig's linkObject): a
+# relocatable object for R's target, which rzig finds beside itself and
+# adds to links. Without it rzig warns at each such link and links
+# without it (dso_fini.zig, cfguard.zig).
+if [ -n "$lo" ]; then
+  f="$TREE/$tc_dir/$lo"
+  # its first bytes: ELF's magic, or an x86-64 COFF object's machine
+  # (IMAGE_FILE_MACHINE_AMD64, little-endian)
+  case "$OS" in linux) magic=7f454c46 ;; windows) magic=6486 ;; esac
+  if [ ! -f "$f" ] || [ "$(od -An -tx1 -N$((${#magic} / 2)) "$f" | tr -d ' \n')" != "$magic" ]; then
+    echo "error: $tc_dir/$lo is missing or not an object for R's target (feat-r-home-link-objects)" >&2
+    exit 1
+  fi
+fi
+echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig${lo:+, $tc_dir/$lo is its link object}, and nothing else is there"
 
 # rzig build's zig build roots for tier 2 (feat-zig-pkg-build; tier 1
 # runs no zig build, feat-tier1-engine), beside the compilers
@@ -500,14 +516,16 @@ fi
 # R's own: every binary under R_HOME but the conda libraries
 # vendor-libs.sh copied there (vendored_files: Windows' bin/x64) and the
 # env files build.zig copies as they are (Windows' Tcl/Tk in R_HOME/Tcl;
-# in the toolchain directory only rzig is R's own, not a conda env's
-# win-64 binutils/, B41). conda-forge's binaries are built for its own
-# baseline, and some carry AVX2 code behind a run-time CPU check
-# (libdeflate, libcrypto), so they are not counted. objdump: on Windows
-# the env's x86_64-w64-mingw32-objdump; on macOS /usr/bin/objdump, which
-# is llvm-objdump, from the Command Line Tools the SDK needs anyway; on
-# linux the env's, conda-forge's binutils (pixi.toml). Without one the
-# check fails, everywhere, saying so. aarch64: the check does not apply.
+# in the toolchain directory only rzig is R's own binary, not a conda
+# env's win-64 binutils/, B41; the loop below takes no other file from
+# there, rzig's link object included). conda-forge's binaries are built
+# for its own baseline, and some carry AVX2 code behind a run-time CPU
+# check (libdeflate, libcrypto), so they are not counted. objdump: on
+# Windows the env's x86_64-w64-mingw32-objdump; on macOS
+# /usr/bin/objdump, which is llvm-objdump, from the Command Line Tools
+# the SDK needs anyway; on linux the env's, conda-forge's binutils
+# (pixi.toml). Without one the check fails, everywhere, saying so.
+# aarch64: the check does not apply.
 case "$(uname -m)" in
   x86_64|amd64)
     if [ "$OS" = windows ]; then objdump_cmd=x86_64-w64-mingw32-objdump; else objdump_cmd=objdump; fi
@@ -761,8 +779,9 @@ n_bins="$(wc -l < "$bin_list" | tr -d ' ')"
 # linux baseline 2.28, for the env's tools build.zig copied there, which
 # run only to compile (minimal's GNU make, which needs 2.17; until phase
 # A5, 5f23127, coreutils' `realpath` too, which needed 2.28). It holds
-# rzig alone now, built for R's own target and so at the floor
-# (feat-standalone-toolchain B19); make is the toolchain tree's, and
+# rzig and its link object alone now, both built for R's own target and
+# so at the floor (feat-standalone-toolchain B19;
+# feat-r-home-link-objects); make is the toolchain tree's, and
 # verify-toolchain.sh keeps the 2.28 tier for it.
 # objdump: conda-forge's binutils (pixi.toml).
 if [ "$OS" = linux ] && ! command -v objdump > /dev/null 2>&1; then

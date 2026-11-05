@@ -472,13 +472,17 @@ def main() -> None:
         modes[rel] = stat.S_IMODE(os.stat(path).st_mode)
 
     # The R tree's R_HOME/bin/toolchain holds rzig only, under each of its
-    # names (feat-standalone-toolchain B19, B30): anything else there is a
-    # leftover of an older build, since zig's install never removes a
-    # file, and would ship in r-zig (a usr/ there, beside the toolchain
-    # tree's in r-zig-build-tools). The R tree's files come first in
-    # `files`.
+    # names (feat-standalone-toolchain B19, B30), and on linux rzig's link
+    # object, dso_fini.o (rzig's build.zig, linkObject;
+    # feat-r-home-link-objects): anything else there is a leftover of an
+    # older build, since zig's install never removes a file, and would
+    # ship in r-zig (a usr/ there, beside the toolchain tree's in
+    # r-zig-build-tools). The R tree's files come first in `files`.
     rzig = dict(files)[TOOLCHAIN_PREFIX + "zig-cc"]
-    stray = [r for r, d in files[:len(tree)] if r.startswith(TOOLCHAIN_PREFIX) and d != rzig]
+    link_object = TOOLCHAIN_PREFIX + "dso_fini.o" if platform.system() == "Linux" else None
+    if link_object and link_object not in dict(files[:len(tree)]):
+        die(f"{prefix} has no R_HOME/bin/toolchain/dso_fini.o, rzig's link object — run `pixi run -e minimal build` first")
+    stray = [r for r, d in files[:len(tree)] if r.startswith(TOOLCHAIN_PREFIX) and d != rzig and r != link_object]
     if stray:
         die(f"not rzig in {prefix}'s R_HOME/bin/toolchain: {', '.join(stray)} — remove {prefix} and run `pixi run -e minimal build` again")
 

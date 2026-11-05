@@ -151,7 +151,8 @@ pixi run contract      # CRAN packages compiled with the tree and the groups (Rc
 ```
 
 `build` installs `dist/<flavor>/R-<ver>-zig/`, the base that ships: R
-and its libraries, with only rzig, the compiler front Makeconf names, in
+and its libraries, with only rzig, the compiler front Makeconf names, and
+its link object (linux `dso_fini.o`, Windows `cfguard.o`) in
 `R_HOME/bin/toolchain`. `toolchain` copies the toolchain groups' files
 from the environment into `dist/toolchain/R-<ver>-zig/`, and upstream
 zig from PyPI's `ziglang` wheel into its `zig/`, each directory with its
@@ -264,8 +265,10 @@ beside it:
   `R-4.6.1-slim-linux-64.tar.gz`. R alone, with its libraries: it runs R
   and installs packages that need no compiling. Its
   `R_HOME/bin/toolchain` holds only rzig, the compiler front R's
-  Makeconf names. Windows slim has full's content (Tcl/Tk, JPEG, TIFF,
-  NLS): R's Windows build has no switches to leave them out.
+  Makeconf names, and the object rzig adds to links (linux
+  `dso_fini.o`, Windows `cfguard.o`). Windows slim has full's content
+  (Tcl/Tk, JPEG, TIFF, NLS): R's Windows build has no switches to leave
+  them out.
 - **The compilers group**, one per platform:
   `R-<ver>-<platform>-compilers.tar.xz`, about 95 MB (linux-64). It
   holds zig 0.16 (PyPI's `ziglang` build, which is the ziglang.org

@@ -15,7 +15,8 @@
 # tar store the directories every archive of a tree repeats, C6): the
 # base holds the R tree as it is ($PREFIX; feat-no-host-paths F1.7), no
 # compile-time OpenMP file (B22) and nothing in R_HOME/bin/toolchain but
-# rzig (B19, B30; Windows' Tcl/Tk headers stay in R_HOME/Tcl/include, T1);
+# rzig and its link object (B19, B30; feat-r-home-link-objects; Windows'
+# Tcl/Tk headers stay in R_HOME/Tcl/include, T1);
 # each group archive holds only its own directories; no file is in two
 # archives, so tar and `unzip -n` (which never stops to ask, C6) fill one
 # directory without one archive overwriting another.
@@ -142,8 +143,9 @@
 # headers and load commands, which moving a tree does not change:
 # verify-tree.sh and verify-toolchain.sh run them where the trees are
 # built. Shared helpers: verify-helpers.sh (archive_files, tree_files,
-# rzig_names, configure_marker, extract_archive, rpaths_of, needed_of,
-# cxx_deps, minos_over_floor, cannot_check).
+# rzig_names, link_object, link_object_named, configure_marker,
+# extract_archive, rpaths_of, needed_of, cxx_deps, minos_over_floor,
+# cannot_check).
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
 
@@ -220,7 +222,8 @@ fi
 # nothing else goes into the environment directories (unix <prefix>/include;
 # Windows Library/include and Library/lib's import libraries). Tcl/Tk's
 # headers in R_HOME/Tcl/include stay in the Windows base (T1). Its
-# R_HOME/bin/toolchain holds rzig under its names and no directory: the
+# R_HOME/bin/toolchain holds rzig under its names, rzig's link object
+# (linux, Windows; feat-r-home-link-objects) and no directory: the
 # groups' directories are the toolchain tree's (B19, B30).
 tc="$TOP/$RH/bin/toolchain"
 tc_re="^${tc//./\\.}/"
@@ -235,14 +238,20 @@ if [ -n "$compile_time" ]; then
   printf '%s\n' "$compile_time" | sed 's/^/  /' >&2
   exit 1
 fi
-names=" $(rzig_names) "
+names=" $(rzig_names) $(link_object) "
 not_rzig=""
 while IFS= read -r m; do
   case "$names" in *" ${m#"$tc/"} "*) ;; *) not_rzig="$not_rzig ${m#"$tc/"}" ;; esac
 done < <(grep -E "$tc_re" "$lists/base" || true)
 if [ -n "$not_rzig" ]; then
-  echo "error: ${base##*/} has more than rzig ($(rzig_names)) in $tc:$not_rzig (B19, B30: the groups' files are the toolchain tree's)" >&2
+  echo "error: ${base##*/} has more than rzig ($(rzig_names)) and its link object ($(link_object)) in $tc:$not_rzig (B19, B30: the groups' files are the toolchain tree's)" >&2
   exit 1
+fi
+lo_word=""
+if [ -n "$(link_object)" ]; then
+  grep -qxF "$tc/$(link_object)" "$lists/base" ||
+    { echo "error: ${base##*/} has no $tc/$(link_object), the object rzig adds to links (feat-r-home-link-objects)" >&2; exit 1; }
+  lo_word=" and its $(link_object)"
 fi
 # Each group archive holds only its group's directories (env.sh's
 # group_dirs), as unpack-toolchain.sh requires, and no file is in two of
@@ -263,7 +272,7 @@ if [ -n "$both" ]; then
   printf '%s\n' "$both" | sed 's/^/  /' >&2
   exit 1
 fi
-echo "== file lists: ${base##*/} is the R tree ($(wc -l < "$lists/base" | tr -d ' ') files and links), nothing compile-time in it and only rzig in $tc; $(for g in $TOOLCHAIN_GROUPS; do printf '%s %s, ' "$g" "$(wc -l < "$lists/$g" | tr -d ' ')"; done)each under its own directories; no file in two archives"
+echo "== file lists: ${base##*/} is the R tree ($(wc -l < "$lists/base" | tr -d ' ') files and links), nothing compile-time in it and only rzig${lo_word} in $tc; $(for g in $TOOLCHAIN_GROUPS; do printf '%s %s, ' "$g" "$(wc -l < "$lists/$g" | tr -d ' ')"; done)each under its own directories; no file in two archives"
 
 # extract <archive> <list>: into the one directory, then every member of
 # the list is there (unzip -n skips a file that exists; the lists being
@@ -1102,17 +1111,20 @@ if [ -n "$pass_zig" ]; then
   fi
   # no zig build command in the trace (grep reads to the end, no -q:
   # grep -q's early exit could kill tr with SIGPIPE and fail the
-  # pipeline, pipefail [tests-SIGPIPE-1]), and in this HOME's rzig cache
-  # its own kinds of entry alone, with the one a link leaves
-  # (rzig_cache_odd), and none of pfC's objects (f.o, val.o) or its
-  # library
+  # pipeline, pipefail [tests-SIGPIPE-1]), the link naming R's link
+  # object beside rzig (link_object_named; feat-r-home-link-objects), and
+  # in this HOME's rzig cache, the one rzig's trace names, its own kinds
+  # of entry alone, no link object (rzig_cache_odd), and none of pfC's
+  # objects (f.o, val.o) or its library
   if tr -d '\r' < "$pf/pfC.log" | grep -E -- ' build --build-file ' > /dev/null; then
     cat "$pf/pfC.log" >&2; echo "error: pfC's install ran zig build: tier 1 runs none" >&2; exit 1
   fi
+  link_object_named "$pf/pfC.log" ||
+    { cat "$pf/pfC.log" >&2; echo "error: pfC's traced link does not name R_HOME/bin/toolchain/$(link_object)" >&2; exit 1; }
   if [ "$OS" = windows ]; then pf_cache="$home/r-zig"; else pf_cache="$home/.cache/r-zig"; fi
-  pf_odd="$(rzig_cache_odd "$pf_cache")"
+  pf_odd="$(rzig_cache_odd "$pf_cache" "$pf/pfC.log")"
   [ -z "$pf_odd" ] ||
-    { echo "error: after pfC's install, rzig's cache $pf_cache: $(printf '%s' "$pf_odd" | tr '\n' ' ')(tier 1 runs no zig build)" >&2; exit 1; }
+    { echo "error: after pfC's install, rzig's cache $pf_cache: $(printf '%s' "$pf_odd" | tr '\n' ' ')(tier 1 runs no zig build; a cache line: rzig's trace names another cache)" >&2; exit 1; }
   [ -z "$(find "$pf_cache" -name f.o -o -name val.o -o -name pfC.so -o -name pfC.dll 2> /dev/null)" ] ||
     { echo "error: after pfC's install, rzig's cache $pf_cache has pfC's objects or library: they belong in its build root" >&2; exit 1; }
   test ! -e "$pf/pk/pfC/src/.rzig" ||

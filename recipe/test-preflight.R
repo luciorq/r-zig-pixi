@@ -65,10 +65,14 @@ tc <- file.path(R.home(), "bin", "toolchain")
 stopifnot(file.exists(file.path(tc, if (windows) c("gcc.exe", "rzig.exe") else c("zig-cc", "rzig"))),
           file.exists(file.path(R.home(), "share", "zig", "rpkg", "build_t2.zig")),
           !dir.exists(file.path(tc, "binutils")), !dir.exists(file.path(tc, "usr")))
+## rzig's link object beside it (feat-r-home-link-objects): linux's
+## dso_fini.o, Windows' cfguard.o, none on macOS
+lo <- if (windows) "cfguard.o" else if (Sys.info()[["sysname"]] == "Linux") "dso_fini.o"
+stopifnot(is.null(lo) || file.exists(file.path(tc, lo)))
 ## no writer of R_ZIG_TOOLCHAIN_HINT came back (B35) (PHASE4 Cc9)
 for (f in file.path(R.home("etc"), c("Renviron", "Renviron.site")))
     if (file.exists(f)) stopifnot(!any(startsWith(readLines(f, warn = FALSE), "R_ZIG_TOOLCHAIN_HINT=")))
-cat("base: rzig and rpkg, no group's directory, no R_ZIG_TOOLCHAIN_HINT written: OK\n")
+cat("base: rzig, its link object and rpkg, no group's directory, no R_ZIG_TOOLCHAIN_HINT written: OK\n")
 
 lib <- file.path(d, "lib")
 dir.create(lib)

@@ -42,10 +42,10 @@
 #     and prints the same values;
 #   - the caches: tier 1 runs no zig build (tier1.zig), so rzig's cache
 #     holds only its own kinds of entry, no build-runner-* and nothing of
-#     an install's, with the dso-fini-* (linux) or cfguard-* (Windows)
-#     that shows it is the cache checked (verify-helpers.sh's
-#     rzig_cache_odd), and no tier-1 log holds a zig build command
-#     (feat-tier1-engine); a kept build root
+#     an install's, and no dso-fini-* or cfguard-*: the links name R's
+#     link object beside rzig instead (verify-helpers.sh's rzig_cache_odd
+#     and link_object_named; feat-r-home-link-objects), and no tier-1 log
+#     holds a zig build command (feat-tier1-engine); a kept build root
 #     (RZIG_KEEP_ROOT=1) holds the plan, the objects and the library and
 #     no zig build cache (N3); a second install of the cli tarball, which
 #     R unpacks into a new directory each time as install.packages does,
@@ -149,16 +149,16 @@ exports_of() {
   esac | LC_ALL=C sort
 }
 # rzig's command lines from a traced install log, normalised (see the
-# header) and sorted: its self and environment lines and a `--version`
-# word (the make path's compiler probes; a -Wl,--version-script= stays)
-# left out; a path keeps its flag's prefix (-I, -L, -Wl,<words>, and
-# --<option>=, also after -Wl,) and its file name, its directory dropped
-# whatever it is: the source operand's is checked by abs_sources below
-# [tests-T7].
+# header) and sorted: its self, environment and cache lines and a
+# `--version` word (the make path's compiler probes; a
+# -Wl,--version-script= stays) left out; a path keeps its flag's prefix
+# (-I, -L, -Wl,<words>, and --<option>=, also after -Wl,) and its file
+# name, its directory dropped whatever it is: the source operand's is
+# checked by abs_sources below [tests-T7].
 argv_of() {
   tr -d '\r' < "$1" \
     | grep -E '^(zig-cc|zig-cxx|zig-fc): ' \
-    | grep -v -E -- '^zig-(cc|cxx|fc): (self|environment) |(^| )--version( |$)' \
+    | grep -v -E -- '^zig-(cc|cxx|fc): (self|environment|cache) |(^| )--version( |$)' \
     | sed -E 's/^(zig-(cc|cxx|fc): )ZIG_LIB_DIR=[^ ]+ /\1/' \
     | tr -d "'\"" \
     | sed -E 's#(^| )(-[IL]|-Wl,([^ ,]*,)*(--?[A-Za-z-]+=)?|--?[A-Za-z-]+=)?[^ ]*[\\/]([^\\/ ]+)#\1\2\5#g; s/ -Xlinker -install_name -Xlinker [^ ]+//; s/[^ ]*\.def( |$)/X.def\1/' \
@@ -175,13 +175,16 @@ abs_sources() {
 global_entries() { ls "$ZIG_GLOBAL_CACHE_DIR/o" 2> /dev/null | wc -l | tr -d ' '; }
 # no_runner <what> [<traced log>]: tier 1 runs no zig build (tier1.zig):
 # rzig's cache holds its own kinds of entry alone (rzig_cache_odd: no
-# build-runner-*, nothing of an install's), and the log no zig build
-# command (feat-tier1-engine).
+# build-runner-*, nothing of an install's, no link object; with the log,
+# the cache rzig traced is $RZIG_CACHE), the log no zig build command
+# (feat-tier1-engine), and its link names R's link object
+# (link_object_named; feat-r-home-link-objects).
 no_runner() {
   local odd
-  odd="$(rzig_cache_odd "$RZIG_CACHE")"
-  [ -z "$odd" ] || fail "$1: rzig's cache ($RZIG_CACHE): $(printf '%s' "$odd" | tr '\n' ' ')(tier 1 runs no zig build; an install's files belong in its build root)"
+  odd="$(rzig_cache_odd "$RZIG_CACHE" "${2:-}")"
+  [ -z "$odd" ] || fail "$1: rzig's cache ($RZIG_CACHE): $(printf '%s' "$odd" | tr '\n' ' ')(tier 1 runs no zig build; an install's files belong in its build root; the link objects are R_HOME/bin/toolchain's; rzig's trace names its cache)"
   [ -z "${2:-}" ] || ! grep -q -- ' build --build-file ' "$2" || fail "$1: tier 1 ran zig build ($2)"
+  [ -z "${2:-}" ] || link_object_named "$2" || fail "$1: no traced link names R_HOME/bin/toolchain/$(link_object) ($2)"
 }
 
 # --- the fixtures, from CRAN once -------------------------------------------
@@ -374,7 +377,7 @@ if [ "$OS" = macos ]; then
   [ -n "$iz" ] && [ "$iz" = "$im" ] || fail "R CMD SHLIB, subdir: the install names differ: rzig build '$iz', make '$im'"
   echo "   subdir: the install name is '$iz' on both paths"
 fi
-no_runner "R CMD SHLIB"
+no_runner "R CMD SHLIB" "$WORK/logs/shlib-probe-zig.log"
 
 # pkgload's compilation database (Cg9, Cc2): its dry run with a single
 # quote injected into make's command line (compilation-db.R), on a tier-1

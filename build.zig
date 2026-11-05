@@ -149,6 +149,7 @@ const Ctx = struct {
     rlapack: ?*std.Build.Step.Compile, // null when blas == .openblas
     // rzig for R's target: the compilers Makeconf names (installRzig)
     rzig: std.Build.LazyPath, // rzig_build.Artifacts.bin
+    rzig_object: ?rzig_build.LinkObject, // installed beside it (installRzig)
 
     /// Link a library this build makes (libR, libRblas, libRlapack). Off
     /// Windows by its file: `linkLibrary` would also add the library's
@@ -506,6 +507,7 @@ pub fn build(b: *std.Build) !void {
         .rblas = undefined,
         .rlapack = undefined,
         .rzig = undefined,
+        .rzig_object = null,
     };
     ctx.path_flags = try filePathFlags(&ctx, io);
 
@@ -519,6 +521,7 @@ pub fn build(b: *std.Build) !void {
         const rz = rzig_build.add(b, b.path("zigbuild/tools/rzig"), target, rzig_build.default_optimize, r_version);
         ctx.addSdkPaths(rz.exe.root_module);
         ctx.rzig = rz.bin;
+        ctx.rzig_object = rz.object;
         const inst = installRzig(&ctx);
         b.getInstallStep().dependOn(inst);
         b.step("rzig", "Build rzig and install it as the compilers in R_HOME/bin/toolchain").dependOn(inst);
@@ -902,13 +905,14 @@ pub fn build(b: *std.Build) !void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/Rscript"), .{ .custom = "lib/R/bin" }, "Rscript").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/Rscript"), .{ .custom = "bin" }, "Rscript").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("zigbuild/launchers/R"), .{ .custom = "bin" }, "R").step);
-    // R_HOME/bin/toolchain holds rzig only (installRzig, from build();
-    // feat-standalone-toolchain B19, B30). GNU make is the build-tools
-    // group's, TC/usr/bin/make (B7, B23), and the compile-time OpenMP files
-    // are the compilers group's, TC/openmp/ (B22): both come from the
-    // toolchain tree zigbuild/toolchain/build.zig installs, not from this
-    // build. libomp itself stays in the base (B21): libR links it where R
-    // has OpenMP, and vendor-libs.sh copies it into <prefix>/lib.
+    // R_HOME/bin/toolchain holds rzig and its link object only
+    // (installRzig, from build(); feat-standalone-toolchain B19, B30). GNU
+    // make is the build-tools group's, TC/usr/bin/make (B7, B23), and the
+    // compile-time OpenMP files are the compilers group's, TC/openmp/
+    // (B22): both come from the toolchain tree zigbuild/toolchain/build.zig
+    // installs, not from this build. libomp itself stays in the base
+    // (B21): libR links it where R has OpenMP, and vendor-libs.sh copies it
+    // into <prefix>/lib.
     // The env's runtime data, for a tree that is not the env: the CA
     // bundle (etc/Renviron names it, finalRenviron), fontconfig's
     // configuration, and in full Tcl/Tk's script libraries.
@@ -2613,7 +2617,9 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 
 /// rzig into R_HOME/bin/toolchain under the names Makeconf uses
 /// (feat-no-host-paths F3): one binary, a copy per name, dispatching on
-/// the name it was started as. They are the only files directly in that
+/// the name it was started as, and beside them the object rzig adds to
+/// links (rzig_build.linkObject: linux's dso_fini.o, Windows' cfguard.o;
+/// feat-r-home-link-objects). They are the only files directly in that
 /// directory: the toolchain groups' files sit in its subdirectories
 /// (feat-standalone-toolchain B19, B30). The base carries them on every
 /// channel: the base archive, r-zig-slim and the r-zig wheel (B19). The
@@ -2659,6 +2665,7 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
     for (names) |n| {
         step.dependOn(&b.addInstallFileWithDir(ctx.rzig, ctx.rhomeInstallDir("bin/toolchain"), n).step);
     }
+    if (ctx.rzig_object) |o| step.dependOn(&b.addInstallFileWithDir(o.file, ctx.rhomeInstallDir("bin/toolchain"), o.name).step);
     // `rzig build`'s tier-2 root (feat-zig-pkg-build): build_t2.zig adds a
     // package's own src/build.zig, and rpkg.zig is the helper its rbuild
     // receives. Tier 1 has no root: rzig builds it (tier1.zig).

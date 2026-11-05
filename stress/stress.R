@@ -345,8 +345,7 @@ Sys.unsetenv("ZIG_LOCAL_CACHE_DIR")
 # rzig's own cache is outside the run directory, where cache.zig puts it
 # (an empty variable counts as unset; with no cache home, zig's global
 # cache). The run removes at its end what it added there (V8's archive
-# copy on macOS, a libc++ mirror per zig, linux's dso-fini object,
-# Windows' cfguard stub), never an older entry.
+# copy on macOS, a libc++ mirror per zig), never an older entry.
 cache_home <- c(Sys.getenv("XDG_CACHE_HOME"), if (win) Sys.getenv("LOCALAPPDATA"),
                 if (nzchar(Sys.getenv("HOME"))) file.path(Sys.getenv("HOME"), ".cache"), Sys.getenv("ZIG_GLOBAL_CACHE_DIR"))
 rzig_cache <- file.path(chartr("\\", "/", cache_home[nzchar(cache_home)][1]), "r-zig")

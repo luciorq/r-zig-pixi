@@ -125,14 +125,15 @@ pub fn noLtoLink(ctx: *Ctx, args: Args) !Args {
 /// zig writes an import library for every DLL it links (and for a
 /// program that exports symbols), beside it, named after the link's
 /// first input: rzig's CFG stub comes first (cfguard.zig), so every
-/// package link left src/guard_dispatch.lib, which R CMD build packs and
-/// R CMD check warns about ("These are unlikely file names for src
-/// files"; kappa, 2026-10-11). GNU ld writes none unless asked, and zig
-/// cc has no flag for none. So an image link that names none
-/// (--out-implib, -implib) names <output>.rzig.lib, which main.zig's run
-/// deletes when zig is done (ctx.discard): no link leaves one, and the
-/// next link of the same output replaces one a killed link left. Through
-/// -Xlinker, as a comma in the output's path would split a -Wl, flag.
+/// package link left src/guard_dispatch.lib (the stub's name in rzig's
+/// cache then), which R CMD build packs and R CMD check warns about
+/// ("These are unlikely file names for src files"; kappa, 2026-10-11).
+/// GNU ld writes none unless asked, and zig cc has no flag for none. So
+/// an image link that names none (--out-implib, -implib) names
+/// <output>.rzig.lib, which main.zig's run deletes when zig is done
+/// (ctx.discard): no link leaves one, and the next link of the same output
+/// replaces one a killed link left. Through -Xlinker, as a comma in the
+/// output's path would split a -Wl, flag.
 pub fn implib(ctx: *Ctx, args: Args) !Args {
     if (cmdline.anyContains(args, "-implib")) return &.{};
     const i = cmdline.outputIndex(args) orelse return &.{};
