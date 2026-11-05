@@ -29,7 +29,16 @@ const cache = @import("cache.zig");
 /// word of its command) would link a shared libc++. Returns whether it did.
 pub fn apply(ctx: *Ctx, zig0: []const u8) !bool {
     const lib_dir = (try zigLibDir(ctx, zig0)) orelse return false;
-    switch (try prepare(ctx.io, ctx.arena, lib_dir, try cache.root(ctx))) {
+    const cache_root = cache.root(ctx) catch |err| switch (err) {
+        // no mirror to make; a warning only when one was needed
+        error.NoCacheHome => {
+            if (try sharedLibcxx(ctx.io, ctx.arena, lib_dir, .unix) != null)
+                ctx.warn("could not prepare a mirror of {s} ({t}); this link may use a shared libc++", .{ lib_dir, err });
+            return false;
+        },
+        else => |e| return e,
+    };
+    switch (try prepare(ctx.io, ctx.arena, lib_dir, cache_root)) {
         .none => return false,
         .failed => |m| {
             ctx.warn("could not prepare {s}; this link may use a shared libc++", .{m});
@@ -232,6 +241,23 @@ test "mirror: ZIG_LIB_DIR given (also for python3 -m ziglang), macOS's libc++.1.
     try testing.expect(try apply(ctx, f.path("anywhere/zig")));
     try testing.expectEqualStrings(mirror, f.env.get("ZIG_LIB_DIR").?);
     try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "mirror: no cache home, none, with a warning only when zig would link a shared libc++" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // as above
+    var f: @import("testutil.zig").Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const ctx = &f.ctx;
+    for ([_][]const u8{ "env/bin/zig", "env/lib/zig/std/std.zig" }) |p| try f.touch(p);
+    const zig0 = f.path("env/bin/zig");
+    // upstream's layout: nothing to say
+    try testing.expect(!try apply(ctx, zig0));
+    try testing.expectEqualStrings("", f.takeWarnings());
+    try f.touch("env/lib/libc++.so.1");
+    try testing.expect(!try apply(ctx, zig0));
+    try testing.expect(f.env.get("ZIG_LIB_DIR") == null);
+    try testing.expectEqualStrings(f.fmt("rzig-test: could not prepare a mirror of {s}/../lib/zig (NoCacheHome); this link may use a shared libc++\n", .{f.path("env/bin")}), f.takeWarnings());
 }
 
 test "prepare: build.zig's use, any cache root; upstream's layout and Windows' name" {

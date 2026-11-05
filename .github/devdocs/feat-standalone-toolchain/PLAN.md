@@ -6511,6 +6511,8 @@ Tests (2026-10-21; `phase7m2/implementer2/RESULTS.md`):
 - Next work (user, 2026-10-22): phases 8 and 9, then pkgconf from
   source (TODO.md), a separate PR, then the zig 0.17 port, then Windows
   on ARM.
+- feat-tier1-engine (its PLAN.md; it replaces PR #27's shared runner):
+  after the queue merges. Its slot beside phase 8 is the user's.
 - Follow-ups for the user (not phase 7): no `ld` anywhere (winch, C6);
   R's Windows manifest for non-ASCII paths (Am12) is fix-r-utf8-manifest,
   merged before phase 7 and published with `_9`; m2's behaviour past

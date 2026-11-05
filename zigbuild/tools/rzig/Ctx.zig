@@ -45,6 +45,9 @@ xcrun: []const u8 = "/usr/bin/xcrun",
 zig: ?[]const []const u8 = null,
 /// Unit tests collect `warn`'s messages here instead of stderr.
 warnings: ?*std.ArrayList(u8) = null,
+/// Unit tests collect `echo`'s lines here instead of stdout (the test
+/// runner talks to zig build on its stdout).
+echoed: ?*std.ArrayList(u8) = null,
 /// Files the command writes that nobody keeps (a Windows link's import
 /// library, windows.implib): main.zig's run deletes them when the command
 /// is done. Windows only, where rzig waits for the command; on unix it
@@ -89,13 +92,31 @@ pub fn fmt(ctx: *const Ctx, comptime f: []const u8, args: anytype) Allocator.Err
 }
 
 /// Messages go to stderr prefixed with the shim's name, as the bash
-/// shims' did.
+/// shims' did. Written at once, as `echo` is: std.debug.print writes in
+/// 64-byte pieces, and tier1.zig's echo of a parallel job could land
+/// between them (RZIG_TRACE lines, which pkg-parity compares).
 pub fn warn(ctx: *const Ctx, comptime f: []const u8, args: anytype) void {
     if (ctx.warnings) |w| {
         w.print(ctx.arena, "{s}: " ++ f ++ "\n", .{ctx.name} ++ args) catch {};
         return;
     }
-    std.debug.print("{s}: " ++ f ++ "\n", .{ctx.name} ++ args);
+    const text = ctx.fmt("{s}: " ++ f ++ "\n", .{ctx.name} ++ args) catch {
+        std.debug.print("{s}: " ++ f ++ "\n", .{ctx.name} ++ args);
+        return;
+    };
+    Io.File.stderr().writeStreamingAll(ctx.io, text) catch {};
+}
+
+/// A command line on stdout before the command runs, as make echoes its
+/// recipes (tier1.zig): written at once, so it comes before what the
+/// command prints.
+pub fn echo(ctx: *const Ctx, line: []const u8) void {
+    if (ctx.echoed) |e| {
+        e.print(ctx.arena, "{s}\n", .{line}) catch {};
+        return;
+    }
+    const text = ctx.fmt("{s}\n", .{line}) catch return;
+    Io.File.stdout().writeStreamingAll(ctx.io, text) catch {};
 }
 
 /// What an applet runs: zig, with these arguments after its own path

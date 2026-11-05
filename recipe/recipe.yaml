@@ -508,11 +508,11 @@ outputs:
                 then:
                   - Library/lib/R/bin/toolchain/rzig.exe
                   - Library/lib/R/bin/toolchain/gcc.exe
-                  - Library/lib/R/share/zig/rpkg/build_t1.zig
+                  - Library/lib/R/share/zig/rpkg/build_t2.zig
                 else:
                   - lib/R/bin/toolchain/rzig
                   - lib/R/bin/toolchain/zig-cc
-                  - lib/R/share/zig/rpkg/build_t1.zig
+                  - lib/R/share/zig/rpkg/build_t2.zig
             not_exists:
               - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
               - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**

@@ -46,9 +46,10 @@
 #      preflight's other branches (zig, no make, no flang;
 #      feat-zig-pkg-build M4; Windows too [phase3-P3-9]): a C package
 #      with no Makevars builds through `rzig build` (patch 0013) with no
-#      make, its build runner in rzig's cache under the run's HOME,
-#      leaves no build root, and loads; one whose Makevars has a rule
-#      stops with rzig's reason and the build tools' text; unix also an
+#      make and no zig build (tier1.zig), leaves no build root and no
+#      build-runner-* in rzig's cache under the run's HOME, and loads;
+#      one whose Makevars has a rule stops with rzig's reason and the
+#      build tools' text; unix also an
 #      R-only package with a configure script, with "a configure script
 #      R runs" and the same text, and a Fortran one with TC/flang's
 #      driver moved aside and the compilers' text (C26, PHASE6 open
@@ -476,12 +477,10 @@ else
   # else the env's), passed on as ZIG_BIN, which env -i drops (rzig would
   # then take TC/zig's), with the global cache env.sh keeps for that zig.
   # Not its
-  # ZIG_LOCAL_CACHE_DIR: rzig build would take that as its cache, and the
+  # ZIG_LOCAL_CACHE_DIR: zig cc would take that as its cache, and the
   # installs here are to use the one a user's install gets [phase3-P3-6]:
-  # build_t1.zig's build runner in rzig's cache, under the fresh HOME
-  # (Windows: LOCALAPPDATA), with each install's objects and library in
-  # its build root, gone with it (pkgbuild.zig's sharedRunner); zig cc keeps
-  # its objects in the global cache.
+  # zig cc's objects in the global cache, each install's objects and
+  # library in its build root, gone with it (tier 1 runs no zig build).
   zig_bin="$ZIG"
   zig_env=(ZIG_BIN="$zig_bin" ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR")
 fi
@@ -900,8 +899,8 @@ fi
 # measurement PLAN.md asks for): R CMD SHLIB of the derived-type module
 # (fdt_src) through rzig build with no make (patch 0013's one hook; PATH
 # unix the tree's bin alone, Windows bin\x64 and System32: no flang on
-# it), in a HOME of its own, so that rzig's cache has no build runner yet
-# and, in the toolchain pass, zig's cache is empty: what a user waits for
+# it), in a HOME of its own, so that, in the toolchain pass, zig's cache
+# is empty: what a user waits for
 # a first Fortran library (the first C++ compile filled the other HOME's
 # caches). In the build pass zig's cache is env.sh's: for comparison.
 # The same call again gives the warm time; the library loads and
@@ -1036,13 +1035,13 @@ fi
 # hook (patch 0013): a package with C code and no Makevars (pfC) passes
 # the compilers' check, needs no make, and the hook builds it through
 # rzig build (RZIG_TRACE=1: `rzig build: tier 1`, no recipe make echoed)
-# with zig build's cache where a user's install has it (zig_env has no
-# ZIG_LOCAL_CACHE_DIR) [phase3-P3-6]: build_t1.zig's build runner in a
-# build-runner-<key> directory of rzig's cache under this HOME, holding
-# nothing of pfC, whose build root goes with the install (pkgbuild.zig's
-# sharedRunner), and it loads; one whose Makevars has a rule (pfM, mkpkg's
-# lib: a static library through $(AR)) needs make and stops at the build
-# tools' check with rzig's reason and their text. unix also: one with a
+# with the caches a user's install has (zig_env has no
+# ZIG_LOCAL_CACHE_DIR) [phase3-P3-6]: no zig build (tier1.zig), so no
+# build-runner-* in rzig's cache under this HOME, and nothing of pfC
+# there; its build root goes with the install, and it loads; one whose
+# Makevars has a rule (pfM, mkpkg's lib: a static library through $(AR))
+# needs make and stops at the build tools' check with rzig's reason and
+# their text. unix also: one with a
 # Fortran source, src/a.f (pfF), stops at the compilers' with no flang
 # (TC/flang's driver moved aside, open point N) and their text; an
 # R-only package with a configure script (pfG,
@@ -1101,28 +1100,30 @@ if [ -n "$pass_zig" ]; then
   if [ -n "$(make_recipes "$pf/pfC.log")" ]; then
     cat "$pf/pfC.log" >&2; echo "error: a recipe make echoed in pfC's install log" >&2; exit 1
   fi
-  # the traced zig build command names the cache: the build runner's
-  # directory in rzig's cache (grep reads to the end, no -q: grep -q's
-  # early exit could kill tr with SIGPIPE and fail the pipeline, pipefail
-  # [tests-SIGPIPE-1]); it is under this HOME's rzig cache, one, and holds
-  # none of pfC's objects (f.o, val.o) or its library
-  tr -d '\r' < "$pf/pfC.log" | grep -E -- '--cache-dir [^ ]*[\\/]r-zig[\\/]build-runner-[0-9a-f]{32}( |$)' > /dev/null ||
-    { cat "$pf/pfC.log" >&2; echo "error: pfC's zig build did not run with the build runner's cache in rzig's cache, <rzig cache>/build-runner-<key> (ZIG_LOCAL_CACHE_DIR leaked in?)" >&2; exit 1; }
+  # no zig build command in the trace (grep reads to the end, no -q:
+  # grep -q's early exit could kill tr with SIGPIPE and fail the
+  # pipeline, pipefail [tests-SIGPIPE-1]), and in this HOME's rzig cache
+  # its own kinds of entry alone, with the one a link leaves
+  # (rzig_cache_odd), and none of pfC's objects (f.o, val.o) or its
+  # library
+  if tr -d '\r' < "$pf/pfC.log" | grep -E -- ' build --build-file ' > /dev/null; then
+    cat "$pf/pfC.log" >&2; echo "error: pfC's install ran zig build: tier 1 runs none" >&2; exit 1
+  fi
   if [ "$OS" = windows ]; then pf_cache="$home/r-zig"; else pf_cache="$home/.cache/r-zig"; fi
-  pf_runner="$(ls -d "$pf_cache"/build-runner-* 2> /dev/null || true)"
-  [ -n "$pf_runner" ] && [ "$(printf '%s\n' "$pf_runner" | wc -l | tr -d ' ')" = 1 ] ||
-    { echo "error: after pfC's install, not one build-runner directory in $pf_cache: '$pf_runner'" >&2; exit 1; }
-  [ -z "$(find "$pf_runner" -name f.o -o -name val.o -o -name pfC.so -o -name pfC.dll)" ] ||
-    { echo "error: pfC's objects or library are in rzig build's shared cache, $pf_runner: they belong in its build root" >&2; exit 1; }
+  pf_odd="$(rzig_cache_odd "$pf_cache")"
+  [ -z "$pf_odd" ] ||
+    { echo "error: after pfC's install, rzig's cache $pf_cache: $(printf '%s' "$pf_odd" | tr '\n' ' ')(tier 1 runs no zig build)" >&2; exit 1; }
+  [ -z "$(find "$pf_cache" -name f.o -o -name val.o -o -name pfC.so -o -name pfC.dll 2> /dev/null)" ] ||
+    { echo "error: after pfC's install, rzig's cache $pf_cache has pfC's objects or library: they belong in its build root" >&2; exit 1; }
   test ! -e "$pf/pk/pfC/src/.rzig" ||
     { echo "error: pfC's install left its build root, $pf/pk/pfC/src/.rzig" >&2; exit 1; }
   (cd "$pf" && env -i "${base_env[@]}" \
     "${pf_load[@]}" -e 'stopifnot(getExportedValue(loadNamespace("pfC", lib.loc = "lib"), "f")() == 1L)') ||
     { echo "error: pfC, built through rzig build, did not load" >&2; exit 1; }
   if [ "$OS" = windows ]; then
-    echo "== the install preflight with zig and no build tools (PATH = bin\\x64 + System32): a C package builds through rzig build (the build runner in rzig's cache under HOME, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text"
+    echo "== the install preflight with zig and no build tools (PATH = bin\\x64 + System32): a C package builds through rzig build (no zig build, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text"
   else
-    echo "== the install preflight with zig and no build tools: a C package builds through rzig build (the build runner in rzig's cache under HOME, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text, an R-only package with a configure script with 'a configure script R runs' and that text (its configure not run), a Fortran one with no flang (TC/flang's driver moved aside) and the compilers' text"
+    echo "== the install preflight with zig and no build tools: a C package builds through rzig build (no zig build, no build root left) and loads; a Makevars-rule package stops with rzig's reason and the build tools' text, an R-only package with a configure script with 'a configure script R runs' and that text (its configure not run), a Fortran one with no flang (TC/flang's driver moved aside) and the compilers' text"
   fi
 fi
 
@@ -1595,8 +1596,8 @@ if [ "$OS" != windows ]; then
     # plus RZIG_TRACE=1, requires `rzig build: tier 1` in its log and no
     # recipe make echoed, and sets shape_so to its library. RZIG_KEEP_ROOT=1
     # keeps rzig build's build root, src/.rzig, whose obj/ holds the
-    # objects it compiled (and no zig build cache: that is the build
-    # runner's, shared, pkgbuild.zig's sharedRunner): each source's object is
+    # objects it compiled (and no zig build cache: tier 1 runs no zig
+    # build, tier1.zig): each source's object is
     # there and at or below the macOS floor, which only the objects show
     # for a compiler that ignored it (the SHLIB runs check theirs)
     # [tests-T8]; then the root goes, as rzig build removes it.
@@ -1623,7 +1624,7 @@ if [ "$OS" != windows ]; then
       if [ -n "$(make_recipes "$shapes/$name.log")" ]; then
         cat "$shapes/$name.log" >&2; echo "error: a recipe make echoed in $name's install log" >&2; exit 1
       fi
-      test ! -e "$d/src/.rzig/zig-cache" || { echo "error: $name's build root has a zig build cache, $d/src/.rzig/zig-cache: tier 1's is the build runner's, in rzig's cache" >&2; exit 1; }
+      test ! -e "$d/src/.rzig/zig-cache" || { echo "error: $name's build root has a zig build cache, $d/src/.rzig/zig-cache: tier 1 runs no zig build" >&2; exit 1; }
       for f in $objs; do
         o="$(find "$d/src/.rzig/obj" -name "$f" 2> /dev/null | head -1 || true)"
         [ -n "$o" ] || { echo "error: no $f in $name's build root, $d/src/.rzig/obj (RZIG_KEEP_ROOT=1)" >&2; exit 1; }
@@ -2021,11 +2022,12 @@ fi
 # build (tier 1, no make), on every OS. Its objects' absolute names make
 # more than 32,767 characters, where a Windows command line ends: `rzig
 # def` and the link named them all and stopped with NameTooLong before
-# (libgeos with its unix Makevars, about 390 objects). Now both read them
-# from the build root's objects.rsp (build_t1.zig), itself over 32,767
-# bytes. Kept root (RZIG_KEEP_ROOT=1): objects.rsp and the objects' names
+# (libgeos with its unix Makevars, about 390 objects). Now the link reads
+# them from the build root's objects.rsp (tier1.zig), itself over 32,767
+# bytes, and the .def is written in process (def.zig), with no command
+# line. Kept root (RZIG_KEEP_ROOT=1): objects.rsp and the objects' names
 # measured; f() is the sum, 44850, and each of the 300 functions is in
-# the library's exports (on Windows rzig def wrote them from the file).
+# the library's exports (on Windows the .def named them).
 if [ -n "$pass_zig" ]; then
   bm="$VERIFY_DIR/btmany"
   rm -rf "$bm"; mkdir -p "$bm/lib"

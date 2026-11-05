@@ -17,6 +17,8 @@ the user ("Open decisions").
 **Merged (2026-10-14)** as PR #27 (main d11dee1); the stress dispatch
 on main after the merge passed on the five runners ("CI").
 
+**Superseded by feat-tier1-engine (2026-10-23).**
+
 ## Why
 
 The user, 2026-10-13: "continue with the shared builder PR before we

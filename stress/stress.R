@@ -17,7 +17,7 @@
 #
 # Usage: stress.R [options] [target ...]
 #   target        a row of packages.tsv (package or package:variant), a group
-#                 (g1 to g4), a tag (heavy), or all. Default: all of this OS's rows.
+#                 (g0 to g4), a tag (heavy), or all. Default: all of this OS's rows.
 #   --skip=X,Y    leave out these rows, groups or tags (--skip=heavy)
 #   --tree        test the R that runs this script (the default)
 #   --conda[=CH]  test r-zig-slim + r-zig-toolchain from channel CH: local
@@ -40,12 +40,6 @@
 #   --trace       RZIG_TRACE=1: rzig prints its commands into the logs, and
 #                 `rzig build` (patch 0013) its tier; R_ZIG_PKG_BUILDER=make
 #                 in the environment makes every install take the make path
-#   --no-shared-cache  leave ZIG_LOCAL_CACHE_DIR unset: `rzig build` takes
-#                 its default zig build cache, as a user's install does: for
-#                 tier 1 the build runner's directory in rzig's cache, its
-#                 runner compiled once and shared, the rest in each build
-#                 root; tier 2's in each build root (zig's global cache
-#                 stays in the run directory)
 #   --list        print the install plan and stop
 #   --sysdeps     print the sysdeps of the rows the run installs on this OS
 #                 (the selected ones and their dependencies' rows) and stop
@@ -62,7 +56,7 @@ opt <- function(name, default = NULL) {
   if (nzchar(v)) v else TRUE
 }
 flag <- function(name) isTRUE(opt(name))
-known <- c("skip", "tree", "conda", "out", "jobs", "resume", "keep-path", "msys-from-tree", "trace", "no-shared-cache", "list", "sysdeps", "strict", "help")
+known <- c("skip", "tree", "conda", "out", "jobs", "resume", "keep-path", "msys-from-tree", "trace", "list", "sysdeps", "strict", "help")
 bad <- setdiff(sub("=.*", "", sub("^--", "", grep("^--", argv, value = TRUE))), known)
 if (length(bad)) stop("unknown option: --", paste(bad, collapse = " --"), " (see --help)", call. = FALSE)
 ca <- commandArgs()                                             # Rscript passes -f FILE (R 4.6) or --file=FILE
@@ -178,8 +172,9 @@ if (!flag("resume") && length(list.files(lib))) stop(lib, " is not empty: use --
 # --- the classifier --------------------------------------------------------------
 # The class is a suggestion from the failing part of the log; a person
 # decides (README). First match wins. toolchain has rzig build's own
-# failures, not its `zig build failed (N)`, which follows every failed
-# compile: the compiler's lines above it decide, as under make [tests-T4];
+# failures, not the line that follows every failed compile (tier 1's
+# `<source> failed (N): <command>`, tier 2's `zig build failed (N)`): the
+# compiler's lines above it decide, as under make [tests-T4];
 # and the install preflight's stops (patch 0009): after rzig's 127, in
 # build 8's words (as universe's packages print it until phase 4) and
 # today's [tests-T11]; after any other status, "this package cannot be
@@ -341,25 +336,19 @@ Sys.setenv(
 if (win) Sys.setenv(TMP = tmp, TEMP = tmp)
 # zig caches every object it compiles: in the run directory, whatever the
 # caller set (as scripts/env.sh does for the build). --resume reuses it.
-# By default rzig build takes it too (ZIG_LOCAL_CACHE_DIR), so its build
-# runner compiles once per run; --no-shared-cache leaves rzig build its
-# default, as a user gets: tier 1's runner in rzig's cache, compiled once
-# and shared. Its build-runner-<key> directory goes at the run's end when
-# the run made it, with what else the run added there; one an earlier
-# install made stays, as any older entry, and the run used it as it was
-# (one runner per directory: pkgbuild.zig's sharedRunner). Dispatch
-# 38467907779 measured the per-install runner this replaced [stress-S1,
-# I-B1, tests-4].
-shared_cache <- !flag("no-shared-cache")
+# rzig build takes its default, as a user's install does: tier 1 runs no
+# zig build (tier1.zig), and tier 2 keeps its zig build cache in each
+# build root (N3). The caller's ZIG_LOCAL_CACHE_DIR would be zig cc's and
+# tier 2's cache instead (feat-tier1-engine).
 Sys.setenv(ZIG_GLOBAL_CACHE_DIR = file.path(out, "zig-cache"))
-if (shared_cache) Sys.setenv(ZIG_LOCAL_CACHE_DIR = file.path(out, "zig-cache")) else Sys.unsetenv("ZIG_LOCAL_CACHE_DIR")
+Sys.unsetenv("ZIG_LOCAL_CACHE_DIR")
 # rzig's own cache is outside the run directory, where cache.zig puts it
-# (an empty variable counts as unset). The run removes at its end what it
-# added there (V8's archive copy on macOS, a libc++ mirror per zig, linux's
-# dso-fini object, Windows' cfguard stub, with --no-shared-cache tier 1's
-# build runner), never an older entry.
+# (an empty variable counts as unset; with no cache home, zig's global
+# cache). The run removes at its end what it added there (V8's archive
+# copy on macOS, a libc++ mirror per zig, linux's dso-fini object,
+# Windows' cfguard stub), never an older entry.
 cache_home <- c(Sys.getenv("XDG_CACHE_HOME"), if (win) Sys.getenv("LOCALAPPDATA"),
-                if (nzchar(Sys.getenv("HOME"))) file.path(Sys.getenv("HOME"), ".cache"), "/tmp/.cache")
+                if (nzchar(Sys.getenv("HOME"))) file.path(Sys.getenv("HOME"), ".cache"), Sys.getenv("ZIG_GLOBAL_CACHE_DIR"))
 rzig_cache <- file.path(chartr("\\", "/", cache_home[nzchar(cache_home)][1]), "r-zig")
 rzig_cache_had <- dir.exists(rzig_cache)
 rzig_cache_old <- list.files(rzig_cache, all.files = TRUE, no.. = TRUE)
@@ -403,7 +392,7 @@ info <- list(
   msys_from_tree = msys_tree,
   zig = if (nzchar(zig)) tryCatch(system2(zig, "version", stdout = TRUE, stderr = FALSE)[1], error = function(e) "") else "",
   cc = tryCatch(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "--no-user-files", "CC"), stdout = TRUE)[1], error = function(e) ""),
-  builder = builder, shared_cache = shared_cache,
+  builder = builder,
   sysdeps_missing = paste(sysdeps_missing, collapse = " "), tsv = tsv, out = out, rzig_cache = rzig_cache,
   rzig_cache_removed = "", args = paste(argv, collapse = " "), minutes = 0, finished = FALSE, error = "")
 
@@ -427,9 +416,7 @@ write_report <- function(final = FALSE) {
                   info$minutes, jobs, info$path),
           sprintf("zig %s; CC `%s`; libraries env `%s`%s.", info$zig, info$cc, sysroot,
                   if (dist == "conda") sprintf(" (%s from %s)", info$r_zig, info$channel) else ""),
-          sprintf("Builder %s (R_ZIG_PKG_BUILDER); zig build cache %s.", builder,
-                  if (shared_cache) "shared by the run (ZIG_LOCAL_CACHE_DIR)" else
-                    "rzig's default (--no-shared-cache: tier 1's build runner in rzig's cache, the rest per install)"),
+          sprintf("Builder %s (R_ZIG_PKG_BUILDER).", builder),
           if (length(sysdeps_missing)) sprintf("Sysdeps missing from the env: %s.", info$sysdeps_missing),
           if (nzchar(info$rzig_cache_removed)) sprintf("The run added to rzig's cache `%s`, and removed at its end: %s.",
                                                        info$rzig_cache, info$rzig_cache_removed),
@@ -483,6 +470,22 @@ tarball <- function(p) {
   if (inherits(r, "error") || !NROW(r)) return(NA_character_)
   r[1, 2]
 }
+# A row tagged local is no CRAN package: stress.R writes it, a fresh copy
+# before each of its STRESS_REPEAT installs, as R unpacks a tarball for
+# each. tinyjobs is 64 one-line C files, built at the row's -j: tier1.zig's
+# pool starts and ends many quick jobs, install after install, which
+# guards its lifetime rule, `defer sel.cancelDiscard()` (feat-tier1-engine).
+tiny_pkg <- function(p, n = 64L) {
+  d <- file.path(out, "src", p)
+  unlink(d, recursive = TRUE)
+  dir.create(file.path(d, "src"), recursive = TRUE)
+  writeLines(c(paste("Package:", p), "Version: 0.1", "Title: Many Tiny Compiles", "Description: Written by stress.R.",
+               "License: GPL-3", "Author: r-zig", "Maintainer: r-zig <r-zig@example.invalid>"), file.path(d, "DESCRIPTION"))
+  writeLines(sprintf("useDynLib(%s)", p), file.path(d, "NAMESPACE"))
+  for (k in seq_len(n)) writeLines(c("#include <Rinternals.h>", sprintf("SEXP f%d(void) { return ScalarInteger(%d); }", k, k)),
+                                   file.path(d, "src", sprintf("f%d.c", k)))
+  d
+}
 
 # --- the run -----------------------------------------------------------------------
 message(sprintf("stress: %s %s, %s, %d items, jobs %d, run directory %s", os, arch, dist, nrow(items), jobs, out))
@@ -506,25 +509,34 @@ for (i in seq_len(nrow(items))) {
     bad_deps <- if (it$name %in% rownames(db)) intersect(unlist(tools::package_dependencies(it$name, db = db, which = hard, recursive = TRUE)), failed) else character()
     message(sprintf("[%d/%d] %s ...", i, nrow(items), it$package))
     installed <- flag("resume") && file.exists(file.path(vlib, it$name, "DESCRIPTION"))
+    local_row <- nrow(row) && "local" %in% on_os(row$tags)
     src <- NA_character_
     if (installed) {
       rec$class <- "resumed"
-    } else if (!it$name %in% rownames(db)) {
+    } else if (!local_row && !it$name %in% rownames(db)) {
       rec$status <- "unavailable"; rec$class <- "network"; rec$first_error <- "not in CRAN or Bioconductor for this R"
     } else if (length(bad_deps)) {
       rec$status <- "skipped"; rec$class <- "dependency"; rec$first_error <- paste("failed dependency:", paste(bad_deps, collapse = " "))
-    } else if (is.na(src <- tarball(it$name))) {
+    } else if (is.na(src <- if (local_row) tiny_pkg(it$name) else tarball(it$name))) {
       rec$status <- "download-failed"; rec$class <- "network"; rec$first_error <- "download.packages failed 3 times"
     } else {
-      for (attempt in 1:3) {                                   # more tries only for a network failure
-        r <- run(c("CMD", "INSTALL", shQuote(paste0("--library=", vlib)), shQuote(src)), log, minutes, env)
-        fe <- first_error(log)
-        if (r$status == 0 || r$status == 124 || attempt == 3 || classify(fe$text) != "network") break
-        file.rename(log, sub("\\.log$", paste0("-attempt", attempt, ".log"), log))
-        Sys.sleep(c(30, 90)[attempt])
+      reps <- if (local_row) as.integer(env[["STRESS_REPEAT"]]) else 1L
+      took <- 0
+      for (k in seq_len(reps)) {                               # until the first failure
+        if (k > 1) tiny_pkg(it$name)
+        for (attempt in 1:3) {                                 # more tries only for a network failure
+          r <- run(c("CMD", "INSTALL", shQuote(paste0("--library=", vlib)), shQuote(src)), log, minutes, env)
+          fe <- first_error(log)
+          if (r$status == 0 || r$status == 124 || attempt == 3 || classify(fe$text) != "network") break
+          file.rename(log, sub("\\.log$", paste0("-attempt", attempt, ".log"), log))
+          Sys.sleep(c(30, 90)[attempt])
+        }
+        took <- took + r$minutes
+        if (r$status != 0) break
       }
       unlink(Sys.glob(file.path(vlib, "00LOCK-*")), recursive = TRUE)   # left by a killed install
-      rec$minutes <- r$minutes
+      rec$minutes <- took
+      if (reps > 1 && r$status != 0) fe$line <- sprintf("install %d of %d: %s", k, reps, fe$line)
       if (r$status == 124) {
         rec$status <- "timeout"; rec$class <- "timeout"
         rec$first_error <- sprintf("timed out after %s min; last line: %s", minutes, fe$line)

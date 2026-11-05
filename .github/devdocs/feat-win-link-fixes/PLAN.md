@@ -56,7 +56,9 @@ single quotes): `"` quotes, `\` is literal unless before a quote, `#` at
 a word's start comments out the line, and `'` pairs with `"` (one quote
 state for both), so a `'` cannot be written in the file.
 
-**The rule, one code path on every OS** (zigbuild/rpkg/build_t1.zig):
+**The rule, one code path on every OS** (zigbuild/rpkg/build_t1.zig;
+since feat-tier1-engine, 2026-10-23, tier1.zig writes objects.rsp and
+rspName and rspText are in rzig's response.zig):
 
 - At build() time `objectsFile` writes `<root>/objects.rsp`: every
   tier-1 object, and tier 2's C and C++ ones, has its path then

@@ -213,6 +213,11 @@ for a week is removed (pkgbuild.zig's `zigBuildDirs`, `sharedRunner`,
 `sweepRunners`). Tier 2 keeps `<build root>/zig-cache`.
 `ZIG_LOCAL_CACHE_DIR` and `--cache-dir` still override the default.
 
+Superseded for tier 1 by feat-tier1-engine (2026-10-23, its PLAN.md):
+tier 1 runs no zig build. rzig compiles and links the plan itself
+(tier1.zig), build_t1.zig and the shared runner are gone, and tier 2
+links through `rzig t1`.
+
 ### What must remain on the R side (small)
 
 - the hook before `run_shlib` (exit 3 falls through to make) (2026-10:

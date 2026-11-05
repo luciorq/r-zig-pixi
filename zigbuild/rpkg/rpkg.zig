@@ -9,12 +9,57 @@
 //!
 //! and its zig root exports `R_init_<pkg>(dll: *R.DllInfo)`, registering
 //! routines with `R.R_registerRoutines` (`const R = @import("R");`).
+//! The zig object is zig build's; the C and C++ sources and the link are
+//! rzig's, one step (`rzig t1`, zigbuild/tools/rzig/tier1.zig), as for a
+//! tier-1 package.
 const std = @import("std");
-const t1 = @import("build_t1.zig");
+
+/// The fields of rzig's plan (zigbuild/tools/rzig/pkgplan.zig's `Plan`)
+/// this file reads; the others are rzig's own. A package's rbuild sees
+/// only these in `opts.plan`. Before feat-tier1-engine it saw
+/// build_t1.zig's whole plan, the compile and link words (cc, cxx, fc,
+/// link, libs, toolchain, sources, env) included: `rzig t1` reads those
+/// itself now.
+pub const Plan = struct {
+    name: []const u8,
+    srcdir: []const u8,
+    output: []const u8,
+    /// "libs", or "libs/x64" on Windows (R_ARCH); "" = the prefix itself
+    libs_dir: []const u8 = "libs",
+    /// rzig itself, which compiles the C and C++ sources and links
+    rzig: []const u8 = "",
+    target: []const u8 = "", // R's zig target, e.g. x86_64-linux-gnu.2.17
+    r_include: []const u8 = "", // R_HOME/include
+    /// plan.zon's own path (readPlan), for `rzig t1 --plan`
+    path: []const u8 = "",
+    /// The build root, plan.zon's directory (readPlan).
+    root: []const u8 = "",
+    /// -j for `rzig t1`, as rzig build's zig build got it (readPlan, from
+    /// -Djobs); 0: rzig t1's own default, the CPU count.
+    jobs: usize = 0,
+};
+
+pub fn readPlan(b: *std.Build) *const Plan {
+    const plan_path = b.option([]const u8, "plan", "plan.zon") orelse @panic("-Dplan=<file> is required");
+    const raw = std.Io.Dir.cwd().readFileAlloc(b.graph.io, plan_path, b.allocator, .limited(16 * 1024 * 1024)) catch @panic("cannot read the plan");
+    const z = b.allocator.dupeZ(u8, raw) catch @panic("OOM");
+    const plan = b.allocator.create(Plan) catch @panic("OOM");
+    plan.* = std.zon.parse.fromSliceAlloc(Plan, b.allocator, z, null, .{ .ignore_unknown_fields = true }) catch @panic("cannot parse the plan");
+    // absolute: rzig passes it so, with `/` (pkgbuild.zig)
+    plan.path = if (std.fs.path.isAbsolute(plan_path)) plan_path else b.pathResolve(&.{ b.graph.cache.cwd, plan_path });
+    plan.root = std.fs.path.dirname(plan.path) orelse ".";
+    plan.jobs = b.option(usize, "jobs", "-j for rzig t1 (rzig build's -j)") orelse 0;
+    return plan;
+}
+
+/// "libs" or "libs/x64" under the prefix.
+pub fn installDir(libs_dir: []const u8) std.Build.InstallDir {
+    return if (libs_dir.len == 0) .prefix else .{ .custom = libs_dir };
+}
 
 pub const Options = struct {
-    /// link, libs and cc as rzig computed them for this package
-    plan: *const t1.Plan,
+    /// the package's plan (readPlan), which `rzig t1` builds from
+    plan: *const Plan,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     /// R_HOME/include
@@ -53,10 +98,15 @@ pub fn rModule(b: *std.Build, opts: Options) *std.Build.Module {
     return tc.createModule();
 }
 
-/// Objects from the zig root (zig) and the C/C++ sources (rzig), linked by
-/// rzig as tier 1 links: the LazyPath of <pkg>.so (.dll).
+/// The zig root's object (zig), then the C/C++ sources and the link
+/// (`rzig t1`): the LazyPath of <pkg>.so (.dll).
 pub fn addLibrary(b: *std.Build, opts: Options, lo: LibraryOptions) std.Build.LazyPath {
-    var objs = std.ArrayList(std.Build.LazyPath).empty;
+    const run = b.addSystemCommand(&.{ opts.plan.rzig, "t1", "--plan", opts.plan.path, "--root", b.fmt("{s}/t1", .{opts.plan.root}) });
+    run.setName(b.fmt("rzig t1 {s}", .{opts.plan.output}));
+    run.has_side_effects = true; // its objects and the link are in the build root, not zig build's cache
+    // its compiles run beside each other: as many as zig build's -j, which
+    // held them when each was a step of its own
+    if (opts.plan.jobs > 0) run.addArgs(&.{ "-j", b.fmt("{d}", .{opts.plan.jobs}) });
     if (lo.root_source_file) |root| {
         var imports = std.ArrayList(std.Build.Module.Import).empty;
         imports.append(b.allocator, .{ .name = "R", .module = rModule(b, opts) }) catch @panic("OOM");
@@ -70,15 +120,11 @@ pub fn addLibrary(b: *std.Build, opts: Options, lo: LibraryOptions) std.Build.La
             .imports = imports.items,
         });
         const obj = b.addObject(.{ .name = opts.plan.name, .root_module = mod });
-        objs.append(b.allocator, obj.getEmittedBin()) catch @panic("OOM");
+        run.addArg("--object");
+        run.addFileArg(obj.getEmittedBin());
     }
-    if (lo.c_sources.len > 0 or lo.cxx_sources.len > 0) {
-        var srcs = std.ArrayList(t1.Source).empty;
-        for (lo.c_sources) |c| srcs.append(b.allocator, .{ .lang = "c", .path = c, .obj = b.fmt("{s}.o", .{std.fs.path.stem(c)}) }) catch @panic("OOM");
-        for (lo.cxx_sources) |c| srcs.append(b.allocator, .{ .lang = "cxx", .path = c, .obj = b.fmt("{s}.o", .{std.fs.path.stem(c)}) }) catch @panic("OOM");
-        var sub = opts.plan.*;
-        sub.sources = srcs.items;
-        for (t1.compileAll(b, &sub)) |o| objs.append(b.allocator, o) catch @panic("OOM");
-    }
-    return t1.link(b, opts.plan, objs.items);
+    for (lo.c_sources) |c| run.addArgs(&.{ "--c", c });
+    for (lo.cxx_sources) |c| run.addArgs(&.{ "--cxx", c });
+    run.addArg("--out");
+    return run.addOutputFileArg(opts.plan.output);
 }

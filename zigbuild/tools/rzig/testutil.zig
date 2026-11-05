@@ -15,6 +15,8 @@ pub const Fixture = struct {
     root: []const u8,
     /// What the code under test warned about (Ctx.warn), one line each.
     warnings: std.ArrayList(u8),
+    /// The command lines it echoed (Ctx.echo), one line each.
+    echoed: std.ArrayList(u8),
 
     /// In place, since `ctx` points into the fixture.
     pub fn init(f: *Fixture, os: Ctx.Os) !void {
@@ -22,7 +24,8 @@ pub const Fixture = struct {
         f.env = .init(f.arena.allocator());
         f.tmp = testing.tmpDir(.{});
         f.warnings = .empty;
-        f.ctx = .{ .io = testing.io, .arena = f.arena.allocator(), .env = &f.env, .os = os, .name = "rzig-test", .warnings = &f.warnings };
+        f.echoed = .empty;
+        f.ctx = .{ .io = testing.io, .arena = f.arena.allocator(), .env = &f.env, .os = os, .name = "rzig-test", .warnings = &f.warnings, .echoed = &f.echoed };
         f.root = try f.tmp.dir.realPathFileAlloc(testing.io, ".", f.arena.allocator());
         if (@import("builtin").os.tag == .windows) f.root = try std.mem.replaceOwned(u8, f.arena.allocator(), f.root, "\\", "/");
         // hermetic: no SDK unless a test provides an xcrun
@@ -34,6 +37,13 @@ pub const Fixture = struct {
         const w = f.warnings.items;
         f.warnings = .empty;
         return w;
+    }
+
+    /// The echoed command lines so far, then forgets them.
+    pub fn takeEchoed(f: *Fixture) []const u8 {
+        const e = f.echoed.items;
+        f.echoed = .empty;
+        return e;
     }
 
     pub fn deinit(f: *Fixture) void {

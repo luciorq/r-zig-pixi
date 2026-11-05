@@ -16,9 +16,9 @@ on:
         type: string
         default: '["ubuntu-latest"]'
       packages:
-        description: 'stress/packages.tsv targets: package names, package:variant, groups g1 to g4, tags (heavy), or all'
+        description: 'stress/packages.tsv targets: package names, package:variant, groups g0 to g4, tags (heavy, local), or all'
         type: string
-        default: 'g3 g4'
+        default: 'g0 g3 g4'
       skip:
         description: 'rows, groups or tags to leave out, comma-separated (heavy: the longest builds)'
         type: string
@@ -51,10 +51,6 @@ on:
         type: choice
         options: [auto, make]
         default: auto
-      shared_cache:
-        description: 'true: rzig build shares the run''s zig cache (its build runner compiles once per run); false: stress.R --no-shared-cache, rzig build takes its default cache as a user''s install does (tier 1: the build runner in rzig''s cache, compiled once and shared; the rest per install)'
-        type: boolean
-        default: true
       msys_from_tree:
         description: 'Windows tree legs (stress.R --msys-from-tree): the stress env''s Library/usr/bin and Library/mingw-w64/bin off PATH, so the build-tools group''s usr/bin alone answers for sh, make and the tools R''s makefiles run'
         type: boolean
@@ -137,7 +133,6 @@ jobs:
           STRESS_JOBS: ${{ inputs.jobs }}
           CHANNEL: ${{ matrix.dist == 'conda' && inputs.channel || '' }}
           TRACE: ${{ inputs.trace }}
-          SHARED_CACHE: ${{ inputs.shared_cache }}
           MSYS_FROM_TREE: ${{ inputs.msys_from_tree }}
           R_ZIG_PKG_BUILDER: ${{ inputs.builder }}
         run: |
@@ -146,7 +141,6 @@ jobs:
           if [ -n "$CHANNEL" ]; then args+=("--conda=$CHANNEL"); fi
           if [ -n "$SKIP" ]; then args+=("--skip=$SKIP"); fi
           if [ "$TRACE" = true ]; then args+=("--trace"); fi
-          if [ "$SHARED_CACHE" = false ]; then args+=("--no-shared-cache"); fi
           if [ "$MSYS_FROM_TREE" = true ] && [ "$RUNNER_OS" = Windows ]; then args+=("--msys-from-tree"); fi
           # one target per word
           # shellcheck disable=SC2086

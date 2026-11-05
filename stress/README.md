@@ -25,6 +25,7 @@ The groups follow the brief:
 | g4 | own build systems and bundled code | nloptr, s2, igraph, stringi, stringi:bundled, qs2, fst, geos, Rhdf5lib |
 | g2 | C++ across a library boundary (the C++ ABI risk) | lwgeom, sf, terra, gdalraster, RcppParallel, RcppParallel:system-tbb, protolite, arrow, arrow:source, V8 |
 | g1 | heavy C++ | Rcpp, RcppArmadillo, lme4, StanHeaders, rstan, duckdb, mlpack |
+| g0 | rzig itself: many tiny jobs at a high `-j`, repeated | tinyjobs |
 
 The runner installs the rows in file order (cheap groups first), each after
 its dependencies, and the `name:variant` rows last. The tag `heavy` marks
@@ -33,7 +34,12 @@ it builds libarrow from source in about 15 min), so `--skip=heavy` leaves
 them out. A tag written `name@os` (arrow's `heavy@linux`) counts on that OS
 only. A `name:variant` row installs the same package again with other
 env vars, into a library of its own (for example `stringi:bundled` builds
-stringi's own ICU).
+stringi's own ICU). A row tagged `local` is no CRAN package: `stress.R`
+writes it into the run directory and installs it `STRESS_REPEAT` times (the
+row's env), a fresh copy each time, until the first failure. `tinyjobs` is
+64 one-line C files, installed 20 times at `-j 32`: `rzig build`'s tier-1
+pool (tier1.zig) starts and ends many quick compiles, which guards its
+lifetime rule (feat-tier1-engine).
 
 ## Run it locally
 
@@ -78,15 +84,6 @@ Useful options (`--help` lists them all):
 - `--trace`: rzig prints the environments it chose and its zig command
   into the logs (`RZIG_TRACE=1`), as lines that start with `zig-cc:` and the
   like, and `rzig build` the tier it built a package with.
-- `--no-shared-cache`: no zig build cache shared by the run. By default
-  `rzig build` uses the run's zig cache (`ZIG_LOCAL_CACHE_DIR`), so its
-  build runner compiles once per run. With this option `rzig build` takes
-  its default, as a user's install does: for a tier-1 package the build
-  runner's directory in rzig's cache (`build-runner-<key>/`, below), where
-  the first install compiles the runner and the others reuse it, with each
-  install's objects and library in its build root; for a tier-2 package a
-  cache in its build root. zig's global cache stays in the run directory
-  either way.
 - `--keep-path`: keep your PATH and, on macOS, skip the runner's CMake
   toolchain file. By default the runner narrows PATH and, on macOS,
   leaves Homebrew out of CMake's searches. A tree that ships its own
@@ -111,7 +108,7 @@ Actions, "stress", "Run workflow", or with `gh`:
 gh workflow run stress.yaml -f oses='["ubuntu-latest","macos-latest"]' -f packages='g3 g4'
 gh workflow run stress.yaml -f packages=g2 -f distribution=both -f channel=universe
 gh workflow run stress.yaml -f packages=all -f skip=heavy -f jobs=2
-gh workflow run stress.yaml -f packages='g3 g4' -f trace=true -f shared_cache=false
+gh workflow run stress.yaml -f packages='g3 g4' -f trace=true
 gh workflow run stress.yaml -f oses='["windows-latest"]' -f packages='g3 g4' -f msys_from_tree=true
 ```
 
@@ -122,7 +119,6 @@ upstream's from `pixi run fetch-zig`), `trace` (`--trace`), the builder
 (`R_ZIG_PKG_BUILDER`: auto, R CMD INSTALL and R CMD SHLIB through rzig
 build where the call qualifies, patch 0013; or make, the make path for
 every package and shared object, a make reference) and
-`shared_cache` (true by default; false passes `--no-shared-cache`) and
 `msys_from_tree` (false by default; true passes `--msys-from-tree` on
 Windows). Each OS and distribution is one job.
 Jobs never stop each other (`fail-fast: false`) and may take up to 6 hours.
@@ -165,20 +161,18 @@ nothing else on the machine:
   `R_LIBS`, `R_LIBS_USER` and `R_LIBS_SITE` all point to it. Each package is
   installed once per run, and later packages use it.
 - An empty file for `R_MAKEVARS_USER`, `R_ENVIRON_USER` and `R_PROFILE_USER`.
-- `TMPDIR` and zig's cache in the run directory, which `rzig build` also
-  uses unless `--no-shared-cache`. The temp files are deleted after each
-  package. rzig's own cache is elsewhere: `$XDG_CACHE_HOME/r-zig`,
+- `TMPDIR` and zig's cache in the run directory. `rzig build` takes its
+  default, as a user's install does: tier 1 runs no zig build, and tier 2
+  keeps its zig build cache in its build root. The temp files are deleted
+  after each package. rzig's own cache is elsewhere: `$XDG_CACHE_HOME/r-zig`,
   by default `~/.cache/r-zig` (Windows: `%LOCALAPPDATA%\r-zig`). There, with
   conda-forge's zig on macOS, rzig makes a libc++ mirror (a directory of
   symlinks) per zig. Since build 7 it also keeps a copy of each archive
   linked under a name without an extension (V8 on macOS:
   `archive-<key>/v8_monolith.a`, 161 MB), on linux the `dso-fini-<key>/`
-  object and on Windows the `cfguard-<key>/` stub. With
-  `--no-shared-cache`, `rzig build` keeps tier 1's build runner there too
-  (`build-runner-<key>/`, one per R's `build_t1.zig` and zig, about 45 MB
-  on linux-64), and removes one no install has used for a week. The runner
-  lists the cache's entries when it starts, and at its end removes the
-  ones the run added; report.md names them. It never removes an older
+  object and on Windows the `cfguard-<key>/` stub. The runner lists the
+  cache's entries when it starts, and at its end removes the ones the run
+  added; report.md names them. It never removes an older
   entry, so what a killed run left stays.
   Another build that uses the cache during the run loses what it added
   there; rzig makes it again when it needs it.
@@ -217,9 +211,7 @@ working (the harness test); no row has timed out on macOS or Windows yet.
 
 `report.md` starts with the run: date, R, commit, minutes, jobs, zig, the
 `CC` from Makeconf, the libraries env, the builder (`R_ZIG_PKG_BUILDER`,
-auto when unset), whether the run shared one zig build cache or left
-`rzig build` its default (`--no-shared-cache`), and what the run removed
-from rzig's cache. The commit is `GITHUB_SHA` when it is set, else the
+auto when unset), and what the run removed from rzig's cache. The commit is `GITHUB_SHA` when it is set, else the
 checkout's `git rev-parse HEAD`, plus "(modified)" when tracked files have
 changes; a copy without `.git` says "unknown". Then one line per target:
 
@@ -243,7 +235,7 @@ The classes, and who acts on them:
 | network | `cannot open URL`, HTTP 4xx/5xx, `curl: (n)`; also a package missing from the repositories | rerun |
 | resource | out of memory, no space left | fewer jobs, a bigger runner |
 | abi | an undefined symbol with `St3__1`, `__cxx11` or an MSVC name: libc++ code against a libstdc++ (or MSVC) library | a design decision for the user |
-| toolchain | rzig's own messages (`zig-cc: cannot run ...`, `rzig build: no zig ...`), `LLVM ERROR`, an unknown option, a missing compiler-rt helper; also the install preflight's stops (patch 0009: `needs the r-zig toolchain (...), which is incomplete` after rzig's 127, and `this package cannot be built` after any other status, such as a zig that is not R's; the row shows rzig's `zig-cc: ` line naming what is wrong; before phase 4 it also said `which is not installed` where R had no rzig, and build 8 said `r-zig toolchain is incomplete`). Not `rzig build: zig build failed`, which follows every failed compile: the compiler's lines decide, as under make | fix in rzig, after the user agrees; for the preflight's stop, add what it names |
+| toolchain | rzig's own messages (`zig-cc: cannot run ...`, `rzig build: no zig ...`), `LLVM ERROR`, an unknown option, a missing compiler-rt helper; also the install preflight's stops (patch 0009: `needs the r-zig toolchain (...), which is incomplete` after rzig's 127, and `this package cannot be built` after any other status, such as a zig that is not R's; the row shows rzig's `zig-cc: ` line naming what is wrong; before phase 4 it also said `which is not installed` where R had no rzig, and build 8 said `r-zig toolchain is incomplete`). Not the line that follows every failed compile (tier 1's `rzig build: <source> failed (N): <command>`, tier 2's `rzig build: zig build failed (N)`): the compiler's lines decide, as under make | fix in rzig, after the user agrees; for the preflight's stop, add what it names |
 | crash | R died from a signal or a Windows exception (exit status 128 or more, or below 0), or printed `*** caught segfault ***` | read the log; after an unload on linux, Z9 until rzig's fix |
 | upstream | a packaging bug in a conda-forge library or in the channels: a Homebrew path in a conda library (`Library not loaded: /opt/homebrew/...`), CMake's `debug`/`optimized` keywords from a `.pc` file, an import library that lists what its DLL does not export (`The specified procedure could not be found`), a solver conflict when `--conda` makes its env (round 1's U1 to U4) | work around it in the env (a pin, a fixed file) and record it |
 | sysdep | `configure: error`, a missing header, `-l` or pkg-config module, `command not found` | add it to the stress feature (or the extras for tools) |

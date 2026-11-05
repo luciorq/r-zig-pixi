@@ -174,7 +174,7 @@ fn notRZig(ctx: *Ctx, what: []const u8) ![]const u8 {
 /// `rzig build --shlib`'s check before it builds an R CMD SHLIB call
 /// (pkgbuild.zig): the compilers check the install preflight makes for a
 /// package (patch 0009), which R CMD SHLIB has none of. Without it a zig
-/// that is not R's failed in build_t1.zig's compile, where make, with
+/// that is not R's (its flags are for R's zig), where make, with
 /// zig-cc, built, and pkgbuild's probe turned FALSE [shlib-r-2]. 0: build;
 /// 127 after the compilers group's text: zig or flang is missing; a zig
 /// that is not R's: with the build tools there, "<label> needs make:

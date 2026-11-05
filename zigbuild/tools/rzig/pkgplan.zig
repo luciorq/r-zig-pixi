@@ -1,6 +1,7 @@
 //! What `R CMD INSTALL` would run for one source package's `src/`, without
-//! make: the tier the package falls in, and for tier 1 the plan the
-//! zig build root (zigbuild/rpkg/build_t1.zig) executes. The plan is the
+//! make: the tier the package falls in, and for tier 1 the plan rzig
+//! runs (tier1.zig), which tier 2's root reads too (zigbuild/rpkg/
+//! rpkg.zig). The plan is the
 //! strings make would have put on each compile and link line, derived as
 //! install.R's .shlib_internal derives them (its makefile order and its
 //! command-line overrides), expanded by makefile.zig and word-split by
@@ -52,8 +53,10 @@ pub const Source = struct {
     obj: []const u8,
 };
 
-/// The plan as plan.zon carries it to the root. Field names and defaults
-/// are the root's (zigbuild/rpkg/build_t1.zig, `Plan`): keep both in step.
+/// The plan as plan.zon carries it to tier1.zig (`rzig t1` reads it
+/// back) and to tier 2's root. zigbuild/rpkg/rpkg.zig's `Plan` reads the
+/// fields it needs by these names, with these defaults, and skips the
+/// others: keep both in step.
 pub const Plan = struct {
     name: []const u8,
     srcdir: []const u8,
@@ -102,7 +105,8 @@ pub const Options = struct {
     /// The site and user Makevars install.R would add, when they exist.
     makevars_site: ?[]const u8 = null,
     makevars_user: ?[]const u8 = null,
-    /// The rzig binary the root runs for `rzig def` (Windows).
+    /// The rzig binary tier 2's root runs as `rzig t1`, on every OS
+    /// (zigbuild/rpkg/rpkg.zig's addLibrary).
     rzig: []const u8 = "",
     /// R CMD SHLIB's call: planned from these files in `src_dir`, the
     /// working directory. null: the package's src/.

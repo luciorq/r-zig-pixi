@@ -524,7 +524,6 @@ pub fn build(b: *std.Build) !void {
         b.step("rzig", "Build rzig and install it as the compilers in R_HOME/bin/toolchain").dependOn(inst);
         const rzt = b.step("rzig-test", "Run rzig's unit tests");
         rzt.dependOn(&b.addRunArtifact(rz.tests).step);
-        rzt.dependOn(&b.addRunArtifact(rz.t1_tests).step);
     }
 
     try checkConfigFreshness(b, io, config_dir);
@@ -2660,10 +2659,10 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
     for (names) |n| {
         step.dependOn(&b.addInstallFileWithDir(ctx.rzig, ctx.rhomeInstallDir("bin/toolchain"), n).step);
     }
-    // `rzig build`'s zig build roots (feat-zig-pkg-build): the tier-1 root
-    // reads a plan, the tier-2 root adds a package's own src/build.zig, and
-    // rpkg.zig is the helper a package's rbuild receives. zigbuild/rpkg/.
-    for ([_][]const u8{ "build_t1.zig", "build_t2.zig", "rpkg.zig" }) |n| {
+    // `rzig build`'s tier-2 root (feat-zig-pkg-build): build_t2.zig adds a
+    // package's own src/build.zig, and rpkg.zig is the helper its rbuild
+    // receives. Tier 1 has no root: rzig builds it (tier1.zig).
+    for ([_][]const u8{ "build_t2.zig", "rpkg.zig" }) |n| {
         step.dependOn(&b.addInstallFileWithDir(b.path(b.fmt("zigbuild/rpkg/{s}", .{n})), ctx.rhomeInstallDir("share/zig/rpkg"), n).step);
     }
     return step;

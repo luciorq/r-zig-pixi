@@ -2,14 +2,13 @@
 //! named `pkg` in this root's build.zig.zon (rzig writes both into the
 //! build root); it exports `rbuild(rpkg, b, opts)` and never imports
 //! anything outside its own tree. `rzig build` copies this file as
-//! build.zig beside build_t1.zig and rpkg.zig.
+//! build.zig beside rpkg.zig.
 const std = @import("std");
-const t1 = @import("build_t1.zig");
 const rpkg = @import("rpkg.zig");
 const pkg = @import("pkg");
 
 pub fn build(b: *std.Build) void {
-    const plan = t1.readPlan(b);
+    const plan = rpkg.readPlan(b);
     // R's target with the baseline CPU, as rzig compiles C (-mcpu=baseline)
     const query = std.Target.Query.parse(.{ .arch_os_abi = plan.target, .cpu_features = "baseline" }) catch @panic("bad target in the plan");
     const opts: rpkg.Options = .{
@@ -20,5 +19,5 @@ pub fn build(b: *std.Build) void {
     };
     const dep = b.dependency("pkg", .{});
     const lib = pkg.rbuild(rpkg, dep.builder, opts);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(lib, t1.installDir(plan.libs_dir), plan.output).step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(lib, rpkg.installDir(plan.libs_dir), plan.output).step);
 }

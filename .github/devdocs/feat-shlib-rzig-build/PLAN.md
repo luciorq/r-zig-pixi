@@ -158,6 +158,8 @@ packages too. Without the chain, 3 of 5 module builds at `-j 8` failed
 (`shlib/fix/fchk/`: run.sh, summary.log, nochain.out.1-5 and
 chain.out.1-5; each run with no `.mod` left and a fresh rzig cache, so
 no Fortran compile came from zig build's cache).
+Since feat-tier1-engine (2026-10-23) the Cc3 rule lives in rzig's
+tier1.zig; build_t1.zig, and with it Cc8's exit 3, is gone.
 
 **R, patch 0013, step 2:** regenerated as the one rzig-build patch (B
 iii). The top-level `.rzig_build(pkg, files, output, pkg_libs, use_lto,

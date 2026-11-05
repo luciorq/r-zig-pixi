@@ -20,6 +20,10 @@
 //! the PR #25 review: until then this tree's Makeconf.win left NM_FILTER
 //! empty and rzig def kept them, to match it; cli exported 195 names so on
 //! kappa, 2026-10-12, and 185 without them in M5).
+//!
+//! Not read: a bigobj object (its own header, which clang writes for more
+//! than 65,279 sections). That is BadObject, and the build fails, where
+//! make's nm reads it (feat-tier1-engine K3; no package seen with one).
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
@@ -56,7 +60,8 @@ pub fn exports(a: mem.Allocator, data: []const u8, out: *std.ArrayList([]const u
     var i: usize = 0;
     while (i < nsyms) {
         const sym = symtab.at(i, .symbol).symbol;
-        defer i += 1 + sym.number_of_aux_symbols;
+        // in usize: 1 + 255 aux records overflows u8
+        defer i += 1 + @as(usize, sym.number_of_aux_symbols);
         if (sym.storage_class != .EXTERNAL) continue;
         const section = @intFromEnum(sym.section_number);
         if (section == 0) {
@@ -66,7 +71,8 @@ pub fn exports(a: mem.Allocator, data: []const u8, out: *std.ArrayList([]const u
             continue; // absolute, debug
         } else {
             if (section > nsections) return error.BadObject;
-            const hdr: *align(1) const coff.SectionHeader = @ptrCast(data[sections_off + (section - 1) * section_size ..].ptr);
+            // in usize: section 1640's header is past 65,535 (K3)
+            const hdr: *align(1) const coff.SectionHeader = @ptrCast(data[sections_off + (@as(usize, section) - 1) * section_size ..].ptr);
             const fl = hdr.flags;
             if (!(fl.CNT_CODE or fl.CNT_INITIALIZED_DATA or fl.CNT_UNINITIALIZED_DATA)) continue;
             if (fl.LNK_INFO or fl.LNK_REMOVE or fl.MEM_DISCARDABLE) continue; // .drectve, debug
@@ -96,7 +102,8 @@ pub fn text(a: mem.Allocator, objects: []const []const u8) ![]const u8 {
 
 /// `rzig def -o out.def a.o b.o ...`: 0, or 1 with the reason on stderr.
 /// An `@file` stands for the objects in it (response.zig): rzig build's
-/// links name theirs so, `@<root>/objects.rsp` (build_t1.zig).
+/// links name theirs so, `@<root>/objects.rsp`. tier1.zig calls `run` in
+/// its own process, with the objects' paths.
 pub fn run(ctx: *Ctx, all: []const []const u8) u8 {
     const args = response.expand(ctx, all) catch return 1;
     var out_path: ?[]const u8 = null;
@@ -170,6 +177,65 @@ test "exports: nm's [BCDRT] set, then CRAN's NM_FILTER" {
     // the seds match anywhere in the name, not only at its start
     for ([_][]const u8{ ".refptr.x", "a.refptr.b", ".weak.f.default.g", "x.weak.y" }) |n| try testing.expect(filtered(n));
     for ([_][]const u8{ "refptr", "x.weak", "weak.x", "a_refptr_b", "R_init_pkg" }) |n| try testing.expect(!filtered(n));
+}
+
+test "exports: symbols in section 1640 and up to 65,279, the most a COFF object has (K3)" {
+    // mlpack's dbscan.o has 2,791 sections, and a symbol in section 1640,
+    // whose header is at 20 + 1639 * 40 = 65,580: def.zig computed that in
+    // u16 and panicked (kappa, 2026-10-30). An object of n code sections,
+    // no data, and one EXTERNAL symbol in each of three of them.
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const n = 65_279;
+    const syms = [_]struct { name: []const u8, section: u16 }{ .{ .name = "first", .section = 1 }, .{ .name = "s1640", .section = 1640 }, .{ .name = "last", .section = n } };
+    const symtab_off = 20 + n * @sizeOf(coff.SectionHeader);
+    const data = try a.alloc(u8, symtab_off + syms.len * coff.Symbol.sizeOf() + 4);
+    @memset(data, 0);
+    mem.writeInt(u16, data[0..2], 0x8664, .little); // x86_64
+    mem.writeInt(u16, data[2..4], n, .little);
+    mem.writeInt(u32, data[8..12], symtab_off, .little);
+    mem.writeInt(u32, data[12..16], syms.len, .little);
+    for (0..n) |s| mem.writeInt(u32, data[20 + s * @sizeOf(coff.SectionHeader) + 36 ..][0..4], 0x60000020, .little); // CNT_CODE, MEM_EXECUTE, MEM_READ
+    for (syms, 0..) |s, i| {
+        const r = data[symtab_off + i * coff.Symbol.sizeOf() ..][0..18];
+        @memcpy(r[0..s.name.len], s.name);
+        mem.writeInt(u16, r[12..14], s.section, .little);
+        r[16] = @intFromEnum(coff.StorageClass.EXTERNAL);
+    }
+    mem.writeInt(u32, data[data.len - 4 ..][0..4], 4, .little); // an empty string table
+    var names: std.ArrayList([]const u8) = .empty;
+    try exports(a, data, &names);
+    try testing.expectEqual(syms.len, names.items.len);
+    for (syms, names.items) |s, name| try testing.expectEqualStrings(s.name, name);
+}
+
+test "exports: a symbol with 255 aux records, the most its u8 count holds (K3)" {
+    // def.zig added 1 + number_of_aux_symbols in u8, which overflowed at
+    // 255 (review of K3, 2026-10-31). One code section, one EXTERNAL
+    // symbol in it, then its 255 aux records.
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const naux = 255;
+    const symtab_off = 20 + @sizeOf(coff.SectionHeader);
+    const data = try a.alloc(u8, symtab_off + (1 + naux) * coff.Symbol.sizeOf() + 4);
+    @memset(data, 0);
+    mem.writeInt(u16, data[0..2], 0x8664, .little); // x86_64
+    mem.writeInt(u16, data[2..4], 1, .little);
+    mem.writeInt(u32, data[8..12], symtab_off, .little);
+    mem.writeInt(u32, data[12..16], 1 + naux, .little);
+    mem.writeInt(u32, data[20 + 36 ..][0..4], 0x60000020, .little); // CNT_CODE, MEM_EXECUTE, MEM_READ
+    const r = data[symtab_off..][0..18];
+    @memcpy(r[0..2], "fn");
+    mem.writeInt(u16, r[12..14], 1, .little);
+    r[16] = @intFromEnum(coff.StorageClass.EXTERNAL);
+    r[17] = naux;
+    mem.writeInt(u32, data[data.len - 4 ..][0..4], 4, .little); // an empty string table
+    var names: std.ArrayList([]const u8) = .empty;
+    try exports(a, data, &names);
+    try testing.expectEqual(1, names.items.len);
+    try testing.expectEqualStrings("fn", names.items[0]);
 }
 
 test "run: the objects from a response file (rzig build's objects.rsp), as on the command line" {

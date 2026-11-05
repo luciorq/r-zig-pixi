@@ -75,15 +75,15 @@ test -x "$R_BIN" || { echo "error: $R_BIN not built yet — run 'pixi run build'
 
 LIB="$BUILD_DIR/testlib-$VARIANT"
 mkdir -p "$LIB"
-# rzig build's cache as a user's install has it: for tier 1 build_t1.zig's
-# build runner in rzig's cache, shared, with each install's objects and
-# library in its build root, gone with it (pkgbuild.zig's sharedRunner).
-# env.sh's ZIG_LOCAL_CACHE_DIR would be its cache instead [phase3-P3-6];
-# zig cc keeps its objects in env.sh's global cache. rzig's cache itself
-# stays in the workspace, as env.sh's zig caches do, not under $HOME,
-# where every worktree and zig that runs this would leave a runner of
-# about 45 MB [code-contract-home-cache]: XDG_CACHE_HOME names it on
-# every OS (cache.zig's root reads it first).
+# rzig build's caches as a user's install has them: tier 1 runs no zig
+# build (tier1.zig), each install's objects and library in its build
+# root, gone with it; zig cc keeps its objects in env.sh's global cache
+# (env.sh's ZIG_LOCAL_CACHE_DIR would be zig cc's cache instead)
+# [phase3-P3-6]. rzig's own cache (dso_fini.o, cfguard.o, archive
+# copies, the libc++ mirror) stays in the workspace, as env.sh's zig
+# caches do, not under $HOME [code-contract-home-cache]: XDG_CACHE_HOME
+# names it on every OS (cache.zig's root reads it first). It also moves
+# the XDG caches of the programs the installs run (cr27 finding 6).
 unset ZIG_LOCAL_CACHE_DIR
 if [ "$OS" = windows ]; then
   export XDG_CACHE_HOME="$(cygpath -w "$BUILD_DIR/rzig-cache")"

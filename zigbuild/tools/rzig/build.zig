@@ -14,7 +14,10 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&b.addInstallBinFile(steps.bin, if (target.result.os.tag == .windows) "rzig.exe" else "rzig").step);
     const t = b.step("test", "Run rzig's unit tests");
     t.dependOn(&b.addRunArtifact(steps.tests).step);
-    t.dependOn(&b.addRunArtifact(steps.t1_tests).step);
+    // the unit tests as a program for -Dtarget, to copy to and run on
+    // another OS (kappa, omicron): bin/rzig-test
+    const tb = b.step("test-bin", "Install rzig's unit tests for -Dtarget as bin/rzig-test");
+    tb.dependOn(&b.addInstallArtifact(addTests(b, b.path("."), target, r_version), .{}).step);
 }
 
 pub const Artifacts = struct {
@@ -22,9 +25,6 @@ pub const Artifacts = struct {
     /// What to install: exe's binary, re-signed on a macOS host (see add).
     bin: std.Build.LazyPath,
     tests: *std.Build.Step.Compile,
-    /// zigbuild/rpkg/build_t1.zig's (rzig build's tier-1 root, beside
-    /// rzig in the tree): its response file's names (feat-win-link-fixes).
-    t1_tests: *std.Build.Step.Compile,
 };
 
 /// Safety checks stay on: a bounds error in an argument rewrite should stop
@@ -47,13 +47,7 @@ pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTar
         .optimize = optimize,
         .strip = optimize != .Debug,
     });
-    const test_mod = b.createModule(.{
-        .root_source_file = dir.path(b, "main.zig"),
-        .target = b.graph.host,
-        .optimize = .Debug,
-    });
     mod.addOptions("build_options", options);
-    test_mod.addOptions("build_options", options);
     const exe = b.addExecutable(.{ .name = "rzig", .root_module = mod });
     var bin = exe.getEmittedBin();
     if (target.result.os.tag == .macos) {
@@ -77,15 +71,44 @@ pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTar
             bin = sign.addOutputFileArg("rzig");
         }
     }
-    const t1_mod = b.createModule(.{
-        .root_source_file = dir.path(b, "../../rpkg/build_t1.zig"),
-        .target = b.graph.host,
-        .optimize = .Debug,
-    });
     return .{
         .exe = exe,
         .bin = bin,
-        .tests = b.addTest(.{ .name = "rzig-test", .root_module = test_mod }),
-        .t1_tests = b.addTest(.{ .name = "build-t1-test", .root_module = t1_mod }),
+        .tests = addTests(b, dir, b.graph.host, r_version),
     };
+}
+
+/// rzig's unit tests for `target`: the host's, to run here (`add`), or
+/// another's, to run on that machine (test-bin).
+pub fn addTests(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTarget, r_version: []const u8) *std.Build.Step.Compile {
+    const options = b.addOptions();
+    options.addOption([]const u8, "r_version", r_version);
+    const mod = b.createModule(.{
+        .root_source_file = dir.path(b, "main.zig"),
+        .target = target,
+        .optimize = .Debug,
+    });
+    mod.addOptions("build_options", options);
+    // tier1.zig's scheduler tests run this compiler and linker stand-in
+    // (testdata/fake_cc.zig), embedded: a program, not a shell script, so
+    // they run on Windows too, and wherever the test binary is copied
+    const fake_cc = b.addExecutable(.{ .name = "fake-cc", .root_module = b.createModule(.{
+        .root_source_file = dir.path(b, "testdata/fake_cc.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .strip = true,
+    }) });
+    mod.addAnonymousImport("fake_cc", .{ .root_source_file = fake_cc.getEmittedBin() });
+    // and this program, which crashes with rzig's crash handling
+    // (testdata/crash.zig, crash.zig), built as rzig is
+    const crash_mod = b.createModule(.{
+        .root_source_file = dir.path(b, "testdata/crash.zig"),
+        .target = target,
+        .optimize = default_optimize,
+        .strip = true,
+    });
+    crash_mod.addAnonymousImport("crash", .{ .root_source_file = dir.path(b, "crash.zig") });
+    const crash = b.addExecutable(.{ .name = "crash", .root_module = crash_mod });
+    mod.addAnonymousImport("crash_program", .{ .root_source_file = crash.getEmittedBin() });
+    return b.addTest(.{ .name = "rzig-test", .root_module = mod });
 }

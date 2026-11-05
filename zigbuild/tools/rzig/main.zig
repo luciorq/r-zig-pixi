@@ -61,9 +61,10 @@
 //!                      shell-quoted, a response file's words in place of
 //!                      its @file), then run it: R CMD INSTALL's log
 //!                      then shows every flag rzig added. Under `rzig
-//!                      build`, zig build echoes each step whose rzig wrote
-//!                      to stderr, headed "failed command:" although it
-//!                      passed (build_runner.zig reports stderr that way).
+//!                      build`, the compiles and the link are rzig's own
+//!                      children (tier1.zig, also tier 2's `rzig t1`), so
+//!                      the line shows after the command rzig build echoed,
+//!                      as under make.
 //!   RZIG_KEEP_ROOT=1   rzig build: keep the build root (the plan, the
 //!                      objects, the library) after the build, whatever
 //!                      its exit: <out>/.rzig for a package; for R CMD
@@ -106,6 +107,11 @@ const response = @import("response.zig");
 const check = @import("check.zig");
 const groups = @import("groups.zig");
 const testutil = @import("testutil.zig");
+const crash = @import("crash.zig");
+
+/// A crash never exits 3, rzig build's "needs make" (crash.zig).
+pub const panic = crash.panic;
+pub const debug = crash.debug;
 
 const Tool = enum {
     cc,
@@ -143,6 +149,7 @@ const Tool = enum {
 const Subcommand = enum {
     build,
     def,
+    t1,
 
     fn fromName(name: []const u8) ?Subcommand {
         return std.meta.stringToEnum(Subcommand, name);
@@ -156,6 +163,7 @@ const usage =
     \\       rzig build --pkg <dir> --out <dir> [options]   (rzig build --help)
     \\       rzig build --shlib --output <lib> [options] -- <file>...
     \\       rzig def -o <file>.def <object>|@<file>...
+    \\       rzig t1 --plan <plan.zon> --root <dir> --out <lib> [--object <o>]... [--c|--cxx <source>]... [-j N]
     \\
 ;
 
@@ -193,6 +201,7 @@ pub fn main(init: std.process.Init) !u8 {
             return switch (sub) {
                 .build => pkgbuild.run(&ctx, args[2..]),
                 .def => def.run(&ctx, args[2..]),
+                .t1 => @import("tier1.zig").run(&ctx, args[2..]),
             };
         }
         tool = Tool.fromName(toolName(args[1]));
@@ -604,6 +613,7 @@ test {
     _ = response;
     _ = @import("pkgplan.zig");
     _ = pkgbuild;
+    _ = @import("tier1.zig");
     _ = def;
     _ = check;
     _ = groups;
@@ -612,4 +622,10 @@ test {
     _ = ar;
     _ = find_zig;
     _ = libcxx_mirror;
+}
+
+test "rzig's root panic and debug are crash.zig's (K4)" {
+    // rzig-test's root is zig's test runner, so tier1.zig's crash test
+    // runs testdata/crash.zig's decls, never these
+    comptime std.debug.assert(panic == crash.panic and debug == crash.debug);
 }

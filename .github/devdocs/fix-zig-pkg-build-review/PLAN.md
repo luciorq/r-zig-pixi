@@ -495,7 +495,8 @@ In feat-standalone-toolchain TODO.md unless named:
 - The shared tier-1 build runner: a stress dispatch with
   `shared_cache = false` on the five runners decides it [stress-S1,
   records-REC-4]. Done: dispatch 38467907779 decided it, and
-  feat-shared-build-runner shares the runner (B1).
+  feat-shared-build-runner shares the runner (B1). Superseded by
+  feat-tier1-engine (2026-10-23): tier 1 runs no zig build.
 - A g1 dispatch with trace (Rcpp's cppFunction, rstan's stan_model):
   run-time compilation; the smoke's result is the evidence [stress-S6].
   Taken by feat-shlib-rzig-build's dispatch (its open point J: g1 and
