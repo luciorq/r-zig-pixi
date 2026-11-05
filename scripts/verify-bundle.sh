@@ -1317,13 +1317,29 @@ FORTRAN
     rh="$(env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" RHOME)"; cxx_name=zig-cxx
   fi
   after="$(tr -d '\r' < "$sn/dry.log" | awk 'f == 1 { print; f = 2 } /^make would use/ && !f { f = 1 }' | tr '\\' '/')"
-  low() { tr '[:upper:]' '[:lower:]'; }
-  if [ "$OS" = windows ]; then want_dry="$(printf '%s' "$rh/bin/toolchain/$cxx_name" | low)"; got_dry="$(printf '%s' "$after" | low)"
-  else want_dry="$rh/bin/toolchain/$cxx_name"; got_dry="$after"; fi
-  case "$got_dry" in
-    "$want_dry"*) ;;
-    *) cat "$sn/dry.log" >&2; echo "error: R CMD SHLIB --dry-run's line after 'make would use' is '$after', which does not start with $rh/bin/toolchain/$cxx_name (Rcpp's macOS OpenMP plugin reads its compiler there)" >&2; exit 1 ;;
-  esac
+  dry_bad() { cat "$sn/dry.log" >&2; echo "error: R CMD SHLIB --dry-run's line after 'make would use' is '$after', which does not start with $rh/bin/toolchain/$cxx_name (Rcpp's macOS OpenMP plugin reads its compiler there)${1:+: $1}" >&2; exit 1; }
+  if [ "$OS" = windows ]; then
+    # Windows: rzig names the compiler by R_HOME as R hands it over, which
+    # may hold 8.3 short names (RUNNER~1), so shellwords.quote single-quotes
+    # it, and the file is g++.exe. Compare the compiler word, unquoted: its
+    # directory with same_dir (long form, case ignored), its name exactly,
+    # with or without .exe.
+    case "$after" in
+      \'*) dry_cc="${after#\'}"; dry_cc="${dry_cc%%\'*}" ;;
+      *) dry_cc="${after%% *}" ;;
+    esac
+    dry_name="$(printf '%s' "${dry_cc##*/}" | tr '[:upper:]' '[:lower:]')"
+    case "$dry_name" in
+      "$cxx_name" | "$cxx_name.exe") ;;
+      *) dry_bad "the compiler is '$dry_name', not $cxx_name or $cxx_name.exe" ;;
+    esac
+    same_dir "${dry_cc%/*}" "$rh/bin/toolchain" || dry_bad "'${dry_cc%/*}' is not $rh/bin/toolchain"
+  else
+    case "$after" in
+      "$rh/bin/toolchain/$cxx_name "*) ;;
+      *) dry_bad ;;
+    esac
+  fi
   [ -z "$(cd "$sn/dry" && find . -name '*.o' -o -name "*.$SO" -o -name '.rzig*')" ] ||
     { echo "error: R CMD SHLIB --dry-run built something in $sn/dry" >&2; exit 1; }
   sn_shapes="$sn_shapes, --dry-run"
