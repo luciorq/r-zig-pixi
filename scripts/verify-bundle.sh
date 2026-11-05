@@ -2230,6 +2230,31 @@ else
   mk_m="$(cygpath -m "$mk")"
   tc_m="$(cygpath -m -l "$TC")"
   lower() { tr '[:upper:]' '[:lower:]'; }
+  # Whether rzig's check line ("make at <path>; sh at <path>; binutils at
+  # <dir>") names each tool where it should: bt_names <line> <name>=<path>...
+  # rzig prints a tool found on PATH in the form R put on PATH, with 8.3
+  # short names (RUNNER~1) and .exe, and one beside it in the long form,
+  # so a tool compares by its directory (same_dir: long form, case
+  # ignored) and its file name, with or without .exe; a directory
+  # (binutils) by same_dir alone. Prints what does not match.
+  bt_names() {
+    local line="$1" item name want got gb wb; shift
+    for item in "$@"; do
+      name="${item%%=*}"; want="${item#*=}"
+      case "$line" in
+        *"$name at "*) got="${line#*"$name at "}"; got="${got%%;*}" ;;
+        *) echo "no '$name at'"; return 1 ;;
+      esac
+      if [ -d "$want" ]; then
+        same_dir "$got" "$want" || { echo "$name at '$got', not $want"; return 1; }
+      else
+        gb="$(printf '%s' "${got##*/}" | lower)"; gb="${gb%.exe}"
+        wb="$(printf '%s' "${want##*/}" | lower)"; wb="${wb%.exe}"
+        [ "$gb" = "$wb" ] && same_dir "${got%/*}" "${want%/*}" ||
+          { echo "$name at '$got', not $want"; return 1; }
+      fi
+    done
+  }
 
   # Every tool path Makeconf.win names under R_HOME/bin/toolchain is a
   # file (B24, B43): make expands each variable Makeconf sets ($(info), no
@@ -2317,10 +2342,8 @@ RCODE
   out="$(cd "$VERIFY_DIR" && env -i "${base_env[@]}" PATH="$bt_path" \
     "$R_EXE" CMD "$(cygpath -w -s "$cc")" --rzig-check=build-tools | tr -d '\r')" ||
     { echo "error: R CMD gcc.exe --rzig-check=build-tools failed with the build-tools group extracted" >&2; exit 1; }
-  for want in "make at $tc_m/usr/bin/make" "sh at $tc_m/usr/bin/sh" "binutils at $tc_m/binutils"; do
-    printf '%s\n' "$out" | grep -qiF -- "$want" ||
-      { echo "error: R CMD gcc.exe --rzig-check=build-tools says '$out', which lacks '$want'" >&2; exit 1; }
-  done
+  bad="$(bt_names "$out" make="$tc_m/usr/bin/make" sh="$tc_m/usr/bin/sh" binutils="$tc_m/binutils")" ||
+    { echo "error: R CMD gcc.exe --rzig-check=build-tools says '$out': $bad" >&2; exit 1; }
   echo "   $out"
 
   # Each of Makeconf.win's binutils, as R's makefiles run them (C10, C11):
@@ -2745,10 +2768,8 @@ CONFIGURE
         out="$(cd "$VERIFY_DIR" && env -i "${base_env[@]}" "${mix_env[@]}" PATH="$cp" \
           "$R_EXE" CMD "$(cygpath -w -s "$cc")" --rzig-check=build-tools | tr -d '\r')" ||
           { echo "error: R CMD gcc.exe --rzig-check=build-tools failed with Git for Windows' usr\\bin $order on PATH" >&2; exit 1; }
-        for want in "make at $tc_m/usr/bin/make" "sh at $tc_m/usr/bin/sh"; do
-          printf '%s\n' "$out" | grep -qiF -- "$want" ||
-            { echo "error: with Git for Windows' usr\\bin $order on PATH, the check says '$out', which lacks '$want'" >&2; exit 1; }
-        done
+        bad="$(bt_names "$out" make="$tc_m/usr/bin/make" sh="$tc_m/usr/bin/sh")" ||
+          { echo "error: with Git for Windows' usr\\bin $order on PATH, the check says '$out': $bad" >&2; exit 1; }
         [ "$order" = first ] || continue
         s0=$SECONDS
         (cd "$bt" && rm -rf lib && mkdir lib && env -i "${base_env[@]}" "${zig_env[@]}" "${mix_env[@]}" PATH="$cp" RZIG_TRACE=1 \
