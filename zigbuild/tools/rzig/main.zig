@@ -64,7 +64,10 @@
 //!                      build`, the compiles and the link are rzig's own
 //!                      children (tier1.zig, also tier 2's `rzig t1`), so
 //!                      the line shows after the command rzig build echoed,
-//!                      as under make.
+//!                      as under make. Before it: `self <path>`, each
+//!                      `environment <dir>`, and `cache <dir>`, rzig's
+//!                      cache (cache.zig's root; `(none)` without one),
+//!                      where the harnesses look for what it wrote.
 //!   RZIG_KEEP_ROOT=1   rzig build: keep the build root (the plan, the
 //!                      objects, the library) after the build, whatever
 //!                      its exit: <out>/.rzig for a package; for R CMD
@@ -81,9 +84,7 @@
 //!                      zig step's (the only ones it applies to). Side
 //!                      effects of preparing the call still happen (the
 //!                      libc++ mirror, ar's archive seed, asking flang and
-//!                      xcrun, compiling a linux shared library's
-//!                      finalization object or a Windows link's CFG stub,
-//!                      copying an archive to an .a name).
+//!                      xcrun, copying an archive to an .a name).
 //!   RZIG_OS=linux|macos|windows  with RZIG_PRINT_ARGV only: apply that
 //!                      OS's rewriting (what the shims' `uname -s` chose),
 //!                      so every OS's branches can be checked from one
@@ -101,6 +102,7 @@ const ar = @import("ar.zig");
 const find_zig = @import("find_zig.zig");
 const environment = @import("environment.zig");
 const libcxx_mirror = @import("libcxx_mirror.zig");
+const cache = @import("cache.zig");
 const pkgbuild = @import("pkgbuild.zig");
 const def = @import("def.zig");
 const response = @import("response.zig");
@@ -243,9 +245,8 @@ pub fn main(init: std.process.Init) !u8 {
             return r.code;
         }
     }
-    // zig, found first: compiler.zig may compile with it (dso_fini.zig,
-    // cfguard.zig). zig-fc's compiles run flang alone, so a missing zig
-    // stops only a command that runs zig (below).
+    // zig, found first. zig-fc's compiles run flang alone, so a missing
+    // zig stops only a command that runs zig (below).
     ctx.zig = if (try find_zig.find(&ctx)) |z| z.argv else null;
     const cmd: Ctx.Command = switch (t) {
         .cc, .cxx => .{ .zig = try compiler.argv(&ctx, if (t == .cc) .c else .cxx, caller) },
@@ -289,6 +290,14 @@ pub fn main(init: std.process.Init) !u8 {
         // environments it chose (environment.zig)
         ctx.warn("self {s}", .{ctx.self_exe orelse "(unknown)"});
         for (try environment.list(&ctx)) |e| ctx.warn("environment {s}{s}", .{ e.dir, if (e.conda) " (conda)" else "" });
+        // and its cache: an empty cache where a harness looks says
+        // nothing unless this is the directory (verify-helpers.sh's
+        // rzig_cache_odd)
+        const cache_root = cache.root(&ctx) catch |err| switch (err) {
+            error.NoCacheHome => "(none)",
+            else => |e| return e,
+        };
+        ctx.warn("cache {s}", .{cache_root});
         for (blocks.items) |b| {
             const lib_dir = if (env_changed and b.zig) try ctx.fmt("ZIG_LIB_DIR={f} ", .{shellQuoted(env.get("ZIG_LIB_DIR") orelse "")}) else "";
             // a response file's words in its place, as zig reads it: rzig

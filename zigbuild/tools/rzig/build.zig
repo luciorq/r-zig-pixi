@@ -2,8 +2,10 @@
 //! needs no pixi env, R source or vendored config, and cross-builds with
 //! -Dtarget (parity-test.sh and smoke-test.sh use it). The repo's build.zig
 //! reuses `add` to build the rzig it installs into R_HOME/bin/toolchain,
-//! for R's own target, and for its `rzig`/`rzig-test` steps.
+//! for R's own target, and for its `rzig`/`rzig-test` steps. Both install
+//! rzig's link object beside it (`linkObject`).
 const std = @import("std");
+const floors = @import("floors.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -12,6 +14,7 @@ pub fn build(b: *std.Build) void {
     const r_version = b.option([]const u8, "r-version", "R's version, for the text that names a missing toolchain group (default: dev)") orelse "dev";
     const steps = add(b, b.path("."), target, optimize, r_version);
     b.getInstallStep().dependOn(&b.addInstallBinFile(steps.bin, if (target.result.os.tag == .windows) "rzig.exe" else "rzig").step);
+    if (steps.object) |o| b.getInstallStep().dependOn(&b.addInstallBinFile(o.file, o.name).step);
     const t = b.step("test", "Run rzig's unit tests");
     t.dependOn(&b.addRunArtifact(steps.tests).step);
     // the unit tests as a program for -Dtarget, to copy to and run on
@@ -25,7 +28,12 @@ pub const Artifacts = struct {
     /// What to install: exe's binary, re-signed on a macOS host (see add).
     bin: std.Build.LazyPath,
     tests: *std.Build.Step.Compile,
+    /// What to install beside it: the object rzig adds to links
+    /// (`linkObject`); none on macOS.
+    object: ?LinkObject,
 };
+
+pub const LinkObject = struct { name: []const u8, file: std.Build.LazyPath };
 
 /// Safety checks stay on: a bounds error in an argument rewrite should stop
 /// the compile, not pass zig a wrong command line.
@@ -75,7 +83,36 @@ pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTar
         .exe = exe,
         .bin = bin,
         .tests = addTests(b, dir, b.graph.host, r_version),
+        .object = linkObject(b, dir, target),
     };
+}
+
+/// The object rzig adds to every link of its kind, for `target`, which
+/// rzig finds in its own directory (compiler.zig's linkObject), so both
+/// build.zigs install it beside rzig: on linux dso_fini.o, the
+/// finalization object of shared libraries (dso_fini.zig), and on x86_64
+/// Windows cfguard.o, the Control Flow Guard stub (cfguard.zig). None
+/// elsewhere: macOS needs none, and the stub is x86_64 code. The command
+/// is the one rzig ran into its cache before feat-r-home-link-objects,
+/// with the zig that runs this build. The object does not depend on that
+/// zig: conda-forge's and upstream's 0.16.0 compile the same bytes but
+/// .comment's clang version, and each links the other's (linux-64 and
+/// cross-built win-64, feat-r-home-link-objects).
+pub fn linkObject(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTarget) ?LinkObject {
+    const t = target.result;
+    const src: []const u8, const triple: []const u8 = switch (t.os.tag) {
+        // compiler.zig's linux_target: the glibc floor packages link for
+        .linux => .{ "dso_fini.c", b.fmt("{t}-linux-gnu." ++ floors.majorMinor(floors.glibc), .{t.cpu.arch}) },
+        .windows => if (t.cpu.arch == .x86_64) .{ "cfguard.S", "x86_64-windows-gnu" } else return null,
+        else => return null,
+    };
+    const cc = b.addSystemCommand(&.{ b.graph.zig_exe, "cc", "-target", triple, "-mcpu=baseline", "-fno-sanitize=undefined", "-O2", "-g0" });
+    if (t.os.tag == .linux) cc.addArg("-fPIC");
+    cc.addArg("-c");
+    cc.addFileArg(dir.path(b, src));
+    cc.addArg("-o");
+    const name = b.fmt("{s}.o", .{std.fs.path.stem(src)});
+    return .{ .name = name, .file = cc.addOutputFileArg(name) };
 }
 
 /// rzig's unit tests for `target`: the host's, to run here (`add`), or

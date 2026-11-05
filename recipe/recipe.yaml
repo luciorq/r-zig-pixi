@@ -363,10 +363,10 @@ outputs:
     inherit: r-zig-build
     build:
       # everything but the groups' directories under R_HOME/bin/toolchain
-      # (feat-standalone-toolchain B20, B28): rzig's names stay here. Of
-      # these, the conda build makes only win-64's binutils/, which
-      # r-zig-build-tools owns; usr/ and etc/ are the standalone tree's
-      # only on win-64 (PHASE7 Cr5)
+      # (feat-standalone-toolchain B20, B28): rzig's names and its link
+      # object stay here. Of these, the conda build makes only win-64's
+      # binutils/, which r-zig-build-tools owns; usr/ and etc/ are the
+      # standalone tree's only on win-64 (PHASE7 Cr5)
       files:
         exclude:
           - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
@@ -497,7 +497,8 @@ outputs:
           recipe:
             - test-win.R
             - test-preflight.R
-      # rzig and rpkg are the base's on every channel (B19); no group's
+      # rzig, its link object (linux, Windows; feat-r-home-link-objects)
+      # and rpkg are the base's on every channel (B19); no group's
       # directory is (B28). Not `strict`: whether the packaged test files
       # count in the checked list is unverified (PHASE4 Cc12), and
       # `not_exists` holds either way
@@ -508,11 +509,15 @@ outputs:
                 then:
                   - Library/lib/R/bin/toolchain/rzig.exe
                   - Library/lib/R/bin/toolchain/gcc.exe
+                  - Library/lib/R/bin/toolchain/cfguard.o
                   - Library/lib/R/share/zig/rpkg/build_t2.zig
                 else:
                   - lib/R/bin/toolchain/rzig
                   - lib/R/bin/toolchain/zig-cc
                   - lib/R/share/zig/rpkg/build_t2.zig
+              - if: linux
+                then:
+                  - lib/R/bin/toolchain/dso_fini.o
             not_exists:
               - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
               - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**

@@ -112,9 +112,10 @@ pkg-parity = { cmd = "bash scripts/pkg-parity.sh", depends-on = ["compile-tree"]
 # kept as an alias of build for existing commands.
 install = { depends-on = ["build"] }
 # Static checks of that installed tree, run right after build (F1.6):
-# Makeconf, R_HOME/bin/toolchain holds rzig only (feat-standalone-toolchain
-# B19), the build tools' lines in Makeconf, Renviron and Rcmd_environ
-# (B24, B25, B43), OpenMP's runtime and no omp.h (B22, B40), no file of
+# Makeconf, R_HOME/bin/toolchain holds rzig and its link object only
+# (feat-standalone-toolchain B19; feat-r-home-link-objects), the build
+# tools' lines in Makeconf, Renviron and Rcmd_environ (B24, B25, B43),
+# OpenMP's runtime and no omp.h (B22, B40), no file of
 # R's own naming the build machine, the CA bundle, rpaths, the glibc and
 # macOS floors, the C++ runtime, load commands, minimal's excluded
 # libraries; Windows: Tcl/Tk and the DLL closure. Takes an optional tree

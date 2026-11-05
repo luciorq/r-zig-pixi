@@ -12,12 +12,12 @@
 #    shared libc++ and need glibc 2.17 at most. The same commands through
 #    the bash shims in toolchain/ must produce byte-identical objects,
 #    archive and program; the shared libraries differ by rzig's
-#    finalization object (dso_fini.zig), which the shims do not add, and
-#    which a C++ library with a static destructor then needs to unload
-#    cleanly. The copies sit in no R tree, so rzig has no environment of
-#    its own there (environment.zig), and R_ZIG_EXTRA_ENV is unset for
-#    this part: the shims know neither, and an extra environment would add
-#    an rpath.
+#    finalization object (dso_fini.zig, beside the copies as R's build
+#    installs it beside rzig), which the shims do not add, and which a C++
+#    library with a static destructor then needs to unload cleanly. The
+#    copies sit in no R tree, so rzig has no environment of its own there
+#    (environment.zig), and R_ZIG_EXTRA_ENV is unset for this part: the
+#    shims know neither, and an extra environment would add an rpath.
 # 2. With an R prefix (an installed tree such as dist/slim/R-4.6.1-zig,
 #    whose bin/toolchain is rzig since F3a): small C, C++, Fortran and
 #    OpenMP packages install from source and load, and with
@@ -40,6 +40,7 @@ for n in zig-cc zig-cxx zig-ar zig-ranlib; do
   cp "$T/build/bin/rzig" "$T/rzig/$n"
   ln -s "$shims/$n" "$T/bash/$n"
 done
+cp "$T/build/bin/dso_fini.o" "$T/rzig/"
 
 # --- 1. libraries and a program ---------------------------------------------------
 mkdir -p "$T/src"

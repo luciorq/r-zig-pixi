@@ -31,13 +31,13 @@
 #     out of rzig's side (where it goes is compiler.zig's unit tests'
 #     business) and reported as "ok+";
 #   - rzig adds the finalization object of linux shared libraries
-#     (dso_fini.zig) and the CFG stub of Windows links (cfguard.zig), each
-#     compiled once into its cache, which a shim cannot reasonably do:
-#     taken out of its side too, after checking that it is there exactly
-#     when the rule says (a linux link with -shared as a word, no
-#     -nostartfiles or -nostdlib; a Windows command with -o as a word; no
-#     compile-only flag), and reported as "ok+". The zig stand-ins write
-#     the object rzig asks them to compile. A Windows link also names its
+#     (dso_fini.zig) and the CFG stub of Windows links (cfguard.zig), the
+#     link objects R's build installs beside rzig, which the shims never
+#     added: taken out of its side too, after checking that it is there
+#     exactly when the rule says (a linux link with -shared as a word, no
+#     -nostartfiles or -nostdlib; a Windows command with -o as a word, by
+#     an x86_64 rzig; no compile-only flag), and reported as "ok+". A
+#     Windows link also names its
 #     import library under the stub's rule (windows.implib: the lines
 #     `-Xlinker` and `--out-implib=<output>.rzig.lib`), and a Windows DLL
 #     link its default system library (windows.defaultLibs: a last
@@ -93,6 +93,13 @@ tree() {
   local tc=$W/$1/lib/R/bin/toolchain sh=$W/$1/lib/R/bin/bash n
   mkdir -p "$tc" "$sh"
   for n in zig-cc zig-cxx zig-ar zig-ranlib gcc g++ gcc-ar gcc-ranlib ar ranlib; do cp "$RZIG" "$tc/$n"; done
+  # rzig's link objects beside it, as R's build installs them (rzig's
+  # build.zig, linkObject): the ones that build made beside $RZIG (the
+  # real builds below link dso_fini.o), else empty files, which the dry
+  # and stub runs only name
+  for n in dso_fini.o cfguard.o; do
+    if [ -f "${RZIG%/*}/$n" ]; then cp "${RZIG%/*}/$n" "$tc/$n"; else : > "$tc/$n"; fi
+  done
   for n in zig-cc zig-cxx zig-ar zig-ranlib; do
     sed "s|/usr/bin/xcrun|$W/tools/xcrun|g" "$shims/$n" > "$sh/$n"
     chmod +x "$sh/$n"
@@ -114,9 +121,6 @@ stub() {
   {
     echo '#!/bin/sh'
     echo 'if [ -n "${ZIG_LIB_DIR+x}" ]; then printf "ZIG_LIB_DIR=%s\n" "$ZIG_LIB_DIR"; fi'
-    # the objects rzig compiles into its cache (dso_fini.zig, cfguard.zig):
-    # the compile's -o written
-    echo 'o=; p=; for a in "$@"; do [ "$p" = -o ] && o=$a; p=$a; done; case "$o" in */r-zig/dso-fini-*|*/r-zig/cfguard-*) : > "$o" ;; esac'
     if [ -n "${2:-}" ]; then echo "printf '%s\n' '$2' \"\$@\""; else echo 'printf "%s\n" "$0" "$@"'; fi
   } > "$1"
   chmod +x "$1"
@@ -187,7 +191,7 @@ for f in libgfortran.dll.a libquadmath.dll.a; do touchf "$W/gcclib/$f"; done
 prog "$W/gf/gfortran" "echo '$W/gcclib/libgfortran.dll.a'"
 
 pass=0 own=0 deliberate=0 fail=0
-obj_re='/r-zig/(dso-fini-[0-9a-f]*/dso_fini|cfguard-[0-9a-f]*/guard_dispatch)\.o$'
+obj_re='/lib/R/bin/toolchain/(dso_fini|cfguard)\.o$'
 # a Windows link's import library (windows.implib): the lines -Xlinker and
 # --out-implib=<output>.rzig.lib; drop_implib takes both out
 implib_re='^--out-implib=.*\.rzig\.lib$'
@@ -220,7 +224,9 @@ run_case() {
   [ "$os" = macos ] && ! declare -p CASE_ENV > /dev/null 2>&1 && env+=(FAKE_SDK="$SDK")
   local p=${CASE_PATH:-}
   # the finalization object's rule (dso_fini.zig's `wanted`, linux only)
-  # and the CFG stub's (cfguard.zig's `wanted`, Windows only: an -o)
+  # and the CFG stub's (cfguard.zig's `wanted`, Windows only: an -o; the
+  # stub is x86_64 code, compiler.zig); the import library's is the
+  # stub's rule on every architecture
   if [ "$os" = linux ] && [ "$shim" != zig-ar ] && [ "$shim" != zig-ranlib ] &&
     [[ " $* " == *" -shared "* && " $* " != *" -nostartfiles "* && " $* " != *" -nostdlib "* ]]; then
     obj_want=1
@@ -231,6 +237,7 @@ run_case() {
     for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) obj_want=0 ;; esac; done
   fi
   [ "$os" = windows ] && implib_want=$obj_want
+  [ "$os" = windows ] && [ "$(uname -m)" != x86_64 ] && obj_want=0
   if [ "$os" = windows ] && [ "$shim" != zig-ar ] && [ "$shim" != zig-ranlib ] &&
     [[ " $* " == *" -shared "* && " $* " != *" -nostdlib "* && " $* " != *" -nodefaultlibs "* ]]; then
     ws2_want=1
@@ -256,8 +263,8 @@ run_case() {
   done
   # always: the shim's unnormalized "<its dir>/../../../.." is rzig's tree
   sed -e "s|$W/$t/lib/R/bin/bash/\.\./\.\./\.\./\.\.|$W/$t|g" ${CASE_DELIBERATE:+-e "$CASE_DELIBERATE"} "$W/out.bash" > "$W/want"
-  # always: rzig's -L into its own environment (F3b), the object it
-  # compiles (dso_fini.zig, cfguard.zig), a Windows link's import library
+  # always: rzig's -L into its own environment (F3b), the link object
+  # beside it (dso_fini.zig, cfguard.zig), a Windows link's import library
   # (windows.implib) and a Windows DLL link's -lws2_32
   # (windows.defaultLibs), taken out of its side
   local own_l="-L$W/$t/lib" own_added=0
@@ -265,7 +272,7 @@ run_case() {
     grep -qxF -- "$own_l" "$W/out.$side" && own_added=1
     n=$(grep -cE -- "$obj_re" "$W/out.$side" || :)
     [ "$n" = 0 ] || own_added=1
-    [ "$n" = "$obj_want" ] || { ok=0; echo "    $side: $n objects rzig compiled, want $obj_want" >> "$W/report"; }
+    [ "$n" = "$obj_want" ] || { ok=0; echo "    $side: $n link objects rzig added, want $obj_want" >> "$W/report"; }
     n=$(grep -cE -- "$implib_re" "$W/out.$side" || :)
     [ "$n" = "$implib_want" ] || { ok=0; echo "    $side: $n import libraries named, want $implib_want" >> "$W/report"; }
     n=$(( $(grep -cxF -- -lws2_32 "$W/out.$side" || :) - $(grep -cxF -- -lws2_32 "$W/want" || :) ))
@@ -361,12 +368,11 @@ run_case "the caller's --no-undefined-version after ours" linux zig-cxx -shared 
 run_case "version script on a compile: nothing" linux zig-cc -Wl,--version-script=v.map -c a.c
 
 # --- linux shared libraries' finalization object (dso_fini.zig) -------------------
-CASE_RESET="rm -rf '$W/home/.cache/r-zig'/dso-fini-*"
-CASE_STATE='cd "$HOME/.cache/r-zig" 2> /dev/null && for f in dso-fini-*/*; do [ -e "$f" ] && echo "${f#*/}"; done; :'
-CASE_DELIBERATE='$a state: dso_fini.c
-$a state: dso_fini.o'
-CASE_WHY="rzig compiles dso_fini.c into its cache once (state: that directory's files)"
-run_case "shared link: the object, compiled once" linux zig-cxx -shared -o lme4.so a.o
+# beside rzig, and nothing in rzig's cache: no compile, no `zig version`
+# (feat-r-home-link-objects)
+CASE_RESET="rm -rf '$W/home/.cache/r-zig'"
+CASE_STATE='ls -A "$HOME/.cache/r-zig" 2> /dev/null; :'
+run_case "shared link: the object beside rzig, nothing in rzig's cache" linux zig-cxx -shared -o lme4.so a.o
 run_case "-nostartfiles: no object" linux zig-cc -shared -nostartfiles -o p.so crtbeginS.o a.o crtendS.o
 run_case "-nostdlib: no object" linux zig-cc -shared -nostdlib -o p.so a.o
 
@@ -601,7 +607,7 @@ run_case "-c with a joined -o: unchanged" windows gcc -c a.c -ob.o
 run_case "-c with two sources: unchanged" windows gcc -c a.c b.c
 run_case "-E, -M with -c: unchanged" windows gcc -E -M -c a.c
 run_case "--allow-multiple-definition dropped (StanHeaders)" windows g++ -shared -Wl,--allow-multiple-definition -o StanHeaders.dll a.o
-# (the cache holds the CFG stub, cfguard.zig, and no mirror)
+# (the cache holds no mirror)
 CASE_ENV=(XDG_CACHE_HOME="$W/cache7"); CASE_PATH="$W/envB/bin"; CASE_STATE='ls -d "$XDG_CACHE_HOME"/r-zig/zig-lib-* 2> /dev/null || echo "no mirror"'
 run_case "libc++ beside zig: no mirror on Windows" windows zig-cxx -shared -o pkg.dll a.o
 run_case "ar and ranlib passthrough" windows zig-ar rcs libw.a a.o
@@ -842,16 +848,24 @@ if [ -n "$real_zig" ]; then
       ${rb_env:+"$rb_env"} PATH="$W/nothing" RZIG_KEEP_ROOT=1 RZIG_TRACE=1 "$RZIG" build --pkg "$W/rb/$1/pb" --out "$W/rb/$1/out" > "$W/check.out" 2> "$W/check.err"
   }
   # the files in rzig's cache (their names included), none when there is
-  # no cache (macOS: no dso_fini.o)
+  # no cache (a zig with no libc++ beside it: no mirror)
   cache_files() { if [ -d "$W/rbcache/r-zig" ]; then (cd "$W/rbcache/r-zig" && find . -type f | LC_ALL=C sort); fi; }
   pc="$pc rb='$rb'; real_zig='$real_zig'; $(declare -f rb_build cache_files);"
-  check "rzig build: tier 1, the objects and the library in the build root, no zig build, nothing of pb's and no build-runner-* in rzig's cache" \
+  # rzig's trace names its cache (main.zig), the one these checks read
+  check "rzig build: tier 1, the objects and the library in the build root, no zig build, nothing of pb's and no build-runner-* in rzig's cache, which the trace names" \
     bash -c "$pc rb_build 1 && [ -f '$W/rb/1/out/libs/pb.so' ] && [ -f '$W/rb/1/out/.rzig/obj/0/a.o' ] && [ -f '$W/rb/1/out/.rzig/pb.so' ] &&
+      [ \"\$(grep -E '^zig-(cc|cxx|fc): cache ' '$W/check.err' | sort -u)\" = 'zig-cc: cache $W/rbcache/r-zig' ] &&
       [ ! -e '$W/rb/1/out/.rzig/zig-cache' ] && ! ls -d '$W/rbcache/r-zig'/build-runner-* > /dev/null 2>&1 &&
       grep -qxF 'rzig build: tier 1, root $W/rb/1/out/.rzig' '$W/check.err' && ! grep -q -- ' build --build-file ' '$W/check.err' &&
       [ -z \"\$(find '$W/rbcache' -name a.o -o -name pb.so 2> /dev/null)\" ] && cache_files > '$W/rb/state1'"
   check "rzig build: tier 1 again from another directory, no file added to rzig's cache" \
     bash -c "$pc rb_build 2 && [ -f '$W/rb/2/out/libs/pb.so' ] && cache_files > '$W/rb/state2' && cmp -s '$W/rb/state1' '$W/rb/state2'"
+  # the finalization object from beside rzig, as R's build installs it:
+  # the link names it, the library has its .fini_array, and rzig's cache
+  # has no dso-fini-* entry (feat-r-home-link-objects)
+  check "rzig build: tier 1's link names the tree's dso_fini.o, the library has a .fini_array, no dso-fini-* in rzig's cache" \
+    bash -c "grep -qE -- '^zig-cc: .* $rb/bin/toolchain/dso_fini\\.o ' '$W/check.err' &&
+      readelf -S '$W/rb/2/out/libs/pb.so' | grep -q '\\.fini_array' && ! ls -d '$W/rbcache/r-zig'/dso-fini-* > /dev/null 2>&1"
   # The link's objects in the build root's objects.rsp, one a line in
   # double quotes, named from src/ (tier1.zig, response.zig's rspText;
   # feat-win-link-fixes item 1); RZIG_TRACE's line names them in its
@@ -1002,5 +1016,5 @@ check "a compile with no zig: 127, the compilers group" \
   bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' -c a.c > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
     grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err'"
 
-echo "== $pass identical, $own identical but for rzig's own-environment -L, compiled object, import library or default system library, $deliberate deliberate differences, $fail failed"
+echo "== $pass identical, $own identical but for rzig's own-environment -L, link object, import library or default system library, $deliberate deliberate differences, $fail failed"
 [ "$fail" = 0 ]

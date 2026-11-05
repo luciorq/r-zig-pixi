@@ -77,8 +77,9 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     // the caller's arguments decide these, not a directory's name
     const soname = try sonameFlag(ctx, args);
     const undefined_version = ctx.os == .linux and !cmdline.compileOnly(args) and cmdline.anyContains(args, "-version-script");
-    const fini = if (ctx.os == .linux and dso_fini.wanted(args)) try dso_fini.object(ctx, linux_target) else null;
-    const cfg = if (ctx.os == .windows and cfguard.wanted(args)) try cfguard.object(ctx) else null;
+    const fini = if (ctx.os == .linux and dso_fini.wanted(args)) try linkObject(ctx, dso_fini.file, dso_fini.consequence) else null;
+    // x86_64 code: an rzig for another architecture adds none
+    const cfg = if (ctx.os == .windows and builtin.cpu.arch == .x86_64 and cfguard.wanted(args)) try linkObject(ctx, cfguard.file, cfguard.consequence) else null;
     const g0 = !cmdline.debugOption(args);
     const strip_debug = ctx.os == .linux and strip.wanted(ctx, args);
     args = try envFlags(ctx, args);
@@ -246,6 +247,19 @@ fn armMcpu(a: mem.Allocator, v: []const u8) !?[]const u8 {
         for (arm_ext_names.get(name) orelse name) |c| try s.append(a, if (c == '-') '_' else c);
     }
     return s.items;
+}
+
+/// <rzig's directory>/<file>, a link object R's build installs beside
+/// rzig (build.zig's linkObject: dso_fini.zig's, cfguard.zig's). Not
+/// there (a broken install, rzig copied alone): null and a warning, and
+/// the link goes on without it. null when rzig does not know its
+/// directory (environment.toolchain; unit tests that set no self_exe).
+fn linkObject(ctx: *Ctx, file: []const u8, consequence: []const u8) !?[]const u8 {
+    const dir = environment.toolchain(ctx) orelse return null;
+    const obj = try ctx.fmt("{s}/{s}", .{ dir, file });
+    if (ctx.isFile(obj)) return obj;
+    ctx.warn("warning: no {s}: {s}", .{ obj, consequence });
+    return null;
 }
 
 /// zig's name for this binary's own architecture. The shim asked `uname
@@ -899,22 +913,17 @@ test "Windows: -c without -o names <stem>.o, as MinGW gcc" {
     try expectArgs(pre ++ &[_][]const u8{ "-O2", "-c", "a.c" }, try argv(c, .c, &.{ "-O2", "-c", "a.c" }));
 }
 
-/// A zig stand-in for dso_fini.zig: answers `version`, writes its -o file.
-fn fakeZig(f: *testutil.Fixture) ![]const u8 {
-    try f.write("bin/zig", "#!/bin/sh\n[ \"$1\" = version ] && { echo 0.16.0; exit 0; }\no=; p=; for a in \"$@\"; do [ \"$p\" = -o ] && o=$a; p=$a; done\n: > \"$o\"\n", .fromMode(0o755));
-    return f.path("bin/zig");
-}
-
 test "linux shared links: the finalization object first among the inputs; nothing elsewhere" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for zig
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
     const c = &f.ctx;
-    try f.env.put("XDG_CACHE_HOME", f.path("cache"));
-    c.zig = &.{try fakeZig(&f)};
-    const fini = (try dso_fini.object(c, linux_target)).?;
-    try testing.expect(mem.startsWith(u8, fini, f.path("cache/r-zig/dso-fini-")));
+    // beside rzig, as R's build installs it (no R tree: no environment);
+    // Windows' too, for the loop below
+    c.self_exe = f.path("tc/zig-cc");
+    try f.touch("tc/dso_fini.o");
+    try f.touch("tc/cfguard.o");
+    const fini = f.path("tc/dso_fini.o");
     // after the SONAME and --undefined-version, before the caller's
     // arguments (and an -x it may give)
     try expectArgs(pre_link ++ &[_][]const u8{ fini, "-shared", "-o", "pkg.so", "a.o" }, try argv(c, .c, &.{ "-shared", "-o", "pkg.so", "a.o" }));
@@ -937,28 +946,54 @@ test "linux shared links: the finalization object first among the inputs; nothin
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 
+test "a link object missing beside rzig: the link goes on without it, with a warning; no zig is asked" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    // a zig that would fail to run: the object is never compiled now
+    c.zig = &.{f.path("no/zig")};
+    c.self_exe = f.path("tc/zig-cc");
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "pkg.so", "a.o" }, try argv(c, .c, &.{ "-shared", "-o", "pkg.so", "a.o" }));
+    try testing.expectEqualStrings(f.fmt("rzig-test: warning: no {s}: this library's static destructors may run after it is unloaded\n", .{f.path("tc/dso_fini.o")}), f.takeWarnings());
+    // nothing written anywhere: no cache, no object
+    try testing.expect(!c.exists(f.path("tc")));
+    try testing.expect(!c.exists(f.path("no")));
+    // Windows: an rzig for another architecture than x86_64 wants no
+    // stub, so it misses none
+    c.os = .windows;
+    _ = try argv(c, .c, &.{ "-shared", "-o", "pkg.dll", "a.o" });
+    try testing.expectEqualStrings(if (builtin.cpu.arch == .x86_64) f.fmt("rzig-test: warning: no {s}: code compiled with Control Flow Guard cannot link\n", .{f.path("tc/cfguard.o")}) else "", f.takeWarnings());
+    // rzig's directory unknown: none, and no warning
+    c.self_exe = null;
+    c.os = .linux;
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "pkg.so", "a.o" }, try argv(c, .c, &.{ "-shared", "-o", "pkg.so", "a.o" }));
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
 test "Windows links: the CFG stub and the import library before the caller's arguments, no -flto; nothing elsewhere" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for zig
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
     defer f.deinit();
     const c = &f.ctx;
-    try f.env.put("XDG_CACHE_HOME", f.path("cache"));
-    c.zig = &.{try fakeZig(&f)};
-    const stub = (try cfguard.object(c)).?;
-    try testing.expect(mem.startsWith(u8, stub, f.path("cache/r-zig/cfguard-")));
+    c.self_exe = f.path("tc/gcc.exe");
+    try f.touch("tc/cfguard.o");
+    try f.touch("tc/dso_fini.o");
+    // the stub is x86_64 code: an rzig for another architecture adds
+    // none, though the file is there; the rest is the same
+    const stub: Args = if (builtin.cpu.arch == .x86_64) &.{f.path("tc/cfguard.o")} else &.{};
     const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" };
     // magick's link, and an executable (CMake's): -lws2_32 on the DLL only
     try expectArgs(
-        try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-Xlinker", "--out-implib=magick.dll.rzig.lib", "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2", "-lws2_32" } }),
+        try mem.concat(c.arena, []const u8, &.{ head, stub, &.{ "-Xlinker", "--out-implib=magick.dll.rzig.lib", "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2", "-lws2_32" } }),
         try argv(c, .cxx, &.{ "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2" }),
     );
-    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-Xlinker", "--out-implib=cmTC_1.exe.rzig.lib", "-o", "cmTC_1.exe", "a.obj" } }), try argv(c, .cxx, &.{ "-o", "cmTC_1.exe", "a.obj" }));
+    try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, stub, &.{ "-Xlinker", "--out-implib=cmTC_1.exe.rzig.lib", "-o", "cmTC_1.exe", "a.obj" } }), try argv(c, .cxx, &.{ "-o", "cmTC_1.exe", "a.obj" }));
     // R CMD INSTALL --use-LTO (LTO_OPT=-flto): the compile keeps it, the
     // link drops it, after exeSuffix's name
     try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ "-O2", "-flto", "-c", "f.cpp", "-o", "f.o" } }), try argv(c, .cxx, &.{ "-O2", "-flto", "-c", "f.cpp", "-o", "f.o" }));
     try expectArgs(
-        try mem.concat(c.arena, []const u8, &.{ head, &.{ stub, "-Xlinker", "--out-implib=px.exe.rzig.lib", "-O2", "-o", "px.exe", "f.o" } }),
+        try mem.concat(c.arena, []const u8, &.{ head, stub, &.{ "-Xlinker", "--out-implib=px.exe.rzig.lib", "-O2", "-o", "px.exe", "f.o" } }),
         try argv(c, .cxx, &.{ "-flto", "-O2", "-o", "px", "f.o", "-flto=thin" }),
     );
     // what main.zig's run deletes after each link: the import libraries

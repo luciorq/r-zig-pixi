@@ -11,15 +11,18 @@
 //! (its clang-x86_64 r-windows bundle: librsvg-2.a holds Rust's std,
 //! compiled with CFG) and a one-file repro (`zig cc -mguard=cf`) fail so.
 //!
-//! The fix is guard_dispatch.S's part: `source` below, assembled once with
-//! the zig that links into rzig's cache (cache.zig), as dso_fini.zig's
-//! object: <cache>/cfguard-<key>/guard_dispatch.o. compiler.zig passes it
+//! The fix is guard_dispatch.S's part, cfguard.S. R's build assembles it
+//! into R_HOME/bin/toolchain/cfguard.o, beside rzig (build.zig's
+//! linkObject), as dso_fini.zig's object; rzig assembled it into its cache
+//! at link time before (feat-r-home-link-objects). compiler.zig passes it
 //! on every Windows link (an -o, no compile-only flag and no -r: a partial
 //! link makes no image, and zig's COFF -r takes one object). Nothing uses it
 //! unless libmingw32's mingw_cfguard_support.obj is pulled in; other links
 //! carry its 16 bytes of code. A zig whose libmingw32 has guard_dispatch.S's
 //! member never pulls that member, as the symbol is already defined. R on
-//! Windows is x86_64 here (win-64), and the code is x86_64's.
+//! Windows is x86_64 here (win-64), and the code is x86_64's: R's build
+//! makes no cfguard.o for another architecture, and an rzig built for one
+//! (Windows on ARM, cross-built only) adds none (compiler.zig).
 //!
 //! The symbol is excluded from lld's MinGW auto-export (a DLL with no .def
 //! file and no dllexport exports every global symbol), with the
@@ -29,32 +32,15 @@
 //! member, pulled only when needed, would avoid both, but takes a second
 //! tool (zig ar) and step to make.
 //!
-//! No object when it cannot be made: the link goes on without it, as
-//! before, with a warning.
+//! No object when the file is missing: the link goes on without it, with
+//! a warning.
 const std = @import("std");
-const mem = std.mem;
-const Ctx = @import("Ctx.zig");
 const cmdline = @import("cmdline.zig");
-const cache = @import("cache.zig");
 const Args = cmdline.Args;
 
-/// mingw-w64-crt's cfguard/guard_dispatch.S, x86_64, kept out of
-/// auto-export.
-pub const source =
-    \\/* rzig (zigbuild/tools/rzig/cfguard.zig): mingw-w64-crt's
-    \\   cfguard/guard_dispatch.S, which zig's MinGW runtime leaves out. The
-    \\   target of __guard_dispatch_icall_fptr when CFG is off: jump to the
-    \\   address the caller put in %rax. Not auto-exported from a DLL. */
-    \\    .text
-    \\    .globl __guard_dispatch_icall_dummy
-    \\__guard_dispatch_icall_dummy:
-    \\    jmp *%rax
-    \\    .section .drectve,"yni"
-    \\    .ascii " -exclude-symbols:__guard_dispatch_icall_dummy"
-    \\
-;
-
-pub const target = "x86_64-windows-gnu";
+/// The file in rzig's directory (compiler.zig's linkObject).
+pub const file = "cfguard.o";
+pub const consequence = "code compiled with Control Flow Guard cannot link";
 
 /// Whether a command links an image: an -o, no compile-only flag and no
 /// -r (`--version`, `-E` for windres, `-c` and a partial link get nothing).
@@ -62,23 +48,9 @@ pub fn wanted(args: Args) bool {
     return !cmdline.compileOnly(args) and cmdline.anyWord(args, "-o") and !cmdline.anyWord(args, "-r");
 }
 
-/// The object, made if it is not there yet; null when ctx.zig is unset or
-/// it cannot be made.
-pub fn object(ctx: *Ctx) !?[]const u8 {
-    return cache.compiled(ctx, .{
-        .name = "cfguard",
-        .file = "guard_dispatch.S",
-        .source = source,
-        .target = target,
-        .consequence = "code compiled with Control Flow Guard cannot link",
-    });
-}
-
 // ---------------------------------------------------------------------------
 
-const builtin = @import("builtin");
 const testing = std.testing;
-const testutil = @import("testutil.zig");
 
 test wanted {
     try testing.expect(wanted(&.{ "-shared", "-o", "p.dll", "a.o" }));
@@ -90,26 +62,4 @@ test wanted {
         &.{ "-shared", "a.o" },
         &.{ "-r", "a.o", "-o", "part.o" },
     }) |args| try testing.expect(!wanted(args));
-}
-
-test "made once into the cache, from guard_dispatch.S" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for zig
-    var f: testutil.Fixture = undefined;
-    try f.init(.windows);
-    defer f.deinit();
-    const c = &f.ctx;
-    try f.env.put("XDG_CACHE_HOME", f.path("cache"));
-    try testing.expect(try object(c) == null);
-    try f.write("bin/zig", "#!/bin/sh\n[ \"$1\" = version ] && { echo 0.16.0; exit 0; }\no=; p=; for a in \"$@\"; do [ \"$p\" = -o ] && o=$a; p=$a; done\necho \"$*\" > \"$o\"\n", .fromMode(0o755));
-    c.zig = &.{f.path("bin/zig")};
-    const o = (try object(c)).?;
-    try testing.expect(mem.startsWith(u8, o, f.path("cache/r-zig/cfguard-")));
-    try testing.expect(mem.endsWith(u8, o, "/guard_dispatch.o"));
-    const dir = o[0 .. o.len - "/guard_dispatch.o".len];
-    var buf: [4096]u8 = undefined;
-    const asked = try std.Io.Dir.cwd().readFile(testing.io, o, &buf);
-    try testing.expect(mem.startsWith(u8, asked, f.fmt("cc -target x86_64-windows-gnu -mcpu=baseline -fno-sanitize=undefined -O2 -g0 -c {s}/guard_dispatch.S -o {s}/guard_dispatch.o.", .{ dir, dir })));
-    var sbuf: [4096]u8 = undefined;
-    try testing.expectEqualStrings(source, try std.Io.Dir.cwd().readFile(testing.io, f.fmt("{s}/guard_dispatch.S", .{dir}), &sbuf));
-    try testing.expectEqualStrings("", f.takeWarnings());
 }

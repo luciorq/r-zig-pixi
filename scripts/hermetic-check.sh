@@ -76,7 +76,8 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 # A copy: R must not rely on the place it was built in. It is the base
-# as it ships, R_HOME/bin/toolchain holding rzig alone (B19, B30):
+# as it ships, R_HOME/bin/toolchain holding rzig and its link object
+# alone (B19, B30; feat-r-home-link-objects):
 # nothing is removed from it (B26: the preflight asks rzig what is
 # missing).
 cp -a "$TREE" "$WORK/"

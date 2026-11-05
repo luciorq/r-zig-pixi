@@ -50,6 +50,14 @@ rzig_names() {
   fi
 }
 
+# The object installed beside rzig in R_HOME/bin/toolchain on this OS,
+# which rzig adds to links (zigbuild/tools/rzig/build.zig's linkObject;
+# feat-r-home-link-objects): linux's dso_fini.o, Windows' cfguard.o
+# (win-64 is x86_64), none on macOS. The base's other file there.
+link_object() {
+  case "$OS" in linux) echo dso_fini.o ;; windows) echo cfguard.o ;; esac
+}
+
 # A configure script in package directory $1 (unix configure, Windows
 # configure.win) that leaves the file configure-ran there with a shell
 # builtin, so that it starts no program: scenario 3 (verify-bundle.sh)
@@ -83,23 +91,50 @@ make_recipes() {
 }
 
 # The entries of rzig's cache $1 (cache.zig's root) that are not of its
-# own kinds, one per line: dso_fini's and cfguard's objects (dso-fini-*,
-# cfguard-*), the archive copies (archive-*) and the libc++ mirror
-# (zig-lib-*). Tier 1 runs no zig build (tier1.zig), so a build-runner-*
-# or an install's object there is one (feat-tier1-engine). After a link,
-# linux has a dso-fini-* and Windows a cfguard-*: without one, the line
-# `no <kind>-*`, as when rzig's cache is not where the caller looks.
+# own kinds, one per line: the archive copies (archive-*) and the libc++
+# mirror (zig-lib-*). Tier 1 runs no zig build (tier1.zig), so a
+# build-runner-* or an install's object there is one
+# (feat-tier1-engine), and the link objects are R's, beside rzig, so a
+# dso-fini-* or cfguard-* is one too (feat-r-home-link-objects). A link
+# leaves nothing there, so an empty cache, or none, is the usual state,
+# and says nothing when rzig's cache is elsewhere. So with a traced
+# install log $2 (RZIG_TRACE=1), also the line `cache <dir>` for each
+# cache rzig named there (main.zig) that is not $1, and `no cache line`
+# when it named none. Windows: compared as cygpath -m forms, case
+# ignored.
 rzig_cache_odd() {
-  local e kind=
+  local e c want
   for e in "$1"/*; do
     [ -e "$e" ] || continue
     case "${e##*/}" in
-      dso-fini-*|cfguard-*|archive-*|zig-lib-*) ;;
+      archive-*|zig-lib-*) ;;
       *) printf '%s\n' "${e##*/}" ;;
     esac
   done
-  case "$OS" in linux) kind=dso-fini ;; windows) kind=cfguard ;; esac
-  if [ -n "$kind" ] && ! ls -d "$1/$kind"-* > /dev/null 2>&1; then printf 'no %s-*\n' "$kind"; fi
+  [ -n "${2:-}" ] || return 0
+  want="$1"
+  if [ "$OS" = windows ]; then want="$(cygpath -m "$want" | tr '[:upper:]' '[:lower:]')"; fi
+  e=""
+  while IFS= read -r c; do
+    e=1
+    if [ "$OS" = windows ]; then
+      [ "$(cygpath -m "$c" | tr '[:upper:]' '[:lower:]')" = "$want" ] && continue
+    else
+      [ "$c" = "$want" ] && continue
+    fi
+    printf 'cache %s\n' "$c"
+  done < <(tr -d '\r' < "$2" | sed -n -E 's/^zig-(cc|cxx|fc): cache //p' | LC_ALL=C sort -u)
+  [ -n "$e" ] || echo "no cache line"
+}
+
+# Whether a link line rzig traced into log $1 (RZIG_TRACE=1: `zig-cc: `,
+# `zig-cxx: `, `zig-fc: `) names R_HOME/bin/toolchain/<link_object>, the
+# word alone or quoted. True on macOS, which has none.
+link_object_named() {
+  local o
+  o="$(link_object)"
+  [ -n "$o" ] || return 0
+  tr -d '\r' < "$1" | grep -E '^zig-(cc|cxx|fc): ' | grep -E -- "[\\/]bin[\\/]toolchain[\\/]${o//./\\.}'?( |\$)" > /dev/null
 }
 
 # Extract archive $1 into directory $2. unzip -n: an archive extracted

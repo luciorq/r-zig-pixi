@@ -343,6 +343,11 @@ entry in rzig's cache, no `zig build` command in the trace".
   verify-bundle's pfC fail on any line. So the checks also show that
   rzig's cache is where they look: a check that only says "no
   build-runner-*" passes when the cache is elsewhere.
+  Changed by feat-r-home-link-objects (2026-10-23): dso-fini-* and
+  cfguard-* now count as odd, the "no dso-fini-*" and "no cfguard-*"
+  lines are gone, and a second argument, a traced log, checks that
+  RZIG_TRACE's `cache` line names the directory checked
+  (`.github/devdocs/feat-r-home-link-objects/PLAN.md`, decision 5).
 - `scripts/contract-test.sh`: the comment only.
 - `scripts/verify-tree.sh`, `recipe/recipe.yaml`, `recipe/test-preflight.R`:
   build_t1.zig leaves the file lists. recipe.yaml and test-preflight.R
@@ -555,6 +560,12 @@ first.
   prototype did it.
 - Its tests: both zigs, an R built by cf and run with up and the other way
   round, and kappa for cfguard.
+- Done (2026-10-23), uncommitted on top of this PR in
+  wt/feat-r-home-link-objects: the objects sit beside rzig in
+  R_HOME/bin/toolchain, with no cache fallback. Measured on gamma: a warm
+  tinyc install runs 38 execve and no `zig version` (39 and 1 here), rzig's
+  cache stays empty, and R CMD SHLIB keeps only check.zig's spawn
+  (decision 6). `.github/devdocs/feat-r-home-link-objects/PLAN.md`.
 
 ## Sequencing
 

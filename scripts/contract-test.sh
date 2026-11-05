@@ -79,11 +79,12 @@ mkdir -p "$LIB"
 # build (tier1.zig), each install's objects and library in its build
 # root, gone with it; zig cc keeps its objects in env.sh's global cache
 # (env.sh's ZIG_LOCAL_CACHE_DIR would be zig cc's cache instead)
-# [phase3-P3-6]. rzig's own cache (dso_fini.o, cfguard.o, archive
-# copies, the libc++ mirror) stays in the workspace, as env.sh's zig
-# caches do, not under $HOME [code-contract-home-cache]: XDG_CACHE_HOME
-# names it on every OS (cache.zig's root reads it first). It also moves
-# the XDG caches of the programs the installs run (cr27 finding 6).
+# [phase3-P3-6]. rzig's own cache (archive copies, the libc++ mirror;
+# the link objects are R_HOME/bin/toolchain's, feat-r-home-link-objects)
+# stays in the workspace, as env.sh's zig caches do, not under $HOME
+# [code-contract-home-cache]: XDG_CACHE_HOME names it on every OS
+# (cache.zig's root reads it first). It also moves the XDG caches of the
+# programs the installs run (cr27 finding 6).
 unset ZIG_LOCAL_CACHE_DIR
 if [ "$OS" = windows ]; then
   export XDG_CACHE_HOME="$(cygpath -w "$BUILD_DIR/rzig-cache")"

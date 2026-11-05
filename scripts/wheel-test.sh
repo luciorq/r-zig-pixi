@@ -203,7 +203,7 @@ run_venv RZIG_TRACE=1 R CMD INSTALL --preclean -l "$T/lib1" "$P" > "$T/install1.
 grep -q 'rzig build: tier 1' "$T/install1.log" || { cat "$T/install1.log" >&2; echo "error: the console-script install did not build through rzig build (no 'rzig build: tier 1' in its log)" >&2; exit 1; }
 # rzig's commands (the two compiles and the link), not its self and
 # environment lines [tests-T10]
-echo "ok: rzig build: tier 1 ($(grep -E '^zig-(cc|cxx|fc): ' "$T/install1.log" | grep -c -v -E '^zig-(cc|cxx|fc): (self|environment) ') rzig commands under PyPI ziglang)"
+echo "ok: rzig build: tier 1 ($(grep -E '^zig-(cc|cxx|fc): ' "$T/install1.log" | grep -c -v -E '^zig-(cc|cxx|fc): (self|environment|cache) ') rzig commands under PyPI ziglang)"
 run Rscript -e "
   library(rzigwheeltest, lib.loc = '$T/lib1')
   stopifnot(dot(1:3, 4:6) == 32, cxx_sum(1:10) == 55)
@@ -430,11 +430,11 @@ run_with "$T/venv2/bin:/usr/bin:/bin" Rscript -e '
 echo "== uninstalling the three group wheels leaves r-zig whole"
 pip_ uninstall --quiet -y r-zig-toolchain r-zig-build-tools r-zig-compilers
 # R_HOME/bin/toolchain keeps the base's files, rzig under each of its
-# names (verify-helpers.sh), and nothing under usr/; pip may leave the
-# empty directories (C32).
+# names and its link object (verify-helpers.sh; linux's dso_fini.o), and
+# nothing under usr/; pip may leave the empty directories (C32).
 left="$(cd "$tc" && find . ! -type d | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ')"
-want="$(printf '%s\n' $(rzig_names) | LC_ALL=C sort | tr '\n' ' ')"
-[ "$left" = "$want" ] || { echo "error: R_HOME/bin/toolchain after uninstalling the groups holds '$left', not rzig's names '$want'" >&2; exit 1; }
+want="$(printf '%s\n' $(rzig_names) $(link_object) | LC_ALL=C sort | tr '\n' ' ')"
+[ "$left" = "$want" ] || { echo "error: R_HOME/bin/toolchain after uninstalling the groups holds '$left', not rzig's names and its link object '$want'" >&2; exit 1; }
 # ziglang stays (pip removes no dependency), and Renviron.site's ZIG_BIN
 # finds it next door: a package that needs no make still compiles
 run_venv RZIG_TRACE=1 "$r_home/bin/R" CMD INSTALL -l "$T/lib7" "$P" > "$T/install7.log" 2>&1 || { cat "$T/install7.log" >&2; exit 1; }

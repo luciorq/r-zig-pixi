@@ -169,8 +169,9 @@ nothing else on the machine:
   conda-forge's zig on macOS, rzig makes a libc++ mirror (a directory of
   symlinks) per zig. Since build 7 it also keeps a copy of each archive
   linked under a name without an extension (V8 on macOS:
-  `archive-<key>/v8_monolith.a`, 161 MB), on linux the `dso-fini-<key>/`
-  object and on Windows the `cfguard-<key>/` stub. The runner lists the
+  `archive-<key>/v8_monolith.a`, 161 MB). linux's finalization object and
+  Windows' CFG stub are R's, in `R_HOME/bin/toolchain`, not in the cache
+  (feat-r-home-link-objects). The runner lists the
   cache's entries when it starts, and at its end removes the ones the run
   added; report.md names them. It never removes an older
   entry, so what a killed run left stays.
