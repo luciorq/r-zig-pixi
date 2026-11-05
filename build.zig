@@ -1766,11 +1766,12 @@ const WinPkgLib = struct { pkg: []const u8, lib: *std.Build.Step.Compile };
 /// build-tools group's, conda-forge's copies in bin/toolchain/binutils/
 /// that zigbuild/toolchain/build.zig installs into the toolchain tree, and
 /// Makeconf.win names each one by its path there, not through BINPREF
-/// (feat-standalone-toolchain B24, B43). flang is NOT bundled here (see
-/// the FC replacement below) — it locates its own pieces relative to its
-/// own install location, so a standalone copy breaks it; FC is rzig's
-/// zig-fc.exe, which runs the flang rzig finds (the toolchain's flang/,
-/// the environment's bin, PATH).
+/// (feat-standalone-toolchain B24, B43). flang is not built here: FC is
+/// rzig's zig-fc.exe, which runs the flang rzig finds (the toolchain's
+/// flang/, the environment's bin, PATH). The compilers group's flang/ is a
+/// copy that works (feat-standalone-toolchain phase 6, B9): its resource
+/// directory follows the binary, and zig-fc passes the intrinsic modules'
+/// path; conda's flang is the environment's (flang-zig).
 fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     const b = ctx.b;
 
@@ -1826,22 +1827,21 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     // FC: rzig's zig-fc.exe (installRzig; MSYS make and sh find it by the
     // name without .exe), as on unix (F3c): it runs the flang rzig finds
     // (the toolchain's flang/, the environment's Library/bin, PATH) and
-    // links a USE_FC_TO_LINK package through zig with the static runtime
-    // and libc++. flang itself is not copied into bin/toolchain: its
-    // driver finds its own pieces (flang.cfg and its intrinsic modules)
-    // relative to where it is installed. Fortran that calls into R under
-    // USE_FC_TO_LINK needs $(LIBR) in PKG_LIBS (install.R drops it from
-    // that link), as with upstream's gfortran.
+    // links a USE_FC_TO_LINK package through zig with the static runtime.
+    // The standalone flang is the compilers group's bin/toolchain/flang/
+    // (phase 6, B9), conda's the environment's. Fortran that calls into R
+    // under USE_FC_TO_LINK needs $(LIBR) in PKG_LIBS (install.R drops it
+    // from that link), as with upstream's gfortran.
     try mk.put("FC", "$(R_HOME)/bin/toolchain/zig-fc");
     // FLIBS: what R CMD SHLIB appends to every package link that has
     // Fortran sources (tools:::.SHLIB → shlib_libadd "$(FLIBS)"); the
     // link itself goes through SHLIB_LD = gcc.exe (rzig), not the Fortran
     // driver, so the runtime must be spelled out here: flang's runtime,
     // which rzig resolves to the archive of the flang zig-fc runs (as on
-    // unix), plus zig's libc++ — libflang_rt.runtime is C++ and PE refuses
-    // unresolved symbols (flang-pixi handoff: only Linux's archive is
-    // libc++-free).
-    try mk.put("FLIBS", "-lflang_rt.runtime -lc++");
+    // unix). No -lc++: flang-rt-zig 10's archives reference no C++
+    // runtime symbol on any OS (feat-standalone-toolchain phase 6, open
+    // point K), and PE would refuse one left unresolved.
+    try mk.put("FLIBS", "-lflang_rt.runtime");
     // (SAFE_FFLAGS, what CRAN Fortran packages such as quadprog put in
     // PKG_FFLAGS, is a plain -O2 in the vendored Makeconf.win: gnuwin32
     // adds gfortran's x87-avoidance switches `-msse2 -mfpmath=sse` unless
@@ -2307,11 +2307,12 @@ fn substFileTests(ctx: *Ctx, io: std.Io, rel: []const u8, srcdir_val: []const u8
 
 /// The zig lib dir R's links get (Ctx.zig_lib_dir; std.Build passes it as
 /// --zig-lib-dir, Step/Compile.zig). libc++ is static everywhere (decided
-/// 2026-09-30), and R itself links it on macOS (flang's runtime is C++,
-/// linkFortranRt). Upstream zig always links its own; conda-forge's zig
-/// links a shared one whenever one sits in <lib dir>/../../lib (every
-/// macOS env, any env with `libcxx`), unless its lib dir is a mirror with
-/// nothing beside it: zigbuild/tools/rzig/libcxx_mirror.zig, which rzig
+/// 2026-09-30); R's own links ask for none since flang-rt-zig 10
+/// (linkFortranRt), so this guards any link that would. Upstream zig
+/// always links its own; conda-forge's zig links a shared one whenever
+/// one sits in <lib dir>/../../lib (every macOS env, any env with
+/// `libcxx`), unless its lib dir is a mirror with nothing beside it:
+/// zigbuild/tools/rzig/libcxx_mirror.zig, which rzig
 /// uses for packages, made here in zig build's local cache (which env.sh
 /// keeps one of per zig). Where the probe would fire the mirror is always
 /// used, so no shared-libc++ link ever enters that cache. Null otherwise,
@@ -2856,18 +2857,15 @@ fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {
 /// findFlangRt found, linked *statically*, explicitly: flang-rt-zig >= 9
 /// ships no shared runtime, but a flang-rt that does (older flang-rt-zig
 /// on macOS, conda-forge's) must not hand every standalone bundle an
-/// rpath dependency to vendor. The runtime is C++ (docs/11 Q5): on macOS
-/// and Windows zig's own libc++ is linked into the module, so libR,
-/// libRblas and libRlapack stay self-contained instead of relying on
-/// `-undefined dynamic_lookup` (macOS) finding some libc++ in the process
-/// at load time; flang-pixi's handoff measured that only the Linux
-/// archives are libc++-free (their sole C++-runtime reference is
-/// __cxa_atexit).
+/// rpath dependency to vendor. No libc++: flang-rt-zig 10's archives
+/// reference no C++ runtime symbol on any OS (their sole C++-ABI
+/// reference, __cxa_atexit, is libc's on linux and libSystem's on macOS;
+/// feat-standalone-toolchain phase 6, open point K), so libR, libRblas
+/// and libRlapack link the runtime alone, as on linux.
 fn linkFortranRt(ctx: *const Ctx, mod: *std.Build.Module) void {
     mod.addLibraryPath(.{ .cwd_relative = ctx.flangrt_dir });
     mod.linkSystemLibrary("flang_rt.runtime", .{ .use_pkg_config = .no, .preferred_link_mode = .static });
     mod.linkSystemLibrary("m", .{ .use_pkg_config = .no });
-    if (ctx.os == .macos or ctx.os == .windows) mod.link_libcpp = true;
 }
 
 /// Tokenize a "-L/x -lfoo ..." string into module link calls.

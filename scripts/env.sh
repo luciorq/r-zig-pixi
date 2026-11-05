@@ -41,6 +41,12 @@ case "$OS-$(uname -m)" in
   *) PLAT=unknown ;;
 esac
 if [ "$OS" = windows ]; then ARCHIVE_EXT=zip; else ARCHIVE_EXT=tar.gz; fi
+# A group archive's extension (B17): the compilers group's is .tar.xz on
+# every platform since phase 6, B13: with zig and flang it was over
+# 150 MB in gzip (PHASE6 open point L); the base and build-tools keep
+# ARCHIVE_EXT. rzig's groups.zig (archiveExt) is the reference, as its
+# text is (B35); this follows it, and verify-bundle checks they agree.
+group_ext() { if [ "$1" = compilers ]; then echo tar.xz; else echo "$ARCHIVE_EXT"; fi; }
 
 # R_HOME in a prefix: lib/R on unix. On Windows this MUST NOT be "lib/R":
 # NTFS is case-insensitive, and a real conda/pixi env already has a
@@ -69,7 +75,7 @@ TOOLCHAIN_PREFIX="${R_TOOLCHAIN_PREFIX:-$ROOT/dist/toolchain/$TOP}"
 R_HOME_DIR="$PREFIX/$RH"
 # The toolchain groups (feat-standalone-toolchain B38) and the directories
 # under R_HOME/bin/toolchain each one holds (B20, B23, B24): compilers,
-# zig/ (upstream zig, B4), flang/ (phase 6) and openmp/; build-tools,
+# zig/ (upstream zig, B4), flang/ (flang-zig, B9) and openmp/; build-tools,
 # usr/ and Windows' binutils/. Only those that exist count: a group's
 # archive holds its directories that the toolchain tree has
 # (package-standalone.sh).

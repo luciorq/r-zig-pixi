@@ -10,10 +10,11 @@
 #     dist/R-<ver>-<flavor>-<platform>.tar.gz (Windows: .zip).
 #   toolchain (pixi run package-toolchain): the toolchain tree in
 #     $TOOLCHAIN_PREFIX (zig-toolchain.sh, B30), one archive per group,
-#     dist/R-<ver>-<platform>-<group>.tar.gz (Windows: .zip), with the
-#     group's directories under R_HOME/bin/toolchain (env.sh's
-#     group_dirs). No flavor in the name: one toolchain serves every
-#     flavor of the platform.
+#     dist/R-<ver>-<platform>-<group>.<ext>, with the group's directories
+#     under R_HOME/bin/toolchain (env.sh's group_dirs). <ext> is env.sh's
+#     group_ext: .tar.xz for the compilers on every platform (PHASE6 open
+#     point L), .tar.gz (Windows: .zip) for build-tools. No flavor in the
+#     name: one toolchain serves every flavor of the platform.
 # Nothing is added to the R tree here, on any OS: zig build installs it
 # with the runtime data it needs from the env (build.zig's
 # installEnvRuntime: the CA bundle, fontconfig's configuration, Windows'
@@ -55,13 +56,20 @@ archive() {
   shift
   echo "== creating $artifact"
   rm -f "$artifact" "$artifact.sha256"
-  if [ "$ARCHIVE_EXT" = zip ]; then
+  if [ "${artifact##*.}" = zip ]; then
     (cd "$parent" && zip -qr "$artifact" "$@")
+  elif [ "${artifact##*.}" = xz ]; then
+    # one level for every platform; -T0: as many threads as xz finds
+    # cores and memory for (PHASE6 risk 7)
+    tar -cf - -C "$parent" "$@" | xz -9 -T0 > "$artifact"
   else
     tar -czf "$artifact" -C "$parent" "$@"
   fi
   (cd "$ROOT/dist" && sha256sum "${artifact##*/}") > "$artifact.sha256"
-  echo "== done: $(du -h "$artifact" | cut -f1) $(cat "$artifact.sha256")"
+  # the file's size in bytes, which B13's measurements record: du gives
+  # the space on disk, which a compressing filesystem shrinks (512 for a
+  # 95 MB .tar.xz on gamma); tr drops the spaces BSD wc puts before it
+  echo "== done: $(wc -c < "$artifact" | tr -d ' ') bytes $(cat "$artifact.sha256")"
 }
 
 if [ "$mode" = base ]; then
@@ -96,5 +104,5 @@ for group in $TOOLCHAIN_GROUPS; do
     { echo "error: the toolchain tree $tree has no directory of the $group group ($(group_dirs "$group") under $tc)" >&2; exit 1; }
 done
 for group in $TOOLCHAIN_GROUPS; do
-  archive "$ROOT/dist/R-$R_VERSION-$PLAT-$group.$ARCHIVE_EXT" $(group_members "$group")
+  archive "$ROOT/dist/R-$R_VERSION-$PLAT-$group.$(group_ext "$group")" $(group_members "$group")
 done

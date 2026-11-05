@@ -158,7 +158,7 @@ directories has its own `LICENSES/` and `SOURCES`, as point 3 requires
 | Group | Directory | linux and macOS | Windows |
 |---|---|---|---|
 | compilers | `TC/zig/` | `zig`, `lib/` (upstream 0.16.0; B4) | `zig.exe`, `lib/` |
-| compilers | `TC/flang/` | `bin/flang`; `lib/clang/23/finclude/flang/<conda triple>/` (15 intrinsic modules, `omp_lib.mod`, `omp_lib_kinds.mod`, `omp_lib.h`); `lib/clang/23/lib/<rt dir>/libflang_rt.runtime.a`. On linux flang-rt-zig also ships `x86_64-unknown-linux-gnu` as a symlink to the conda-triple directory (seen with build 9 in the default env; build 10 not re-checked). It is not needed once zig-fc passes `-fintrinsic-modules-path`, and must not be installed as a copy | `bin/flang.exe`; the same tree, with both `x86_64-w64-mingw32` and `x86_64-w64-windows-gnu` module directories |
+| compilers | `TC/flang/` | `bin/flang`; `lib/clang/23/finclude/flang/<conda triple>/` (15 intrinsic modules, `omp_lib.mod`, `omp_lib_kinds.mod`, `omp_lib.h`); `lib/clang/23/lib/<rt dir>/libflang_rt.runtime.a`. On linux flang-rt-zig also ships `x86_64-unknown-linux-gnu` as a symlink to the conda-triple directory (seen with build 9 in the default env; build 10 too: a `softlink` in its record, phase 6). It is not needed once zig-fc passes `-fintrinsic-modules-path`, and must not be installed as a copy (phase 6 copies only `hardlink` paths, PHASE6 open point A a) | `bin/flang.exe`; the same tree, with both `x86_64-w64-mingw32` and `x86_64-w64-windows-gnu` module directories |
 | compilers | `TC/openmp/` | `include/{omp.h,ompx.h,omp-tools.h,ompt.h}` | `include/{omp.h,ompx.h}`, `lib/libomp.lib` |
 | build-tools (the brief's "minimal build tools") | `TC/usr/` | `usr/bin/make` (B23 a) | `usr/bin/`: B39's list (sh, make, coreutils, sed, grep, gawk, which, findutils) and pkg-config (B43; also as `pkgconf`, stress round 1), copied with their DLL closure from conda-forge packages: native builds first, `m2-*` packages where conda-forge has no native one (B11) |
 | build-tools | `TC/binutils/` | none | copies of conda-forge's MinGW binutils, as .exe: `nm, dlltool, as, strip, windres` and `objdump` (B24, B43); ar and ranlib are rzig's (B43), and each other tool moves to rzig once rzig can serve it (B24) |
@@ -596,15 +596,16 @@ compilers; base + compilers + build-tools.
     | osx-arm64 | 143.9 MB | 45.1 MB | 30.5 MB | 25.9 MB |
     | osx-64 | 157.3 MB | 50.3 MB | 35.0 MB | 31.8 MB |
     | win-64 | 190.1 MB | 58.0 MB | 40.1 MB | 35.6 MB |
-- **Still ours for Fortran** (old Design 5):
+- **Still ours for Fortran** (old Design 5; done in phase 6, 2026-10-16,
+  "Phase 6 record: what changed"):
   - zig-fc sends every link through zig: a call with sources and a link
     becomes `flang -c` per source plus the zig link with the runtime
     archive. This reverses F3c's "a mixed call stays flang's"
     (fortran.zig:1-30) and is what configure's `$FC` probes need.
   - zig-fc passes `-fintrinsic-modules-path` on every compile, found from
-    flang's own location. Open: whether passing it twice beside a conda
-    env's flang.cfg is harmless, and whether the triple is a constant or
-    a directory scan.
+    flang's own location. Answered in phase 6: passing it beside a conda
+    env's flang.cfg (the same directory twice) is harmless (PHASE6 PP),
+    and the triple is a directory scan (PHASE6 open point D a).
   - rzig finds the runtime under `TC/flang/` through
     `-print-resource-dir`; on Windows, without the `Library/` prefix.
   - The driver ships once, as `flang` (`flang.exe`): zig 0.16's install
@@ -616,9 +617,17 @@ compilers; base + compilers + build-tools.
   win-64 archive): 131 external undefined names, none from the C++
   runtime; a cross link of a Fortran exe and DLL succeeds without it, and
   with it the DLL is the same. So the `-lc++` in Windows FLIBS
-  (build.zig:1824), in rzig's flibs (fortran.zig:75) and linkFortranRt's
-  `link_libcpp` (build.zig:2702) look like no-ops. Not re-checked on
-  build 10; the re-lock's kappa runs passed with `-lc++` present.
+  (build.zig:1836 before phase 6), in rzig's flibs (fortran.zig:75) and
+  linkFortranRt's `link_libcpp` (build.zig:2833 before phase 6) look like
+  no-ops. Re-checked on build 10 (PHASE6 ST §4, SR §2): no runtime
+  archive references a C++ runtime symbol on any OS; the only
+  C++-looking one is `__cxa_atexit` (`___cxa_atexit` on macOS), which
+  libc or libSystem defines. Phase 6 drops all three (open point K a):
+  rzig's Windows flibs and Makeconf.win's FLIBS are `-lflang_rt.runtime`
+  alone, and linkFortranRt has no `link_libcpp`. omicron's and kappa's
+  runs (2026-10-17) confirm every drop: libR, Rblas and Rlapack on
+  macOS are the same bytes either way, and R.dll imports no C++ runtime
+  ("Phase 6 record: tests on every host").
 - **Windows userland facts.** GNU make on Windows runs simple recipe lines
   without a shell, so rm, cp, sed and the rest must be real .exe files.
   busybox-w32's make applet (pdpmake) cannot parse Makeconf.win
@@ -1165,6 +1174,20 @@ Recommendation: **(a)**. Every unix tar reads gzip, and the real sizes
 come with phase 6 (G4).
 Blocks: phase 3 (format), phase 6 (revisit). Replaces: old 11.
 
+Revisited in phase 6 (2026-10-16, PHASE6 open point L a): the measured
+linux-64 compilers `.tar.gz` with flang/ is 150,809,244 bytes, over
+150 MB, so the compilers archive is `.tar.xz` (`xz -9 -T0`) on every
+platform, Windows included, and the base and build-tools keep
+`.tar.gz`/`.zip`. linux-64's `.tar.xz` is about 95.3 MB (103 s to make
+on gamma's 16 threads, 9 s to unpack). The rule is per group, never per
+OS (env.sh's `group_ext`, groups.zig's `archiveExt`). On Windows R's own
+`untar(..., tar = "internal")` reads it wherever the base is, and
+System32's `tar.exe` where its build has liblzma (kappa, 2026-10-17:
+bsdtar 3.7.2 with liblzma, 12.8 s; `untar()` 66.7 s). Measured
+`.tar.xz`: osx-arm64 79.1 MB (gzip 132.7 MB), win-64 92.7 MB (`.zip`
+160.0 MB); linux-aarch64 and osx-64 come with CI ("Phase 6 record: the
+measurements").
+
 ### B14. conda build number (old 12)
 
 **Answer (2026-10-08): (a)**, with B37 (a). D7 (CC_VER/FC_VER) and E2
@@ -1252,6 +1275,10 @@ Recommendation: **(a)**. It unblocks phase 3, each name says what is
 inside, and the final names can follow v3 (G4).
 Depends on: B38, B42; (c) needs B36 (c). Blocks: phase 3. Replaces:
 old 15.
+
+Since phase 6 (2026-10-16, B13's revisit): the compilers archive is
+`R-<ver>-<plat>-compilers.tar.xz` on every platform, Windows included;
+the base and build-tools keep `.tar.gz` (Windows `.zip`).
 
 ### B18. The zig 0.17 wave (old 18)
 
@@ -1933,6 +1960,17 @@ Options:
 Recommendation: **(a)**. No per-flavor state, it works when rzig runs
 outside R, and it keeps minimal safe (G1, G2).
 Blocks: phase 2. Replaces: none (new).
+
+The Fortran half (phase 6, 2026-10-16; PHASE6 open point U a, Cg1):
+(a) hides only C's `openmp/include`. Fortran's OpenMP files
+(`omp_lib.mod`, `omp_lib_kinds.mod`, `omp_lib.h`) sit in flang/'s one
+intrinsic-module directory, which zig-fc passes on every flavor. So on
+minimal (no libomp) `use omp_lib` compiles, and the link fails on the
+`omp_*`/`__kmpc_*` symbols (no `-lomp`): a probe that links, as
+autoconf's OpenMP checks do, concludes "no OpenMP", which is true.
+minimal's verify-bundle asserts it (measured on linux-64: "ld.lld:
+error: undefined symbol: omp_get_max_threads"), and README's minimal
+text says so. No second module directory and no flavor rule in zig-fc.
 
 ### B41. conda's exceptions to the shared boundary (new; follows B22 and point 5)
 
@@ -3119,7 +3157,10 @@ Choices and deviations, with their reasons:
   ~/.R/Makevars or rzig cache of this machine reaches them; Windows'
   builds run under env -i with Windows' own variables, and fomp/fompfc
   get flang's directory (the env's Library/bin) last on PATH, since
-  flang.exe cannot be copied and phase 6 brings TC/flang; the make
+  flang.exe cannot be copied and phase 6 brings TC/flang (corrected by
+  the SHLIB record and phase 6: a copy works, since its resource
+  directory follows the binary and zig-fc passes the modules path;
+  since phase 6 they use TC/flang with no flang on PATH); the make
   version comes from usr/SOURCES; Makeconf.win's tool paths are read
   from make's own expansion (plain and with LTO_OPT=-flto), not a text
   scan; `R.exe CMD` gets gcc.exe as a `cygpath -w -s` path, which
@@ -5162,7 +5203,9 @@ Then:
 - The toolchain step installs the set from the env (B9 a) into
   `TC/flang/` (flang-zig's layout, no `Library/`, no flang.cfg, no lld,
   the driver once, no linux module-directory symlink), `flang/SOURCES`
-  from conda-meta, verify-tree checks each copy against `paths_data`.
+  from conda-meta, verify-toolchain checks each copy against
+  `paths_data` (verify-tree checks the R trees, which hold no flang/;
+  phase 3 split the two).
 - The carve script's cross-check, once.
 - `-lc++` and `link_libcpp` dropped where those runs passed.
 - Compression revisited with the measured compilers archives (B13).
@@ -5172,6 +5215,806 @@ derived-type module, a USE_FC_TO_LINK package, `use omp_lib` on two
 threads, a configure that links with `$FC`; RZIG_PRINT_ARGV shows
 `TC/flang/bin/flang` compiling and zig linking. Every OS (all five
 platforms in CI), each one passing.
+
+**Status (2026-10-17): phase 6 pending CI.** Steps 1 to 8 are done in
+the worktree feat-standalone-phase6 (branch feat-standalone-phase6:
+main d11dee1 plus phase 4's, the R CMD SHLIB routing's and phase 5's
+uncommitted changes), not committed. Every test passes by hand on
+linux-64 (gamma, both zigs), osx-arm64 (omicron, both zigs) and win-64
+(kappa, both zigs); the standalone runs have no flang on PATH and no
+cfg, so TC/flang is the only flang (B44 met on those three). The host
+stage took two rounds: round 1 found two test bugs and no product bug
+(the kit's five.sh grepped linux's `ld.lld` on macOS;
+recipe/test-compilers.R expected zig's file to be named `zig` on
+win-64), both were fixed, and round 2 passed on both hosts ("Phase 6
+record: tests on every host"). All three K drops stay: macOS
+and Windows pass without `-lc++` and `link_libcpp`. kappa's R
+`untar(..., tar = "internal")` reads the compilers `.tar.xz`, so L
+holds on Windows. No flang-pixi change is needed. osx-64 under Rosetta
+on omicron did not run in this phase (an open item below). CI has not
+run: the branch is not pushed. linux-aarch64 (its only B44 run),
+native osx-64 (macos-15-intel) and the `upstream-zig` label run happen
+only after the user's push (PHASE6 open point T, Cg3), and the PR does
+not merge before they pass. The work follows the
+reviewed implementation plan, copied here as
+phase6/PHASE6-IMPLEMENTATION.md with its critique phase6/CRITIQUE.md
+(cited below as PHASE6 <section>, Cc<n> and Cg<n>), and the user's
+answers to its open points ("Phase 6: the user's answers"). The build
+number stays 8 (the user's decision of 2026-10-19, B14's amendment; it
+was 12, the number after phase 5's 11, B14 a, open point R), and phase
+6 publishes with phase 7's bump: conda's and PyPI's contents change (rzig on every OS; Makeconf.win's
+FLIBS and the links of libR, Rblas and Rlapack on macOS and Windows).
+pixi.lock is unchanged (sha256 fbb64b7b...a68bb96); phase 6 changes no
+dependency. Merge order: phase 4's PR, SHLIB's, phase 5's, then phase
+6's, which is `phase6-only.diff` against those three (open point S).
+Next: the user commits and opens the PR with
+`phase6/handover/commands.sh` (the core tier and conda-package first,
+then the `full-ci` and `upstream-zig` labels); CI's numbers go into a
+new "Phase 6 record: CI".
+
+#### Phase 6: the user's answers (2026-10-16)
+
+The user, 2026-10-16: "Keep going", after "Follow with the
+recommended". Every open point of PHASE6 section 11 takes its ★ option;
+each is recorded here as answered that way, the options not taken named
+after it.
+- A (a): the driver is one renamed copy (`bin/flang-23`, win-64
+  `Library/bin/flang.exe`, to `flang/bin/flang[.exe]`); the modules and
+  the runtime are record-driven trees: every `hardlink` file of
+  flang-rt-zig's record under `lib/clang/23/finclude/flang/`, and the
+  file `libflang_rt.runtime.a` under `lib/clang/23/lib/`, each installed
+  at its path less `Library/` and checked by `conda.find`. Not taken:
+  (b) fixed lists per platform.
+- A2 (a): `llvm_major = "23"` is a constant beside the flang directory
+  in the toolchain build; rzig's `modulesDir` and R's findFlangRt scan,
+  since they must find whatever flang the env or PATH has. Not taken:
+  (b) a scan in the toolchain build too.
+- B (a): win-64 keeps both module directories (`x86_64-w64-mingw32`,
+  `x86_64-w64-windows-gnu`; 263 KB). The surveys split (as phase 5's
+  Cg5): the tree survey and this plan's table ("The toolchain groups")
+  said keep both, the rzig survey one. (a) is a by-product of A (a),
+  with no rule (Cg4), and was taken for simplicity. Not taken: (b) a
+  rule keeping only the first.
+- C (a): no `flang.cfg` in TC/flang; zig-fc passes the modules path.
+  Not taken: (b) flang-zig's `flang-compile.cfg` copied as
+  `flang/bin/flang.cfg`.
+- D (a): the modules path comes from flang's real path, `\` turned
+  into `/`, `bin/<file>` cut as strings (no `..`, Cc3):
+  `<tree>/lib/clang/<v>/finclude/flang/<t>`, `<v>` the first entry in
+  byte order holding `finclude/flang/`, `<t>` the first entry named for
+  rzig's CPU (`x86_64-`, `aarch64-`/`arm64-`), else the first in byte
+  order (Cc8, Cg8). It goes last on every call that reads Fortran
+  source and is no probe (`-c`, `-S`, `-E`, `-fsyntax-only`, the split's
+  compiles; Cc9), beside a conda env's cfg too. Not taken: (b)
+  `-print-resource-dir` on every compile, (c) a triple constant in
+  rzig, (d) only without a cfg.
+- E (a): every link goes through zig. A call with Fortran sources is
+  split: a flang compile per source into `<tmp>/rzig-fc-<random>/`,
+  then the zig link with each source replaced by its object; spawned
+  and waited on every OS; the first failing exit (128+n for a signal on
+  unix); the directory removed on every path (Cc15). Two measured
+  refusal lists (Cc1): `link_refused` (what zig cc refuses) and
+  `compile_refused` (the link-only options flang refuses). Each grows
+  only by a host's measured refusal, with its measurement. Not taken:
+  (b) a whitelist of link options, (c) executables and mixed calls kept
+  flang's.
+- F (a), as amended (Cc7): each input is classified by the `-x` in
+  force, else its extension; a C-family source stays on zig's line
+  (`-x <lang> <src> -x none` when only an `-x` classified it); no other
+  `-x` reaches the link. Not taken: (a0) the planner's separate zig-cc
+  compile step for a C source, (b) calls with `-x` kept flang's.
+- G (a): RZIG_PRINT_ARGV prints each step's argv with a line `&&`
+  between steps, `ZIG_LIB_DIR=` just before the first zig block (Cc6);
+  RZIG_TRACE one line per step; a dry run's directory is
+  `<tmp>/rzig-fc-dryrun`, not created. Not taken: (b) the link only.
+- H (a): flang/'s SOURCES says `feedstock: unknown` (flang-pixi's
+  recipes record no repository); an open item for the user, not filed.
+  Not taken: (b) an override in build.zig.
+- I (a): verify-toolchain checks `flang/bin/flang --version` against
+  SOURCES' flang-zig `version:` and that the closures block counted the
+  driver (phase 5's Cg8 shape). Not taken: (b) presence only.
+- J (a): flang-pixi's carve script ran once, by hand, as the
+  cross-check ("the per-OS facts" below). Not taken: (b) a script in
+  the repo (B9 says no).
+- K (a): `-lc++` and `link_libcpp` are dropped where step 3's runs
+  passed, as one recorded patch (`k-drops.diff`, Cc14). K2 (a): the
+  macOS drop stays when omicron passes, with libR's exported `std::`
+  count before and after recorded. Not taken: (b) only Windows'
+  `-lc++`, (c) keep all three; K2 (b) keep `link_libcpp` on macOS
+  whenever libR exported a libc++ symbol. How they landed: below
+  ("what changed") and in the host section.
+- L (a), as amended (Cg2): the measured linux-64 `.tar.gz` was over
+  150 MB, so the compilers archive is `.tar.xz` on every platform,
+  Windows included with no condition; the base and build-tools keep
+  `.tar.gz`/`.zip`; the rule is per group, never per OS. On Windows the
+  README names R's `untar(..., tar = "internal")` first. kappa's
+  `untar()` failing would stop the work, not switch win-64 back. Not
+  taken: (a0) the planner's per-OS fallback, Cc5's variant (`.zip`
+  where the oldest Windows' tar has no liblzma), (b) zstd, (c) xz on
+  unix only.
+- M (a): the standalone line reads `extract
+  R-<ver>-<plat>-compilers.tar.xz where you extracted R (zig 0.16,
+  flang and the OpenMP files)`; the first line and the pip line are
+  unchanged. Not taken: (b) flang's version in the text.
+- N (a): verify-bundle's no-flang checks move `TC/flang/bin/flang[.exe]`
+  aside into VERIFY_DIR and back, restored on every exit path. Not
+  taken: (b) a directory without flang/.
+- O (a): TC/flang in both verify-bundle passes; the env's flang with
+  its cfg keeps its coverage through contract, pkg-parity, stress and
+  the conda tests. Not taken: (b) the build pass on the env's flang.
+- P (a): recipe/test-compilers.R gains a `$FC` probe (a program and a
+  derived-type module, compiled, linked and run) with the env's flang
+  and cfg. Not taken: (b) the dev env's step 1 run only.
+- Q (a): r-zig-compilers keeps its `lld-zig ==23.1.1 *_5` pin, though
+  nothing of ours runs lld-zig now (a recipe comment says so). Not
+  taken: (b) drop it, a dependency change.
+- R (a): build 12. If another build publishes to universe first, the
+  one after universe's newest. (Superseded 2026-10-19: no bump in phase
+  6, the number stays 8; B14's amendment.)
+- S (a): `phase6-only.diff` against the step-0 baseline (main d11dee1
+  + phase5-base.diff + the baseline's untracked files), checked by
+  applying it to a second copy; four PRs in order. Not taken: (b) the
+  whole worktree diff for the user to split.
+- T (a): CI's ubuntu-24.04-arm leg under `full-ci` is linux-aarch64's
+  B44 run, after gamma's non-gating cross pre-check (Cg3). Not taken:
+  (b) the aarch64 tree checked on gamma only.
+- U (a): B40's Fortran limit is accepted and documented: `omp_lib.mod`,
+  `omp_lib_kinds.mod` and `omp_lib.h` sit in flang/'s one module
+  directory, so on minimal `use omp_lib` compiles and its link fails on
+  the `omp_*`/`__kmpc_*` symbols; one minimal verify-bundle assertion
+  (the linker's own undefined-symbol message). Not taken: (b) no
+  modules flag on a base without libomp, (c) a second module directory
+  without the OpenMP files.
+- V (a): `ISO_Fortran_binding.h` is left out of flang/, the same on
+  every channel; it comes back with an include rule if a package needs
+  it. Not taken: (b) copied, with rzig adding it to C compiles.
+- W (a): the toolchain build reads the trees' records in one pass with
+  a separator-free needle per tree (`libflang_rt.runtime.a"`, `flang`),
+  so `conda.find`'s two-owner check sees a clobber. Not taken: (b) a
+  second pass by basename, (c) a `"name": "<package>"` needle.
+- X (a): the toolchain summary lists packages in copy order (`flang/
+  (flang-zig, flang-rt-zig)`). Not taken: (b) sorted names.
+
+#### Phase 6 record: what changed (2026-10-16)
+
+`phase6-only.diff`: 29 files against the phase 5 baseline (the two new
+records under phase6/ included).
+- zigbuild/tools/rzig/fortran.zig (D, E, F, G): a call is one of three
+  kinds: `.flang` (compiles, probes, no input), `.link` (objects or
+  C-family sources only, through zig cc as zig-cc links, executables
+  included, with the runtime) or `.split` (a Fortran source plus a
+  link: one flang step per Fortran source in the caller's order, `flang
+  <floor> <compile args> -Qunused-arguments -c [-x lang] <src> -o
+  <tmp>/<n>-<stem>.o -fintrinsic-modules-path <dir>`, then one zig link).
+  `link_refused` holds `-J <dir>`, `-Mfixed`, `-Mfree`, `-Mextend` and
+  `-fno-fortran-main`; `compile_refused` the 31 options CA measured plus
+  `-unexported_symbols_list`, with `-F` in both forms. One `drop` helper
+  takes each option with its value. The split's temporary directory is
+  TMPDIR's, else /tmp; on Windows TEMP, then TMP, else the output's
+  directory (never MSYS' TMPDIR). The module doc says why zig links
+  everything, replacing F3c's "a mixed call stays flang's"; split()'s
+  doc says configure's `-v` parse reads zig's link line (`ld.lld`, on
+  macOS `zig ld`). `flibs` on
+  Windows is `-lflang_rt.runtime` alone (K).
+- flang_rt.zig: `modulesDir` (D; no process runs); `globDirs` made
+  public. cmdline.zig: `takes_value` gains `-undefined`, `-force_load`,
+  `-multiply_defined`, `-Xflang`, `-J`, `-module-dir` and
+  `-fintrinsic-modules-path` (Cc2); new `isFortran`, `xLang` and
+  `isFortranLang`. Ctx.zig: a command of several steps (`.steps`) and a
+  `dry_run` field. main.zig: commands are a list of blocks; `runSteps`
+  spawns and waits for each, stops at the first failure and removes the
+  directory and the discard on every path; single commands still exec
+  on unix; with no zig the run exits 127 before any step. compiler.zig:
+  its Windows FLIBS test without `-lc++` (K).
+- zigbuild/tools/rzig/groups.zig (L, M): `archiveExt` (compilers
+  `.tar.xz` everywhere; build-tools `.zip` on Windows, `.tar.gz`
+  elsewhere), the standalone line above, the header naming flang (B9)
+  in the compilers group. parity-test.sh: the anchored grep for the new
+  line; the two Windows FLIBS cases without `-lc++`.
+- zigbuild/toolchain/build.zig (A, A2, B, C, W, X): `Tree{package,
+  from, name?}` and `Dir.trees`; `flangDir(prefix, driver)` written
+  once (Cg6), listed first in unix_dirs and windows_dirs; trees are
+  skipped when the prefix is the env (Cc4), before any record is read;
+  an empty tree stops the build with "<pkg>'s record lists no <name>
+  under <dir>"; one `copyOf` helper for copies and trees; the header
+  table gains flang/ ("no cfg, no lld, no ISO_Fortran_binding.h", V).
+  conda.zig: `Record.Path.path_type`, `under` (a package's `hardlink`
+  paths under a directory, `\` read as `/`) and `inDir` (drops a
+  leading `Library/`), with three tests (the linux softlinks left out,
+  win-64's twins and `\` paths, a second owner gives TwoOwners).
+- scripts/verify-toolchain.sh (I): flang's driver tracked in the
+  closures (`flang_exe`, `.exe` on Windows) with the positive check;
+  `flang --version` against SOURCES' flang-zig `version:`; the header
+  notes the Cg10 build paths.
+- Compression (L): env.sh's `group_ext` (compilers `tar.xz`, the rest
+  `$ARCHIVE_EXT`, no OS test; Cg11, groups.zig the reference);
+  package-standalone.sh's `archive()` picks zip, xz (`tar -cf - | xz -9
+  -T0`) or gz from the artifact's extension; verify-helpers.sh's
+  `archive_files` and `extract_archive` read `.tar.xz` with the env's
+  xz on every OS; unpack-toolchain.sh and verify-bundle.sh name
+  archives with `group_ext`. package-standalone.sh's "== done:" line
+  prints each archive's size in bytes (`wc -c`), where `du -h` printed
+  the space on disk (512 for a fresh file on gamma's ZFS; fixer,
+  2026-10-16).
+- R's build.zig (K): Makeconf.win's `FLIBS = -lflang_rt.runtime`;
+  linkFortranRt without `link_libcpp` on macOS and Windows, its doc
+  giving the measurement (the runtime's only C++-ABI reference is
+  `__cxa_atexit`, from libc or libSystem); the FC comment and
+  installWindowsCompilerContract's doc no longer say flang cannot be
+  copied (TC/flang is a copy that works; conda's flang is the env's).
+  linux's libR, libRblas, libRlapack and R binary are byte-identical
+  before and after.
+- scripts/verify-bundle.sh (N, O, U; Cc3, Cc6, Cc9): `pass_flang`
+  (`TC/flang/bin/flang[.exe]`, `pwd -P` / `cygpath -m -l`) in both
+  passes, and the archive named when it is missing; no `*.cfg` in the
+  extracted tree and no flang on the check mode's PATH; the check mode
+  names "flang at $pass_flang"; the first Fortran compile (R CMD SHLIB
+  of a derived-type module across two files, rzig build with no make,
+  PATH the tree's bin, a fresh HOME) timed cold and warm; RZIG_PRINT_ARGV
+  of `-c` (flang first, the modules path under TC/flang, physical, no
+  `..`) and of `-o conftest conftest.f` (two blocks, `&&`, zig linking
+  TC/flang's runtime); `$FC -E` of a `#include "omp_lib.h"` source
+  naming exactly the modules directory's file, `$FC -c` of a Fortran
+  `INCLUDE 'omp_lib.h'`; the `fdt` package (derived-type module, no
+  Makevars, rzig build tier 1); `fcconf` (one configure and
+  configure.win script: `R CMD config FC`, conftest compiled, linked,
+  run and linked with `-v`); under the package PATH (the env's bin with
+  its flang and cfg first), zig-fc still runs TC/flang (the rz/rf dry
+  runs and the fs build); fl, fcconf, fomp and fompfc build with no
+  flang on PATH and no cfg, PATH the env's make alone, linked, then
+  /usr/bin:/bin (fixer, 2026-10-17: they had run under the package
+  PATH; default both passes, minimal and upstream pass again); the no-flang
+  checks with the driver moved aside (`flang_aside`, `flang_back`, the
+  EXIT trap); minimal's U assertion; the Windows dry run with TC/flang's
+  runtime and no `-lc++`. The `fc_dir` variable and the Windows copy of
+  flang.exe, flang-new.exe, the cfg and the runtime are gone. Scenario 1
+  checks that the compilers text names the extracted archive.
+- Docs and comments: README (the compilers bullet: `.tar.xz`, about
+  95 MB on linux-64, zig 0.16, flang 23.1.1 and OpenMP's headers; one
+  bare-driver sentence for every OS; SOURCES naming flang-pixi's
+  packages; `tar -xJf` and, on Windows, `untar()` first, then
+  System32's tar where `tar --version` lists liblzma; minimal's
+  `use omp_lib` limit, U); scripts/env.sh, compile-tree.sh (zig/ and
+  flang/ stay out, C12), contract-test.sh; toolchain.yaml's header and
+  upload comment; pixi.toml's toolchain and package-toolchain comments
+  (comments only: no table changed, `pixi lock --check` passes).
+- recipe/recipe.yaml: `number: 12` with its 11 → 12 history entry
+  (2026-10-19: back to 8, with one "8 stays" line for phases 4 to 6;
+  B14's amendment); the lld-zig pin's comment (Q). recipe/test-compilers.R (P): Makeconf's FC
+  is zig-fc; a dry run of `zig-fc -o p m.f90 u.f90` gives three blocks
+  (two flang compiles with the modules flag, then the link by the same
+  zig that `zig-fc --rzig-check=fortran` reports, compared as paths:
+  on win-64 conda-forge's zig is `x86_64-w64-mingw32-zig.exe`, since
+  its `zig` is a .bat, find_zig.zig; host fix, 2026-10-17, after kappa's
+  round 1 failed on a check of the name `zig`); conftest and a
+  derived-type module program are linked and run ("ok"); no
+  `rzig-fc-*` is left in the probe's TMPDIR. It reads FC from Makeconf,
+  not `R CMD config FC`, since r-zig-compilers alone has no make and
+  patch 0010 stops R CMD config with 127 there.
+- wheel-test.sh greps "flang and the OpenMP files" and keeps the pip
+  line's grep (B29 a: PyPI has no Fortran).
+
+What did not change: rzig's flang lookup (`flang_rt.flang` already looks
+in `TC/flang/bin` first, and `-print-resource-dir` gives
+`TC/flang/lib/clang/23`); conda's recipe outputs (the conda build's
+tree is its env, where flang/ is skipped, so no package holds
+`bin/toolchain/flang`); make-wheel.py and the PyPI text (no Fortran);
+compile-tree.sh's rule; pixi.lock and every dependency table.
+
+#### Phase 6 record: the measurements (2026-10-16/17: linux-64, osx-arm64, win-64)
+
+The compilers archive with flang/ (B13, L). TC/flang is 23 files,
+210,055,043 bytes unpacked on linux-64 (driver, 18 module files in one
+directory, the runtime, two licences, SOURCES); 23 files, 143,977,601
+bytes on osx-arm64 (module directory `arm64-apple-darwin20.0.0`); 41
+files, 182 MB on win-64 (36 module files in the two twins).
+
+| platform | `.tar.gz` / `.zip` | `.tar.xz` (`-9 -T0`) | members |
+|---|---|---|---|
+| linux-64 (gamma) | 150,809,244 (.tar.gz, 29 s) | 95,251,492-95,533,632 (103-104 s) | 19,587 files |
+| linux-aarch64 | CI | CI | |
+| osx-arm64 (omicron) | 132,668,316 (gzip -6 of the same tar stream) | 79,145,836-79,158,960 (66 s) | 20,903 entries, 38 under flang/ |
+| osx-64 | not run (CI's macos-15-intel) | not run | |
+| win-64 (kappa) | 160,012,809 (.zip, `zip -qr`, 26.4 s) | 92,652,560-92,657,048 (96.4 s with build-tools' zip) | 19,604 files |
+
+ST's estimates were gzip/zip 150.8, 144.4, 132.7, 142.1 and 160.0 MB
+and xz 78-95 MB. linux-64's gzip archive measured 150.8 MB, over B13's
+150 MB, which decided L. The two xz sizes are two builds of the same
+tree (tar records mtimes). The base and build-tools archives keep their
+formats: slim base 63,084,045-63,084,785 B, minimal 51,820,204 B,
+build-tools 155,101 B.
+
+xz's cost on gamma (16 threads): package-toolchain 103-104 s against
+29 s with gzip; unpack-toolchain 9.3 s (phase 5's gzip: 8 s); `xz -dc |
+tar -tf -` of the archive 2.0 s. omicron: package-toolchain 66 s in
+all, `xz -dc` 2 s, unpack-toolchain 7 s. kappa: package-toolchain's
+archive step 96.4 s, `xz -dc` 2.4 s, unpack-toolchain 19 s.
+
+The Windows readers (L): System32's `tar.exe` on kappa (Windows
+10.0.22621.4317, Windows 11 22H2) is bsdtar 3.7.2 with liblzma 5.4.3:
+`-tf` 5.9 s, `-xf` 12.8 s. R's `untar(..., tar = "internal")` read the
+whole archive in 66.7 s (65.45 s elapsed), all 19,604 files, the same
+bytes as tar.exe's tree. macOS's `/usr/bin/tar` (bsdtar 3.5.3, liblzma
+5.4.3) reads it too.
+
+The first Fortran compile with TC/flang only (verify-bundle's line: R
+CMD SHLIB of a derived-type module, rzig build, no make, a new user's
+empty zig cache):
+
+| leg | toolchain pass (TC/zig, empty cache) | build pass (env.sh's cache) |
+|---|---|---|
+| linux-64 slim | 8-9 s, zig's cache then 44 MB; warm 0 s | 6 s; warm 1 s |
+| linux-64 minimal | 9 s, 44 MB; warm 0 s | 6 s; warm 1 s |
+| linux-64 upstream (one zig) | 8 s, 44 MB | skipped |
+| osx-arm64 slim | 10 s, 43 MB; warm 1 s | 13-14 s; warm 0-1 s |
+| osx-arm64 minimal | | 10 s |
+| osx-arm64 upstream (one zig) | 10 s; warm 1 s | skipped |
+| win-64 slim | 39 s, 55 MB; warm 1 s | 50 s |
+
+The first C++ compile stays 15 s and 49 MB on linux-64 (omicron 12 s
+and 68 MB, the build pass 11 s; kappa 49 s), so a Fortran-only
+package pays about half of the C++ first-compile cost on linux-64 and
+about four fifths of it on macOS and Windows. kappa's bundle run:
+conftest.exe 28.0 s cold, 0.3 s warm. On the hosts the build pass's
+caches were cold too (each copy had its own), so its first C++ compile
+prints about 3,400 warning lines like the toolchain pass's (gamma's
+warm build pass: 0); not a change.
+
+verify-toolchain with flang/ (19,590 files): 23-24 s as a pixi task on
+gamma (phase 5: 10 s); the closures block counts 3 ELF files (phase
+5: 2; the new one is flang/bin/flang). omicron 8 s (19,590 files);
+kappa 1m30s on the built tree and 3m24s on the unpacked one (19,621
+files, 10 PE closures).
+
+verify-package per pass (verify-bundle's final line per pass):
+
+| leg | toolchain pass | build pass | whole task |
+|---|---|---|---|
+| linux-64 slim | 86-88 s | 62-64 s | 307 s |
+| linux-64 minimal | 77 s | 52 s | |
+| linux-64 upstream (one zig) | 87 s | skipped | |
+| osx-arm64 slim | 135 s | 113 s | 349-351 s |
+| osx-arm64 minimal | 115 s | 73 s | |
+| osx-arm64 upstream (one zig) | 132 s | skipped | 232 s |
+| win-64 slim | 275 s | 256 s | 12m55s with `package` |
+| win-64 upstream (one zig) | 276 s | skipped | 8m40s |
+
+Phase 5's were 73-75 s and 51 s (278 s), minimal 62 s and 40 s,
+upstream about 72 s: phase 6's Fortran blocks add about 11-15 s per
+pass on linux-64. omicron's phase 5 passes were 107 s and 72 s,
+minimal 90 s and 52 s, upstream 107 s: about 20-40 s more per pass;
+kappa's whole task was 12m39s in phase 5.
+
+The rest of section 7's entries are in "the per-OS facts" and "tests
+on every host" below. CI's figures (linux-aarch64, macos-15-intel,
+windows-latest) come with the PR.
+
+#### Phase 6 review (2026-10-16)
+
+Each change over about 200 lines had a skeptical review of its diff
+before its tests:
+- Step 1 (the 1,000-line zig-fc diff): exec against spawn, every exit
+  path's cleanup of the temporary directory and the discard, Windows
+  paths and `.exe`, the import-library discard, a missing `-o`,
+  duplicate sources and base names, options with values on both lists,
+  where `ZIG_LIB_DIR=` prints. rzig also cross-compiles for
+  x86_64-windows-gnu, aarch64-macos, x86_64-macos and
+  aarch64-linux-musl.
+- Step 6 (verify-bundle.sh, 524 lines): every former `fc_dir` site and
+  the Windows copy are gone, every `flang_aside` has its `flang_back`
+  and the EXIT trap restores the driver, `cygpath -m -l`, `flang.exe`
+  through `$exe`, `\` → `/` with lower-cased comparisons, `tr -s` for
+  `#line`'s `\\`, no `grep -q` after `tr` (SIGPIPE), nothing dropped
+  from SHLIB's and phase 5's blocks.
+
+What the implementation corrected in the plan:
+- flang 23.1.1's `-E` does not expand a Fortran `INCLUDE` line: it
+  keeps the line for the compile, and exits 0 even when the file does
+  not exist. Only a cpp `#include "omp_lib.h"` is expanded under `-E`,
+  through the intrinsic modules path. So Cc9's "`-E` of a file with
+  `include 'omp_lib.h'` fails on macOS without the flag" holds for
+  `#include`; verify-bundle checks `#include` with `-E` and `INCLUDE`
+  with `-c`. The flag on `-E` stays right.
+- flang 23 also refuses `-Mfree`, `-Mfixed`, `-Mextend` and
+  `-fno-fortran-main` on its own compile; they stay on `link_refused`
+  only, for links of objects (`link_refused`'s comment).
+- verify-bundle's comment "minimal empties FLIBS" was stale: minimal's
+  Makeconf has `FLIBS = -lflang_rt.runtime -lm` and an empty
+  `SHLIB_OPENMP_FFLAGS`, so every Fortran check but OpenMP runs on
+  minimal.
+- A standalone executable linked with `-fopenmp` needs the base's
+  `lib/` on the loader path (no rpath outside conda), as zig-cc's
+  executables do; package libraries R loads are fine, so verify-bundle
+  tests OpenMP Fortran through R.
+
+#### Phase 6 record: tests on every host (2026-10-16/17)
+
+gamma (linux-64; the implementer, who owns `dist/`): pixi.lock was
+fbb64b7b...a68bb96 at every step's start and end, `pixi lock --check`
+passes (the env was installed with `--locked` in step 0), and every
+pixi task ran with PIXI_CACHE_DIR=.../pixi-cache-p6 and TMPDIR under
+`phase6/<step>/` (logs there). `/` held 7.2-7.4 GB free (stop line
+6 GB); every output went to /data.
+- Steps 1-5: `rzig-test` with both zigs (162/162 at the end; parity
+  125 identical, 59 identical but for rzig's own additions, 34
+  deliberate, 0 failed); `toolchain-test` with both zigs; `toolchain`
+  with both zigs, byte-identical trees; verify-toolchain (19,590 files,
+  `flang verified: ... 23.1.1`) and its seven negative cases (a changed
+  module, the runtime missing, a stray `bin/flang.cfg`, a script as the
+  driver, an ELF printing 99.0.0, the driver missing, no `version:`
+  line); the six two-owner and empty-tree fixtures through the real
+  build; the fake-env conda run ("nothing to install (the prefix is the
+  env)", nothing written); `package-toolchain`, `unpack-toolchain` and
+  verify-toolchain on the unpacked tree; `build`, verify-tree, smoke and
+  contract after K's drops (linux's libR unchanged).
+- Step 3's bundle (base, compilers and build-tools extracted, `env -i`,
+  `PATH=/usr/bin:/bin`, ZIG_BIN unset, no flang on PATH, no `*.cfg`):
+  TC/flang reports 23.1.1 with `-print-resource-dir` under the tree;
+  `flang -### -c` names only paths under the tree; the five zig-fc
+  calls (conftest, `-v` with zig's ld.lld line, a derived-type module
+  `.so` loaded by R, `use omp_lib` on two threads in an executable and
+  in a `.so` R loads, a failing compile leaving nothing); R CMD INSTALL
+  through rzig build tier 1 of dtmod, fcl (USE_FC_TO_LINK), fomp and
+  fompfc (two threads), quadprog 1.5-8, Rcpp 1.1.2 and minqa 1.2.8.
+- Step 6: verify-package, both passes, with conda-forge's zig; the
+  one-zig pass with upstream zig; minimal's both passes with the U
+  assertion ("ld.lld: error: undefined symbol: omp_get_max_threads");
+  a negative run with TC/flang removed fails at once, naming the
+  compilers archive.
+- Step 7, the default chain end to end (seconds): rzig-test 51,
+  toolchain-test 6, build 150, toolchain 7, verify-tree 24,
+  verify-toolchain 23, smoke 3, contract 104, hermetic 11, pkg-parity
+  137, package-toolchain 103, verify-package 307; `-e minimal build`
+  140 and `toolchain` 5; `-e wheel wheel` 16 and `wheel-test` 66 (zig-fc
+  with no flang exits 127 naming the compilers `.tar.xz`; the pip line
+  unchanged); `-e pkg conda-package` 283 (r-zig-slim hb0f4dca_12,
+  r-zig-compilers and r-zig-build-tools h318eb1d_12, r-zig-toolchain
+  h889a3b9_12, built locally as `_12` before the 2026-10-19 decision,
+  the PR keeps 8; the four tests and P's probe pass; no package lists
+  `bin/toolchain/flang` or `bin/toolchain/zig`) and `conda-consume` 25.
+  actionlint passes on every workflow.
+- Step 8: records only; `git diff` before and after, the lock unchanged
+  ("Phase 6 record: hand-over").
+
+omicron (osx-arm64) and kappa (win-64), the host stage (2026-10-17).
+Each tester ran a copy of the worktree (`~/rz-p6`,
+`C:\Users\admin\rz-p6`; never this worktree), recorded pixi.lock's
+sha256 (fbb64b7b... at every start and end, on the host and in this
+worktree) and a manifest of the copy at start and end, and deleted
+the copy, its lock and its scripts afterwards (checked again by the
+recorder: no `rz-p6*` left on either host). kappa kept PIXI_CACHE_DIR,
+RATTLER_CACHE_DIR, XDG_CACHE_HOME and TEMP inside its copy, and its
+shared rattler, zig and r-zig caches were checked unwritten. Round 1
+ran the worktree at `git diff` sha256 050f3c2a...; round 2 ran it after
+the host fixes (48d46c81...; two files changed: recipe/test-compilers.R
+and a comment in fortran.zig). Logs: `phase6/omicron/` (round 2 in `r2/`),
+`phase6/kappa/` (`r2/`).
+- omicron, round 1, all passing but one kit check: `lock-check`;
+  `rzig-test` with conda-forge's zig (38 s) and upstream zig (29 s);
+  `toolchain-test`; `build` (330 s); verify-tree; `toolchain` (summary
+  `flang/ (flang-zig, flang-rt-zig), openmp/, usr/, zig/`);
+  verify-toolchain ("flang verified: ... 23.1.1"; the driver and
+  runtime listed as naming flang-pixi's build paths under `$HOME`, not
+  failed, as Cg10 expected); `package-toolchain`; `unpack-toolchain`
+  and verify-toolchain on the unpacked tree; verify-package, both
+  passes, under `env -i PATH=/usr/bin:/bin` (each pass: "no .cfg in
+  the extracted tree, no flang on PATH", "flang from TC/flang");
+  `check` (190 s); contract; pkg-parity; minimal `build` and
+  verify-package (B40's limit: "undefined symbol:
+  _omp_get_max_threads"); `wheel` and wheel-test (zig-fc with no flang
+  exits 127; the compilers text names the `.tar.xz`); the upstream
+  one-zig leg (`build`, verify-tree, `toolchain`, verify-toolchain,
+  `package-toolchain`, verify-package); `-e pkg conda-package` (r-zig-*
+  `_12`, built locally before the 2026-10-19 decision kept 8, no
+  `bin/toolchain/flang` or `bin/toolchain/zig/` in any
+  package, P's probe OK) and conda-consume. The step-3 kit's
+  bundle-unix.sh passed every section (resource dir, `flang -###`,
+  the split's RZIG_PRINT_ARGV, `omp_lib.h` with INCLUDE, `#include` and
+  `-E`, the renamed-module-directory simulation, dtmod, fcl, fomp and
+  fompfc on two threads, quadprog, Rcpp and minqa through rzig build
+  tier 1, nothing left in TMPDIR) but five.sh's call 2: it grepped
+  `-v`'s output for `ld.lld`, linux's linker, where macOS's zig prints
+  `zig ld ...` (a kit bug; the binary was linked). K on macOS
+  (`k-mac.sh`, then `patch -p1 -R` of `phase6/fix/k-revert-macos.diff`,
+  a rebuild with `link_libcpp`, and back): libR.dylib 3,051,112 B,
+  libRblas 238,064 B and libRlapack 1,820,000 B with and without
+  `link_libcpp`, each exporting 0 `std::` and 0 `___cxa`/`___gxx`
+  symbols and none referencing `___cxa_atexit`; RcppArmadillo 15.6.0-1
+  (fastLm), Rcpp, quadprog and minqa build and load, `___cxa_atexit`
+  is "undefined external (from libSystem)" in minqa.so, Rcpp.so and
+  RcppArmadillo.so, and no package loads libc++. So the drop changes
+  nothing on macOS and stays (K2 a; risk 3 does not occur).
+- kappa, round 1, all passing but one test: `lock-check`; `rzig-test`
+  with both zigs (130 pass, 32 skipped); `build` with K's drops (6m48s;
+  R.dll, Rblas.dll and Rlapack.dll link without libc++, which PE would
+  refuse if a symbol were missing); verify-tree; smoke; `toolchain`
+  (2m51s; `flang/ (flang-zig, flang-rt-zig)` first); verify-toolchain
+  (19,621 files, flang.exe 23.1.1, 10 PE closures; flang.exe and the
+  runtime listed as naming kappa's flang-pixi build paths);
+  `package-toolchain`; `unpack-toolchain` and verify-toolchain on the
+  unpacked tree; verify-package, both passes (every Fortran line names
+  TC/flang; the zig-fc.exe dry run has no `-lc++`; fcconf's
+  configure.win, USE_FC_TO_LINK, Fortran OpenMP and the derived-type
+  module pass); `check` (8m56s); compile-tree, contract, pkg-parity,
+  hermetic; the upstream one-zig leg (`build`, `toolchain`,
+  `package-toolchain`, verify-package). kappa's own bundle-win.sh (its
+  first run had three bugs of its own; the rerun, bundle-win2, passed):
+  System32's tar and R's `untar()` on the `.tar.xz` (L holds);
+  `-print-resource-dir` is TC/flang/lib/clang/23 with no `Library/`;
+  `flang.exe -###` names only the tree and reads no `.cfg`; the five
+  calls (conftest.exe, `-v` with `lld-link`, m.dll loaded with 42,
+  omp.exe and ompso.dll on two threads, a failing compile leaving no
+  `rzig-fc-*` in TEMP); RZIG_PRINT_ARGV with the modules path at
+  `.../finclude/flang/x86_64-w64-mingw32` and zig.exe linking the
+  runtime with no `-lc++`; dtmod, fcl, fomp and fompfc through rzig
+  build tier 1; quadprog and Rcpp tier 1, and minqa with make (its
+  Makevars.win `$(shell)`, as contract already asserts). K on Windows:
+  R.dll (3,631,104 B) imports no C++ runtime DLL; Rblas.dll and
+  Rlapack.dll export 0 `_Z` symbols; the Fortran package DLLs import
+  only R, Rblas, libomp and system DLLs; so all the Windows drops stay
+  (K a). The one failure: `-e pkg conda-package`'s r-zig-compilers
+  test, where P's new probe required the link's first word to be named
+  `zig`; on win-64 conda-forge's zig is
+  `Library/bin/x86_64-w64-mingw32-zig.exe`, since its `zig` is a .bat
+  (find_zig.zig). With kappa's proposed name-list fix on its copy,
+  conda-package (`_12`, built locally before the 2026-10-19 decision
+  kept 8; P's probe OK, no `bin/toolchain/flang`) and conda-consume
+  passed.
+- The host fixes (2026-10-17; `phase6/rfix1/`): recipe/test-compilers.R
+  now compares the link's first word, as a path, with the zig that
+  `zig-fc --rzig-check=fortran` reports (stricter than a list of names,
+  and no Windows special case); the kit's five.sh accepts `ld\.lld|^zig
+  ld ` (a fixed kit with its kit.sha256 in `phase6/rfix1/kit/`;
+  `phase6/step-3/kit/` is left as it was); fortran.zig's split() doc
+  says so too. gamma: bundle-unix.sh with the fixed kit and `-e pkg
+  conda-consume` with the new probe pass.
+- Round 2, both hosts passing every task: omicron `lock-check`,
+  `rzig-test`, `build`, `toolchain`, verify-toolchain,
+  `package-toolchain`, verify-package (351 s), bundle-unix.sh with the
+  fixed kit (0 FAILED lines; five.sh matches "zig ld -dynamic
+  -platform_version macos 13.0.0 26.4 ..."), contract, pkg-parity,
+  conda-package (the probe's link uses `$PREFIX/bin/zig`, the check's)
+  and conda-consume; kappa `lock-check`, `rzig-test` with both zigs,
+  conda-package (13 min; r-zig-slim h9490d1a_12 and the three group
+  packages, built locally as `_12` before the 2026-10-19 decision, the
+  PR keeps 8; the probe's path comparison passes, rattler-build's
+  `%PREFIX%` and `%SRC_DIR%_run_env` display masks normalised to the
+  same file) and conda-consume. The tasks whose inputs rfix1 did not
+  touch were not run again.
+- Not run in this phase: omicron's osx-64 under Rosetta (the plan's
+  table had `toolchain`, verify-toolchain, `package-toolchain`, the
+  Fortran calls, the driver's signature and whether the endpoint agent
+  touches it, verify-package's toolchain pass); the open items below
+  say how it is covered. No failure on any host had a cause in
+  flang-zig or flang-rt-zig, so B44 needs nothing from flang-pixi.
+- The K revert patches were made for a failing host and are now
+  history: `patch -p1 -R` of `phase6/fix/k-revert-windows.diff`
+  (sha256 b13ada78...) or `phase6/fix/k-revert-macos.diff` (1acdf6f4...)
+  takes that OS's `-lc++` back (omicron used the macOS one for its
+  before/after); `phase6/implementer/k-drops.diff` (e0bcd4bc...) is
+  the record of what step 5 landed.
+
+CI: not run. The PR's runs go into "Phase 6 record: CI": run IDs; each
+toolchain leg's time (the xz step) and artifact size; unpack-toolchain's
+time per leg kind; verify-package per pass against phase 5's (above) and
+the CI baselines in "Phase 5 record: the measurements"; linux-aarch64's
+first TC/flang run (T); and the carve cross-check (J) for linux-aarch64,
+osx-64 and win-64 against the SOURCES in each leg's compilers artifact
+(`phase6/step-2/carve/crosscheck.sh` with that subdir's carve; gamma
+compared linux-64 and omicron's SOURCES osx-arm64; kappa's tree was
+deleted before its SOURCES was compared).
+
+#### Phase 6 record: the per-OS facts and what the critiques added
+
+The modules flag per OS (Cc13, Cg4): linux's and Windows' drivers find
+their modules under their default triple without it (CP1:
+`x86_64-conda-linux-gnu` and `x86_64-w64-windows-gnu` are shipped
+directories; SR §3.2's "linux finds them only through the symlink" was
+wrong); macOS's does not (CP2). The flag is kept on every OS as one
+rule. Bare-driver probe (TC/flang/bin/flang -c with no flag and no
+cfg), linux-64: `use iso_c_binding`, `use omp_lib`, `INCLUDE
+'omp_lib.h'` and `#include "omp_lib.h"` all compile. gamma reproduced
+macOS's case with a copy whose module directory was renamed: the bare
+driver fails all four, zig-fc compiles them and links a `-fopenmp`
+program that runs on two threads. omicron (osx-arm64; the driver's
+default target `arm64-apple-darwin25.4.0`, the shipped directory
+`arm64-apple-darwin20.0.0`): the bare driver fails all four ("Semantic
+errors" for `use`, "Could not scan" for the includes), and zig-fc
+compiles them, as CP2 measured. kappa (win-64): the bare driver
+compiles all four; zig-fc's flag picks `x86_64-w64-mingw32`, the
+first of the two twins in byte order (B a).
+
+B40's Fortran limit (U): recorded in B40's entry and asserted in
+minimal's verify-bundle; README's minimal text says so.
+
+macOS signatures of TC/flang/bin/flang (Cc11): CP4 read both macOS
+packages' `bin/flang-23` as ad-hoc signed (CS_ADHOC, not zig's
+linker-signed flag); no file has a prefix placeholder, so rattler never
+re-signs it and the toolchain build's byte copy should stay valid.
+Phase 5's zig notes, for comparison: TC/zig/zig is ad-hoc
+linker-signed, `spctl` "rejected", and runs with no prompt. omicron
+(osx-arm64, 2026-10-17), in `dist/toolchain` and in the extracted
+tree: Mach-O arm64, 135,869,744 B; `Signature=adhoc`,
+`flags=0x2(adhoc)`, no linker-signed flag (CP4 confirmed); `codesign
+-v` valid; `spctl -a -t exec` "rejected" (exit 3), yet it runs with no
+prompt; xattr `com.apple.provenance` only, no quarantine; `otool -L`
+libSystem only; minos 11.0. The endpoint agent left it alone (no
+`Killed: 9` anywhere in the chain). osx-64's driver was not checked
+(Rosetta did not run; open items).
+
+#### Phase 6 record: osx-64 under Rosetta (2026-10-17, omicron)
+
+Run after the hand-over, as its menu recommended, in a scratch copy
+re-solved for osx-64 (lock 0662b7ae…, the same as phase 5's; conda-forge
+zig 0.16.0, flang-zig 23.1.1 `zig_0257dba_6`, flang-rt-zig
+`zig_e4a4366_10`). Every task passed and nothing was left to CI; no
+Falcon event (no kill, no exit 137, no quarantine, no binary gone):
+- toolchain 119 s (TC/zig and TC/flang x86_64; TC/flang 23 files,
+  150 MB, one module directory `x86_64-apple-darwin13.4.0`),
+  verify-toolchain 12 s, package-toolchain 84 s: the compilers
+  `.tar.xz` is 90,125,796 bytes, 20,903 members (38 under flang/).
+- build 221 s: libR, libRblas and libRlapack export no `std::`,
+  `___cxa` or `___gxx` symbol and load no libc++ (K2's after count).
+- verify-package 751 s (phase 5: 570 s): the toolchain pass took zig
+  from TC/zig and flang from TC/flang with PATH=/usr/bin:/bin; the
+  first Fortran compile 32 s cold, 2 s warm; the build pass passed too.
+- The host kit's Fortran calls: 41 ok, 0 failed (resource dir in the
+  tree; `flang -###` reads no `.cfg`; modules, OpenMP, `omp_lib.h`, the
+  dtmod/fcl/fomp/fompfc packages, quadprog, Rcpp and minqa at tier 1).
+  The compile-side list refuses the same 40 flags as osx-arm64. The bare
+  driver fails all four files without zig-fc's flag (its default triple
+  is darwin25.4.0), as expected on macOS. The carve cross-check matches
+  (20 files).
+- Signatures: TC/flang/bin/flang is ad hoc signed (`codesign -v` exit
+  0; `spctl` rejects it, as the plan expects) and runs with no prompt;
+  TC/zig/zig (the ziglang wheel's) is not signed at all (`codesign -v`
+  exit 1) and still runs under Rosetta. The endpoint agent touched
+  neither.
+Logs: /data/gamma/luciorq/workspaces/temp/r-zig-pixi/phase6/omicron-osx64/.
+
+The licence set (Cc12, checked): flang/'s LICENSES hold the LLVM
+project's Apache-2.0 WITH LLVM-exception text for both packages. CP5:
+every driver (linux-64, osx-arm64, win-64) says LLVM was built without
+zlib and zstd, so no third-party compression library is in it. The
+linux driver's NEEDED list is glibc only, so it carries zig's static
+libc++/libc++abi (LLVM's licence, the text flang/'s LICENSE.TXT holds)
+and zig's compiler_rt (MIT, the text TC/zig/LICENSES/ziglang holds in
+the same compilers archive). A flang/ shipped alone would need zig's MIT
+text ("Later and future checks").
+
+Embedded build paths (Cg10): all three OSes' drivers embed flang-pixi's
+build paths; linux-64's names
+`/data/gamma/luciorq/workspaces/temp/rb-out/bld/...` 912 times, outside
+every directory verify-toolchain scans on gamma, so nothing is listed.
+omicron's and kappa's verify-toolchain listed flang/'s driver and
+runtime as copies naming flang-pixi's build paths
+(`/Users/luciorq/flang-pixi-rbout/bld/...` on omicron), listed, not
+failed, as for make. `flang -###` from each host's extracted tree
+(gamma, omicron and kappa are flang-pixi's build hosts) names only
+paths under it and reads no `.cfg`.
+
+The carve cross-check (J; B9's "once"): flang-pixi's
+`carve-fortran-standalone.py` (sha256 a350d078..., unchanged since
+eaa07ba; the clone's HEAD e384eba) ran under `pixi exec --spec
+"python>=3.14"` on the ten pinned flang-zig and flang-rt-zig `.conda`
+files, each sha256 found in pixi.lock. It carved 24, 24, 24, 24 and 40
+files (linux-64 210.0 MB raw, linux-aarch64 195.9, osx-64 157.3,
+osx-arm64 143.9, win-64 190.3). linux-64: the 20 carved regular files
+(`Library/` dropped, `bin/flang-23` read as `bin/flang`) equal flang/
+SOURCES' 20 `file:` lines with the same sha256; the extras are exactly
+STANDALONE-ORIGIN.txt, `bin/flang.cfg`, the `bin/flang` symlink, the
+linux module-directory symlink and the `lib/libflang_rt.runtime.a`
+symlink, the decided omissions. osx-arm64 (omicron's SOURCES,
+compared on gamma): the 20 carved regular files MATCH SOURCES' 20
+lines; the extras are STANDALONE-ORIGIN.txt, `bin/flang.cfg` and the
+`bin/flang` and `lib/libflang_rt.runtime.a` symlinks. linux-aarch64,
+osx-64 and win-64 are compared against CI's artifacts (above). The
+script's own "four duplicate runtime archives" comment is flang-pixi's
+file: recorded, not edited.
+
+linux-aarch64's cross pre-check (Cg3, recorded, not a gate): the x86_64
+TC/flang driver with `--target=aarch64-unknown-linux-gnu` and the
+aarch64 module directory compiles the derived-type module, its users and
+a `-fopenmp` `use omp_lib` source to AArch64 objects; TC/zig links an
+aarch64 executable (interpreter /lib/ld-linux-aarch64.so.1, NEEDED libm
+and libc) and a shared object with the aarch64 runtime. Neither can run
+on gamma; CI runs the aarch64 driver itself (T). The aarch64 and x86_64
+runtime archives leave no `_Z` symbol unresolved, and their only C++-ABI
+reference is `__cxa_atexit` (K's premise on linux).
+
+The compile-side list (Cc1), re-measured with the extracted driver: 65
+entries, 40 refused, every exit code equal to step 1's, so no additions
+on linux-64. omicron's macOS driver and kappa's flang.exe (MSYS argument
+conversion off) give the same 65 entries and 40 refusals, every exit
+code equal to gamma's: neither list grows (E a).
+
+A flang that is not flang-zig's through zig-fc (Cg9, risk 15; a record,
+not a gate): conda-forge's flang 23.1.3 alone: compiles, but a link
+misses the runtime (`undefined symbol: _FortranAProgramStart`; that
+package has no flang_rt archive). With flang-rt_linux-64 23.1.3 too,
+`flang_rt.find` finds its `.a`: conftest links and runs and `-v`
+shows zig's ld.lld line; the derived-type module's second compile
+aborts inside flang 23.1.3 itself ("runtime derived type info
+descriptor was not generated"), and `use omp_lib` fails because
+conda-forge's packages ship no intrinsic modules. flang-zig's driver
+passes all five.
+
+Configure probes that parse `-v` (risk 2): CMake's Fortran detection
+now reads zig's link line. A CMake project with a Fortran target built
+and ran through zig-fc; its `CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES`
+names TC/flang's runtime plus two archives in zig's cache
+(`libc_nonshared.a`, `libcompiler_rt.a`). A package that copies those
+paths into its own link would depend on that cache; R packages take
+FLIBS from Makeconf, so only a package's own probe sees them.
+
+FLANG_PIXI_HANDOFF.md §1 item 3 ("never copy flang.exe") and its note
+that consumers should not pass the modules path are superseded by §8
+and by this phase (a copy works: the resource directory follows the
+binary, and zig-fc passes the modules path); the HANDOFF itself is
+unchanged, and nothing was sent to flang-pixi.
+
+The amendments (phase6/CRITIQUE.md): the code critique's Cc1-Cc18 and
+the goals critique's Cg1-Cg11 were checked against the worktree and,
+for flang claims, a staged TC/flang. All were accepted (some widened,
+merged or done differently: Cc1 widened to 31 refusals; Cc8 with Cg8;
+Cc10 as W; Cc13 with Cg4; Cc17 as X) but two. Cc5's `.zip` fallback for
+Windows was decided otherwise by Cg2 (L), its recording half kept.
+Cg7, comparing the base's FC_VER or `R_compiled_by()` with
+TC/flang's `--version`, was rejected: FC_VER is a hand-kept captured
+string on unix (`zigbuild/config/*/{subst.txt,config.h}`) and a fixed
+text with no version on Windows (`"flang (flang-pixi flang-zig, MinGW
+target)"`), so the check would fail on Windows by design and on unix
+compare a hand-kept string; same-bytes is already enforced by the one
+solve-group `r` and the exact flang-zig and flang-rt-zig build pins in
+`[dependencies]` and `[feature.minimal.dependencies]`, and
+verify-toolchain checks TC/flang's version against SOURCES (I).
+
+Recorded by kappa, not failures: `R CMD config` needs `sh` on Windows
+(with PATH `bin\x64` and System32 only it has none; phase 7);
+`R CMD config SHLIB_OPENMP_FFLAGS` prints "no information for
+variable" on Windows, as before phase 6; RZIG_TRACE lines mix `/` and
+`\` (cosmetic); minqa needs make on Windows (its Makevars.win uses
+`$(shell)`), as contract asserts.
+
+Open items for the user (none filed, nobody contacted):
+- Phase 6 is pending CI: linux-aarch64 (its only B44 run), native
+  osx-64 (macos-15-intel) and the `upstream-zig` label run need your
+  push with `full-ci` and the label; the PR does not merge before they
+  pass. CI's artifacts also give the carve cross-check for
+  linux-aarch64, osx-64 and win-64.
+- osx-64 under Rosetta on omicron: run after the records, on
+  2026-10-17 (the hand-over menu's recommended option; see "Phase 6
+  record: osx-64 under Rosetta" below). It passed.
+- H: flang-pixi's recipes record no repository (`extra.remote_url`,
+  `extra.sha`), so flang/'s SOURCES says `feedstock: unknown`.
+  Cosmetic; a flang-pixi change if wanted.
+- Settled by the host stage, nothing left: kappa's `untar()` reads the
+  `.tar.xz` (L holds); no host failure had a cause in flang-zig or
+  flang-rt-zig (B44 needs no flang-pixi build and no re-lock); K keeps
+  every drop.
+- Later, not acted on (Cg5, Q): r-zig-compilers' explicit `lld-zig
+  ==23.1.1 *_5` pin is redundant now (flang-zig run-depends on lld-zig
+  anyway); dropping it is a dependency change, yours to decide.
+
+#### Phase 6 record: hand-over (2026-10-17)
+
+`phase6-only.diff` (open point S) is made by
+`phase6/handover/make-diff.sh`: main d11dee1 exported with `git
+archive`, `phase5-base.diff` applied (sha256 checked), the baseline's
+eleven untracked files copied from the phase 5 worktree (each sha256
+checked against step 0's record); that baseline is identical to the
+phase 5 worktree. Then `diff -ruN` against the worktree's tracked and
+untracked files, and the check: the diff applied to a second copy of the
+baseline reproduces the worktree exactly. The earlier copies in
+`phase6/step-8/handover/` and `phase6/implementer/` predate the host
+stage and are superseded. The commit and PR commands are
+`phase6/handover/commands.sh`, with no trailer: it applies the diff
+with `patch -p1 --no-backup-if-mismatch` (a hunk applied with an offset
+or fuzz leaves no `.orig`), and step 3 adds, commits, pushes and opens
+the PR only when `git status` shows no `.orig` or `.rej` file
+(.gitignore has neither, so `git add -A` would stage one; fixer,
+2026-10-16). The PR body (`phase6/handover/pr-body.md`) gives the host
+results and says phase 6 is pending CI.
 
 ### Phase 7 — Windows build tools: usr/bin
 
@@ -5279,7 +6122,19 @@ PATH set to `R_HOME\bin\x64;C:\Windows\System32`.
    - C, C++ (static libc++), OpenMP C in three forms and the flagless
      omp.h probe (not on minimal); from phase 5 on Windows, a package
      linking `-lsynchronization` (D6), built and loaded; from phase 6
-     the Fortran checks of phase 6, which must pass on every OS (B44).
+     the Fortran checks of phase 6, which must pass on every OS (B44):
+     TC/flang with no flang on PATH and no `.cfg` in the tree; the check
+     mode names TC/flang; the first Fortran compile timed (a
+     derived-type module through R CMD SHLIB and rzig build); the
+     RZIG_PRINT_ARGV of a compile (TC/flang, the modules path under it)
+     and of a split (TC/flang compiling, zig linking TC/flang's
+     runtime); `omp_lib.h` through `$FC -E` (`#include`) and `$FC -c`
+     (`INCLUDE`); the `fdt` package; a configure that compiles, links
+     and runs with `$FC` (`fcconf`); USE_FC_TO_LINK, FLIBS and `use
+     omp_lib` on two threads (not on minimal, which asserts B40's
+     Fortran limit instead); the no-flang checks with the driver moved
+     aside; on Windows the dry runs (no `-lc++`) and the direct `$FC`
+     link and run.
    - unix uses the host's make from `/usr/bin` here; on Windows this
      scenario runs rzig's dry runs and direct compiles, since `R CMD
      INSTALL` needs make.
@@ -5295,11 +6150,13 @@ PATH set to `R_HOME\bin\x64;C:\Windows\System32`.
 Also in verify-bundle: the file lists (base ∪ groups = R tree ∪
 toolchain tree, no overlap, nothing compile-time in the base but
 Windows' Tcl/Tk headers, T1), and the existing compiles with
-`ZIG_BIN=$ZIG` and the env's make and flang as a fourth pass: from
-phase 5, `verify-bundle.sh build`, which the default `toolchain` pass
-runs after itself unless `$ZIG` has TC/zig's bytes (the upstream legs).
-The build pass skips the base alone and the no-zig check (PHASE5 open
-point S).
+`ZIG_BIN=$ZIG` as a fourth pass: from phase 5, `verify-bundle.sh
+build`, which the default `toolchain` pass runs after itself unless
+`$ZIG` has TC/zig's bytes (the upstream legs). The build pass skips the
+base alone and the no-zig check (PHASE5 open point S). flang is TC/flang
+in both passes (PHASE6 open point O a); the env's flang with its cfg
+keeps its coverage through contract, pkg-parity, stress and the conda
+tests.
 
 The same three scenarios on the other channels: conda (the recipe's
 tests and conda-consume: r-zig-slim alone, with r-zig-compilers, with
@@ -5324,9 +6181,9 @@ pixi run -e pkg conda-package && pixi run -e pkg conda-consume
 export ZIG_BIN="$(pixi run fetch-zig)"   # PowerShell: $env:ZIG_BIN = pixi run fetch-zig
 # a user's view: the archives, nothing else
 mkdir /tmp/sa && cd /tmp/sa
-for a in R-4.6.1-slim-linux-64 R-4.6.1-linux-64-compilers R-4.6.1-linux-64-build-tools; do
-  tar -xzf .../$a.tar.gz
-done
+tar -xzf .../R-4.6.1-slim-linux-64.tar.gz
+tar -xJf .../R-4.6.1-linux-64-compilers.tar.xz     # .tar.xz since phase 6 (B13)
+tar -xzf .../R-4.6.1-linux-64-build-tools.tar.gz
 env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   R-4.6.1-zig/bin/R CMD INSTALL -l lib <a package with src/>
 ```
@@ -5370,7 +6227,10 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   flang (phase 5, 2026-10-15): the compilers archive is 87.5-91.4 MB as
   .tar.gz (linux-64 88.1, osx-arm64 87.5, osx-64 91.4) and 101.6 MB as
   win-64's .zip; linux-aarch64 comes with CI ("Phase 5 record: the
-  measurements").
+  measurements"). With flang (phase 6, 2026-10-16): linux-64's gzip
+  archive was 150.8 MB, so the compilers archive is `.tar.xz`: about
+  95.3 MB on linux-64, 79.1 MB on osx-arm64 and 92.7 MB on win-64
+  (B13's revisit; "Phase 6 record: the measurements").
 - **The mixed zig case.** R by conda-forge's zig and packages by
   upstream zig; tested before phase 5 only by wheel-test, without OpenMP
   or Fortran. Since phase 5 verify-bundle's toolchain pass covers it on
@@ -5396,7 +6256,8 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   warnings once; conda-forge's zig does the same with a cold cache.
   Measured with TC/zig and an empty cache (phase 5, 2026-10-15): linux-64
   15-18 s, osx-arm64 9-11 s, osx-64 under Rosetta 13 s, win-64 46 s.
-  Pre-seeding is a later menu ("zig's global cache").
+  The first Fortran compile (phase 6, linux-64): 8-9 s, zig's cache
+  then 44 MB. Pre-seeding is a later menu ("zig's global cache").
 - **macOS without the Command Line Tools.** rzig runs `xcrun` on every
   compile; frameworks need the SDK; whether a fresh Mac opens the install
   dialog is unobserved.
@@ -5423,10 +6284,24 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   tests all three; the risks stay recorded until it does.
 - **zig-fc's split of mixed calls.** Probes that rely on flang's driver
   (`-v` output parsed for library paths) may behave differently; the
-  prototype runs real configure scripts.
+  prototype runs real configure scripts. Phase 6 (linux-64, 2026-10-16):
+  `-v` prints zig's `ld.lld` line; a configure that compiles, links and
+  runs with `$FC` passes (verify-bundle's `fcconf`); CMake's Fortran
+  detection works, and its implicit link libraries name TC/flang's
+  runtime and two archives in zig's cache. Each refusal list (the link
+  options flang refuses, the Fortran options zig cc refuses) is measured
+  and grows only by a host's measured refusal (PHASE6 open point E a).
+  omicron and kappa (2026-10-17): the same lists, nothing added; macOS
+  `-v` prints `zig ld ...`, Windows `lld-link`, and configure (fcconf,
+  configure.win on Windows) passes on both.
 - **Fortran on every OS** (B44). A prototype failure on one OS holds
   phase 6 until it is fixed with flang-pixi; the fix may need a new
-  flang-zig or flang-rt-zig build, and a re-lock to it.
+  flang-zig or flang-rt-zig build, and a re-lock to it. Phase 6
+  (2026-10-16): linux-64 passes with TC/flang alone (gamma);
+  linux-aarch64's cross pre-check passes (gamma, not a gate);
+  osx-arm64 and win-64 pass by hand with both zigs (2026-10-17);
+  linux-aarch64, native osx-64 and the upstream legs come with CI after
+  the push.
 - **VCRUNTIME140.dll.** libomp.dll and zstd.dll (which R.dll imports)
   import it; a clean Windows without the VC++ redistributable is
   untested, for the base as well.
@@ -5449,9 +6324,14 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
 - Where is the release published, and how does the message name it?
 - Is passing `-fintrinsic-modules-path` twice harmless, and where does
   the conda triple come from? Does flang find its resource dir without
-  Windows' `Library/`?
+  Windows' `Library/`? (2026-10-16, phase 6: harmless, the same
+  directory twice exits 0 (PHASE6 PP); the triple is the directory
+  scan of open point D a; without `Library/` flang's
+  `-print-resource-dir` follows the binary: checked on linux-64,
+  osx-arm64 and, without `Library/`, on win-64, 2026-10-17.)
 - Is flang-pixi's docs/19, its file lists and its carve script committed
-  now?
+  now? (2026-10-16: yes, flang-pixi eaa07ba; the carve script ran as
+  phase 6's cross-check.)
 - Can rattler-build 0.76.1 (pixi.lock) make an output with no files that
   does not inherit the staging build (B28 a)? (2026-10-14, phase 4: not
   needed. The group packages and the metapackage `inherit` with `files:
@@ -5468,7 +6348,10 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   `--opt=value` forms are not; phase 3's step 6 record.)
 - Do CRAN packages' Makevars.win use `$(BINPREF)` for a binutils tool?
 - Does flang-rt-zig 10's win-64 archive still need no `-lc++` (phase 6
-  checks it)?
+  checks it)? (2026-10-16: statically yes, 131 external names and none
+  from the C++ runtime (PHASE6 ST §4); phase 6 drops `-lc++`, and on
+  kappa R, `check`, quadprog, Rcpp, minqa and the Fortran packages pass
+  without it, 2026-10-17.)
 
 ## Later and future checks
 
@@ -5562,14 +6445,28 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   menu decides where rzig's zig keeps its cache: a standalone R's zig
   and a conda R's (both 0.16.0) share zig's default cache today, which
   env.sh's comment says can mix objects (PHASE5 open point N a: not
-  seen to break a package, no rzig change).
+  seen to break a package, no rzig change). The first Fortran compile
+  with TC/flang and an empty cache (phase 6, 2026-10-16, linux-64): 8-9
+  s, zig's cache then 44 MB, warm 0 s; the build's zig with env.sh's
+  cache 6 s ("Phase 6 record: the measurements").
 - **The groups' licence completeness** (PHASE5 Cc5, Cg2; a menu with
   phase 6's licence review): zig/ ships upstream's licence set, whose
   gaps are LLVM's attribution in the binary, Apple's SDK headers and
   libSystem.tbd, and the NetBSD and OpenBSD headers ("Phase 5 record:
   the mixed case and the facts the critiques added"); flang/ joins in
   phase 6. B33 covers the base's runtime files only, so no phase picks
-  this up otherwise.
+  this up otherwise. flang/ (phase 6, PHASE6 Cc12, checked): its
+  LICENSES hold the LLVM project's Apache-2.0 WITH LLVM-exception text
+  for flang-zig and flang-rt-zig; no driver has zlib or zstd in it; the
+  linux driver carries zig's static libc++/libc++abi (LLVM's text, the
+  one flang/ holds) and zig's compiler_rt (MIT, the text in
+  TC/zig/LICENSES/ziglang, in the same compilers archive). So a flang/
+  shipped alone would need zig's MIT text too.
+- **The lld-zig pin in r-zig-compilers** (PHASE6 Cg5, open point Q a;
+  not acted on): since phase 6 nothing of ours links with lld-zig, so
+  r-zig-compilers' explicit `lld-zig ==23.1.1 *_5` pin is redundant
+  (flang-zig run-depends on lld-zig anyway). Dropping it is a dependency
+  change, the user's to decide.
 - **zig/ on the legs that never read it** (Cg6; a menu): build-r's
   build-only legs, stress and the local dev chains download and unpack
   the compilers archive (or fetch the wheel) though only verify-package

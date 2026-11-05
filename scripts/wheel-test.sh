@@ -184,16 +184,17 @@ echo "== zig-fc: the base's, and with no flang it stops naming flang"
 # a Fortran compiler, so a Fortran compile stops at once: exit 127, with
 # rzig's text for the compilers group (feat-standalone-toolchain B35, the
 # same on every channel): its pip line says PyPI has no Fortran compiler
-# (PHASE4 Cg3), its standalone line names LLVM flang on PATH. With the
-# venv's bin alone on PATH no host flang is reachable. C packages build as
-# before.
+# (PHASE4 Cg3; B29 a: pip still has none), and its standalone line names
+# the compilers archive, which holds flang since phase 6 ("flang and the
+# OpenMP files"). With the venv's bin alone on PATH no host flang is
+# reachable. C packages build as before.
 cmp -s "$tc/zig-fc" "$tc/zig-cc" || { echo "error: $tc/zig-fc is missing or not the same rzig as zig-cc" >&2; exit 1; }
 printf '      end\n' > "$T/nofc.f"
 rc=0
 (cd "$T" && run_venv "$r_home/bin/R" CMD toolchain/zig-fc -c nofc.f -o nofc.o) > "$T/nofc.log" 2>&1 || rc=$?
-if [ "$rc" != 127 ] || ! grep -q '^zig-fc: no flang (' "$T/nofc.log" || ! grep -qF "LLVM flang on PATH" "$T/nofc.log" ||
+if [ "$rc" != 127 ] || ! grep -q '^zig-fc: no flang (' "$T/nofc.log" || ! grep -qF "flang and the OpenMP files" "$T/nofc.log" ||
   ! grep -qF "pip install r-zig-compilers (zig only: PyPI has no Fortran compiler)" "$T/nofc.log"; then
-  cat "$T/nofc.log" >&2; echo "error: zig-fc with no flang: exit $rc, or not the compilers group's text (LLVM flang on PATH; pip: no Fortran compiler)" >&2; exit 1
+  cat "$T/nofc.log" >&2; echo "error: zig-fc with no flang: exit $rc, or not the compilers group's text (flang and the OpenMP files; pip: no Fortran compiler)" >&2; exit 1
 fi
 echo "ok: exit 127: $(head -1 "$T/nofc.log")"
 

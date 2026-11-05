@@ -68,6 +68,7 @@ if (length(mk)) stop("build tools in an env without r-zig-build-tools: ", paste(
 cc <- file.path(R.home(), "bin", "toolchain", if (windows) "gcc.exe" else "zig-cc")
 r <- run_to(cc, "--rzig-check=fortran"); cat(r$out, sep = "\n")
 fl <- sub("^.*; flang at ", "", r$out[1L])
+zg <- sub("^.*: zig [^ ]+ at (.*); flang at .*$", "\\1", r$out[1L])
 stopifnot(r$status == 0L, startsWith(r$out[1L], "zig-cc: compilers ok: zig 0.16."),
           grepl("; flang at ", r$out[1L], fixed = TRUE),
           same_path(shown(dirname(fl)), shown(env_bin)))
@@ -94,7 +95,8 @@ inst <- function(pkg) run_to(file.path(R.home("bin"), if (windows) "Rcmd.exe" el
                              c(if (!windows) "CMD", "INSTALL", "-l", shQuote(lib), shQuote(pkg)))
 ## tier 1 through rzig build, traced (RZIG_TRACE=1: `rzig build: tier
 ## 1`): C, and Fortran with no Makevars, which links FLIBS's runtime
-## (PHASE4 Cc10 b; Windows and macOS: with libc++)
+## (PHASE4 Cc10 b; no libc++ on any OS since feat-standalone-toolchain
+## phase 6, open point K)
 tier1 <- function(pkg, name) {
     Sys.setenv(RZIG_TRACE = "1"); on.exit(Sys.unsetenv("RZIG_TRACE"))
     r <- inst(pkg)
@@ -177,6 +179,56 @@ shlib_ok(shlib(p, c("-o", paste0("fs", ext), "fs.f")), "the Fortran shape")
 dyn.load(file.path(p, paste0("fs", ext)))
 stopifnot(.Fortran("fw", 42L, r = 0L)$r == 42L)
 cat("compilers: R CMD SHLIB of a Fortran file, no make: OK\n")
+## a configure script's $FC probe (feat-standalone-toolchain phase 6, open
+## point P), with the env's flang and its flang.cfg: Makeconf's FC is
+## zig-fc (R CMD config needs make, which this env has not), and zig-fc
+## compiles each Fortran source with flang, the intrinsic modules' path
+## added, then links through zig (decisions D, E). A fixed-form conftest
+## and a program using a derived-type module are each linked and run, in
+## a fresh TMPDIR (Windows: TEMP and TMP), which the split's temporary
+## directory must leave empty
+## (Makeconf.win's line is indented, in USE_LLVM's else branch)
+mkconf <- if (windows) file.path(R.home("etc"), "x64", "Makeconf") else file.path(R.home("etc"), "Makeconf")
+stopifnot(any(trimws(readLines(mkconf)) == "FC = $(R_HOME)/bin/toolchain/zig-fc"))
+fc <- file.path(R.home(), "bin", "toolchain", if (windows) "zig-fc.exe" else "zig-fc")
+p <- fresh("fc-probe"); tmp <- fresh("fc-tmp")
+writeLines(c("      program conftest", "      print '(a)', 'ok'", "      end"), file.path(p, "conftest.f"))
+writeLines(c("module shapes", "  type :: sq", "    integer :: n", "  end type",
+             "contains", "  integer function area(s)", "    type(sq), intent(in) :: s",
+             "    area = s%n * s%n", "  end function", "end module"), file.path(p, "m.f90"))
+writeLines(c("program p", "  use shapes", "  type(sq) :: s", "  s%n = 3",
+             "  if (area(s) == 9) print '(a)', 'ok'", "end program"), file.path(p, "u.f90"))
+old_tmp <- Sys.getenv(c("TMPDIR", "TEMP", "TMP"), unset = NA)
+Sys.setenv(TMPDIR = tmp, TEMP = tmp, TMP = tmp)
+owd <- setwd(p)
+## the dry run: flang for each source (the env's, with the modules'
+## path), then the link through the zig the check found, which on win-64
+## is conda-forge's x86_64-w64-mingw32-zig.exe (its zig is a .bat;
+## find_zig.zig)
+Sys.setenv(RZIG_PRINT_ARGV = "1")
+r <- run_to(fc, c("-o", "p", "m.f90", "u.f90"))
+Sys.unsetenv("RZIG_PRINT_ARGV")
+argv <- r$out[!startsWith(r$out, "ZIG_LIB_DIR=")]
+blocks <- split(argv[argv != "&&"], cumsum(argv == "&&")[argv != "&&"])
+firsts <- vapply(blocks, `[`, "", 1L)
+if (r$status != 0L || length(blocks) != 3L) { cat(r$out, sep = "\n"); stop("zig-fc -o p m.f90 u.f90: not two compiles and a link") }
+stopifnot(same_path(shown(dirname(firsts[1:2])), shown(env_bin)),
+          vapply(blocks[1:2], function(b) "-fintrinsic-modules-path" %in% b, NA),
+          same_path(shown(firsts[3L]), shown(zg)))
+## each program named with .exe on Windows, as a configure script does
+exe <- if (windows) ".exe" else ""
+for (args in list(c("-o", paste0("conftest", exe), "conftest.f"), c("-o", paste0("p", exe), "m.f90", "u.f90"))) {
+    r <- run_to(fc, args)
+    if (r$status != 0L) { cat(r$out, sep = "\n"); stop("zig-fc ", paste(args, collapse = " "), " failed") }
+    prog <- file.path(p, args[2L])
+    r <- run_to(prog, character())
+    if (r$status != 0L || !identical(r$out, "ok")) { cat(r$out, sep = "\n"); stop(args[2L], " did not print ok") }
+}
+setwd(owd)
+for (v in names(old_tmp)) if (is.na(old_tmp[[v]])) Sys.unsetenv(v) else do.call(Sys.setenv, as.list(old_tmp[v]))
+left <- list.files(tmp, pattern = "^rzig-fc-")
+if (length(left)) stop("zig-fc left ", paste(left, collapse = ", "), " in TMPDIR")
+cat("compilers: a configure-style $FC probe (conftest.f, a derived-type module) through zig-fc, with the env's flang: OK\n")
 ## cpp11's cpp_source: a Makevars in the working directory, absolute
 ## sources, --output=
 p <- fresh("shlib-cpp11"); dir.create(file.path(p, "inc")); dir.create(file.path(p, "src"))

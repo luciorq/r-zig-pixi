@@ -49,7 +49,13 @@ warnings: ?*std.ArrayList(u8) = null,
 /// library, windows.implib): main.zig's run deletes them when the command
 /// is done. Windows only, where rzig waits for the command; on unix it
 /// becomes the command (execve), and only a dry run adds to this there.
+/// After a command of several steps (`steps`, zig-fc's split), which rzig
+/// waits for on every OS, they are deleted too.
 discard: std.ArrayList([]const u8) = .empty,
+/// RZIG_PRINT_ARGV: nothing will run (main.zig). zig-fc's split then
+/// names its temporary directory `rzig-fc-dryrun`, so the printed
+/// commands are the same on every run, and nothing creates it.
+dry_run: bool = false,
 
 /// `${NAME:-}`: the shims treat unset and empty alike.
 pub fn getenv(ctx: *const Ctx, name: []const u8) ?[]const u8 {
@@ -94,8 +100,20 @@ pub fn warn(ctx: *const Ctx, comptime f: []const u8, args: anytype) void {
 
 /// What an applet runs: zig, with these arguments after its own path
 /// (main.zig finds zig, and for the compilers prepares the libc++ mirror),
-/// or another program, a whole command (zig-fc's flang).
+/// or another program, a whole command (zig-fc's flang), or several of
+/// those in order.
 pub const Command = union(enum) {
+    zig: []const []const u8,
+    program: []const []const u8,
+    /// A call that compiles sources and links (zig-fc's split,
+    /// fortran.zig): each step in order until one fails, that step's exit
+    /// code, then `tmp` (the steps' objects) removed, whatever happened.
+    steps: struct { steps: []const Step, tmp: []const u8 },
+};
+
+/// One step of `Command.steps`: zig's arguments or a whole command, as
+/// in Command.
+pub const Step = union(enum) {
     zig: []const []const u8,
     program: []const []const u8,
 };

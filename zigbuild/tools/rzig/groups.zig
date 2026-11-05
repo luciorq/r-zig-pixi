@@ -20,13 +20,15 @@
 //!   r-zig-compilers or r-zig-build-tools (B28, B29), and r-zig-toolchain,
 //!   which installs every group (PHASE4 open point H a). PyPI has no
 //!   Fortran compiler, and the pip compilers line says so (PHASE4 Cg3).
-//! - standalone: from phase 3 each group has an archive,
-//!   R-<ver>-<plat>-<group>.tar.gz (.zip on Windows, B17), extracted where
-//!   R was. The text names it for what it holds and the tools themselves
-//!   for the rest. build-tools holds unix make, and on Windows the binutils
-//!   (B24); phase 7 adds Windows' usr/bin, until then sh and make on PATH.
-//!   compilers holds zig (from phase 5, PyPI's ziglang wheel, B4) and the
-//!   OpenMP files (C19); phase 6 adds flang, until then on PATH.
+//! - standalone: from phase 3 each group has an archive (B17), extracted
+//!   where R was: R-<ver>-<plat>-compilers.tar.xz on every platform since
+//!   phase 6 (archiveExt), R-<ver>-<plat>-build-tools.tar.gz (.zip on
+//!   Windows). The text names it for what it holds and the tools
+//!   themselves for the rest. build-tools holds unix make, and on Windows
+//!   the binutils (B24); phase 7 adds Windows' usr/bin, until then sh and
+//!   make on PATH. compilers holds zig (from phase 5, PyPI's ziglang
+//!   wheel, B4), flang (from phase 6, flang-pixi's flang-zig and
+//!   flang-rt-zig, B9) and the OpenMP files (C19).
 //!
 //! rzig does not read R_ZIG_TOOLCHAIN_HINT. Nothing writes it since phase
 //! 4, which ships rzig with R on every channel (B19, B35). The preflight
@@ -93,6 +95,19 @@ pub fn platformName(comptime arch: std.Target.Cpu.Arch, comptime os: std.Target.
     };
 }
 
+/// The extension of the group's archive (B17). The compilers group's is
+/// tar.xz on every platform since phase 6 (B13: with zig and flang its
+/// .tar.gz was over 150 MB; PHASE6 open point L), a rule per group, never
+/// per OS; build-tools keeps tar.gz, zip on Windows. env.sh's group_ext,
+/// which names the archives the scripts make and read, follows this one
+/// (B35), and verify-bundle.sh checks that they agree.
+pub fn archiveExt(g: Group, p: Platform) []const u8 {
+    return switch (g) {
+        .compilers => "tar.xz",
+        .build_tools => if (p.windows) "zip" else "tar.gz",
+    };
+}
+
 /// The group's text after its first line: what the group holds, then one
 /// line per channel.
 pub fn text(a: mem.Allocator, g: Group, p: Platform) ![]const u8 {
@@ -109,10 +124,10 @@ pub fn text(a: mem.Allocator, g: Group, p: Platform) ![]const u8 {
         .build_tools => "  pip:         pip install r-zig-build-tools" ++ all ++ "\n",
     };
     // the group's archive (B17), which the standalone line names
-    const archive = try std.fmt.allocPrint(a, "R-{s}-{s}-{s}.{s}", .{ p.r, p.name, g.name(), if (p.windows) "zip" else "tar.gz" });
+    const archive = try std.fmt.allocPrint(a, "R-{s}-{s}-{s}.{s}", .{ p.r, p.name, g.name(), archiveExt(g, p) });
     const head = switch (g) {
         .compilers => try std.fmt.allocPrint(a, "Compiling needs the r-zig compilers for R {s} on {s}: zig {s}, and flang for Fortran.\n" ++
-            "  standalone:  extract {s} where you extracted R (zig {s} and the OpenMP files), and put LLVM flang on PATH\n", .{ p.r, p.name, p.zig, archive, p.zig }),
+            "  standalone:  extract {s} where you extracted R (zig {s}, flang and the OpenMP files)\n", .{ p.r, p.name, p.zig, archive, p.zig }),
         .build_tools => if (p.windows)
             try std.fmt.allocPrint(a, "Building packages needs the r-zig build tools for R {s} on {s}: sh, make, binutils and the tools R's makefiles run.\n" ++
                 "  standalone:  extract {s} where you extracted R (binutils), and put sh and make on PATH (for example Rtools45's usr/bin)\n", .{ p.r, p.name, archive })
@@ -154,6 +169,16 @@ test platformName {
     try testing.expectEqualStrings("build-tools", Group.build_tools.name());
 }
 
+test archiveExt {
+    const linux: Platform = .{ .r = "4.6.1", .name = "linux-64", .windows = false, .zig = "0.16" };
+    const win: Platform = .{ .r = "4.6.1", .name = "win-64", .windows = true, .zig = "0.16" };
+    // the compilers' rule is per group: no OS changes it (PHASE6 Cg2, Cg11)
+    try testing.expectEqualStrings("tar.xz", archiveExt(.compilers, linux));
+    try testing.expectEqualStrings("tar.xz", archiveExt(.compilers, win));
+    try testing.expectEqualStrings("tar.gz", archiveExt(.build_tools, linux));
+    try testing.expectEqualStrings("zip", archiveExt(.build_tools, win));
+}
+
 test "one text per group, the same on every channel" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
@@ -162,18 +187,20 @@ test "one text per group, the same on every channel" {
     const mac: Platform = .{ .r = "4.6.1", .name = "osx-arm64", .windows = false, .zig = "0.16" };
     const win: Platform = .{ .r = "4.6.1", .name = "win-64", .windows = true, .zig = "0.16" };
     // other scripts grep these: verify-bundle.sh and hermetic-check.sh the
-    // first lines' beginnings, wheel-test.sh "LLVM flang on PATH" and the
-    // pip line, parity-test.sh the first lines and unix's standalone lines
+    // first lines' beginnings, verify-bundle.sh the compilers' standalone
+    // line up to the archive it extracts, wheel-test.sh "flang and the
+    // OpenMP files" and the pip line, parity-test.sh the first lines and
+    // unix's standalone lines
     try testing.expectEqualStrings(
         \\Compiling needs the r-zig compilers for R 4.6.1 on linux-64: zig 0.16, and flang for Fortran.
-        \\  standalone:  extract R-4.6.1-linux-64-compilers.tar.gz where you extracted R (zig 0.16 and the OpenMP files), and put LLVM flang on PATH
+        \\  standalone:  extract R-4.6.1-linux-64-compilers.tar.xz where you extracted R (zig 0.16, flang and the OpenMP files)
         \\  conda, pixi: pixi add r-zig-compilers (or conda install r-zig-compilers); r-zig-toolchain installs every group
         \\  pip:         pip install r-zig-compilers (zig only: PyPI has no Fortran compiler); r-zig-toolchain installs every group
         \\
     , try text(a, .compilers, linux));
     try testing.expectEqualStrings(
         \\Compiling needs the r-zig compilers for R 4.6.1 on win-64: zig 0.16, and flang for Fortran.
-        \\  standalone:  extract R-4.6.1-win-64-compilers.zip where you extracted R (zig 0.16 and the OpenMP files), and put LLVM flang on PATH
+        \\  standalone:  extract R-4.6.1-win-64-compilers.tar.xz where you extracted R (zig 0.16, flang and the OpenMP files)
         \\  conda, pixi: pixi add r-zig-compilers (or conda install r-zig-compilers); r-zig-toolchain installs every group
         \\  pip:         no wheels for Windows
         \\
