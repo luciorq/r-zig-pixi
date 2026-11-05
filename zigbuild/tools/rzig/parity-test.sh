@@ -613,7 +613,7 @@ if [ -n "$real_zig" ]; then
   check "--rzig-check=fortran: no flang, 127, the compilers group" \
     bash -c "env -i ZIG_BIN='$real_zig' PATH='$W/nothing' '$tc/zig-cc' --rzig-check=fortran > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
       grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err' &&
-      grep -q '^  standalone:  .*LLVM flang on PATH; for OpenMP, extract R-[^ ]*-compilers\.tar\.gz where you extracted R\$' '$W/check.err'"
+      grep -q '^  standalone:  extract R-[^ ]*-compilers\.tar\.gz where you extracted R (zig [0-9.]* and the OpenMP files), and put LLVM flang on PATH\$' '$W/check.err'"
   check "zig-fc --rzig-check checks flang too" \
     bash -c "cp '$RZIG' '$tc/zig-fc' && env -i ZIG_BIN='$real_zig' PATH='$W/flang' '$tc/zig-fc' --rzig-check | grep -qF '; flang at $W/flang/flang'"
 fi

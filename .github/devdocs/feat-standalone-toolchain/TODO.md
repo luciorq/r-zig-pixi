@@ -619,27 +619,57 @@ the user, 2026-10-15).
 ## Phase 5 — zig in the compilers group
 
 Needs (answered): B4; B6 (both cases are tested either way); B13 (sizes
-only recorded); D6 (b).
+only recorded); D6 (b). PHASE5's open points A-T: the recommended option
+each (the user, 2026-10-15, "Start phase 5"; PLAN.md "Phase 5: the
+user's answers"). Build number 11 (M a); since 2026-10-19 it stays 8
+(the user's decision; PLAN.md's B14 amendment).
 
-- [ ] Toolchain step: fetch-zig's zig into `TC/zig/` with `LICENSES/`
+- [x] Toolchain step: fetch-zig's zig into `TC/zig/` with `LICENSES/`
       (LICENSE, dist-info licences) and `SOURCES` (wheel URL, sha256)
-- [ ] verify-tree: `zig/` third-party in the build-path scan;
-      `zig/zig version` is 0.16.0
-- [ ] groups.zig (B35): the compilers standalone line names
+      (2026-10-15: build.zig and wheel.zig from fetch-zig's unpacked
+      wheel, `-Dziglang`; a `file:` line per copy from the RECORD)
+- [x] verify-toolchain (not verify-tree, which checks the R trees):
+      `zig/` third-party in the build-path scan; `zig/zig version` is
+      0.16.0; the checks in batch for 19.5k files (D a)
+- [x] groups.zig (B35): the compilers standalone line names
       `R-<ver>-<plat>-compilers.tar.gz` (.zip on Windows) for zig
-- [ ] rzig provides `-lsynchronization`'s import library when the zig it
-      runs has none (D6 b; e.g. from MinGW's `.def` with zig's dlltool),
-      unless feat-no-host-paths' rzig follow-up PR (ii) has landed it; no
-      upstream report
-- [ ] verify-bundle scenario 2 with `ZIG_BIN` unset: RZIG_PRINT_ARGV shows
+- [x] `-lsynchronization` with upstream zig (D6 b): done by PR #19
+      (fix-rzig-follow-ups, 7a3004d), a rename to
+      `api-ms-win-core-synch-l1-2-0` for both zigs; no import library is
+      generated (zig builds it from the API set's `.def`); no upstream
+      report. Phase 5 adds verify-bundle's Windows package test
+- [x] verify-bundle scenario 2 with `ZIG_BIN` unset: RZIG_PRINT_ARGV shows
       `TC/zig/zig`; C, C++ (no shared libc++/libstdc++), OpenMP C (3
       forms), flagless omp.h probe; on Windows a `-lsynchronization`
-      package builds and loads; the env-tools pass kept
-- [ ] The mixed case (default legs) and the one-zig case (upstream legs)
-      pass on every OS
-- [ ] Archive sizes recorded in PLAN.md; the first C++ compile's time
+      package builds and loads; the env-tools pass kept (the `build`
+      pass)
+- [ ] The mixed case (default legs) passes on every OS: by hand on
+      linux-64, osx-arm64, osx-64 (omicron, Rosetta) and win-64
+      (2026-10-15); linux-aarch64's comes from CI's default leg (tick
+      this then). The one-zig case runs on the upstream legs only
+      (linux-64, osx-arm64, win-64; 2026-10-15 by hand, CI with the
+      `upstream-zig` label); per K (a) there is no upstream leg for
+      linux-aarch64 or osx-64, so their one-zig case stays untested
+      (open item: an upstream leg for them is a later menu)
+- [x] Archive sizes recorded in PLAN.md; the first C++ compile's time
       with upstream zig measured ("Later": cache pre-seeding)
 - [ ] Tested: linux-64, omicron (both), kappa, CI, upstream-zig label run
+      (2026-10-15: linux-64, omicron and kappa done, then round 1 on
+      both hosts after the review's fixes and round 2 on kappa after the
+      host fix, all passed; CI and the label run wait for the PR, which
+      the user pushes, so this stays open)
+- [ ] After phase 4's and SHLIB's PRs merge: phase 5's commit
+      (`phase5-only.diff`, open point O) and its PR with the `full-ci`
+      and `upstream-zig` labels; record CI's run IDs, each toolchain
+      leg's time and artifact size, windows-latest's toolchain step times
+      (Cc7), unpack times per leg kind (Cg6) and verify-package's
+      per-pass times against ea7e6ee's (Cg1) in PLAN.md
+- [x] ~~Before merging: `pixi run -e pkg conda-channel-list universe
+      <subdir>` still shows nothing newer than `_8` (else the number
+      after universe's newest, M a); after merging, the publish of `_11`
+      follows phase 4's and SHLIB's~~: no number to check since
+      2026-10-19 (phase 5 keeps 8); phase 5 publishes with phase 7's
+      bump (phase 7's items)
 
 ## Phase 6 — Fortran in the compilers group
 
@@ -888,7 +918,44 @@ Needs (answered): B14 (a), with B37 (a).
       item 4; D14 a)
 - [ ] Windows minimal and the Windows wheel (C1-C3 a), after phase 7
 - [ ] zig's global cache: after phase 5's measurement, put pre-seeding
-      to the user as a menu
+      to the user as a menu (measured 2026-10-15, PLAN.md "Phase 5
+      record: the measurements"); in the same menu, two zigs sharing
+      zig's default cache on a user's machine, a standalone R's and a
+      conda R's (PHASE5 open point N a)
+- [ ] Menu: the groups' licence completeness, zig/ now and flang/ in
+      phase 6 (LLVM's attribution, Apple's SDK headers and libSystem.tbd,
+      the NetBSD and OpenBSD headers), with phase 6's licence review; B33
+      covers only the base's runtime files (PHASE5 Cc5, Cg2)
+- [ ] Menu: leave zig/ out of the legs that never read it (build-r's
+      build-only legs, stress, the local dev chains), with phase 5's
+      unpack timings (Cg6)
+- [ ] Menu: upstream-zig.yaml reuses build.yaml's toolchain artifact,
+      which carries the same TC/zig since phase 5 (Cg9)
+- [ ] Menu: verify-package's build pass: keep, reduce to the package
+      blocks (PHASE5 F b), or run it only under full-ci, with CI's
+      per-pass times (Cg1)
+- [ ] Menu: the one-zig case (TC/zig is the build's zig) on
+      linux-aarch64 and osx-64, which no CI leg runs: upstream-zig.yaml
+      has ubuntu-latest, macos-latest and windows-latest only, and PHASE5
+      K (a) took no upstream osx-64 leg; their mixed case is covered
+      (omicron's osx-64 by hand, CI's default legs)
+- [ ] Menu: `compression-level: 0` on toolchain.yaml's upload (the
+      archives are already compressed), with windows-latest's step times
+      (PHASE5 T a, Cc7)
+- [ ] Windows: Rust static libraries built for the r-windows clang
+      bundles (gifski's prebuilt one) need an unwinder in a C link
+      through gcc.exe: 9 undefined `_Unwind_*`/`_GCC_specific_handler`
+      with both zigs; `SHLIB_LIBADD = -lunwind` fixes it (kappa,
+      2026-10-15, phase 5 step 3b). Options when it comes back: a
+      windows.zig rule adding `-lunwind` to image links through gcc.exe,
+      or leave it to packages
+- [ ] Windows `-lmsvcrt` with upstream zig (PHASE5 open point L a): map
+      `msvcrt` in `mingw_names` only if a real package needs it (magick
+      and gifski did not reach it, 2026-10-15)
+- [ ] package-standalone.sh's "== done:" size is `du -h`'s, the blocks
+      used (97M on APFS, 45M on gamma's compressed filesystem, for an
+      87-88 MB compilers archive): print the byte size instead, as
+      verify-bundle's cache size does (phase 5, 2026-10-15)
 - [ ] macOS without the Command Line Tools: observe a Mac that never had
       them, then put rzig's `xcrun` handling to the user as a menu
 

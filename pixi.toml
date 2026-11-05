@@ -75,7 +75,8 @@ build = { cmd = "bash scripts/zig-build.sh", depends-on = ["fetch"] }
 # build/zig-cache/zig-<cksum>/ (scripts/env.sh). conda-package does not:
 # rattler-build gives the recipe a clean environment, so the conda
 # package builds with its build env's zig; nor does wheel-test, which
-# compiles with the ziglang it installs.
+# compiles with the ziglang it installs. `toolchain` runs it too, for the
+# toolchain tree's zig/ (feat-standalone-toolchain B4, phase 5).
 fetch-zig = "bash scripts/fetch-zig.sh"
 # R's regression suite (make check's Examples/Specific/Reg targets)
 # against the installed tree, on every OS: R's own tests/Makefile on
@@ -141,12 +142,16 @@ verify-package = { cmd = "bash scripts/verify-bundle.sh", depends-on = ["package
 # The toolchain tree (feat-standalone-toolchain B30): the toolchain
 # groups' third-party files, each directory with SOURCES and LICENSES/,
 # copied unchanged from this env by their own zig build
-# (zigbuild/toolchain/build.zig) into dist/toolchain/R-<ver>-zig. Phase 3:
-# openmp/ (compilers); unix usr/bin/make, Windows binutils/ (build-tools).
-# Needs no R source; one tree per platform serves every flavor. LICENSES
-# come from pixi's package cache, where the env was installed from.
+# (zigbuild/toolchain/build.zig) into dist/toolchain/R-<ver>-zig: openmp/
+# (compilers); unix usr/bin/make, Windows binutils/ (build-tools). Phase
+# 5 adds the compilers group's zig/, upstream zig from PyPI's ziglang
+# wheel, which it runs fetch-zig for (once per platform; B4). Needs no R
+# source; one tree per platform serves every flavor. LICENSES come from
+# pixi's package cache, where the env was installed from, and zig/'s
+# from the wheel.
 toolchain = "bash scripts/zig-toolchain.sh"
-# That build's unit tests: the conda-meta reader and the SOURCES writer.
+# That build's unit tests: the conda-meta and wheel readers and the
+# SOURCES writer (fetches nothing).
 # Its configure step runs first, as for `toolchain`, so it also needs the
 # env's conda-meta and the package cache (in CI: setup-pixi's cache: false).
 toolchain-test = "bash scripts/zig-toolchain.sh test"

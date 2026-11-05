@@ -18,8 +18,8 @@
 # without $(NM), which winshlib.mk pipes into sed, and passes: contract
 # would prove nothing (C11). With openmp/, rzig's B40 rule runs on every
 # leg: it counts openmp/ where the base has the libomp runtime (slim,
-# full) and leaves it alone on minimal (C12). zig/ and flang/ (phases 5
-# and 6) stay out, so dev compiles keep the zig that built R and the
+# full) and leaves it alone on minimal (C12). zig/ and flang/ (flang from
+# phase 6) stay out, so dev compiles keep the zig that built R and the
 # env's flang (B30). The R tree and the toolchain tree are only read:
 # verify-tree, hermetic, package and pkg-parity see the base (pkg-parity's
 # no-make install runs the base's R in place, into its own library,

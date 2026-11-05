@@ -8,10 +8,14 @@ name: toolchain
 # stress.yaml (C3), each from a toolchain job of its own that its legs
 # need. The toolchain tree, dist/toolchain/R-<ver>-zig, holds the
 # groups' third-party files copied unchanged from the env, each directory
-# with SOURCES and LICENSES/ (zigbuild/toolchain/build.zig): in phase 3
-# openmp/ (compilers), unix usr/bin/make and Windows binutils/
-# (build-tools). It needs no R source, so this job builds no R. No
-# concurrency group here, as build-r.yaml: the callers keep their own.
+# with SOURCES and LICENSES/ (zigbuild/toolchain/build.zig): openmp/
+# (compilers), unix usr/bin/make and Windows binutils/ (build-tools), and
+# from phase 5 the compilers group's zig/, upstream zig from PyPI's
+# ziglang wheel (B4), which the toolchain build fetches on every leg
+# (scripts/zig-toolchain.sh runs fetch-zig; on the upstream legs the
+# "Upstream zig (ZIG_BIN)" step has already filled the same directory).
+# It needs no R source, so this job builds no R. No concurrency group
+# here, as build-r.yaml: the callers keep their own.
 on:
   workflow_call:
     inputs:
@@ -79,7 +83,8 @@ jobs:
       # are CI's, not a release (B12), but the legs of the same run
       # download them, and GitHub lets failed jobs be re-run for 30 days
       # without re-running this job when it passed: kept those 30 days,
-      # still short of a release.
+      # still short of a release. The compilers archive is 84-100 MB with
+      # zig (phase 5); the default compression stays (PHASE5 open point T).
       - name: Upload the group archives
         uses: actions/upload-artifact@v7
         with:

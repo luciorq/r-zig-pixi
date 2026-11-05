@@ -415,6 +415,15 @@ library list, the renamed name looked up in -L directories,
 `-lsynchronizationx`, `-lsynch`, the two-argument form and `-Wl,` left
 alone); two parity cases.
 
+Closing note (2026-10-15, feat-standalone-toolchain phase 5): the
+standalone compilers group now ships upstream zig in `TC/zig/`, and
+verify-bundle builds a package with `PKG_LIBS = -lsynchronization`
+(WakeByAddressSingle) through rzig build tier 1, checks that its DLL
+imports api-ms-win-core-synch-l1-2-0.dll and loads it with PATH =
+bin\x64 + System32. It passed on kappa with TC/zig and with conda-forge's
+zig, on R built by either zig. windows-latest runs it with the phase 5
+PR. The rename needed no change.
+
 ## Files
 
 - zigbuild/tools/rzig/main.zig: printArgv (E4) and its test.

@@ -121,16 +121,21 @@ pixi run build         # zig build, no autoconf/make/gnuwin32
 pixi run verify-tree   # static checks of the installed tree (Makeconf, rpaths, floors)
 pixi run smoke         # quick sanity check
 pixi run check         # R's own regression suite
-pixi run toolchain     # the toolchain tree: the groups' files (OpenMP headers, make; Windows binutils)
+pixi run toolchain     # the toolchain tree: the groups' files (zig, OpenMP headers, make; Windows binutils)
 pixi run contract      # CRAN packages compiled with the tree and the groups (Rcpp, data.table, minqa)
 ```
 
 `build` installs `dist/<flavor>/R-<ver>-zig/`, the base that ships: R
 and its libraries, with only rzig, the compiler front Makeconf names, in
 `R_HOME/bin/toolchain`. `toolchain` copies the toolchain groups' files
-from the environment into `dist/toolchain/R-<ver>-zig/`, each directory
-with its `SOURCES` (package, version, sha256, where its source is) and
+from the environment into `dist/toolchain/R-<ver>-zig/`, and upstream
+zig from PyPI's `ziglang` wheel into its `zig/`, each directory with its
+`SOURCES` (package, version, sha256, where its source is) and
 `LICENSES/`; one toolchain tree serves every flavor of the platform.
+For that `zig/`, `toolchain` downloads the wheel once per platform (about
+100 MB, `pixi run fetch-zig`; kept unpacked in `build/zig-upstream/`),
+even for the tasks that use only the compile tree, which leaves `zig/`
+out; an offline machine needs that directory.
 `contract` compiles packages in a copy of the installed tree with the
 groups added, `build/compile-tree/<flavor>/R-<ver>-zig/`, as a user who
 extracted all three archives has it (see Standalone archives). The
@@ -235,11 +240,12 @@ a `.sha256` beside it:
   Makeconf names. Windows slim has full's content (Tcl/Tk, JPEG, TIFF,
   NLS): R's Windows build has no switches to leave them out.
 - **The compilers group**, one per platform:
-  `R-<ver>-<platform>-compilers.tar.gz`. For now it holds OpenMP's
-  headers (Windows also `libomp.lib`), which the `minimal` flavor, built
-  without OpenMP, leaves alone; zig and flang join it later. Until then
-  rzig takes zig 0.16 from `ZIG_BIN` or `PATH` (PyPI's `ziglang` works,
-  also as `python3 -m ziglang`) and LLVM `flang` from `PATH`.
+  `R-<ver>-<platform>-compilers.tar.gz`, about 85-100 MB. It holds zig
+  0.16 (PyPI's `ziglang` build, which is the ziglang.org release) and
+  OpenMP's headers (Windows also `libomp.lib`), which the `minimal`
+  flavor, built without OpenMP, leaves alone. flang joins it later; until
+  then rzig takes LLVM `flang` from `PATH`. `ZIG_BIN` still overrides the
+  group's zig.
 - **The build-tools group**, one per platform:
   `R-<ver>-<platform>-build-tools.tar.gz`. GNU make on linux and macOS,
   which R puts first on its `PATH`; on Windows the MinGW binutils R's
@@ -248,14 +254,15 @@ a `.sha256` beside it:
 
 Every archive has the same top directory, `R-<ver>-zig/`, and a group
 archive's files sit under its `R_HOME/bin/toolchain/`, each directory
-with `SOURCES` (the conda-forge package each file comes from, its
-sha256, and where the package's source is) and `LICENSES/`. Extract the
-ones you need into one directory; no file is in two of them:
+with `SOURCES` (the package each file comes from, a conda-forge package
+or, for `zig/`, PyPI's `ziglang` wheel, its sha256, and where its source
+is) and `LICENSES/`. Extract the ones you need into one directory; no
+file is in two of them:
 
 ```bash
 sha256sum -c R-4.6.1-slim-linux-64.tar.gz.sha256
 tar -xzf R-4.6.1-slim-linux-64.tar.gz           # R-4.6.1-zig/
-tar -xzf R-4.6.1-linux-64-compilers.tar.gz      # + R-4.6.1-zig/lib/R/bin/toolchain/openmp/
+tar -xzf R-4.6.1-linux-64-compilers.tar.gz      # + R-4.6.1-zig/lib/R/bin/toolchain/zig/ and openmp/
 tar -xzf R-4.6.1-linux-64-build-tools.tar.gz    # + R-4.6.1-zig/lib/R/bin/toolchain/usr/bin/make
 R-4.6.1-zig/bin/Rscript -e 'R.version.string'
 ```
@@ -268,7 +275,8 @@ says which archive to extract or what to put on `PATH`.
 
 `pixi run package` makes the base archive of the environment's flavor
 and `pixi run package-toolchain` the group archives, in `dist/`; CI keeps
-both for a week (see CI). No release publishes them yet.
+the base archives for a week and the group archives for 30 days (see
+CI). No release publishes them yet.
 
 ### Older Linux HPC servers
 

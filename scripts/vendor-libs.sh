@@ -36,20 +36,8 @@ if [ ! -d "$R_HOME_DIR" ]; then
 fi
 # The conda build installs into the env (recipe/build.sh points both
 # R_INSTALL_PREFIX and CONDA_PREFIX at rattler's $PREFIX). The same test
-# as build.zig's prefix_is_env, on resolved paths. Windows: MSYS bash may
-# be handed C:\..., C:/... or /c/..., with 8.3 short names, and NTFS
-# ignores case, so the long Windows form (cygpath -m -l), lower-cased, is
-# compared there.
-resolved() {
-  local d
-  d="$(cd "$1" && pwd -P)" || return 1
-  if [ "$OS" = windows ]; then
-    cygpath -m -l "$d" | tr '[:upper:]' '[:lower:]'
-  else
-    echo "$d"
-  fi
-}
-if [ "$(resolved "$PREFIX")" = "$(resolved "$CONDA")" ]; then
+# as build.zig's prefix_is_env, on real paths: env.sh's same_dir.
+if same_dir "$PREFIX" "$CONDA"; then
   exit 0
 fi
 
