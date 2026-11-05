@@ -1,0 +1,5 @@
+package: m2-libpcre 8.45.5 hc364b38_6
+license: BSD-3-Clause (conda-meta)
+source: https://repo.msys2.org/msys/sources/pcre-8.45-5.src.tar.zst sha256:f7104aa31f29655689b404ead9923332e2fa6aadfe97c060d0dfc02f4661d6b5
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/pcre-8.45-5.src.tar.zst
+file: LICENCE 51b3dea44f63338b84b9c97b3d793826a8397309068cf9379a423216ab8ea5b2 <- pcre/pcre-8.45.tar.bz2:pcre-8.45/LICENCE

@@ -340,6 +340,10 @@ libtiff = "*"
 # other names (tcl90.dll, tcl9tk90.dll). recipe/recipe.yaml pins the same.
 tk = "8.6.*"
 gettext = "*"
+# MSYS2's userland. The toolchain tree's build-tools group copies every
+# file of m2-bash, m2-make, m2-coreutils, m2-sed, m2-grep, m2-gawk,
+# m2-which and m2-findutils's usr/bin, with the MSYS DLLs they import, into
+# R_HOME/bin/toolchain/usr/bin (zigbuild/toolchain/build.zig, phase 7).
 m2-bash = "*"
 m2-make = "*"
 m2-coreutils = "*"

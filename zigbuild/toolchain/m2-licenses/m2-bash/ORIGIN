@@ -1,0 +1,5 @@
+package: m2-bash 5.2.037.2 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/bash-5.2.037-2.src.tar.zst sha256:aff1580b5ecbb020dd8af489b84b9070e6a405a9b05f4a178494e2fc45ca477f
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/bash-5.2.037-2.src.tar.zst
+file: COPYING 8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903 <- bash/bash-5.2.tar.gz:bash-5.2/COPYING

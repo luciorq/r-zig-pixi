@@ -148,12 +148,21 @@ build:
   # databases name no build path: build 7's named rattler's work dir and
   # host prefix inside their compressed objects, which conda's prefix
   # replacement cannot reach.
-  # 8 stays (2026-10-19, the user's decision): feat-standalone-toolchain
-  # phases 4, SHLIB routing (feat-shlib-rzig-build), 5 and 6 keep build
-  # 8, and main does not publish them (build.yaml's CONDA_PUBLISH); the
-  # next bump comes with phase 7's merge, to the number after universe's
-  # newest (B14 a).
-  number: 8
+  # 8 → 9 (2026-10-20, with feat-standalone-toolchain phase 7's merge;
+  # universe's newest was _8 on all five subdirs): phases 4 to 7, which
+  # kept 8 and published nothing (build.yaml's CONDA_PUBLISH, the user's
+  # decision of 2026-10-19; B14 a). Phase 4 split the toolchain into
+  # r-zig-compilers and r-zig-build-tools (r-zig-toolchain their
+  # metapackage) and ships rzig with R on every channel; R CMD INSTALL
+  # and R CMD SHLIB build through rzig build where they can
+  # (feat-shlib-rzig-build); the standalone compilers group carries zig
+  # (phase 5) and flang (phase 6); the standalone build-tools group
+  # carries MSYS2's tools on Windows, R CMD config names the missing build
+  # tools, R on win-64 puts the build tools first on PATH, in sessions
+  # too, then its env's MSYS (Library/usr/bin), and R CMD check finds nm
+  # (phase 7). The Windows front-ends embed R's UTF-8 manifest
+  # (fix-r-utf8-manifest, merged before phase 7, which kept 8 too).
+  number: 9
 
 outputs:
   # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), four
@@ -351,11 +360,12 @@ outputs:
       # everything but the groups' directories under R_HOME/bin/toolchain
       # (feat-standalone-toolchain B20, B28): rzig's names stay here. Of
       # these, the conda build makes only win-64's binutils/, which
-      # r-zig-build-tools owns
+      # r-zig-build-tools owns; usr/ and etc/ are the standalone tree's
+      # only on win-64 (PHASE7 Cr5)
       files:
         exclude:
-          - lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
-          - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
+          - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
+          - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
     requirements:
       run:
         # R's own shared libraries (libR, base packages like stats/utils via
@@ -499,8 +509,8 @@ outputs:
                   - lib/R/bin/toolchain/zig-cc
                   - lib/R/share/zig/rpkg/build_t1.zig
             not_exists:
-              - lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
-              - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,binutils}/**
+              - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
+              - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
     # Windows builds R with full's content, under the name slim on every
     # channel (feat-standalone-toolchain B42 a); a Windows slim that is
     # really slim is a later aim.
@@ -595,13 +605,17 @@ outputs:
       run:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
         # B28 (a): unix make. On win-64, m2-make is the make R runs (it
-        # comes first on PATH), so no native make there (PHASE4 Cg7);
-        # phase 7 chooses native or m2 (B11)
+        # comes first on PATH), so no native make there (PHASE4 Cg7;
+        # PHASE7 open point B a)
         - if: unix
           then:
             - make >=4.4
-        # win-64's interim set until phase 7 chooses one for both channels
-        # (B11, B39)
+        # win-64: the build-tools group's set on both channels (B11; PHASE7
+        # open points A-C): MSYS2's userland from conda-forge's m2 packages
+        # and the native pkg-config; the standalone tree copies the same
+        # packages' files into R_HOME/bin/toolchain/usr/bin. R puts this
+        # env's Library/usr/bin on PATH itself, after the group's usr/bin,
+        # in R and under R CMD (PHASE7 F2 b)
         - if: win
           then:
             # bash.exe: packages' own configure scripts and make's recipe
@@ -636,7 +650,8 @@ outputs:
             - m2-which
             - m2-findutils
             # B43: Makeconf.win names a bare pkg-config (pkg-config only:
-            # phase 7 adds the pkgconf name, PHASE4 open point F a)
+            # the pkgconf name comes with a pkgconf built from source, a
+            # later change after phase 7, PHASE4 open point F a)
             - pkg-config
             # E2: the six binutils import zstd.dll
             - zstd

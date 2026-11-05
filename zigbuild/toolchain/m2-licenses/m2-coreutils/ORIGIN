@@ -1,0 +1,5 @@
+package: m2-coreutils 8.32.5 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/coreutils-8.32-5.src.tar.zst sha256:2b8689413bc50367a9995adf50ea84cd3caaff0ec68a8f32d8328842c3f83835
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/coreutils-8.32-5.src.tar.zst
+file: COPYING 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986 <- coreutils/coreutils-8.32.tar.xz:coreutils-8.32/COPYING

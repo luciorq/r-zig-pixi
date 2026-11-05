@@ -4,8 +4,10 @@
 # (zigbuild/toolchain/build.zig), package-standalone.sh's toolchain mode
 # archives it, one archive per group. Every file in it is a third-party
 # file copied unchanged from a conda package (flang/: flang-pixi's
-# flang-zig and flang-rt-zig, from universe, B9 a, phase 6) or, in zig/,
-# from PyPI's ziglang wheel (B4, phase 5), or that package's record:
+# flang-zig and flang-rt-zig, from universe, B9 a, phase 6; Windows' usr/:
+# conda-forge's m2 packages and pkg-config, phase 7) or, in zig/, from PyPI's
+# ziglang wheel (B4, phase 5), or that package's record, except
+# etc/fstab (Windows), r-zig's own MSYS mount table (PHASE7 open point D):
 #   - layout: group directories under R_HOME/bin/toolchain only (env.sh's
 #     group_dirs), and no file directly in it;
 #   - records: each directory has SOURCES, each package block of it with
@@ -29,9 +31,15 @@
 #     only to compile; make needs 2.17), and rpaths relative to the file;
 #     macOS, /usr/lib and /System, minos at most MACOS_MIN, rpaths
 #     relative; Windows, every DLL a PE file imports beside it or the
-#     system's;
+#     system's (usr/bin/'s tools find their DLLs beside them);
 #   - OpenMP (the compilers group, B22): openmp/include/omp.h; Windows
 #     also openmp/lib/libomp.lib;
+#   - Windows' build tools (the build-tools group, B39; PHASE7 open point
+#     O a): each name R's makefiles and configure scripts run is an .exe
+#     in usr/bin that runs with PATH = System32 alone, make says the
+#     m2-make version SOURCES records, etc/fstab is build.zig's two lines,
+#     and MSYS takes R_HOME/bin/toolchain as its root and the temporary
+#     directory (TMP, TEMP) as /tmp;
 #   - zig (the compilers group, B4): zig/zig runs and prints the version
 #     SOURCES records for ziglang;
 #   - flang (the compilers group, B9 a): flang/bin/flang runs and says the
@@ -315,6 +323,80 @@ for f in $omp; do
   [ -s "$TREE/$tc/$f" ] || { echo "error: $tc/$f is missing (the compilers group's OpenMP)" >&2; exit 1; }
 done
 echo "== OpenMP verified: $omp (in $tc)"
+
+# Windows' build tools (B39; PHASE7 open point O a, amendment Am10), when
+# the tree has usr/ (the build-tools group): B39's names, coreutils' that
+# R's makefiles and configure scripts run, and pkg-config (B43), each an
+# .exe in usr/bin that runs `--version` with PATH = System32 alone from a
+# scratch directory (`[` runs `[ 1 = 1 ]`): a copy that does not
+# start (a DLL of the wrong package, a missing runtime) fails here, where
+# the tree is built. Their bytes are SOURCES' (above); only make's version
+# is compared, SOURCES' m2-make version less MSYS's release (4.4.1.2 is
+# GNU Make 4.4.1), as verify-bundle checks unix's make (PHASE7 Cr4). Then
+# MSYS's mount table: etc/fstab is build.zig's two lines, and with TMP and
+# TEMP a scratch directory TC's sh says R_HOME/bin/toolchain is / and that
+# directory is /tmp (usertemp: Windows' temporary directory, TMP before
+# TEMP), by bash's `pwd -W` (TC holds no cygpath, PHASE7 Cr3), compared in
+# this script's own MSYS's `cygpath -m -l` form, in lower case. That sh
+# starts from cmd.exe, as R starts it: a child of this script's MSYS (the
+# env's m2, the same msys-2.0.dll release) takes its parent's mount table,
+# and says the env's root and /tmp (seen on kappa, 2026-10-20).
+if [ "$OS" = windows ] && [ -d "$TREE/$tc/usr" ]; then
+  ub="$TREE/$tc/usr/bin"
+  names="sh bash make sed grep gawk awk which find xargs pkg-config
+    basename rm cp mv mkdir cat tr sort uname chmod ln ls expr touch head
+    tail wc env printf mktemp test ["
+  mkdir -p "$WORK/run" "$WORK/temp"
+  bad=""
+  n=0
+  for x in $names; do
+    if [ ! -f "$ub/$x.exe" ]; then
+      bad="$bad
+  usr/bin/$x.exe (missing)"
+      continue
+    fi
+    args=(--version)
+    [ "$x" != "[" ] || args=(1 = 1 "]")
+    if ! out="$(cd "$WORK/run" && PATH="$WIN_SYSTEM32" "$ub/$x.exe" "${args[@]}" 2>&1 < /dev/null)"; then
+      bad="$bad
+  usr/bin/$x.exe ${args[*]}: $(printf '%s' "$out" | tr -d '\r' | head -3 | tr '\n' ' ')"
+      continue
+    fi
+    n=$((n + 1))
+  done
+  want="$(awk '{ sub(/\r$/, "") } $1 == "package:" { p = $2 } p == "m2-make" && $1 == "version:" && v == "" { v = $2 } END { print v }' "$TREE/$tc/usr/SOURCES")"
+  want="${want%.*}"
+  got="$(cd "$WORK/run" && PATH="$WIN_SYSTEM32" "$ub/make.exe" --version 2>&1 | tr -d '\r' | sed -n '1s/^GNU Make //p')" || true
+  [ -n "$want" ] && [ "$got" = "$want" ] || bad="$bad
+  usr/bin/make.exe says GNU Make '$got', SOURCES records m2-make '${want:-(none)}' (less MSYS's release)"
+  fstab="$TREE/$tc/etc/fstab"
+  if [ ! -f "$fstab" ]; then
+    bad="$bad
+  etc/fstab (missing: MSYS's mount table)"
+  elif [ "$(tr -d '\r' < "$fstab")" != "none / cygdrive binary,posix=0,noacl,user 0 0
+none /tmp usertemp binary,posix=0 0 0" ]; then
+    bad="$bad
+  etc/fstab is not build.zig's two lines: $(tr -d '\r' < "$fstab" | tr '\n' '|')"
+  fi
+  lower() { tr -d '\r' | tr '[:upper:]' '[:lower:]'; }
+  root_want="$(cygpath -m -l "$TREE/$tc" | lower)"
+  tmp_want="$(cygpath -m -l "$WORK/temp" | lower)"
+  wtemp="$(cygpath -w "$WORK/temp")"
+  for d in root tmp; do
+    printf '@"%s" -c "cd /%s && pwd -W"\r\n' "$(cygpath -w "$ub/sh.exe")" "${d#root}" > "$WORK/run/$d.bat"
+  done
+  root_got="$(cd "$WORK/run" && PATH="$WIN_SYSTEM32" TMP="$wtemp" TEMP="$wtemp" "$WIN_SYSTEM32/cmd.exe" //c root.bat 2>&1 | lower)" || true
+  tmp_got="$(cd "$WORK/run" && PATH="$WIN_SYSTEM32" TMP="$wtemp" TEMP="$wtemp" "$WIN_SYSTEM32/cmd.exe" //c tmp.bat 2>&1 | lower)" || true
+  [ "$root_got" = "$root_want" ] || bad="$bad
+  usr/bin/sh.exe: / is '$root_got', not $root_want (R_HOME/bin/toolchain, the MSYS root msys-2.0.dll's place makes)"
+  [ "$tmp_got" = "$tmp_want" ] || bad="$bad
+  usr/bin/sh.exe: /tmp is '$tmp_got', not TMP and TEMP ($tmp_want: etc/fstab's usertemp line)"
+  if [ -n "$bad" ]; then
+    echo "error: the build-tools group's usr/ and etc/ (Windows):$bad" >&2
+    exit 1
+  fi
+  echo "== usr/ verified: $n tools run with PATH = System32; make $got; MSYS root $root_got, /tmp = TMP and TEMP"
+fi
 
 # The compilers group's zig (B4, phase 5): upstream zig, PyPI's ziglang
 # wheel; it runs, and says the version SOURCES records for it (SOURCES',

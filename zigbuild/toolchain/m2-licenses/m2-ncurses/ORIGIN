@@ -1,0 +1,5 @@
+package: m2-ncurses 6.5.20240831.2 hc364b38_6
+license: MIT (conda-meta)
+source: https://repo.msys2.org/msys/sources/ncurses-6.5.20240831-2.src.tar.zst sha256:786a20b0c38c2f9cc209ebcff5fff5c173fc568d7fbacad7dea393fc8a104639
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/ncurses-6.5.20240831-2.src.tar.zst
+file: COPYING b2feb54f39529abe226f709a292584fde48a2e5721559fee417d2cdd51cb7cc1 <- ncurses/ncurses-6.5-20240831.tgz:ncurses-6.5-20240831/COPYING

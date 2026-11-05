@@ -76,14 +76,15 @@ R_HOME_DIR="$PREFIX/$RH"
 # The toolchain groups (feat-standalone-toolchain B38) and the directories
 # under R_HOME/bin/toolchain each one holds (B20, B23, B24): compilers,
 # zig/ (upstream zig, B4), flang/ (flang-zig, B9) and openmp/; build-tools,
-# usr/ and Windows' binutils/. Only those that exist count: a group's
+# usr/, Windows' etc/ (MSYS's mount table, phase 7) and Windows'
+# binutils/. Only those that exist count: a group's
 # archive holds its directories that the toolchain tree has
 # (package-standalone.sh).
 TOOLCHAIN_GROUPS="compilers build-tools"
 group_dirs() {
   case "$1" in
     compilers) echo "zig flang openmp" ;;
-    build-tools) echo "usr binutils" ;;
+    build-tools) echo "usr etc binutils" ;;
     *) echo "error: no toolchain group named '$1'" >&2; return 1 ;;
   esac
 }

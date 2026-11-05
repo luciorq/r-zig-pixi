@@ -31,6 +31,12 @@
 #                 programs and the OS's base directories) and, on macOS,
 #                 skip the runner's CMake toolchain file that leaves
 #                 Homebrew out (a tree with its own etc/r-zig.cmake gets none)
+#   --msys-from-tree  Windows, the tree: leave the libraries env's
+#                 Library/usr/bin and Library/mingw-w64/bin off PATH, so that
+#                 sh, make and the tools R's makefiles run come from the
+#                 tree's build-tools group alone (R_HOME/bin/toolchain/usr/bin,
+#                 which R puts first); ignored, with a note, elsewhere and
+#                 for a conda env, whose tools are in its Library/usr/bin
 #   --trace       RZIG_TRACE=1: rzig prints its commands into the logs, and
 #                 `rzig build` (patch 0013) its tier; R_ZIG_PKG_BUILDER=make
 #                 in the environment makes every install take the make path
@@ -56,7 +62,7 @@ opt <- function(name, default = NULL) {
   if (nzchar(v)) v else TRUE
 }
 flag <- function(name) isTRUE(opt(name))
-known <- c("skip", "tree", "conda", "out", "jobs", "resume", "keep-path", "trace", "no-shared-cache", "list", "sysdeps", "strict", "help")
+known <- c("skip", "tree", "conda", "out", "jobs", "resume", "keep-path", "msys-from-tree", "trace", "no-shared-cache", "list", "sysdeps", "strict", "help")
 bad <- setdiff(sub("=.*", "", sub("^--", "", grep("^--", argv, value = TRUE))), known)
 if (length(bad)) stop("unknown option: --", paste(bad, collapse = " --"), " (see --help)", call. = FALSE)
 ca <- commandArgs()                                             # Rscript passes -f FILE (R 4.6) or --file=FILE
@@ -375,8 +381,15 @@ if (os == "macos" && !flag("keep-path") && nzchar(sysroot) && !file.exists(file.
 # first, then the OS's base directories, nothing else (no Homebrew, no
 # Rtools or Strawberry gcc). On Linux and macOS this is scripts/env.sh's
 # rule; env.sh keeps PATH on Windows, so the Windows list is this script's.
+# --msys-from-tree leaves the env's MSYS (and MinGW) directories out: the
+# tree's build-tools group then answers alone (feat-standalone-toolchain
+# PHASE7 open point L a), the env keeping cmake and the libraries.
+msys_tree <- flag("msys-from-tree") && win && dist == "tree"
+if (flag("msys-from-tree") && !msys_tree)
+  message("stress: --msys-from-tree is for a Windows tree; ignored (", os, ", ", dist, ")")
 if (!flag("keep-path") && nzchar(sysroot)) Sys.setenv(PATH = paste(if (win) c(
-  file.path(rhome, "bin/x64"), sysroot, file.path(sysroot, c("Library/mingw-w64/bin", "Library/usr/bin", "Library/bin", "Scripts", "bin")),
+  file.path(rhome, "bin/x64"), sysroot,
+  file.path(sysroot, c(if (!msys_tree) c("Library/mingw-w64/bin", "Library/usr/bin"), "Library/bin", "Scripts", "bin")),
   file.path(Sys.getenv("SystemRoot", "C:/Windows"), c("System32", ""))) else c(file.path(sysroot, "bin"), "/usr/bin", "/bin"),
   collapse = .Platform$path.sep))
 zig <- Sys.getenv("ZIG_BIN", Sys.which("zig"))
@@ -387,6 +400,7 @@ info <- list(
   date = format(t_start, "%Y-%m-%d %H:%M %Z", tz = "UTC"), r = R.version.string, os = os, arch = arch, dist = dist,
   channel = Sys.getenv("STRESS_CHANNEL"), r_zig = paste(meta("^r-zig-(slim|toolchain)-.*\\.json$"), collapse = " "),
   r_home = rhome, libraries_env = sysroot, commit = commit, jobs = jobs, path = if (flag("keep-path")) "kept" else "narrowed",
+  msys_from_tree = msys_tree,
   zig = if (nzchar(zig)) tryCatch(system2(zig, "version", stdout = TRUE, stderr = FALSE)[1], error = function(e) "") else "",
   cc = tryCatch(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "--no-user-files", "CC"), stdout = TRUE)[1], error = function(e) ""),
   builder = builder, shared_cache = shared_cache,

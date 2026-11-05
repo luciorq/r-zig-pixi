@@ -1,0 +1,7 @@
+package: m2-libiconv 1.18.1 hc364b38_6
+license: LGPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/libiconv-1.18-1.src.tar.zst sha256:f126a38c3b1f84c2240c44aeb3c824796cbf37d5c206a09ef83e58d55b82aa8a
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/libiconv-1.18-1.src.tar.zst
+file: COPYING.LIB 20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95 <- libiconv/libiconv-1.18.tar.gz:libiconv-1.18/COPYING.LIB
+file: COPYING 8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903 <- libiconv/libiconv-1.18.tar.gz:libiconv-1.18/COPYING
+note: the texts differ from conda-meta's license: libiconv 1.18's library is LGPL-2.1-or-later (COPYING.LIB, LGPL 2.1); GPL-3.0-or-later (COPYING) covers its iconv program

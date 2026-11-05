@@ -281,7 +281,7 @@ if [ "$OS" = windows ]; then
     bad="$bad
   ${mk#$TREE/} names a tool through BINPREF: $l"
   done < "$WORK/binpref.txt"
-  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin' \
+  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/../../usr/bin' \
     'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"' \
     'R_ZIG_RC=${R_HOME}/bin/toolchain/binutils/windres.exe'; do
     has_line "$TREE/$rh/etc/Rcmd_environ" "$l" || bad="$bad

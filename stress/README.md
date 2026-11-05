@@ -92,6 +92,15 @@ Useful options (`--help` lists them all):
   leaves Homebrew out of CMake's searches. A tree that ships its own
   toolchain file (build 7's `etc/r-zig.cmake`) gets none from the runner
   and leaves Homebrew out either way.
+- `--msys-from-tree`: Windows and the tree only. The runner's PATH then
+  leaves out the libraries env's `Library/usr/bin` and
+  `Library/mingw-w64/bin`, so sh, make and the tools R's makefiles and
+  `configure.win` scripts run come from the tree's build-tools group alone
+  (`R_HOME/bin/toolchain/usr/bin`, which R puts first on PATH under R CMD
+  and in its sessions). The env keeps cmake and the libraries. A tool the
+  group lacks then fails its row with "command not found" instead of being
+  found in the env. A conda run ignores it, with a note: there the tools
+  are the env's.
 - `--strict`: exit 1 when a result differs from its `expect`.
 
 ## Run it in CI
@@ -103,6 +112,7 @@ gh workflow run stress.yaml -f oses='["ubuntu-latest","macos-latest"]' -f packag
 gh workflow run stress.yaml -f packages=g2 -f distribution=both -f channel=universe
 gh workflow run stress.yaml -f packages=all -f skip=heavy -f jobs=2
 gh workflow run stress.yaml -f packages='g3 g4' -f trace=true -f shared_cache=false
+gh workflow run stress.yaml -f oses='["windows-latest"]' -f packages='g3 g4' -f msys_from_tree=true
 ```
 
 The inputs are the runners (a JSON list), the targets, rows to skip, the
@@ -112,8 +122,9 @@ upstream's from `pixi run fetch-zig`), `trace` (`--trace`), the builder
 (`R_ZIG_PKG_BUILDER`: auto, R CMD INSTALL and R CMD SHLIB through rzig
 build where the call qualifies, patch 0013; or make, the make path for
 every package and shared object, a make reference) and
-`shared_cache` (true by default; false passes `--no-shared-cache`). Each
-OS and distribution is one job.
+`shared_cache` (true by default; false passes `--no-shared-cache`) and
+`msys_from_tree` (false by default; true passes `--msys-from-tree` on
+Windows). Each OS and distribution is one job.
 Jobs never stop each other (`fail-fast: false`) and may take up to 6 hours.
 
 Every job builds the dev tree. The conda job with the local channel also

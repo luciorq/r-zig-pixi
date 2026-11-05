@@ -2540,16 +2540,32 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     group's usr/bin in Rtools' place (feat-standalone-toolchain B25):
 ///     the sh, make and the rest R's makefiles run come first, unless
 ///     R_CUSTOM_TOOLS_PATH names others, as R intends. rcmdfn.c then puts
-///     R_HOME/bin/x64 before it. A missing directory is harmless: a tree
-///     without the group keeps the tools already on PATH (Rtools, a conda
-///     env's). B25's line names R_HOME inside the default, which would
-///     stay unexpanded, hence R_ZIG_TOOLS_PATH.
+///     R_HOME/bin/x64 before it. Right after the group's usr/bin comes
+///     R_HOME/../../usr/bin, R's own conda env's MSYS dir (R_HOME is
+///     <env>/Library/lib/R, so <env>/Library/usr/bin, where the m2
+///     packages are), so that its sh, sed and make answer whatever the
+///     caller's PATH puts first: with Git for Windows' usr\bin before the
+///     activated env, Git's sed (a second msys-2.0.dll) wrote tmp.def from
+///     offset 0 under m2's sh and R CMD SHLIB exited 0 with no DLL
+///     (PHASE7 F2 b, kappa 2026-10-21). R sessions (patch 0014) put the
+///     same directory, spelled without "..", before these entries: R's own
+///     command search (run.c's expandcmd, Sys.which) rejects a match in an
+///     entry whose ".." shortens it by more than ten characters, as this
+///     one's do; programs R CMD starts resolve it. One line on every
+///     channel: in the standalone tree, <top>/Library/lib/R, it names
+///     <top>/Library/usr/bin, inside the install and never created, as
+///     usr/bin is without the group; each channel has one of the two, so
+///     one MSYS runtime. A
+///     missing directory is harmless: a tree without the group keeps the
+///     tools already on PATH (Rtools). B25's line names R_HOME inside the
+///     default, which would stay unexpanded, hence R_ZIG_TOOLS_PATH.
 ///   - CMAKE_GENERATOR: CMake builds of a package's bundled library
 ///     (RcppParallel's TBB, Rhdf5lib's HDF5 through biocmake) pass no -G,
 ///     and conda-forge's cmake then picks NMake Makefiles ("make: invalid
 ///     option -- ?"). MSYS Makefiles are makefiles for make and sh, which
-///     R runs packages' own makefiles with (in a conda env m2-make, first
-///     on PATH, and m2-bash's sh).
+///     R runs packages' own makefiles with: the build-tools group's make
+///     and sh (R_HOME/bin/toolchain/usr/bin; in a conda env m2's, in
+///     Library/usr/bin).
 ///   - RC, RCFLAGS: CMake compiles a .rc file (TBB's) with RC, else a
 ///     windres on PATH, where there is none; the tree's is the build-tools
 ///     group's bin/toolchain/binutils/windres.exe (B24). windres
@@ -2557,10 +2573,14 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     on PATH; RCFLAGS names the toolchain's, with the arguments windres
 ///     gives its default one (-E -xc -DRC_INVOKED), which --preprocessor
 ///     drops.
-/// CMAKE_GENERATOR, RC and RCFLAGS are defaults: one set in the
-/// environment wins (`${VAR-default}`). They were tested in stress round 1
-/// on kappa with these values in the environment (feat-stress-suite
-/// stress/results/2026-10-08.md, T3).
+///   - UserNM: R CMD check reads compiled objects' symbol tables with
+///     UserNM, else an nm on PATH (tools' sotools.R), and PATH has none;
+///     the build-tools group's binutils/nm.exe, as RC names its windres
+///     (feat-standalone-toolchain PHASE7 open point H a).
+/// CMAKE_GENERATOR, RC, RCFLAGS and UserNM are defaults: one set in the
+/// environment wins (`${VAR-default}`). The first three were tested in
+/// stress round 1 on kappa with these values in the environment
+/// (feat-stress-suite stress/results/2026-10-08.md, T3).
 fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
     const b = ctx.b;
     const src = try readSrcFile(ctx, io, "src/gnuwin32/fixed/etc/Rcmd_environ");
@@ -2570,8 +2590,9 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
     try out.appendSlice(b.allocator, src);
     for ([_][]const u8{
         "## r-zig: the build tools first on PATH (feat-standalone-toolchain B25): R's",
-        "## installer line, with the build-tools group's usr/bin in Rtools' place.",
-        "R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin",
+        "## installer line, with the build-tools group's usr/bin in Rtools' place,",
+        "## then a conda env's MSYS dir (Library/usr/bin; PHASE7 F2 b).",
+        "R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/../../usr/bin",
         "PATH=\"${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/\"",
         "## r-zig: CMake for packages that build a bundled library with it.",
         "CMAKE_GENERATOR=${CMAKE_GENERATOR-'MSYS Makefiles'}",
@@ -2579,6 +2600,9 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
         "RC=${RC-${R_ZIG_RC}}",
         "R_ZIG_RCFLAGS=--preprocessor=${R_HOME}/bin/toolchain/gcc.exe --preprocessor-arg=-E --preprocessor-arg=-xc --preprocessor-arg=-DRC_INVOKED",
         "RCFLAGS=${RCFLAGS-${R_ZIG_RCFLAGS}}",
+        "## r-zig: R CMD check reads objects' symbols with UserNM, else nm on PATH.",
+        "R_ZIG_NM=${R_HOME}/bin/toolchain/binutils/nm.exe",
+        "UserNM=${UserNM-${R_ZIG_NM}}",
     }) |line| {
         try out.appendSlice(b.allocator, line);
         try out.appendSlice(b.allocator, eol);

@@ -764,67 +764,103 @@ Then:
 
 ## Phase 7 — Windows build tools: usr/bin
 
-Needs (answered): B11, B25, B39, B43 (pkg-config).
+Needs (answered): B11, B25, B39, B43 (pkg-config). Plan:
+feat-standalone-toolchain/phase7/PHASE7-IMPLEMENTATION.md as amended by
+AMENDMENTS.md (the m2 set, the user's decision of 2026-10-20; its "User
+decisions 2026-10-21": pkgconf out, Am1 and Am2 withdrawn, F2 b, MSYSTEM
+a); the record is PLAN.md's "Phase 7 record".
 
-- [ ] Choose the conda-forge package for each of B39's tools and
-      pkg-config: native win-64 build first, `m2-*` where conda-forge has
-      none (B11); each tool an .exe of its own name (check
-      uutils-coreutils); record the choice
-- [ ] Decide whether make.exe is stripped
-- [ ] Toolchain step: the chosen packages' files into `TC/usr/bin/` with
-      their DLL closure (msys-2.0.dll and the msys-*.dll for m2 ones),
-      `usr/LICENSES/` and `usr/SOURCES` from conda-meta; verify-tree
-      checks the closure
-- [ ] conda's win-64 r-zig-build-tools depends on the same packages
-      (replacing phase 4's interim list)
-- [ ] Rprofile.windows PATH line, if the tests need it
-- [ ] groups.zig (B35): Windows' build-tools standalone line names
-      `R-<ver>-win-64-build-tools.zip`
-- [ ] `R CMD config` without the build tools fails with one clear message
-- [ ] Re-scope from feat-zig-pkg-build's stress table (its PLAN.md,
-      "Consolidation with phase 3", M6: one dispatch after its push, with
-      stress.yaml's `trace` and `builder` inputs): which rows need the
-      group at all. `R CMD INSTALL` of tier 0 to 2 packages without a
-      configure script R runs (a src/build.zig and no src/Makefile, or
-      no configure, no src/Makefile and a Makevars of assignments)
-      builds through rzig build with no sh or make [records-REC-6]; the
-      group is for packages that need make, configure scripts R runs,
-      `R CMD SHLIB` (run-time compilation, pkgbuild's probe and so pak),
-      `R CMD config`'s direct callers, `R CMD check`'s objdump (Windows)
-      and cleanup.ucrt/cleanup.win under `--clean` or `--preclean`
-      [stress-S10]. The table (2026-10-12, run 38317654371 on 45892fb,
-      five runners, `trace`, `builder = auto`; feat-zig-pkg-build's
-      PLAN.md, "Stress dispatch", corrected by its review follow-up): of
-      the suite's 47 rows that compile, 30 need the group on Windows: 29
-      whose run_shlib goes to make (12 configure.win scripts, 9 Makevars
-      rules in src/Makevars, .win or .ucrt, 5 `$(shell)`, 2
-      conditionals, 1 include) [stress-S8] and Rhdf5lib, whose
-      configure script builds HDF5 through CMake and make [stress-S9];
-      17 go through rzig build. From the recipes and the packages'
-      messages, not word counts in the logs [stress-S3]: winshlib.mk's
-      silent def and link recipe runs nm, sed, basename and rm in every
-      make row, the configure.win scripts sh, pkg-config at least 9
-      rows, rzig's AR/RANLIB 12 and 2, cmake Rhdf5lib and RcppParallel's
-      TBB (which also runs windres through RC). So: sh, make, coreutils,
-      sed, pkg-config and the make path's nm stay in the group; nothing
-      leaves it on the table's evidence; cmake stays the extras
-      candidate
-- [ ] verify-bundle scenario 3 on Windows with PATH = bin\x64 + System32:
-      the contract set, pak, data.table, glue and a pkg-config package
-      build and load
-- [ ] The same with Rtools or Git for Windows also on PATH (msys-2.0.dll
-      clash), and in a fresh conda env with r-zig-toolchain
-- [ ] Tested: kappa, CI windows-latest (watch for the old spawn hangs)
-- [ ] The build-number bump (PLAN.md's B14 amendment, the user's
-      decision of 2026-10-19): phases 4, SHLIB routing, 5 and 6 kept 8;
-      phase 7's PR takes the number after universe's newest (B14 a),
-      checked just before merging (`pixi run -e pkg conda-channel-list
-      universe <subdir>` on the five subdirs), with one history entry
-      for phases 4 to 7
+- [x] Choose the conda-forge package for each of B39's tools and
+      pkg-config: MSYS2's from conda-forge's m2 packages (m2-bash,
+      m2-make, m2-coreutils, m2-sed, m2-grep, m2-gawk, m2-which,
+      m2-findutils) and conda-forge's native pkg-config 0.29.2 with its
+      glib closure (open points A-C; no pkgconf name: the user's decision
+      D0 a of 2026-10-21, amendment Am1 withdrawn).
+      uutils-coreutils was not taken: 0.0.20 has no touch, uname or
+      chmod; native make was not taken (KN's F1: R's single-quoted
+      SHLIB_LD and PKG_LIBS need MSYS's make and sh)
+- [x] Decide whether make.exe is stripped: no native make, nothing to
+      strip (m2's make.exe has no debug sections)
+- [x] Toolchain step: every file of the eight tool packages' usr/bin with
+      the nine MSYS DLLs and pkg-config with its DLLs into `TC/usr/bin/`
+      (PLAN.md's record has the count), `TC/etc/fstab` written,
+      `usr/LICENSES/` and `usr/SOURCES` from conda-meta, the m2 licence
+      texts from zigbuild/toolchain/m2-licenses/ (open point E a);
+      verify-toolchain (not verify-tree) checks the closure, the names,
+      make's version, fstab and the MSYS root
+- [x] conda's win-64 r-zig-build-tools depends on the same packages
+      (pkg-config kept) and owns binutils/ only: no TC/usr/ in a conda env
+      (D0 a; amendment Am2 withdrawn)
+- [x] Rprofile.windows PATH line (patch 0014, open point I a): R
+      sessions put the group's usr/bin first, as R CMD does; then, on
+      both channels, a conda env's MSYS dir (`R_HOME/../../usr/bin` in
+      Rcmd_environ, without ".." in sessions, where R's own command search
+      rejects it), so Git for Windows' usr\bin before an activated env no
+      longer answers for sed (F2 b, 2026-10-21)
+- [x] groups.zig (B35): Windows' build-tools standalone line names
+      `R-<ver>-win-64-build-tools.zip` alone (open point K a)
+- [x] `R CMD config` without the build tools fails with one clear message
+      (patch 0010's rcmdfn.c hunk, open point J a: 127 and rzig's text,
+      no "is not recognized")
+- [x] Re-scope from feat-zig-pkg-build's stress table: B39's list stays
+      (open point G a). The suite's Windows rows (runs 38317654371,
+      38467907779, 38569895172): nm and sed in 25 rows, basename in 27,
+      rm in 26; cp in RcppParallel; Rmpfr's autoconf configure: awk,
+      grep, expr, cat, mkdir, mv, tr, sort, uname, chmod, ln, ls; find
+      and xargs only in cleanup.win under --preclean or R CMD build;
+      which in no row; R CMD config is called by configure.win scripts
+      (install.R never calls it); cmake stays the extras candidate.
+      Pending: the `--msys-from-tree` dispatch (open point L a) after the
+      push, read row by row
+- [x] verify-bundle scenario 3 on Windows with PATH = bin\x64 + System32:
+      the group's sh and make (the check, Sys.which in a session),
+      btTools (B39's tools), btPc (pkg-config, a path with a space), R
+      CMD check's nm, the phase 6 blocks; kappa both passes (PLAN's
+      record)
+- [x] The same with Git for Windows' usr\bin first (MSYSTEM=MINGW64)
+      and after on PATH (verify-bundle's clash block, kappa); Rtools45
+      is not installed on kappa (recorded). In a fresh conda env with
+      r-zig-toolchain: conda-consume's fourth environment (gamma,
+      omicron, kappa), and with Git's usr\bin before the activated env
+      (F2 b; kappa 2026-10-21: Rmpfr, data.table and stringi link,
+      PLAN.md's record). With `MSYSTEM=MINGW64`
+      configure says `x86_64-pc-mingw64`; packages build (MSYSTEM a:
+      recorded, README line, not set)
+- [ ] Tested: kappa (done, the final code and the win-64 `_9` conda
+      packages, 2026-10-21, PLAN's record); CI windows-latest after the
+      push (full-ci, upstream-zig, the stress dispatch; watch for the old
+      spawn hangs)
+- [x] The build-number bump: universe's newest was `_8` on all five
+      subdirs (2026-10-20), so 8 → 9, one history entry for phases 4 to 7
+      and fix-r-utf8-manifest, which merges first (recipe.yaml); the
+      hand-over's last commit
 - [ ] Set CONDA_PUBLISH=true (`gh variable set CONDA_PUBLISH --body
       true`) after phase 7's bump merges, then publish (that push's run
       once the variable is set, or `pixi run ci-trigger`) and run phase
       4's post-publish check with the new number
+
+### After phase 7: pkgconf from source (a separate PR, next work)
+
+The user's decision D0 (a) of 2026-10-21: pkgconf left phase 7, whose
+`pkg-config` is conda-forge's 0.29.2 (no `pkgconf` name). It prints
+`Libs.private` without `--static`, so ncdf4 (KN d) and RPostgres (KN i)
+fail on Windows; conda-forge's pkgconf 3.0.7 fixed both (kappa,
+2026-10-20), and s2's Makevars.ucrt calls `pkgconf`.
+
+- [ ] build.zig builds pkgconf from source: one static exe answering
+      both `pkg-config` and `pkgconf`, on both channels (standalone
+      TC/usr/bin; conda's r-zig-build-tools), no DLL and no conda-forge
+      pkgconf pin. The parked wt/feat-userland worktree has a zig build
+      of pkgconf 3.0.7 to read first (its record, not its code as is)
+- [ ] Its search path (PKG_CONFIG_PATH, the exe-relative defaults, the
+      registry key), its INCLUDE/CPATH/LIBRARY_PATH filters and the space
+      escape, checked as AMENDMENTS Am1, Am3 and Am9 describe
+- [ ] verify-toolchain's names gain `pkgconf`; verify-bundle's btPc gets
+      back its pkgconf leg and the `--libs` without Libs.private check;
+      stress/packages.tsv's ncdf4 and RPostgres rows move when a Windows
+      dispatch shows them ok
+- [ ] verify-tree.sh's conda exception, if conda's TC gains usr/ (kappa's
+      F1 of 2026-10-20)
 
 ## Phase 8 — the base's runtime files
 
@@ -939,7 +975,13 @@ Needs (answered): B14 (a), with B37 (a).
       `cc_path` is empty; `has_rtools()` answered TRUE there only from
       stale registry entries for Rtools 4.4 and 4.5, while
       `has_compiler()` and `check_build_tools()` were TRUE through rzig
-      build. Clears with `R CMD config` through rzig (the item above)
+      build. Clears with `R CMD config` through rzig (the item above).
+      Phase 7 (kappa, 2026-10-20): without the build tools R CMD config
+      now exits 127 with rzig's text (no "is not recognized"); with the
+      build-tools group `R CMD config CC` answers gcc.exe,
+      `has_rtools(debug = TRUE)` is TRUE and `check_build_tools(debug =
+      TRUE)` says "Your system is ready to build packages!" (PLAN.md's
+      Phase 7 record)
 - [ ] TMB's precompile across model names (feat-shlib-rzig-build's open
       point D): under rzig build each new model name compiles libTMB.cpp
       again (about 45 s and 4 MB of zig cache on linux-64), where make

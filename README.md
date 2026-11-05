@@ -66,8 +66,28 @@ the environment (`pixi shell`, `conda activate`) or start R with
   too, so with `r-zig-slim` alone it installs no source package:
   `install.packages()` does.
 - On Windows, Rtools is not needed: r-zig's build tools take its place.
-  pkgbuild's "Rtools is required" warning, printed by
-  `with_build_tools()` callers such as devtools, can be ignored.
+  R puts the build tools first on `PATH`, in R and under `R CMD` (in a
+  conda environment its own MSYS2 tools, `Library\usr\bin`, whatever
+  `PATH` holds); set `R_CUSTOM_TOOLS_PATH` to use others. pkgbuild's
+  "Rtools is required" warning, printed by `with_build_tools()` callers
+  such as devtools, can be ignored. With the tools first, R code's `system()` and `Sys.which()`
+  still find `find`, `sort`, `expand`, `hostname`, `timeout`, `whoami`,
+  `tar` and `bash` (WSL's) in System32, as with R's own installer and
+  Rtools; sh, make and configure scripts get the build tools'.
+- On Windows, `pkg-config` is conda-forge's pkg-config 0.29.2 (the
+  standalone tree's `R_HOME/bin/toolchain/usr/bin`; a conda
+  environment's own). It prints `Libs.private` without `--static`, and
+  the standalone tree's copy searches only `PKG_CONFIG_PATH`. A conda or
+  pixi environment's activation sets `PKG_CONFIG_PATH` when the
+  environment has the `pkg-config` package (r-zig-build-tools brings it);
+  for another libraries environment set
+  `PKG_CONFIG_PATH=<env>\Library\lib\pkgconfig`. Neither R's install path
+  nor that environment's path may contain spaces (pkg-config's output
+  then splits), and keep R's install path short (past about 260
+  characters R and make stop finding files).
+- From Git Bash on Windows (`MSYSTEM=MINGW64`), configure scripts see
+  the build system `x86_64-pc-mingw64`, not `x86_64-pc-msys`; packages
+  build either way.
 - A TMB installed by an earlier r-zig build (universe's build 8 or before)
   keeps make, as it keeps a copy of R's own SHLIB code: reinstall it.
   TMB's `precompile()` speeds up only the recompiles of one model name:
@@ -254,10 +274,15 @@ beside it:
   `toolchain/flang/lib/clang/23/finclude/flang/` (Windows has two, with
   the same files).
 - **The build-tools group**, one per platform:
-  `R-<ver>-<platform>-build-tools.tar.gz`. GNU make on linux and macOS,
-  which R puts first on its `PATH`; on Windows the MinGW binutils R's
-  Makeconf names (nm, dlltool, as, strip, windres, objdump), with sh and
-  make still taken from `PATH` (for example Rtools45's `usr/bin`).
+  `R-<ver>-<platform>-build-tools.tar.gz` (`.zip` on Windows, about
+  18 MB). GNU make on linux and macOS, which R puts first on its `PATH`;
+  on Windows sh, make and the tools R's makefiles and `configure.win`
+  scripts run (MSYS2's, from conda-forge's m2 packages: bash, make,
+  coreutils, sed, grep, gawk, which, findutils) and pkg-config
+  (conda-forge's native build), with the DLLs they load, in `usr/bin`,
+  MSYS's mount table in `etc/fstab`, and the MinGW binutils R's Makeconf
+  names (nm, dlltool, as, strip, windres, objdump). R puts `usr/bin` first on
+  `PATH`, in R and under `R CMD`.
 
 Every archive has the same top directory, `R-<ver>-zig/`, and a group
 archive's files sit under its `R_HOME/bin/toolchain/`, each directory
@@ -273,6 +298,7 @@ tar -xzf R-4.6.1-slim-linux-64.tar.gz           # R-4.6.1-zig/
 tar -xJf R-4.6.1-linux-64-compilers.tar.xz      # + R-4.6.1-zig/lib/R/bin/toolchain/zig/, flang/ and openmp/
 tar -xzf R-4.6.1-linux-64-build-tools.tar.gz    # + R-4.6.1-zig/lib/R/bin/toolchain/usr/bin/make
 R-4.6.1-zig/bin/Rscript -e 'R.version.string'
+# Windows: R-4.6.1-win-64-build-tools.zip + R-4.6.1-zig\Library\lib\R\bin\toolchain\usr\bin\ (sh, make, ...), etc\ and binutils\
 ```
 
 On macOS, `tar -xf` extracts all three, the `.tar.xz` too. On Windows,

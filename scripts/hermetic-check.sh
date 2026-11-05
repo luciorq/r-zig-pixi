@@ -12,8 +12,10 @@
 #   - the install preflight (patch 0009): a package with C code stops
 #     in it with rzig's text for the compilers group, since the tree is
 #     the base alone (rzig, no zig and no build tools;
-#     feat-standalone-toolchain B26, B35); unix: R CMD config CC fails
-#     with rzig's text for the build tools (patch 0010),
+#     feat-standalone-toolchain B26, B35); R CMD config CC fails with
+#     rzig's text for the build tools and its status, 127 (patch 0010;
+#     Windows: rcmdfn.c's check, before config.sh's sh, PHASE7 open point
+#     J a), and no "is not recognized" line from cmd.exe,
 #   - installs R6 from CRAN when it is reachable (download, TLS, R's
 #     internal untar),
 #   - Windows: loads tcltk, whose Tcl/Tk must then come from the tree's
@@ -158,17 +160,18 @@ if (is.null(attr(out, "status")) ||
     dir.exists(file.path(lib, "hermeticSrc")))
     stop("no compile preflight with rzig's compilers text:\n", paste(out, collapse = "\n"))
 cat("preflight: compiled package stopped:", grep("^Compiling needs", out, value = TRUE), "\n")
-if (!windows) {
-    ## its exit status is rzig's, 127, which system2(stdout = TRUE) would
-    ## turn into an R error: into a file instead
-    log <- file.path(tempdir(), "config.log")
-    st <- suppressWarnings(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "CC"),
-                                   stdout = log, stderr = log))
-    cfg <- readLines(log)
-    if (st == 0L || !any(startsWith(cfg, "Building packages needs the r-zig build tools for R ")))
-        stop("R CMD config without make: exit ", st, ", not rzig's build-tools text:\n", paste(cfg, collapse = "\n"))
-    cat("R CMD config: exit", st, "with rzig's build-tools text:", grep("^Building packages", cfg, value = TRUE), "\n")
-}
+## Its exit status is rzig's, 127, which system2(stdout = TRUE) would
+## turn into an R error: into a file instead. Windows: rcmdfn.c's check
+## runs before config.sh's sh, so cmd.exe has no sh to miss (PHASE7 open
+## point J a).
+log <- file.path(tempdir(), "config.log")
+st <- suppressWarnings(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "CC"),
+                               stdout = log, stderr = log))
+cfg <- readLines(log)
+if (st != 127L || !any(startsWith(cfg, "Building packages needs the r-zig build tools for R ")) ||
+    any(grepl("is not recognized", cfg, fixed = TRUE)))
+    stop("R CMD config without the build tools: exit ", st, ", not rzig's 127 and build-tools text alone:\n", paste(cfg, collapse = "\n"))
+cat("R CMD config: exit", st, "with rzig's build-tools text:", grep("^Building packages", cfg, value = TRUE), "\n")
 if (online) {
     install.packages("R6", repos = repo, lib = lib, type = "source")
     stopifnot(requireNamespace("R6", lib.loc = lib))

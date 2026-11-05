@@ -1,0 +1,6 @@
+package: m2-mpfr 4.2.2.1 hc364b38_6
+license: LGPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/mpfr-4.2.2-1.src.tar.zst sha256:e0c56e3af3819471e74dd37e32660e4eb8f58761c4d214dabd2d62f57c548869
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/mpfr-4.2.2-1.src.tar.zst
+file: COPYING.LESSER e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118 <- mpfr/mpfr-4.2.2.tar.xz:mpfr-4.2.2/COPYING.LESSER
+file: COPYING 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986 <- mpfr/mpfr-4.2.2.tar.xz:mpfr-4.2.2/COPYING

@@ -1,0 +1,10 @@
+package: m2-msys2-runtime 3.6.1.4 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/msys2-runtime-3.6.1-4.src.tar.zst sha256:73b0423e3ee8e6d83b4661e502fcc4ed033eb3b5d449f8af26e0f919d1fe8321
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/msys2-runtime-3.6.1-4.src.tar.zst
+file: winsup/CYGWIN_LICENSE 794433752103cf4bbb4a84a1bdb8fbc150abb1762704bb35fecc9f7f820be984 <- msys2-runtime/msys2-runtime (git, tag cygwin-3.6.1, a439763b8de45f4cd93849ed883e167493061a6d):winsup/CYGWIN_LICENSE
+file: winsup/COPYING 8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903 <- msys2-runtime/msys2-runtime (git, tag cygwin-3.6.1, a439763b8de45f4cd93849ed883e167493061a6d):winsup/COPYING
+file: winsup/COPYING.LIB da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768 <- msys2-runtime/msys2-runtime (git, tag cygwin-3.6.1, a439763b8de45f4cd93849ed883e167493061a6d):winsup/COPYING.LIB
+file: COPYING.NEWLIB fcfb5ec69b6ab52676dcc4dab7cf4338c8000ef97812dadd35b8592a640a8419 <- msys2-runtime/msys2-runtime (git, tag cygwin-3.6.1, a439763b8de45f4cd93849ed883e167493061a6d):COPYING.NEWLIB
+file: COPYING.LIBGLOSS bdaffd5fff30cb5fc7a239a4fa0b95f703590f7b3813ca7f4e76ff46437aeb81 <- msys2-runtime/msys2-runtime (git, tag cygwin-3.6.1, a439763b8de45f4cd93849ed883e167493061a6d):COPYING.LIBGLOSS
+note: the texts differ from conda-meta's license: msys-2.0.dll is the Cygwin DLL, whose sources are LGPL-3.0-or-later with Cygwin's linking exception (winsup/CYGWIN_LICENSE), and its newlib and libgloss parts carry the BSD-like licences of COPYING.NEWLIB and COPYING.LIBGLOSS; GPL-3.0-or-later covers the cygserver, lsaauth and utils sources, which usr/bin does not take

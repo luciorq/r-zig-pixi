@@ -1,0 +1,5 @@
+package: m2-libreadline 8.2.013.1 hc364b38_6
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/readline-8.2.013-1.src.tar.zst sha256:ad655ca45db2efb27bc127478dbde3b38596d14d7741e14103dfc07162b4be51
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/readline-8.2.013-1.src.tar.zst
+file: COPYING 8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903 <- readline/readline-8.2.tar.gz:readline-8.2/COPYING
