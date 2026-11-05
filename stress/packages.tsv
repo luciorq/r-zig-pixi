@@ -4,10 +4,12 @@
 #   package     CRAN/Bioconductor name, or name:variant (a second install of the
 #               same package with other env vars, into a library of its own)
 #   group       g3 C libraries from the env, g4 own build systems / bundled code,
-#               g2 C++ across a library boundary, g1 heavy C++ (the brief's 1-4)
+#               g2 C++ across a library boundary, g1 heavy C++ (the brief's 1-4);
+#               g0 rzig itself
 #   tags        extra labels a target or --skip can name: heavy (long builds,
 #               e.g. `--skip=heavy` on small CI runners); name@os limits one
-#               to an OS (heavy@linux)
+#               to an OS (heavy@linux); local: no CRAN package, stress.R
+#               writes it and installs it STRESS_REPEAT times (env)
 #   oses        all, or a comma list of linux, macos, windows
 #   sysdeps     conda-forge names the row needs in the libraries env;
 #               name@os limits one to an OS. For documentation, the drift
@@ -26,6 +28,7 @@
 #               other characters as \u escapes.
 #   note        why the row is here, what it exercises
 package	group	tags	oses	sysdeps	env	timeout_min	expect	smoke	note
+tinyjobs	g0	local	all	-	MAKEFLAGS=-j32;STRESS_REPEAT=20	5	ok	all(vapply(1:64, function(k) .Call(paste0("f", k), PACKAGE = "tinyjobs"), 0L) == 1:64)	many tiny jobs at a high -j, repeated (feat-tier1-engine): 64 one-line C files, 20 installs at -j 32, a fresh copy each time; tier1.zig's pool starts and ends many quick compiles, which guards its lifetime rule (defer sel.cancelDiscard(); without it 4 of 302 installs aborted in cr27's benchmark)
 curl	g3	-	all	libcurl	-	15	ok	curl::curl_version()$version	tree vendors libcurl.so.4 (same soname as the env's); windows: tools/winlibs.R downloads an r-windows bundle and ignores the env; windows 2026-10-08: ok; R_COMPILED_BY is 'clang 21.1.8', so winlibs.R takes the clang-x86_64 bundle
 openssl	g3	-	all	openssl	-	15	ok	openssl::sha256("abc")	windows: downloads an r-windows bundle; windows 2026-10-08: ok, through pkg-config to the env's openssl (C API)
 xml2	g3	-	all	libxml2-devel	-	15	ok	xml2::xml_text(xml2::read_xml("<a>x</a>"))	libxml2-devel holds xml2-config and libxml-2.0.pc (conda-forge split); windows: downloads a bundle; windows 2026-10-08: ok, through pkg-config to the env's libxml2 (C API)

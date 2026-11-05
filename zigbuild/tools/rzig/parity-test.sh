@@ -822,15 +822,13 @@ check "rzig build: no zig, 127, the compilers group, and the build root is gone"
     [ -d '$W/out/p1' ] && [ ! -e '$W/out/p1/.rzig' ]"
 check "rzig build: RZIG_KEEP_ROOT=1 keeps it" \
   bash -c "$pc pkg_build p1 PATH='$W/nothing' RZIG_KEEP_ROOT=1; [ \$? = 127 ] && [ -f '$W/out/p1/.rzig/plan.zon' ]"
-# rzig build for real (the real zig, the repo's rpkg): a tier-1 package
-# three times, each from a new directory as install.R unpacks every
-# install, the third with another R's rpkg (a copy elsewhere, the same
-# build_t1.zig). The steps write the objects and the library into the
-# build root (kept here), and zig build's cache, build-runner-<key> in
-# rzig's cache, holds build_t1.zig's copy, which zig builds from, and its
-# build runner alone: the later builds add no file there, whichever R
-# they come from (pkgbuild.zig's sharedRunner; stress dispatch
-# 38467907779) [code-runner-growth, tests-1].
+# rzig build for real (the real zig): a tier-1 package twice, each from a
+# new directory as install.R unpacks every install, in an R_HOME with no
+# share/zig/rpkg (tier 1 needs none; a tree without build_t1.zig no longer
+# goes to make). rzig compiles and links it itself (tier1.zig): the
+# objects and the library in the build root (kept here), no zig build, so
+# no build-runner-* entry in rzig's cache, and the second build adds no
+# file there (feat-tier1-engine).
 if [ -n "$real_zig" ]; then
   tree rbtree
   rb=$W/rbtree/lib/R
@@ -838,30 +836,24 @@ if [ -n "$real_zig" ]; then
   grep -v '^LIBR' "$rh/etc/Makeconf" > "$rb/etc/Makeconf"   # no libR to link here
   cp "$rh/share/make/shlib.mk" "$rb/share/make/"
   printf 'Package: pb\n' > "$W/pkgs/pb/DESCRIPTION"; printf 'int pb(void) { return 1; }\n' > "$W/pkgs/pb/src/a.c"
-  rm -rf "$W/rpkg2"; cp -R "$here/../../rpkg" "$W/rpkg2"
-  rb_build() { # <n> [<rpkg dir>]: pb copied to $W/rb/<n>/pb, built into $W/rb/<n>/out, the root kept
+  rb_build() { # <n>: pb copied to $W/rb/<n>/pb, built into $W/rb/<n>/out, the root kept
     rm -rf "$W/rb/$1"; mkdir -p "$W/rb/$1"; cp -R "$W/pkgs/pb" "$W/rb/$1/"
     env -i R_HOME="$rb" HOME="$W/rbhome" XDG_CACHE_HOME="$W/rbcache" ZIG_BIN="$real_zig" ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-$W/zig-global}" \
-      ${rb_env:+"$rb_env"} PATH="$W/nothing" RZIG_KEEP_ROOT=1 RZIG_TRACE=1 "$RZIG" build --pkg "$W/rb/$1/pb" --out "$W/rb/$1/out" --rpkg-dir "${2:-$here/../../rpkg}" > "$W/check.out" 2> "$W/check.err"
+      ${rb_env:+"$rb_env"} PATH="$W/nothing" RZIG_KEEP_ROOT=1 RZIG_TRACE=1 "$RZIG" build --pkg "$W/rb/$1/pb" --out "$W/rb/$1/out" > "$W/check.out" 2> "$W/check.err"
   }
-  # the files in rzig's cache's build-runner directories (their names
-  # included); pb's object or library is not among them (the runner's own
-  # names differ)
-  runner_files() { (cd "$W/rbcache/r-zig" && find . -path './build-runner-*' -type f | LC_ALL=C sort); }
-  pc="$pc rb='$rb'; real_zig='$real_zig'; $(declare -f rb_build runner_files);"
-  check "rzig build: tier 1, the objects and the library in the build root, zig build's cache in rzig's, from build_t1.zig's copy there" \
+  # the files in rzig's cache (their names included), none when there is
+  # no cache (macOS: no dso_fini.o)
+  cache_files() { if [ -d "$W/rbcache/r-zig" ]; then (cd "$W/rbcache/r-zig" && find . -type f | LC_ALL=C sort); fi; }
+  pc="$pc rb='$rb'; real_zig='$real_zig'; $(declare -f rb_build cache_files);"
+  check "rzig build: tier 1, the objects and the library in the build root, no zig build, nothing of pb's and no build-runner-* in rzig's cache" \
     bash -c "$pc rb_build 1 && [ -f '$W/rb/1/out/libs/pb.so' ] && [ -f '$W/rb/1/out/.rzig/obj/0/a.o' ] && [ -f '$W/rb/1/out/.rzig/pb.so' ] &&
-      [ ! -e '$W/rb/1/out/.rzig/zig-cache' ] && [ \$(ls -d '$W/rbcache/r-zig'/build-runner-* | wc -l) = 1 ] &&
-      grep -qE -- ' --build-file $W/rbcache/r-zig/build-runner-[0-9a-f]{32}/build_t1.zig --cache-dir $W/rbcache/r-zig/build-runner-[0-9a-f]{32} ' '$W/check.err' &&
-      runner_files > '$W/rb/state1'"
-  check "rzig build: neither pb's object nor its library in zig build's cache" \
-    bash -c "[ -s '$W/rb/state1' ] && [ -z \"\$(find '$W/rbcache/r-zig' -name a.o -o -name pb.so)\" ]"
-  check "rzig build: tier 1 again from another directory, the same build runner, no file added to it" \
-    bash -c "$pc rb_build 2 && [ -f '$W/rb/2/out/libs/pb.so' ] && runner_files > '$W/rb/state2' && cmp -s '$W/rb/state1' '$W/rb/state2'"
-  check "rzig build: tier 1 from another R with the same build_t1.zig, the same build runner, no file added to it" \
-    bash -c "$pc rb_build 3 '$W/rpkg2' && [ -f '$W/rb/3/out/libs/pb.so' ] && runner_files > '$W/rb/state3' && cmp -s '$W/rb/state1' '$W/rb/state3'"
+      [ ! -e '$W/rb/1/out/.rzig/zig-cache' ] && ! ls -d '$W/rbcache/r-zig'/build-runner-* > /dev/null 2>&1 &&
+      grep -qxF 'rzig build: tier 1, root $W/rb/1/out/.rzig' '$W/check.err' && ! grep -q -- ' build --build-file ' '$W/check.err' &&
+      [ -z \"\$(find '$W/rbcache' -name a.o -o -name pb.so 2> /dev/null)\" ] && cache_files > '$W/rb/state1'"
+  check "rzig build: tier 1 again from another directory, no file added to rzig's cache" \
+    bash -c "$pc rb_build 2 && [ -f '$W/rb/2/out/libs/pb.so' ] && cache_files > '$W/rb/state2' && cmp -s '$W/rb/state1' '$W/rb/state2'"
   # The link's objects in the build root's objects.rsp, one a line in
-  # double quotes, named from src/ (build_t1.zig's objectsFile;
+  # double quotes, named from src/ (tier1.zig, response.zig's rspText;
   # feat-win-link-fixes item 1); RZIG_TRACE's line names them in its
   # place, as make's link does (response.zig). A -g compile with no -g on
   # the link (pkgbuild's compile_dll(debug = TRUE)): strip.zig reads the
@@ -880,12 +872,12 @@ fi
 # an R_HOME whose Makeconf has no libR to link (as rb's) and the C++ and
 # Fortran 9x lines; a case that checks the build root sets
 # R_SESSION_TMPDIR=$W/sh/<n>.tmp. The builds use the real zig and rb's
-# rzig cache, whose build runner they share.
+# rzig cache.
 tree shtree
 sh_rh=$W/shtree/lib/R
 sh_tc=$sh_rh/bin/toolchain
 cp "$RZIG" "$sh_tc/zig-fc"
-mkdir -p "$sh_rh/etc" "$sh_rh/share/make" "$W/sh/empty-rpkg"
+mkdir -p "$sh_rh/etc" "$sh_rh/share/make"
 grep -v '^LIBR' "$rh/etc/Makeconf" > "$sh_rh/etc/Makeconf"
 cat >> "$sh_rh/etc/Makeconf" <<'MK'
 CXXFLAGS = -O2
@@ -939,9 +931,6 @@ check "rzig build --shlib: a Makevars rule, no zig, no make: 127, the compilers'
     l=\$(grep -n '^rzig build: foo.so needs make: Makevars has a rule or target line: .all: .(SHLIB) extra.; no make on PATH\$' '$W/check.err' | cut -d: -f1) &&
     b=\$(grep -n '^Building packages needs the r-zig build tools for R ' '$W/check.err' | cut -d: -f1) &&
     [ \"\$c\" -lt \"\$l\" ] && [ \"\$l\" -lt \"\$b\" ] && [ ! -e '$W/sh/5/foo.so' ]"
-check "rzig build --shlib: a missing build_t1.zig, 3: a damaged tree, make builds it" \
-  bash -c "$pc sh_dir 6; sh_build 6 -- --output foo.so --rpkg-dir '$W/sh/empty-rpkg' -- foo.c; [ \$? = 3 ] &&
-    grep -qxF 'rzig build: $W/sh/empty-rpkg/build_t1.zig is missing: R_HOME/share/zig/rpkg is not installed; make builds this' '$W/check.err' && no_root 6"
 # a zig that is not R's (another minor version; R CMD SHLIB has no
 # preflight): make's, 3, when make is there, else 1 and the compilers'
 # text; zig build never runs [shlib-r-2]
@@ -958,14 +947,14 @@ if [ -n "$real_zig" ]; then
   # the real builds, with rb's rzig cache and zig's global cache
   sh_env="HOME=$W/rbhome XDG_CACHE_HOME=$W/rbcache ZIG_BIN=$real_zig ZIG_GLOBAL_CACHE_DIR=${ZIG_GLOBAL_CACHE_DIR:-$W/zig-global}"
   pc="$pc sh_env='$sh_env';"
-  check "rzig build --shlib: a real build, the library and nothing beside it, junk.c not compiled, no file added to the build runner" \
+  check "rzig build --shlib: a real build, the library and nothing beside it, junk.c not compiled, no zig build, no file added to rzig's cache" \
     bash -c "$pc sh_dir 7 && sh_build 7 \$sh_env RZIG_TRACE=1 R_SESSION_TMPDIR='$W/sh/7.tmp' -- --output foo.so -- foo.c &&
       [ -f '$W/sh/7/foo.so' ] && [ ! -e '$W/sh/7/foo.o' ] && no_root 7 &&
       grep -q '^rzig build: R CMD SHLIB, tier 1, root $W/sh/7.tmp/\.rzig\.[0-9a-f]\{16\}\$' '$W/check.err' &&
-      ! grep -q junk '$W/check.err' && runner_files > '$W/sh/state7' && cmp -s '$W/rb/state1' '$W/sh/state7'"
+      ! grep -q junk '$W/check.err' && ! grep -q -- ' build --build-file ' '$W/check.err' && cache_files > '$W/sh/state7' && cmp -s '$W/rb/state1' '$W/sh/state7'"
   # R's session directory below the sources, in a directory named -tmp:
   # objects.rsp names each object `./-tmp/...`, not as an option
-  # (build_t1.zig's rspName; feat-win-link-fixes review R1)
+  # (response.zig's rspName; feat-win-link-fixes review R1)
   check "rzig build --shlib: the root under ./-tmp, the link reads its objects, the root gone" \
     bash -c "$pc sh_dir 14 && mkdir '$W/sh/14/-tmp' && sh_build 14 \$sh_env R_SESSION_TMPDIR='$W/sh/14/-tmp' -- --output foo.so -- foo.c &&
       [ -f '$W/sh/14/foo.so' ] && [ -z \"\$(ls -A '$W/sh/14/-tmp')\" ]"

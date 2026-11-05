@@ -89,8 +89,15 @@ fn isArchive(ctx: *Ctx, path: []const u8) bool {
 /// The copy of `path` in the cache, made if it is not there yet; null,
 /// with a warning, when it cannot be made (zig then names the input).
 fn cached(ctx: *Ctx, path: []const u8) !?[]const u8 {
+    const cache_root = cache.root(ctx) catch |err| switch (err) {
+        error.NoCacheHome => {
+            ctx.warn("cannot copy {s} into rzig's cache: {t}", .{ path, err });
+            return null;
+        },
+        else => |e| return e,
+    };
     const k = (try contentKey(ctx, path)) orelse return null;
-    const dest = try ctx.fmt("{s}/archive-{s}/{s}.a", .{ try cache.root(ctx), &k, cmdline.baseName(path) });
+    const dest = try ctx.fmt("{s}/archive-{s}/{s}.a", .{ cache_root, &k, cmdline.baseName(path) });
     if (ctx.isFile(dest)) return dest;
     Io.Dir.cwd().copyFile(path, Io.Dir.cwd(), dest, ctx.io, .{ .make_path = true, .replace = true }) catch |err| {
         ctx.warn("cannot copy {s} to {s}: {t}", .{ path, dest, err });
@@ -184,4 +191,14 @@ test "a copy it cannot make: the input unchanged, with a warning" {
     const args: Args = &.{ "-shared", "-o", "x.so", f.path("deps/v8_monolith") };
     try expectArgs(args, try rename(&f.ctx, args));
     try testing.expect(mem.find(u8, f.takeWarnings(), "cannot copy") != null);
+}
+
+test "no cache home: the input unchanged, with a warning" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    try f.write("deps/v8_monolith", "!<arch>\n", .default_file);
+    const args: Args = &.{ "-shared", "-o", "x.so", f.path("deps/v8_monolith") };
+    try expectArgs(args, try rename(&f.ctx, args));
+    try testing.expectEqualStrings(f.fmt("rzig-test: cannot copy {s} into rzig's cache: NoCacheHome\n", .{f.path("deps/v8_monolith")}), f.takeWarnings());
 }

@@ -1,8 +1,9 @@
-//! `rzig build`: one source package's native library with zig build alone
+//! `rzig build`: one source package's native library without make
 //! (design record .github/devdocs/feat-zig-pkg-build/PLAN.md). Classifies
-//! the package (pkgplan.zig), writes its plan, and runs zig build on the
-//! root R ships in R_HOME/share/zig/rpkg (zigbuild/rpkg/): tier 1 reads the
-//! plan, tier 2 adds the package's own src/build.zig as a path dependency.
+//! the package (pkgplan.zig) and writes its plan. Tier 1: rzig compiles
+//! and links the plan itself (tier1.zig, feat-tier1-engine). Tier 2: zig
+//! build on the root R ships in R_HOME/share/zig/rpkg (zigbuild/rpkg/),
+//! with the package's own src/build.zig as a path dependency.
 //! install.R calls it before its make path (M3); exit 3 means "this
 //! package needs make", and R goes on as it did.
 //!
@@ -10,6 +11,11 @@
 //!              [--linkingto <dir>]... [--cxx-std NN] [--c-std NN] [--use-lto yes|no]
 //!              [--debug] [-j N] [--r-home <dir>] [--rpkg-dir <dir>] [--cache-dir <dir>]
 //!              [--keep-root]
+//!
+//! --rpkg-dir (the root files' directory, default R_HOME/share/zig/rpkg)
+//! and --cache-dir (zig build's cache) are tier 2's: tier 1 and --shlib
+//! run no zig build, and take them and ignore them (Cc4: flags are added,
+//! never removed).
 //!
 //! The library goes to <out>/libs<R_ARCH>/<pkg>.so (a package's installed
 //! layout), or with --flat to <out>/<pkg>.so, where make leaves it in
@@ -19,7 +25,8 @@
 //!   rzig build --pkg <dir> --classify      the tier to stdout
 //!
 //! Exit 0 built (or nothing to build), 3 needs make (why, on stderr),
-//! 2 usage, 1 failed, 127 no zig (the compilers group's text). A tier-2
+//! 2 usage, 1 failed, 127 no zig (the compilers group's text); a crash
+//! is never 3 (crash.zig: 70 on Windows, SIGABRT elsewhere). A tier-2
 //! package whose plan needs make is 1, not 3: make would ignore its
 //! build.zig (`buildZigNeedsMake`). R_HOME from the environment, as
 //! under R. `--classify` prints the decided tier (r_only, makevars, zig,
@@ -28,11 +35,9 @@
 //! `--plan-only` the plan. The install preflight (check.zig's
 //! --rzig-check=package) decides through `decide` below. Whatever the
 //! exit, the build root <out>/.rzig is gone afterwards unless kept
-//! (--keep-root, RZIG_KEEP_ROOT=1); zig build's cache, for tier 1 its
-//! build runner alone, is shared in rzig's cache (`zigBuildDirs`). A
-//! tier-1 build whose R_HOME/share/zig/rpkg/build_t1.zig is missing exits
-//! 3: a damaged tree, which make builds, as with no rzig
-//! (feat-shlib-rzig-build Cc8).
+//! (--keep-root, RZIG_KEEP_ROOT=1). Tier 1 runs no zig build: rzig
+//! compiles and links the plan itself (tier1.zig); tier 2's zig build
+//! has a cache in the build root, gone with it.
 //!
 //!   rzig build --shlib --output <lib> [--pkg-libs <words>] [--use-lto yes|no] [--c-std NN]
 //!              [--debug] [-j N] [--dry-run] [--plan-only]
@@ -52,7 +57,7 @@
 //! Before the root, the compilers check the install preflight makes
 //! (check.zig's shlibCompilers; R CMD SHLIB has no preflight): a missing
 //! zig or flang exits 127 after the compilers group's text, and a zig
-//! that is not R's, which could not compile build_t1.zig, exits 3 when
+//! that is not R's exits 3 when
 //! make is there (R's make path with zig-cc, as before), else 1
 //! [shlib-r-2]. A call that
 //! needs make exits 3, or, when a group it needs is missing (make, zig,
@@ -75,6 +80,7 @@ const groups = @import("groups.zig");
 const cache = @import("cache.zig");
 const check = @import("check.zig");
 const shellwords = @import("shellwords.zig");
+const tier1 = @import("tier1.zig");
 
 pub const exit_needs_make: u8 = 3;
 
@@ -87,6 +93,7 @@ const usage =
     \\       rzig build --shlib --output <lib> [--pkg-libs <words>] [--use-lto yes|no] [--c-std NN]
     \\                  [--debug] [-j N] [--dry-run] [--plan-only]
     \\                  [--r-home <dir>] [--rpkg-dir <dir>] [--cache-dir <dir>] [--keep-root] -- <file>...
+    \\--rpkg-dir and --cache-dir are tier 2's; tier 1 and --shlib ignore them.
     \\
 ;
 
@@ -397,8 +404,6 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         return 2;
     };
     const rpkg_dir = args.rpkg_dir orelse try ctx.fmt("{s}/share/zig/rpkg", .{r_home});
-    const t1_file = try ctx.fmt("{s}/build_t1.zig", .{rpkg_dir});
-    if (class.tier == .makevars and !ctx.isFile(t1_file)) return missingRoot(ctx, t1_file);
     Io.Dir.cwd().createDirPath(ctx.io, out_in) catch |err| {
         ctx.warn("cannot create {s}: {t}", .{ out_in, err });
         return 1;
@@ -422,9 +427,9 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     if (!try writePlan(ctx, &plan, root)) return 1;
     var build_file: []const u8 = undefined;
     switch (class.tier) {
-        .makevars => build_file = t1_file,
+        .makevars => return tier1Build(ctx, args, &plan, root, out, "tier 1"),
         .zig => {
-            const files = [_][2][]const u8{ .{ "build_t2.zig", "build.zig" }, .{ "build_t1.zig", "build_t1.zig" }, .{ "rpkg.zig", "rpkg.zig" } };
+            const files = [_][2][]const u8{ .{ "build_t2.zig", "build.zig" }, .{ "rpkg.zig", "rpkg.zig" } };
             for (files) |f| {
                 Io.Dir.cwd().copyFile(try ctx.fmt("{s}/{s}", .{ rpkg_dir, f[0] }), Io.Dir.cwd(), try ctx.fmt("{s}/{s}", .{ root, f[1] }), ctx.io, .{}) catch |err| {
                     ctx.warn("cannot copy {s}/{s} into {s}: {t} (is R_HOME/share/zig/rpkg installed?)", .{ rpkg_dir, f[0], root, err });
@@ -467,15 +472,7 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         },
         else => unreachable,
     }
-    return zigBuild(ctx, args, &plan, class.tier, root, build_file, out, if (class.tier == .zig) "tier 2" else "tier 1");
-}
-
-/// tier 1's root file missing: a damaged tree, as one with no rzig, so
-/// make builds this; exit 3 (feat-shlib-rzig-build Cc8). Tier 2 has no
-/// make to fall back to: a missing root file fails it (1).
-fn missingRoot(ctx: *Ctx, build_file: []const u8) u8 {
-    ctx.warn("{s} is missing: R_HOME/share/zig/rpkg is not installed; make builds this", .{build_file});
-    return exit_needs_make;
+    return zigBuild(ctx, args, &plan, class.tier, root, build_file, out, "tier 2");
 }
 
 fn keepRoot(ctx: *const Ctx, args: Args) bool {
@@ -494,9 +491,31 @@ fn writePlan(ctx: *Ctx, plan: *const pkgplan.Plan, root: []const u8) !bool {
     return true;
 }
 
-/// zig build on the build root `root`, which holds plan.zon (and for tier
-/// 2 the root files), installing into `out`: one path for both modes and
-/// both tiers. `label` names the build in RZIG_TRACE's line.
+/// Tier 1 (a package's, and R CMD SHLIB's): rzig compiles and links the
+/// plan in the build root `root` (tier1.zig), the library into `out`'s
+/// libs_dir. No zig build, so no build runner to compile or cache: what
+/// is shared across installs is zig's global cache (std, compiler_rt,
+/// zig cc's objects keyed by the source as named and its contents, so a
+/// reinstall of the same sources adds none, as on make's path [tests-T1]).
+/// `label` names the build in RZIG_TRACE's line.
+fn tier1Build(ctx: *Ctx, args: Args, plan: *const pkgplan.Plan, root: []const u8, out: []const u8, label: []const u8) !u8 {
+    // no zig: 127 and the compilers group's text once, before any compile
+    // says it (main.zig)
+    const zig = (try find_zig.find(ctx)) orelse {
+        try groups.report(ctx, groups.no_zig, .compilers);
+        return 127;
+    };
+    try reportCompilers(ctx, plan, .makevars, zig.argv);
+    if (isSet(ctx, "RZIG_TRACE")) ctx.warn("{s}, root {s}", .{ label, root });
+    const dest = if (plan.libs_dir.len == 0) try ctx.fmt("{s}/{s}", .{ out, plan.output }) else try ctx.fmt("{s}/{s}/{s}", .{ out, plan.libs_dir, plan.output });
+    const code = try tier1.build(ctx, plan, .{ .root = root, .dest = dest, .jobs = if (args.jobs) |j| tier1.jobCount(j) else 0 });
+    if (code != 0 and keepRoot(ctx, args)) ctx.warn("the build root is kept in {s}", .{root});
+    return code;
+}
+
+/// zig build on tier 2's build root `root`, which holds plan.zon and the
+/// root files, installing into `out`. `label` names the build in
+/// RZIG_TRACE's line.
 fn zigBuild(ctx: *Ctx, args: Args, plan: *const pkgplan.Plan, tier: pkgplan.Tier, root: []const u8, build_file: []const u8, out: []const u8, label: []const u8) !u8 {
     const no_packages = try ctx.fmt("{s}/no-packages", .{root});
     if (tier == .zig) Io.Dir.cwd().createDirPath(ctx.io, no_packages) catch |err| {
@@ -508,15 +527,12 @@ fn zigBuild(ctx: *Ctx, args: Args, plan: *const pkgplan.Plan, tier: pkgplan.Tier
         try groups.report(ctx, groups.no_zig, .compilers);
         return 127;
     };
-    // zig build's build file and cache (zigBuildDirs): for tier 1 the
-    // build runner's directory in rzig's cache, shared by every install;
-    // the objects and the library are written in the build root and go
-    // with it. zig's global cache is the other shared part: std and
-    // compiler_rt, keyed by target, and zig cc's objects, keyed by the
-    // source as named (relative to src/, as make names it: build_t1.zig)
-    // and its contents, so a reinstall of the same sources adds none, as
-    // on make's path [tests-T1].
-    const dirs = try zigBuildDirs(ctx, args.cache_dir, tier, root, zig.argv, build_file);
+    // zig build's cache: --cache-dir, else ZIG_LOCAL_CACHE_DIR (stress.R
+    // points it at its run directory), else <build root>/zig-cache, gone
+    // with the root. The root imports the package's build.zig from its
+    // path in this install, so its runner is new in every install, and a
+    // shared cache would only grow (feat-zig-pkg-build N3).
+    const cache_dir = args.cache_dir orelse ctx.getenv("ZIG_LOCAL_CACHE_DIR") orelse try ctx.fmt("{s}/zig-cache", .{root});
     try reportCompilers(ctx, plan, tier, zig.argv);
     // zig build makes an (empty) .zig-cache in a path dependency's directory,
     // the package's src/ here; leave src/ as it was found
@@ -524,9 +540,11 @@ fn zigBuild(ctx: *Ctx, args: Args, plan: *const pkgplan.Plan, tier: pkgplan.Tier
     const dep_cache_existed = tier == .zig and ctx.exists(dep_cache);
     var cmd: std.ArrayList([]const u8) = .empty;
     try cmd.appendSlice(ctx.arena, zig.argv);
-    try cmd.appendSlice(ctx.arena, &.{ "build", "--build-file", dirs.build_file, "--cache-dir", dirs.cache_dir, "--prefix", out, try ctx.fmt("-Dplan={s}/plan.zon", .{root}) });
+    try cmd.appendSlice(ctx.arena, &.{ "build", "--build-file", build_file, "--cache-dir", cache_dir, "--prefix", out, try ctx.fmt("-Dplan={s}/plan.zon", .{root}) });
     if (tier == .zig) try cmd.appendSlice(ctx.arena, &.{ "--system", no_packages });
-    if (args.jobs) |j| try cmd.append(ctx.arena, try ctx.fmt("-j{s}", .{j}));
+    // -j for zig build's steps, and through rpkg.zig for `rzig t1`'s
+    // compiles, which are one step
+    if (args.jobs) |j| try cmd.appendSlice(ctx.arena, &.{ try ctx.fmt("-j{s}", .{j}), try ctx.fmt("-Djobs={d}", .{tier1.jobCount(j)}) });
     if (isSet(ctx, "RZIG_TRACE")) {
         ctx.warn("{s}, root {s}", .{ label, root });
         ctx.warn("{s}", .{try mem.join(ctx.arena, " ", cmd.items)});
@@ -614,12 +632,8 @@ fn shlibIn(ctx: *Ctx, args: Args, r_home: []const u8, cwd: []const u8, stdout: *
         try printCommands(ctx, &plan, output, stdout);
         return 0;
     }
-    const rpkg_dir = args.rpkg_dir orelse try ctx.fmt("{s}/share/zig/rpkg", .{r_home});
-    const build_file = try ctx.fmt("{s}/build_t1.zig", .{rpkg_dir});
-    if (!ctx.isFile(build_file)) return missingRoot(ctx, build_file);
     // the compilers check the install preflight (patch 0009) makes for a
-    // package, which R CMD SHLIB has none of: a zig that is not R's failed
-    // in build_t1.zig's compile where make, with zig-cc, built [shlib-r-2]
+    // package, which R CMD SHLIB has none of [shlib-r-2]
     const comp = try check.shlibCompilers(ctx, output, fortran);
     if (comp != 0) return comp;
     Io.Dir.cwd().createDirPath(ctx.io, out_dir) catch |err| {
@@ -646,7 +660,7 @@ fn shlibIn(ctx: *Ctx, args: Args, r_home: []const u8, cwd: []const u8, stdout: *
     if (!try writePlan(ctx, &plan, root)) return 1;
     // not "tier 1, ...": pkg-parity's and verify-bundle's greps for a
     // package's tier never take a configure script's SHLIB for it
-    return zigBuild(ctx, args, &plan, .makevars, root, build_file, out_dir, "R CMD SHLIB, tier 1");
+    return tier1Build(ctx, args, &plan, root, out_dir, "R CMD SHLIB, tier 1");
 }
 
 /// R's session directory, R_SESSION_TMPDIR, which unix R sets for its
@@ -702,134 +716,6 @@ pub fn printCommands(ctx: *Ctx, plan: *const pkgplan.Plan, output: []const u8, w
     try w.print("if test \"z{s}\" != \"z\"; then \\\n", .{try mem.join(a, " ", objs.items)});
     if (plan.def) try w.print("  {s} def -o {s}{s}; \\\n", .{ try shellwords.quote(a, plan.rzig), try shellwords.quote(a, try ctx.fmt("{s}.def", .{base})), quoted_objs.items });
     try w.print("  echo {s}; \\\n  {s}; \\\nfi\n", .{ link.items, link.items });
-}
-
-/// zig build's --build-file and --cache-dir.
-const ZigBuildDirs = struct { build_file: []const u8, cache_dir: []const u8 };
-
-/// The build file as found (R_HOME's build_t1.zig, or for tier 2 the
-/// build root's build.zig) with --cache-dir, else ZIG_LOCAL_CACHE_DIR
-/// (stress.R points it at its run directory); else by tier.
-///
-/// Tier 1: the build runner's directory in rzig's cache (`sharedRunner`),
-/// shared by every install. Compiling build_t1.zig's runner in every
-/// install (a cache per install, feat-zig-pkg-build N3) added 3.3 s
-/// (ubuntu-latest) to 12.8 s (windows-latest) per tier-1 install in stress
-/// dispatch 38467907779, where make installs a small package in 1 to 2 s
-/// (feat-standalone-toolchain TODO.md, "Depend less on make": the shared
-/// tier-1 build runner) [stress-S1, records-REC-4]. build_t1.zig's steps
-/// write into the build root, so the directory holds the runner and
-/// nothing of an install. When it cannot be used, the build root's, as
-/// for tier 2.
-///
-/// Tier 2: <build root>/zig-cache, gone with the root. The root imports the
-/// package's build.zig from its path in this install, so its runner is
-/// new in every install, and a shared cache would only grow (N3).
-fn zigBuildDirs(ctx: *Ctx, given: ?[]const u8, tier: pkgplan.Tier, root: []const u8, zig: []const []const u8, build_file: []const u8) !ZigBuildDirs {
-    if (given orelse ctx.getenv("ZIG_LOCAL_CACHE_DIR")) |d| return .{ .build_file = build_file, .cache_dir = d };
-    if (tier == .makevars) {
-        if (try sharedRunner(ctx, zig, build_file)) |dirs| return dirs;
-    }
-    return .{ .build_file = build_file, .cache_dir = try ctx.fmt("{s}/zig-cache", .{root}) };
-}
-
-/// A build-runner directory no install has used for this long goes at the
-/// next tier-1 build (`sweepRunners`). A runner is about 45 MB on linux-64
-/// and compiles again in 3 to 13 s (dispatch 38467907779): a week keeps
-/// the runners in use and drops what an upgrade, a removed environment or
-/// another zig left behind [code-runner-growth].
-const runner_idle_days = 7;
-
-/// <rzig's cache>/build-runner-<key>, the key made of build_t1.zig's
-/// content, the zig command and what `zig version` says (as cache.zig's
-/// `compiled` keys its entries), with a copy of build_t1.zig in it that
-/// zig builds from. zig names the runner's manifest by its build file's
-/// path, relative to the cache when the file is in it, and checks the
-/// files' content against it. Built from R_HOME's own build_t1.zig, each
-/// R installation (a conda env, a worktree's compile tree, a wheel) added
-/// a runner of about 45 MB, and an upgrade in place a second one beside
-/// the first, which stayed. Built from the copy, every R whose
-/// build_t1.zig has that content shares the directory's one runner, and
-/// an upgrade (R's build_t1.zig, or zig) makes another directory, which
-/// the sweep removes whole once idle [code-runner-growth]. The zig
-/// command keeps conda-forge's and upstream's zig, both 0.16.0 with
-/// different std files, apart: the manifest's name is the same for both,
-/// so in one directory they would replace each other's runner whenever
-/// they alternate. On Windows the command is keyed with `/` only
-/// (cache.command): kappa got two directories for one conda-forge zig.
-///
-/// Each use writes the directory's `last-used` anew, which the sweep
-/// reads. That is also the check that rzig can create files there, which
-/// zig needs even on a hit (it opens the manifest for writing): an
-/// existing directory on a read-only file system, or in another user's
-/// cache, failed the build where the build root's cache works
-/// [code-unwritable-cache]. null when the directory cannot be used.
-fn sharedRunner(ctx: *Ctx, zig: []const []const u8, build_file: []const u8) !?ZigBuildDirs {
-    const source = Io.Dir.cwd().readFileAlloc(ctx.io, build_file, ctx.arena, .limited(1 << 20)) catch return null;
-    const command = try cache.command(ctx, zig);
-    const version = ctx.capture(try mem.concat(ctx.arena, []const u8, &.{ zig, &.{"version"} }));
-    const cache_root = try cache.root(ctx);
-    const dir = try ctx.fmt("{s}/build-runner-{s}", .{ cache_root, &cache.key(&.{ source, command, version.stdout }) });
-    const copy = try ctx.fmt("{s}/build_t1.zig", .{dir});
-    useRunnerDir(ctx, dir, copy, source, try ctx.fmt("{s}\n{s}\n", .{ command, version.stdout })) catch return null;
-    sweepRunners(ctx, cache_root) catch {};
-    return .{ .build_file = copy, .cache_dir = dir };
-}
-
-/// `dir` made, its `last-used` written (the zig it is for, for whoever
-/// looks), and the copy of build_t1.zig in place, written once.
-fn useRunnerDir(ctx: *Ctx, dir: []const u8, copy: []const u8, source: []const u8, stamp: []const u8) !void {
-    try Io.Dir.cwd().createDirPath(ctx.io, dir);
-    try writeWhole(ctx, try ctx.fmt("{s}/last-used", .{dir}), stamp);
-    if (!ctx.isFile(copy)) try writeWhole(ctx, copy, source);
-}
-
-/// `data` written under a temporary name in `path`'s directory, then
-/// renamed into place, as cache.zig makes its entries: parallel installs
-/// see the file whole or not at all. Making the temporary file is the
-/// check that rzig can create files there. A rename that fails while the
-/// file is there is no failure: another install renamed its own at the
-/// same moment (Windows refuses one of two such renames).
-fn writeWhole(ctx: *Ctx, path: []const u8, data: []const u8) !void {
-    var af = try Io.Dir.cwd().createFileAtomic(ctx.io, path, .{ .replace = true });
-    defer af.deinit(ctx.io);
-    try af.file.writeStreamingAll(ctx.io, data);
-    af.replace(ctx.io) catch |err| if (!ctx.isFile(path)) return err;
-}
-
-/// Removes from rzig's cache each build-runner directory whose
-/// `last-used` is `runner_idle_days` old (this build's was just written),
-/// and what an earlier sweep left half removed. A directory is renamed
-/// out of its name first, so an install finds it whole or not at all;
-/// one with no `last-used` (being made, or not rzig's to write) stays. An
-/// install that takes up a week-idle directory in the instant between
-/// the stat and the rename fails once; it takes another R or zig
-/// sweeping at that moment. The caller ignores errors: the sweep never
-/// fails a build.
-fn sweepRunners(ctx: *Ctx, cache_root: []const u8) !void {
-    var dir = try Io.Dir.cwd().openDir(ctx.io, cache_root, .{ .iterate = true });
-    defer dir.close(ctx.io);
-    const now = Io.Timestamp.now(ctx.io, .real);
-    // listed first, removed after: renaming entries while listing them
-    // could skip some
-    var gone: std.ArrayList([]const u8) = .empty;
-    var it = dir.iterate();
-    while (try it.next(ctx.io)) |e| {
-        if (!mem.startsWith(u8, e.name, "build-runner-")) continue;
-        if (!mem.endsWith(u8, e.name, ".old")) {
-            const st = dir.statFile(ctx.io, try ctx.fmt("{s}/last-used", .{e.name}), .{}) catch continue;
-            if (st.mtime.durationTo(now).toSeconds() < runner_idle_days * std.time.s_per_day) continue;
-        }
-        try gone.append(ctx.arena, try ctx.arena.dupe(u8, e.name));
-    }
-    for (gone.items) |name| {
-        var old = name;
-        if (!mem.endsWith(u8, name, ".old")) {
-            old = try cache.tempName(ctx, name, ".old");
-            dir.rename(name, dir, old, ctx.io) catch continue;
-        }
-        dir.deleteTree(ctx.io, old) catch {};
-    }
 }
 
 /// install.R's "using C compiler: '...'" lines (R CMD check greps them from
@@ -1109,7 +995,7 @@ test "the build root goes on every return, unless kept" {
     const r = try pkgplan.rHome(&f);
     try f.env.put("R_HOME", r);
     // the root's files, as R_HOME/share/zig/rpkg holds them
-    for ([_][]const u8{ "build_t1.zig", "build_t2.zig", "rpkg.zig" }) |n| try f.touch(f.fmt("rpkg/{s}", .{n}));
+    for ([_][]const u8{ "build_t2.zig", "rpkg.zig" }) |n| try f.touch(f.fmt("rpkg/{s}", .{n}));
     // tier 2 with a URL dependency: refused after the root is written, 1
     try f.write("u/DESCRIPTION", "Package: u\n", .default_file);
     try f.touch("u/src/build.zig");
@@ -1132,175 +1018,6 @@ test "the build root goes on every return, unless kept" {
     try testing.expectEqual(1, try run(c, &u_args));
     try testing.expect(c.isFile(f.path("out-u/.rzig/build.zig")) and c.isFile(f.path("out-u/.rzig/plan.zon")));
     _ = f.takeWarnings();
-}
-
-test "zig build's build file and cache: tier 1 the build runner's directory in rzig's cache, tier 2 the build root's" {
-    var f: testutil.Fixture = undefined;
-    try f.init(.linux);
-    defer f.deinit();
-    const c = &f.ctx;
-    try f.env.put("XDG_CACHE_HOME", f.path("xdg"));
-    const root = f.path("out/.rzig");
-    // two R installations with one build_t1.zig, and an upgraded one
-    try f.write("r1/build_t1.zig", "// t1\n", .default_file);
-    try f.write("r2/build_t1.zig", "// t1\n", .default_file);
-    try f.write("r3/build_t1.zig", "// t1, upgraded\n", .default_file);
-    const t1 = f.path("r1/build_t1.zig");
-    // no zig there: `zig version` says nothing, in the key all the same
-    const zig = [_][]const u8{f.path("a/zig")};
-    const other = [_][]const u8{f.path("b/zig")};
-    // tier 1: build-runner-<key of build_t1.zig's content, the zig
-    // command and its version>, made, with build_t1.zig's copy and
-    // last-used (the zig command and its version) in it
-    const dir = f.fmt("{s}/r-zig/build-runner-{s}", .{ f.path("xdg"), &cache.key(&.{ "// t1\n", f.path("a/zig"), "" }) });
-    const shared = try zigBuildDirs(c, null, .makevars, root, &zig, t1);
-    try testing.expectEqualStrings(dir, shared.cache_dir);
-    try testing.expectEqualStrings(f.fmt("{s}/build_t1.zig", .{dir}), shared.build_file);
-    var buf: [256]u8 = undefined;
-    try testing.expectEqualStrings("// t1\n", try Io.Dir.cwd().readFile(testing.io, shared.build_file, &buf));
-    try testing.expectEqualStrings(f.fmt("{s}\n\n", .{f.path("a/zig")}), try Io.Dir.cwd().readFile(testing.io, f.fmt("{s}/last-used", .{dir}), &buf));
-    // another install, from another R with the same build_t1.zig: the same
-    const again = try zigBuildDirs(c, null, .makevars, f.path("again/.rzig"), &zig, f.path("r2/build_t1.zig"));
-    try testing.expectEqualStrings(shared.cache_dir, again.cache_dir);
-    try testing.expectEqualStrings(shared.build_file, again.build_file);
-    // an upgraded build_t1.zig, another zig: other directories
-    const up = try zigBuildDirs(c, null, .makevars, root, &zig, f.path("r3/build_t1.zig"));
-    try testing.expectEqualStrings(f.fmt("{s}/r-zig/build-runner-{s}", .{ f.path("xdg"), &cache.key(&.{ "// t1, upgraded\n", f.path("a/zig"), "" }) }), up.cache_dir);
-    try testing.expectEqualStrings("// t1, upgraded\n", try Io.Dir.cwd().readFile(testing.io, up.build_file, &buf));
-    const oz = try zigBuildDirs(c, null, .makevars, root, &other, t1);
-    try testing.expectEqualStrings(f.fmt("{s}/r-zig/build-runner-{s}", .{ f.path("xdg"), &cache.key(&.{ "// t1\n", f.path("b/zig"), "" }) }), oz.cache_dir);
-    // tier 2: the build root's, the build file as given
-    const t2 = try zigBuildDirs(c, null, .zig, root, &zig, f.path("out/.rzig/build.zig"));
-    try testing.expectEqualStrings(f.path("out/.rzig/zig-cache"), t2.cache_dir);
-    try testing.expectEqualStrings(f.path("out/.rzig/build.zig"), t2.build_file);
-    // ZIG_LOCAL_CACHE_DIR for both tiers (empty is unset), --cache-dir
-    // over it; R_HOME's build_t1.zig then
-    try f.env.put("ZIG_LOCAL_CACHE_DIR", f.path("zlc"));
-    const zlc = try zigBuildDirs(c, null, .makevars, root, &zig, t1);
-    try testing.expectEqualStrings(f.path("zlc"), zlc.cache_dir);
-    try testing.expectEqualStrings(t1, zlc.build_file);
-    try testing.expectEqualStrings(f.path("zlc"), (try zigBuildDirs(c, null, .zig, root, &zig, t1)).cache_dir);
-    try testing.expectEqualStrings(f.path("given"), (try zigBuildDirs(c, f.path("given"), .makevars, root, &zig, t1)).cache_dir);
-    try f.env.put("ZIG_LOCAL_CACHE_DIR", "");
-    try testing.expectEqualStrings(dir, (try zigBuildDirs(c, null, .makevars, root, &zig, t1)).cache_dir);
-    // no rzig cache to make (here a file in its place): the build root's,
-    // R_HOME's build_t1.zig
-    try f.touch("file");
-    try f.env.put("XDG_CACHE_HOME", f.path("file"));
-    const none = try zigBuildDirs(c, null, .makevars, root, &zig, t1);
-    try testing.expectEqualStrings(f.path("out/.rzig/zig-cache"), none.cache_dir);
-    try testing.expectEqualStrings(t1, none.build_file);
-    try testing.expectEqualStrings("", f.takeWarnings());
-}
-
-test "Windows: one zig, one build-runner directory, whichever separator its path is spelled with" {
-    // feat-shared-build-runner open decision 1 (b)
-    var f: testutil.Fixture = undefined;
-    try f.init(.windows);
-    defer f.deinit();
-    const c = &f.ctx;
-    try f.env.put("XDG_CACHE_HOME", f.path("xdg"));
-    try f.write("r/build_t1.zig", "// t1\n", .default_file);
-    const t1 = f.path("r/build_t1.zig");
-    const root = f.path("out/.rzig");
-    // conda-forge's zig as PATH finds it, and as ZIG_BIN names it through
-    // MSYS (no zig there: `zig version` says nothing for either)
-    const back = [_][]const u8{"C:\\env\\Library\\bin\\x86_64-w64-mingw32-zig.exe"};
-    const fwd = [_][]const u8{"C:/env/Library/bin/x86_64-w64-mingw32-zig.exe"};
-    const dir = f.fmt("{s}/r-zig/build-runner-{s}", .{ f.path("xdg"), &cache.key(&.{ "// t1\n", fwd[0], "" }) });
-    try testing.expectEqualStrings(dir, (try zigBuildDirs(c, null, .makevars, root, &back, t1)).cache_dir);
-    try testing.expectEqualStrings(dir, (try zigBuildDirs(c, null, .makevars, root, &fwd, t1)).cache_dir);
-    var buf: [256]u8 = undefined;
-    try testing.expectEqualStrings(f.fmt("{s}\n\n", .{fwd[0]}), try Io.Dir.cwd().readFile(testing.io, f.fmt("{s}/last-used", .{dir}), &buf));
-    // other OSes key the command as spelled: `\` is a file name's character
-    c.os = .linux;
-    try testing.expectEqualStrings(
-        f.fmt("{s}/r-zig/build-runner-{s}", .{ f.path("xdg"), &cache.key(&.{ "// t1\n", back[0], "" }) }),
-        (try zigBuildDirs(c, null, .makevars, root, &back, t1)).cache_dir,
-    );
-    try testing.expectEqualStrings("", f.takeWarnings());
-}
-
-test "a build-runner directory rzig cannot write: the build root's cache" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest; // no mode bits to take write access away
-    var f: testutil.Fixture = undefined;
-    try f.init(.linux);
-    defer f.deinit();
-    const c = &f.ctx;
-    try f.env.put("XDG_CACHE_HOME", f.path("xdg"));
-    try f.write("r/build_t1.zig", "// t1\n", .default_file);
-    const t1 = f.path("r/build_t1.zig");
-    const zig = [_][]const u8{f.path("a/zig")};
-    const first = try zigBuildDirs(c, null, .makevars, f.path("out/.rzig"), &zig, t1);
-    // read-only now, as on a read-only file system or in another user's
-    // cache, where zig could not write its manifests
-    var d = try Io.Dir.cwd().openDir(testing.io, first.cache_dir, .{ .iterate = true });
-    defer d.close(testing.io);
-    try d.setPermissions(testing.io, .fromMode(0o555));
-    defer d.setPermissions(testing.io, .fromMode(0o755)) catch {};
-    // root writes there all the same: nothing to test
-    if (Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = f.fmt("{s}/probe", .{first.cache_dir}), .data = "" })) |_| return error.SkipZigTest else |_| {}
-    const ro = try zigBuildDirs(c, null, .makevars, f.path("out/.rzig"), &zig, t1);
-    try testing.expectEqualStrings(f.path("out/.rzig/zig-cache"), ro.cache_dir);
-    try testing.expectEqualStrings(t1, ro.build_file);
-    try testing.expectEqualStrings("", f.takeWarnings());
-}
-
-test "build-runner directories idle for a week go, renamed out of their names first; the others stay" {
-    var f: testutil.Fixture = undefined;
-    try f.init(.linux);
-    defer f.deinit();
-    const c = &f.ctx;
-    try f.env.put("XDG_CACHE_HOME", f.path("xdg"));
-    // rzig's cache: a runner last used 8 days ago, one 6 days ago, one
-    // with no last-used (being made), one an earlier sweep left half
-    // removed, and another kind of entry
-    const idle = "build-runner-" ++ "1" ** 32;
-    const recent = "build-runner-" ++ "2" ** 32;
-    const making = "build-runner-" ++ "3" ** 32;
-    const half = "build-runner-" ++ "4" ** 32 ++ ".0123456789abcdef.old";
-    const dso = "dso-fini-" ++ "5" ** 32;
-    try f.write("xdg/r-zig/" ++ idle ++ "/last-used", "zig\n", .default_file);
-    try f.write("xdg/r-zig/" ++ idle ++ "/o/x/build", "runner", .default_file);
-    try f.write("xdg/r-zig/" ++ recent ++ "/last-used", "zig\n", .default_file);
-    try f.write("xdg/r-zig/" ++ making ++ "/build_t1.zig", "", .default_file);
-    try f.write("xdg/r-zig/" ++ half ++ "/o/x/build", "runner", .default_file);
-    try f.write("xdg/r-zig/" ++ dso ++ "/dso_fini.o", "", .default_file);
-    const now = Io.Timestamp.now(testing.io, .real);
-    const day: i64 = std.time.s_per_day;
-    try setMtime(f.path("xdg/r-zig/" ++ idle ++ "/last-used"), now.subDuration(.fromSeconds(8 * day)));
-    try setMtime(f.path("xdg/r-zig/" ++ recent ++ "/last-used"), now.subDuration(.fromSeconds(6 * day)));
-    // a tier-1 build: its own directory, and the sweep
-    try f.write("r/build_t1.zig", "// t1\n", .default_file);
-    const zig = [_][]const u8{f.path("a/zig")};
-    const dirs = try zigBuildDirs(c, null, .makevars, f.path("out/.rzig"), &zig, f.path("r/build_t1.zig"));
-    var names: std.ArrayList([]const u8) = .empty;
-    var d = try Io.Dir.cwd().openDir(testing.io, f.path("xdg/r-zig"), .{ .iterate = true });
-    defer d.close(testing.io);
-    var it = d.iterate();
-    while (try it.next(testing.io)) |e| try names.append(c.arena, try c.arena.dupe(u8, e.name));
-    mem.sort([]const u8, names.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return mem.lessThan(u8, a, b);
-        }
-    }.lt);
-    const own = std.fs.path.basename(dirs.cache_dir);
-    var want = [_][]const u8{ own, recent, making, dso };
-    mem.sort([]const u8, &want, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return mem.lessThan(u8, a, b);
-        }
-    }.lt);
-    try testutil.expectArgs(&want, names.items);
-    try testing.expectEqualStrings("", f.takeWarnings());
-}
-
-/// Through the open file: Dir.setTimestamps is not implemented on Windows
-/// in zig 0.16.
-fn setMtime(path: []const u8, t: Io.Timestamp) !void {
-    var file = try Io.Dir.cwd().openFile(testing.io, path, .{ .mode = .write_only });
-    defer file.close(testing.io);
-    try file.setTimestamps(testing.io, .{ .modify_timestamp = .{ .new = t } });
 }
 
 // R CMD SHLIB's calls, `rzig build --shlib` (feat-shlib-rzig-build)
@@ -1354,7 +1071,6 @@ test "shlib: the build root, in R's session directory, else beside the output; u
     defer f.deinit();
     const c = &f.ctx;
     const r = try pkgplan.rHome(&f);
-    try f.touch("rpkg/build_t1.zig");
     try f.touch("w/foo.c");
     try f.tmp.dir.createDirPath(testing.io, "sess");
     try f.env.put("R_SESSION_TMPDIR", f.path("sess"));
@@ -1420,7 +1136,6 @@ test "shlib: a zig that is not R's: make's (3) with the build tools, else 1 and 
     defer f.deinit();
     const c = &f.ctx;
     const r = try pkgplan.rHome(&f);
-    try f.touch("rpkg/build_t1.zig");
     try f.touch("w/foo.c");
     try f.env.put("PATH", f.path("nothing"));
     // another minor version, and a mark when zig build runs
@@ -1441,34 +1156,16 @@ test "shlib: a zig that is not R's: make's (3) with the build tools, else 1 and 
     try testing.expectEqualStrings(f.fmt("rzig-test: foo.so needs make: {s}\n", .{what}), f.takeWarnings());
     try testing.expect(!c.exists(f.path("built")));
     try testing.expectEqual(0, (try roots(&f, f.path("w"))).len);
-    // R_ZIG_NO_PREFLIGHT skips the comparison: zig build runs
+    // R_ZIG_NO_PREFLIGHT skips the comparison: rzig compiles, with the
+    // toolchain's zig-cc (here a file that is no program: 1); zig build
+    // never runs, tier 1 has none (tier1.zig)
     try f.env.put("R_ZIG_NO_PREFLIGHT", "1");
-    try testing.expectEqual(0, try shlibTest(&f, r, f.path("w"), &argv, &out));
-    try testing.expect(c.exists(f.path("built")));
+    try testing.expectEqual(1, try shlibTest(&f, r, f.path("w"), &argv, &out));
+    try testing.expect(mem.startsWith(u8, f.takeWarnings(), f.fmt("rzig-test: cannot run {s}/bin/toolchain/zig-cc: ", .{r})));
+    try testing.expect(!c.exists(f.path("built")));
     try testing.expectEqual(0, (try roots(&f, f.path("w"))).len);
     try testing.expectEqualStrings("", out.written());
     _ = f.takeWarnings();
-}
-
-test "shlib: a missing build_t1.zig, 3: a damaged tree, make builds it" {
-    // feat-shlib-rzig-build Cc8
-    var f: testutil.Fixture = undefined;
-    try f.init(.linux);
-    defer f.deinit();
-    const r = try pkgplan.rHome(&f);
-    try f.touch("w/foo.c");
-    try f.tmp.dir.createDirPath(testing.io, "empty");
-    var out: Io.Writer.Allocating = .init(f.ctx.arena);
-    try testing.expectEqual(exit_needs_make, try shlibTest(&f, r, f.path("w"), &.{ "--shlib", "--output", "foo.so", "--rpkg-dir", f.path("empty"), "--", "foo.c" }, &out));
-    try testing.expectEqualStrings(f.fmt("rzig-test: {s}/build_t1.zig is missing: R_HOME/share/zig/rpkg is not installed; make builds this\n", .{f.path("empty")}), f.takeWarnings());
-    try testing.expectEqual(0, (try roots(&f, f.path("w"))).len);
-    // a package's tier 1 too
-    try f.env.put("R_HOME", r);
-    try f.write("t/DESCRIPTION", "Package: t\n", .default_file);
-    try f.touch("t/src/a.c");
-    try testing.expectEqual(exit_needs_make, try run(&f.ctx, &.{ "--pkg", f.path("t"), "--out", f.path("out-t"), "--rpkg-dir", f.path("empty") }));
-    try testing.expectEqualStrings(f.fmt("rzig build: {s}/build_t1.zig is missing: R_HOME/share/zig/rpkg is not installed; make builds this\n", .{f.path("empty")}), f.takeWarnings());
-    try testing.expect(!f.ctx.exists(f.path("out-t")));
 }
 
 test "shlib: --dry-run prints make -n's commands" {
@@ -1531,7 +1228,6 @@ test "shlib: a call that needs make, with no make: every missing group, 127; wit
     defer f.deinit();
     const c = &f.ctx;
     const r = try pkgplan.rHome(&f);
-    try f.touch("rpkg/build_t1.zig");
     try f.write("w/Makevars", "all: $(SHLIB) extra\n", .default_file);
     try f.touch("w/x.c");
     try f.env.put("PATH", f.path("nothing"));

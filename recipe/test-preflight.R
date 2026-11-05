@@ -63,7 +63,7 @@ mk <- mk[nzchar(mk)]
 if (length(mk)) stop("build tools in an env without r-zig-build-tools: ", paste(mk, collapse = ", "))
 tc <- file.path(R.home(), "bin", "toolchain")
 stopifnot(file.exists(file.path(tc, if (windows) c("gcc.exe", "rzig.exe") else c("zig-cc", "rzig"))),
-          file.exists(file.path(R.home(), "share", "zig", "rpkg", "build_t1.zig")),
+          file.exists(file.path(R.home(), "share", "zig", "rpkg", "build_t2.zig")),
           !dir.exists(file.path(tc, "binutils")), !dir.exists(file.path(tc, "usr")))
 ## no writer of R_ZIG_TOOLCHAIN_HINT came back (B35) (PHASE4 Cc9)
 for (f in file.path(R.home("etc"), c("Renviron", "Renviron.site")))

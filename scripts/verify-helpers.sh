@@ -69,12 +69,37 @@ configure_marker() {
 # The compile and link commands make echoed into install log $1, one per
 # line: R's Makeconf runs the compilers by their path in
 # R_HOME/bin/toolchain (zig-cc, zig-cxx, zig-fc; Windows gcc.exe, g++.exe)
-# and make echoes each recipe it runs, while rzig build runs no make and
-# its traced lines start with `zig-cc: ` or `rzig build: `. A make build
-# that succeeds prints no `make:` line, so this, not a `^make` grep, tells
-# a make path's log from rzig build's [tests-T6]. CRs dropped (Windows).
+# and make echoes each recipe it runs, while rzig build runs no make: its
+# traced lines start with `zig-cc: ` or `rzig build: `, and the command
+# lines it echoes as make does (tier1.zig) write into its build root,
+# `-o <dir>/.rzig[.<hex>]/...`, where make's write beside the sources.
+# That word is in single quotes when the path needs them (a space, a `~`
+# in an 8.3 name; shellwords.quote). A make build that succeeds prints no
+# `make:` line, so this, not a `^make` grep, tells a make path's log from
+# rzig build's [tests-T6]. CRs dropped (Windows).
 make_recipes() {
-  tr -d '\r' < "$1" | grep -E '^[^ ]*/bin/toolchain/(zig-cc|zig-cxx|zig-fc|gcc|g\+\+)' || true
+  tr -d '\r' < "$1" | grep -E '^[^ ]*/bin/toolchain/(zig-cc|zig-cxx|zig-fc|gcc|g\+\+)' |
+    grep -v -E -- " -o ('[^']*|[^ ']*)[\\\\/]\.rzig(\.[0-9a-f]{16})?[\\\\/]" || true
+}
+
+# The entries of rzig's cache $1 (cache.zig's root) that are not of its
+# own kinds, one per line: dso_fini's and cfguard's objects (dso-fini-*,
+# cfguard-*), the archive copies (archive-*) and the libc++ mirror
+# (zig-lib-*). Tier 1 runs no zig build (tier1.zig), so a build-runner-*
+# or an install's object there is one (feat-tier1-engine). After a link,
+# linux has a dso-fini-* and Windows a cfguard-*: without one, the line
+# `no <kind>-*`, as when rzig's cache is not where the caller looks.
+rzig_cache_odd() {
+  local e kind=
+  for e in "$1"/*; do
+    [ -e "$e" ] || continue
+    case "${e##*/}" in
+      dso-fini-*|cfguard-*|archive-*|zig-lib-*) ;;
+      *) printf '%s\n' "${e##*/}" ;;
+    esac
+  done
+  case "$OS" in linux) kind=dso-fini ;; windows) kind=cfguard ;; esac
+  if [ -n "$kind" ] && ! ls -d "$1/$kind"-* > /dev/null 2>&1; then printf 'no %s-*\n' "$kind"; fi
 }
 
 # Extract archive $1 into directory $2. unzip -n: an archive extracted

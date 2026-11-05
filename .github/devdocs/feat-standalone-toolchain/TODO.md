@@ -158,6 +158,9 @@ D5 (a), D8-D11 (a), D13 (a), E3 (a), E4 (a).
 - [ ] feat-no-host-paths' proposed follow-up PRs: (i) with D12
       (rattler-build error flags; phase 4 relies on it), (ii) rzig fixes
       with D6 (phase 5 relies on it)
+- [ ] feat-tier1-engine (its PLAN.md): rzig runs tier 1 itself, and
+      build_t1.zig and PR #27's shared runner go; after the queue
+      merges, its slot beside phase 8 the user's
 
 ## The zig 0.17 wave (B18 = a; not a phase of this plan)
 
@@ -951,8 +954,9 @@ Needs (answered): B14 (a), with B37 (a).
       install's objects and library stay in its build root. With the
       runner warm, a small tier-1 package installs within 0.2 s of make
       on linux-64 and osx-arm64 and 0.4 to 0.8 s faster on win-64 (its
-      PLAN.md, "Measurements"). verify-bundle
-      scenario 2's new assertions (the tier-1 install with the compilers
+      PLAN.md, "Measurements"). Superseded by feat-tier1-engine
+      (2026-10-23): tier 1 runs no zig build and keeps no runner.
+      verify-bundle scenario 2's new assertions (the tier-1 install with the compilers
       alone, the Makevars-rule stop; on unix also the configure-only and
       no-flang stops; Windows since the review follow-up
       [phase3-P3-9]) are the gate for the group's scope
