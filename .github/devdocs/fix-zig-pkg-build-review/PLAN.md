@@ -12,7 +12,8 @@ still to run: the PR is to get the `full-ci` and `upstream-zig` labels
 (menu 3). No build-number bump: feat-zig-pkg-build's N5 stands, and
 the next bump publishes both packages: since the user's decision of
 2026-10-19 it comes with feat-standalone-toolchain phase 7's merge, not
-phase 4's (phases 4 to 6 keep 8; its TODO.md, phase 7). Two choices
+phase 4's (phases 4 to 6 keep 8; its TODO.md, phase 7). That bump
+merged as #34; both packages were published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check). Two choices
 are left to the user ("Open decisions").
 
 ## Why

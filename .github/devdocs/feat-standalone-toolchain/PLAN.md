@@ -6133,8 +6133,10 @@ Steps:
   routing, 5 and 6 kept 8, so phase 7's PR takes the number after
   universe's newest (B14 a), with one history entry for phases 4 to 7.
   After it merges the user sets `gh variable set CONDA_PUBLISH --body
-  true`, and that push's run (or a `ci-trigger` dispatch) publishes all
-  four packages; then PHASE4 section 7's post-publish check.
+  true` and dispatches build.yaml on main, which publishes all four
+  packages; then PHASE4 section 7's post-publish check, and the user
+  deletes the variable (a release switch, decided 2026-10-27). Done:
+  published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check).
 
 Tests: scenario 3 on kappa and windows-latest with the contract set,
 pak, data.table, glue and a package whose configure.win uses
@@ -6507,7 +6509,13 @@ Tests (2026-10-21; `phase7m2/implementer2/RESULTS.md`):
 - After the merge: `gh variable set CONDA_PUBLISH --body true`, `pixi
   run ci-trigger`, then phase 4's post-publish check with `_9`; the
   CONDA_PUBLISH notes in build.yaml, pixi.toml and README are reworded
-  then.
+  then. Done: phase 7 merged as #34 (2026-11-05), and the queue (#28 to
+  #37) was published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check;
+  that run's windows-latest default leg failed, fixed by #38 and #39,
+  while its five conda-package legs passed and published). The variable is a release switch (the user's
+  option c, 2026-10-27): set for a bump's publish dispatch, deleted after
+  its check, so a merge without a bump uploads nothing; build.yaml,
+  pixi.toml and README say so.
 - Next work (user, 2026-10-22): phases 8 and 9, then pkgconf from
   source (TODO.md), a separate PR, then the zig 0.17 port, then Windows
   on ARM.

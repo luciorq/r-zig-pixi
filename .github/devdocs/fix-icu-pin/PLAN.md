@@ -1,5 +1,12 @@
 # fix-icu-pin — r-zig-build's host pins icu below 79
 
+**Merged (2026-11-04, #28); floor added (2026-11-06, #40).** The pin
+went into `_9`, published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check): r-zig-slim `_9` depends on
+`icu >=78.3,<79.0a0` on all five subdirs. With `<79` alone, main's
+next conda builds took the 2022 icu-70 stack, so #40 made the pin
+`icu 78.*` ("Follow-up: a floor too"), with no bump: `_9`'s build
+strings are unchanged. Lift both bounds as "Lifting it" says.
+
 **Status (2026-10-31).** Branch fix-icu-pin, from main at d11dee1 (the
 merge of feat-shared-build-runner, PR #27). One change: the host of
 recipe.yaml's r-zig-build staging output, which r-zig-slim inherits,
