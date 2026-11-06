@@ -279,13 +279,16 @@ outputs:
         - liblzma-devel
         - pcre2
         - libcurl
-        # <79 while conda-forge's zig 0.16 needs libxml2-16, which is built
+        # 78.* while conda-forge's zig 0.16 needs libxml2-16, which is built
         # against icu 78 only: with icu 79 in this host (79.1, 2026-10-22)
         # r-zig-slim's run export becomes icu >=79.1,<80, and no test env
         # that holds r-zig-slim and zig (r-zig-toolchain's, for one) can
-        # solve. Lift it, with a build-number bump, when conda-forge's
-        # libxml2-16 is built against icu 79.
-        - icu <79
+        # solve. A floor too: with `<79` alone, rattler's solver took the
+        # 2022 cairo/pango/harfbuzz stack built against icu 70 (2026-11-05),
+        # whose run export clashes with zig's icu 78 the same way. Lift it,
+        # with a build-number bump, when conda-forge's libxml2-16 is built
+        # against icu 79.
+        - icu 78.*
         - tzdata
         # <1.26 while conda-forge's libgdal-core needs <1.26: libdeflate's
         # run export pins r-zig-slim to the host's minor version, and builds
