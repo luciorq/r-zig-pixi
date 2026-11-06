@@ -106,9 +106,29 @@ is published: the next publishing main run would upload today's
 content under the old name (`F/followup-2-gamma-conda`, "Content vs
 universe `_8`").
 
+## Follow-up: a floor too, `icu 78.*` (2026-11-06)
+
+After the queue merged, every conda-package leg of main's push runs
+failed again (run 42126061546, after PR #39; `_9` was already
+published, with `icu >=78.3,<79.0a0` and `cairo >=1.18.6`, and is
+fine). The host solve had changed: with `icu <79`, rattler's solver
+(resolvo) took the 2022 stack, cairo 1.16.0, pango 1.50.10, harfbuzz
+5.2.0, glib 2.72.1 and icu 70.1. r-zig-slim's run export became
+`icu >=70.1,<71.0a0`, which clashes with zig's libxml2-16 (icu 78)
+in r-zig-compilers' test env, as icu 79 did. `libdeflate <1.26` alone
+gives the same stack. micromamba solves the same specs to today's
+stack (cairo 1.18.6, harfbuzz 15.0.0, icu 78.3); rattler does not.
+
+The fix is a floor as well as the ceiling: `- icu 78.*`. With it,
+rattler (pixi exec, the same specs) takes cairo 1.18.6, pango 1.58.2,
+harfbuzz 15.0.0, glib 2.90.0 and icu 78.3 on linux-64, linux-aarch64
+and win-64; on osx-arm64 the `<79` solve takes glib 2.72.1 too. A
+version bound in host is not a variant input, so the build strings
+stay those of `_9`, and CONDA_PUBLISH is unset: nothing is uploaded.
+
 ## Lifting it
 
-Lift the pin when conda-forge's libxml2-16, the one libllvm21 needs, is
+Lift the pin (both bounds) when conda-forge's libxml2-16, the one libllvm21 needs, is
 built against icu 79, so that zig 0.16 (or the zig the recipe then
 uses) installs beside icu 79. Check with:
 
