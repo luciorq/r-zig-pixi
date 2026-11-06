@@ -1,5 +1,8 @@
 # feat-r-home-link-objects — rzig's link objects ship in R_HOME
 
+**Merged (2026-11-05, #37).** After feat-tier1-engine (#36). No bump:
+it ships with the next build number.
+
 **Status (2026-10-23).** Worktree `wt/feat-r-home-link-objects`, branch
 feat-r-home-link-objects at main d11dee1. It carries feat-tier1-engine
 (PR 1) and the queue under it, uncommitted. This layer is on top. The

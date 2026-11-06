@@ -1,5 +1,10 @@
 # feat-tier1-engine — rzig runs tier 1 itself
 
+**Merged (2026-11-05, #36).** After the queue (#28 to #35) and the
+`_9` publish. No bump: it ships with the next build number. K3 and K4
+(the final test's findings) are fixed in it; COFF bigobj objects are
+left (feat-standalone-toolchain TODO.md, "After `_9`").
+
 **Status (2026-10-23).** Worktree `wt/feat-tier1-engine`, branch
 feat-tier1-engine at main d11dee1. It carries the uncommitted queue: the
 manifest PR, phases 4, SHLIB, 5, 6 and 7, and win-link-fixes. This layer

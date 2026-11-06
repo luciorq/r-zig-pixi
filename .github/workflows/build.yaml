@@ -8,9 +8,9 @@ name: build-r
 #   nothing else: all 15 legs (full, openblas and minimal too).
 # conda-package (5 jobs) runs on every push to main, in the full tier,
 # and on a pull request that changes what it builds from. A push to main
-# publishes only while the repository variable CONDA_PUBLISH is `true`
-# (off from 2026-10-19 until phase 7's build-number bump merges; the
-# publish step says why).
+# publishes only while the repository variable CONDA_PUBLISH is `true`:
+# a release switch, set for a build-number bump's publish and deleted
+# after it (the publish step says why).
 # Both tiers' legs wait for the toolchain job (5 jobs, one per
 # platform), whose group archives they unpack and test
 # (feat-standalone-toolchain B31). Docs-only changes never touch the
@@ -298,16 +298,17 @@ jobs:
       # which rattler-build's test phase cannot run).
       - name: Fresh-env consume test (each group alone)
         run: pixi run -e pkg conda-consume
-      # Paused until phase 7's build-number bump merges (the user's
-      # decision, 2026-10-19: feat-standalone-toolchain phases 4, SHLIB
-      # routing, 5 and 6 keep build 8). Without a bump, a push to main
-      # would upload the new r-zig-compilers and r-zig-build-tools and a
-      # new-hash r-zig-toolchain at _8, while --skip-existing keeps
-      # universe's old r-zig-slim _8, which has no rzig: the coupling
-      # feat-zig-pkg-build's N5 records, and every compiled install would
-      # stop. Publishing resumes when the user sets the repository
-      # variable after that merge: `gh variable set CONDA_PUBLISH --body
-      # true`.
+      # A release switch (the user's decision, 2026-10-27, option c of
+      # feat-standalone-toolchain's phase 7 record). CONDA_PUBLISH is
+      # unset between releases, so a merge without a build-number bump
+      # uploads nothing: with --skip-existing it would put a package
+      # whose build string changed beside universe's others at the same
+      # number (a new-hash r-zig-toolchain beside an old r-zig-slim, the
+      # coupling feat-zig-pkg-build's N5 records). For a release: merge
+      # the bump, `gh variable set CONDA_PUBLISH --body true`, dispatch
+      # this workflow on main, check universe and a fresh env, then
+      # `gh variable delete CONDA_PUBLISH`. `_9` was published this way
+      # on 2026-11-05 (run 41942729382).
       - name: Publish to prefix.dev (OIDC trusted publishing)
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CONDA_PUBLISH == 'true'
         run: pixi run -e pkg conda-publish

@@ -829,26 +829,63 @@ a); the record is PLAN.md's "Phase 7 record".
       PLAN.md's record). With `MSYSTEM=MINGW64`
       configure says `x86_64-pc-mingw64`; packages build (MSYSTEM a:
       recorded, README line, not set)
-- [ ] Tested: kappa (done, the final code and the win-64 `_9` conda
+- [x] Tested: kappa (done, the final code and the win-64 `_9` conda
       packages, 2026-10-21, PLAN's record); CI windows-latest after the
       push (full-ci, upstream-zig, the stress dispatch; watch for the old
-      spawn hangs)
+      spawn hangs); merged as #34, 2026-11-05
 - [x] The build-number bump: universe's newest was `_8` on all five
       subdirs (2026-10-20), so 8 → 9, one history entry for phases 4 to 7
       and fix-r-utf8-manifest, which merges first (recipe.yaml); the
       hand-over's last commit
-- [ ] feat-win-link-fixes (its PLAN.md: rzig build's objects in a
+- [x] feat-win-link-fixes (its PLAN.md: rzig build's objects in a
       response file, -lws2_32 on Windows DLL links, patch in TC/usr/bin)
       merges after phase 7 and before CONDA_PUBLISH=true: no bump of its
       own, it rides on phase 7's `_9` (r-zig-slim: rzig and build_t1.zig;
       the standalone build-tools: patch.exe). No pixi.toml/pixi.lock
       change; one recipe run dependency added, r-zig-build-tools (win-64)
       on m2-patch, kept (user decision, 2026-10-22; its PLAN.md). Check
-      universe's newest is still `_8` first
-- [ ] Set CONDA_PUBLISH=true (`gh variable set CONDA_PUBLISH --body
-      true`) after phase 7's bump merges, then publish (that push's run
-      once the variable is set, or `pixi run ci-trigger`) and run phase
-      4's post-publish check with the new number
+      universe's newest is still `_8` first (merged as #35, 2026-11-05)
+- [x] Set CONDA_PUBLISH=true (`gh variable set CONDA_PUBLISH --body
+      true`) after phase 7's bump merges, then publish (a `pixi run
+      ci-trigger` dispatch on main) and run phase 4's post-publish check
+      with the new number; then delete the variable (a release switch,
+      the user's option c of 2026-10-27). Done: published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check)
+
+## After `_9`: follow-ups (from the final test, 2026-10-31)
+
+None blocks phase 8. Each is its own small PR unless it says otherwise.
+
+- [ ] The icu pin's lift: when conda-forge's libxml2-16 is built against
+      icu 79, drop both bounds of r-zig-build's `icu 78.*`, with a
+      build-number bump (fix-icu-pin/PLAN.md, "Lifting it")
+- [ ] evex512 (X1, F2): `-mcpu=baseline+evex512` in rzig's x86_64
+      target flags. It fixes arrow and arrow:source on the x86_64
+      runners, and RcppSimdJson, which `_9` ships with
+- [ ] K1: packages.tsv's RPostgres sysdeps `libpq
+      libboost-headers@windows lz4-c@windows` (tested on kappa); the
+      Windows conda stress row's `RPostgres (!) install-failed sysdep`
+      (`boost/noncopyable.hpp`) goes with it
+- [ ] K2: stress.R `--conda` unsets every variable that names the
+      tree's CONDA_PREFIX, PATH excepted (tested on win-64 only); s2's
+      configure line then stops naming the tree's stress env
+- [ ] COFF bigobj objects: def.zig still rejects them (BadObject). K3
+      and K4 were fixed in feat-tier1-engine (#36)
+- [ ] N6: correct stress.R:337-338's comment, or set ZIG_LOCAL_CACHE_DIR
+      to the run directory (a `.zig-cache` appears in the checkout root)
+- [ ] N7: check that a user's runtime zig cache does not mix
+      conda-forge's and upstream zig 0.16.0 objects (the cache key has
+      only the version)
+- [ ] N8: never delete a universe `_8` file before the next number is
+      out (a rebuilt `_8` differs from universe's); a rule for every
+      release, recorded here
+- [ ] N9: test-preflight.R:75 (no link object on macOS), wheel-test.sh:71
+      (`mktemp -d "${TMPDIR:-/tmp}/wheel-test.XXXXXX"`),
+      package-standalone.sh's tar (not reproducible), and
+      chore-lock-and-ci-refresh PLAN.md:305-306, :313-318, :322-327
+      (stale wording)
+
+Next: phase 8, then phase 9, pkgconf from source, the zig 0.17 port,
+Windows on ARM (the user's order, 2026-10-22).
 
 ### After phase 9: pkgconf from source (a separate PR)
 
@@ -906,6 +943,8 @@ Needs (answered): B14 (a), with B37 (a).
       name) and bumps nothing (its N5, 2026-10-12): the bump that
       publishes phase 4 publishes both, together (phase 4's item says
       why); since 2026-10-19 that is phase 7's bump, not a 9 in phase 4
+      (done: `_9`, 2026-11-05). From here on a bump also sets
+      CONDA_PUBLISH for its publish dispatch and deletes it after
 - [ ] feat-no-host-paths PLAN.md: What remains 3 points here; the T
       record and the OpenMP note (467-470) updated
 - [ ] This PLAN.md: status and records with dates and test results

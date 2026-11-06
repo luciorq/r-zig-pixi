@@ -726,7 +726,7 @@ and asked for one follow-up PR on the new main:
 | N2 | (a) the build-tools scope is written as below; routing `R CMD SHLIB` through rzig is a later item (R CMD SHLIB routed by feat-shlib-rzig-build, published with feat-standalone-toolchain phase 7's bump) |
 | N3 | (a) a per-install zig build cache, removed with the install (tier 1 changed by feat-shared-build-runner, 2026-10-13: one shared build runner per content of build_t1.zig and zig, the steps writing into the build root; "Cache and cleanliness") |
 | N4 | (a) a variable assignment in MAKEFLAGS makes the package need make, with that reason |
-| N5 | (a) no build-number bump in this PR; phase 4's bump (8 to 9) publishes both packages (2026-10-19: phase 4 keeps build 8, the user's decision; the bump that publishes both comes with feat-standalone-toolchain phase 7's merge) |
+| N5 | (a) no build-number bump in this PR; phase 4's bump (8 to 9) publishes both packages (2026-10-19: phase 4 keeps build 8, the user's decision; the bump that publishes both comes with feat-standalone-toolchain phase 7's merge). Done: phase 7's bump (8 to 9) merged as #34 and both packages were published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check) |
 | N6 | (a) tier 2 means vendored or path dependencies only: a URL dependency is refused, zig build runs with `--system` |
 | N7 | (a) this session implements; the phase 3 session reviews before the commit and push (it reviewed after the merge instead, 2026-10-13: above [records-REC-5]) |
 | R1 | (a) CONSOLIDATION.md not committed: its decisions and corrected facts are here; HANDOFF.md folded in below and deleted |

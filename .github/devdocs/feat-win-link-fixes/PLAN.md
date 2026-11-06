@@ -1,5 +1,9 @@
 # feat-win-link-fixes: response files, a default Winsock link, patch
 
+**Merged and published (2026-11-05).** Merged as #35, after phase 7
+(#34), and published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check). The
+status below is the hand-over's.
+
 **Status (2026-10-21).** Uncommitted, stacked on phase 7
 (wt/feat-standalone-phase7: `git diff | sha256sum` 167659b3..., 83
 status entries, pixi.lock fbb64b7b...) in wt/feat-win-link-fixes, branch

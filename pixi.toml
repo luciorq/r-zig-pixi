@@ -202,7 +202,8 @@ configure = { cmd = "bash zigbuild/tools/configure-only.sh", depends-on = ["fetc
 # --- CI (build-r.yml on GitHub Actions; needs `gh auth login`) ---
 # The full tier on demand, on main: all 15 legs and conda-package on all
 # 5, which publishes as a push to main does, while the repository
-# variable CONDA_PUBLISH is `true` (off until phase 7's bump merges). A
+# variable CONDA_PUBLISH is `true` (a release switch: build.yaml's
+# publish step). A
 # push runs only the core tier's 6 legs
 # (.github/devdocs/chore-ci-tiers/PLAN.md). For a branch:
 # `gh workflow run build.yaml --ref <branch>`; for a pull request, the
@@ -608,9 +609,8 @@ conda-channel-delete = "bash scripts/prefix-delete-package.sh"
 # rattler-build's own dist/conda/broken/ (its convention for a package
 # that failed its test phase) — each dev machine only ever builds its own
 # platform, so this is exact, not just defensive.
-# Not run by hand either from 2026-10-19 until phase 7's build-number bump
-# merges: build 8's new packages would land beside universe's old
-# r-zig-slim _8, which has no rzig (build.yaml's CONDA_PUBLISH says why).
+# Not run by hand either: hosted CI publishes, for a build-number bump
+# only (build.yaml's CONDA_PUBLISH says why).
 [feature.pkg.target.linux-64.tasks]
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/linux-64/*.conda"
 

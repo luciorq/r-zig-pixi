@@ -349,8 +349,9 @@ tree, which is the tree the standalone base archive packs), and
 five subdirs (linux-64, linux-aarch64, osx-arm64, osx-64, win-64), which
 publishes to the `universe` channel on prefix.dev via OIDC trusted
 publishing on every push to `main` while the repository variable
-`CONDA_PUBLISH` is `true` (paused from 2026-10-19 until the next
-build-number bump merges, with feat-standalone-toolchain's phase 7).
+`CONDA_PUBLISH` is `true`. That variable is a release switch: it is set
+only for a build-number bump's publish and deleted after it, so other
+merges upload nothing (build 9 was published on 2026-11-05).
 There is no self-hosted fleet — the former gamma/omicron/kappa runners
 were decommissioned in September 2026 and fully removed on 2026-09-24.
 Docs-only changes (`*.md`, `.github/devdocs/`) skip the workflow.
@@ -405,8 +406,14 @@ gh variable set ENABLE_HOSTED_JOBS --body true   # resume
 
 No commit or workflow edit needed either way. Publishing has a switch
 of its own, `CONDA_PUBLISH`: `conda-package` still builds and tests on
-main without it, and uploads only with it set to `true`
-(`gh variable set CONDA_PUBLISH --body true`).
+main without it, and uploads only with it set to `true`. Set it for a
+build-number bump's release and delete it after the release's check:
+
+```bash
+gh variable set CONDA_PUBLISH --body true   # after the bump merges
+gh workflow run build.yaml --ref main        # publishes each subdir
+gh variable delete CONDA_PUBLISH             # after universe and a fresh env check out
+```
 
 ## More detail
 
