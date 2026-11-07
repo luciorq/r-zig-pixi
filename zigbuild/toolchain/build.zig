@@ -9,7 +9,10 @@
 //! (pixi run toolchain) installs dist/toolchain/R-<ver>-zig with it, and
 //! package-standalone.sh's toolchain mode archives the groups from there
 //! (B17). `test` runs conda.zig's and wheel.zig's unit tests (pixi run
-//! toolchain-test).
+//! toolchain-test). With -Dbase it writes the R tree's records instead
+//! (PHASE8 open points A a, F a; installBase, below):
+//!   zig build --build-file zigbuild/toolchain/build.zig --prefix <R tree> -Dbase
+//! which scripts/zig-build.sh runs after vendor-libs.sh.
 //!
 //! What it installs, today's third-party files (phase 3's table, zig/ from
 //! phase 5, flang/ from phase 6, Windows' usr/ and etc/ from phase 7):
@@ -46,14 +49,15 @@
 //! that built it, and each file with the package's sha256 of it;
 //! LICENSES/<package>/ is the package's info/licenses/. Both come from the
 //! package cache the env was installed from (the record's
-//! extracted_package_dir). The m2 packages ship no licence files: theirs
-//! are the texts r-zig took by hand from their MSYS2 source archives into
-//! m2-licenses/<package>/ beside this file, for the version and build its
-//! VERSION names (PHASE7 open point E a; its README says how). A file no
-//! record lists, one with a prefix placeholder (conda rewrote it), a
-//! package with no licence files (an m2 one: none here either, or for
-//! another version), or a GPL one whose recipe lists no source stops this
-//! build and names it.
+//! extracted_package_dir). A package that ships no licence files (the m2
+//! packages; libgcc, libstdcxx and libfreetype6 in the R tree) has the
+//! texts r-zig took by hand from its source archive in
+//! licenses/<package>/ beside this file, for the version its VERSION names
+//! (PHASE7 open point E a, PHASE8 open point H a; its README says how). A
+//! file no record lists, one with a prefix placeholder (conda rewrote it),
+//! a package with no licence files (none here either, or for another
+//! version), or a GPL one whose recipe lists no source stops this build
+//! and names it.
 //! R's own build (build.zig) never reads the package cache. zig/'s files
 //! are the wheel's, each with the wheel's own sha256 of it (its RECORD,
 //! the counterpart of paths_data), in a SOURCES block of the same shape
@@ -271,16 +275,18 @@ pub fn build(b: *std.Build) !void {
         test_step.dependOn(&b.addRunArtifact(tests).step);
     }
     const ziglang = b.option([]const u8, "ziglang", "PyPI's ziglang wheel, unpacked (scripts/fetch-zig.sh's directory): the compilers group's zig/");
+    const base = b.option(bool, "base", "Write the records of the R tree at --prefix (its files from the env) instead of the toolchain tree") orelse false;
 
     const env = b.graph.environ_map.get("CONDA_PREFIX") orelse
         return fail("CONDA_PREFIX is not set: run through pixi (pixi run toolchain)", .{});
     const os = b.graph.host.result.os.tag;
     const prefix = try mem.replaceOwned(u8, arena, b.install_prefix, "\\", "/");
     const prefix_is_env = samePhysicalDir(io, arena, prefix, env);
+    if (base) return installBase(b, io, env, prefix, prefix_is_env, os);
     const tc = if (os == .windows) "Library/lib/R/bin/toolchain" else "lib/R/bin/toolchain";
     const dirs: []const Dir = if (os == .windows) &windows_dirs else &unix_dirs;
 
-    const records = try readRecords(b, io, env, dirs);
+    const records = try readRecords(b, io, env, try dirNeedles(b, dirs));
     var summary: std.ArrayList(u8) = .empty;
     for (dirs) |d| {
         const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/{s}", .{ tc, d.name }) };
@@ -335,7 +341,7 @@ pub fn build(b: *std.Build) !void {
         for (copies.items) |c| {
             if (mem.indexOfScalar(*const conda.Record, packages.items, c.record) != null) continue;
             if (packages.items.len > 0) try summary.appendSlice(arena, ", ");
-            try installLicenses(b, io, c.record, dest);
+            try installLicenses(b, io, c.record, dest, b.fmt("LICENSES/{s}", .{c.record.name}));
             try summary.appendSlice(arena, c.record.name);
             try packages.append(arena, c.record);
         }
@@ -385,6 +391,187 @@ fn copyOf(b: *std.Build, records: []const conda.Record, src: []const u8, from: [
     };
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = src }, dest, to).step);
     return copy;
+}
+
+/// A directory of the R tree whose files came from the env (PHASE8 open
+/// point F a): every file under `to` (relative to the tree's top), from
+/// the same path under the env's `from`; or, `vendored`, vendor-libs.sh's
+/// copies, the files directly in `to` whose name the env's `from` has
+/// (verify-helpers.sh's vendored_files rule), on Windows only its DLLs.
+const BaseDir = struct {
+    to: []const u8,
+    from: []const u8,
+    vendored: bool = false,
+    /// What may change a copy here, for its `changed:` line. A copy that
+    /// differs from the env's file where this is null stops the build.
+    how: ?[]const u8 = null,
+};
+
+/// The R tree's records (PHASE8 open points A a, B a, C a, F a; B33 a):
+/// <top>/share/licenses/ (Windows: <top>/Library/share/licenses/) gets
+/// SOURCES, written by conda.zig's writer as the groups' is, with a
+/// `file:` line per file the tree has from the env (each `to` path
+/// relative to the tree's top), and <package>/, each package's licence
+/// texts (installLicenses). The files: the libraries vendor-libs.sh
+/// copied, which zig-build.sh runs before this, and what build.zig's
+/// installEnvRuntime installs, the CA bundle, fontconfig's configuration
+/// and Tcl/Tk's runtime (BaseDir). A file the env has as a link (the
+/// soname links in lib/, conf.d's links into conf.avail) is recorded as
+/// the package's file it names. A copy that is not the package's file has
+/// a `changed:` line (conda rewrote it at install, vendor-libs.sh stripped
+/// or re-linked it, build.zig took the env's directories out of
+/// fonts.conf), with the copy's sha256, which verify-tree.sh checks. An
+/// earlier run's records go first, as vendor-libs.sh's copies do. The conda
+/// build (the prefix is the env) has none: conda keeps every package's
+/// licences in its info/.
+fn installBase(b: *std.Build, io: std.Io, env: []const u8, prefix: []const u8, prefix_is_env: bool, os: std.Target.Os.Tag) !void {
+    const arena = b.allocator;
+    if (prefix_is_env) {
+        std.debug.print("r-zig: the R tree's records: none (the prefix is the env, whose packages keep their own)\n", .{});
+        return;
+    }
+    const share = if (os == .windows) "Library/share/licenses" else "share/licenses";
+    std.Io.Dir.cwd().deleteTree(io, b.fmt("{s}/{s}", .{ prefix, share })) catch |err|
+        return fail("cannot remove {s}/{s}, an earlier run's records ({t})", .{ prefix, share, err });
+    const lib_how: ?[]const u8 = switch (os) {
+        .linux => "strip --strip-debug (vendor-libs.sh)",
+        .macos => "install_name_tool -change, codesign (vendor-libs.sh)",
+        else => null,
+    };
+    const dirs: []const BaseDir = if (os == .windows) &.{
+        .{ .to = "Library/lib/R/bin/x64", .from = "Library/bin", .vendored = true },
+        .{ .to = "Library/lib/R/Tcl/bin", .from = "Library/bin" },
+        .{ .to = "Library/lib/R/Tcl/lib", .from = "Library/lib" },
+        .{ .to = "Library/lib/R/Tcl/include", .from = "Library/include" },
+    } else &.{
+        .{ .to = "lib", .from = "lib", .vendored = true, .how = lib_how },
+        .{ .to = "ssl", .from = "ssl" },
+        .{ .to = "etc/fonts", .from = "etc/fonts", .how = "fonts.conf without the env's directories (build.zig, installFontconfig)" },
+        .{ .to = "lib/tcl8.6", .from = "lib/tcl8.6" },
+        .{ .to = "lib/tk8.6", .from = "lib/tk8.6" },
+        .{ .to = "lib/tcl8", .from = "lib/tcl8" },
+    };
+    const env_real = try realPath(b, io, env);
+
+    // Each file: its path here, its package's path (the env's link
+    // followed) and which directory it is in.
+    const File = struct { to: []const u8, from: []const u8, dir: *const BaseDir };
+    var files: std.ArrayList(File) = .empty;
+    var wanted: std.StringHashMapUnmanaged(void) = .empty;
+    for (dirs) |*d| {
+        const top = b.fmt("{s}/{s}", .{ prefix, d.to });
+        var dir = std.Io.Dir.cwd().openDir(io, top, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => continue, // not this variant's (fonts, Tcl/Tk)
+            else => return fail("cannot read {s} ({t})", .{ top, err }),
+        };
+        defer dir.close(io);
+        var rels: std.ArrayList([]const u8) = .empty;
+        if (d.vendored) {
+            var it = dir.iterate();
+            while (try it.next(io)) |e| {
+                // links (lib/libopenblas.so, vendor-libs.sh's) name a copy
+                if (e.kind != .file) continue;
+                if (os == .windows and !std.ascii.endsWithIgnoreCase(e.name, ".dll")) continue;
+                if (!pathExists(io, b.fmt("{s}/{s}/{s}", .{ env, d.from, e.name }))) continue;
+                try rels.append(arena, b.dupe(e.name));
+            }
+        } else {
+            var it = try dir.walk(arena);
+            defer it.deinit();
+            while (try it.next(io)) |e| {
+                if (e.kind != .file) continue;
+                try rels.append(arena, try mem.replaceOwned(u8, arena, e.path, "\\", "/"));
+            }
+        }
+        for (rels.items) |rel| {
+            const real = try realPath(b, io, b.fmt("{s}/{s}/{s}", .{ env, d.from, rel }));
+            if (!mem.startsWith(u8, real, env_real) or real.len <= env_real.len or real[env_real.len] != '/')
+                return fail("{s}/{s}: the env's {s}/{s} is {s}, outside the env {s}", .{ d.to, rel, d.from, rel, real, env_real });
+            const from = real[env_real.len + 1 ..];
+            try files.append(arena, .{ .to = b.fmt("{s}/{s}", .{ d.to, rel }), .from = from, .dir = d });
+            try wanted.put(arena, from, {});
+        }
+    }
+
+    // The records that list one of those paths: findInEnv then sees every
+    // owner of each (a clobber stops the build), and reads no other.
+    var records: std.ArrayList(conda.Record) = .empty;
+    for (try readRecords(b, io, env, null)) |r| {
+        for (r.files) |f| {
+            const path = try mem.replaceOwned(u8, arena, f, "\\", "/");
+            if (!wanted.contains(path)) continue;
+            try records.append(arena, r);
+            break;
+        }
+    }
+
+    var copies: std.ArrayList(conda.Copy) = .empty;
+    var n_changed: usize = 0;
+    for (files.items) |f| {
+        const found = conda.findInEnv(records.items, f.from, f.to) catch |err| {
+            const name = if (conda.owner(records.items, f.from)) |r| r.name else "";
+            return switch (err) {
+                error.NoOwner => fail("{s} (the env's {s}): no package of the env lists it in conda-meta, so its source and licence are unknown", .{ f.to, f.from }),
+                error.TwoOwners => fail("{s} (the env's {s}): two packages of the env list it (a clobber), so which one installed it is unknown", .{ f.to, f.from }),
+                error.NotInPathsData, error.NoSha256 => fail("{s} (the env's {s}): {s}'s conda-meta record has no sha256 for it (paths_data)", .{ f.to, f.from, name }),
+                error.PrefixPlaceholder => unreachable,
+            };
+        };
+        var copy = found.copy;
+        const here = try sha256Hex(b, io, b.fmt("{s}/{s}", .{ prefix, f.to }));
+        if (!mem.eql(u8, &here, copy.sha256)) {
+            const in_env = try sha256Hex(b, io, b.fmt("{s}/{s}", .{ env, f.from }));
+            var how: std.ArrayList(u8) = .empty;
+            if (found.rewritten) {
+                try how.appendSlice(arena, "conda's prefix at install");
+            } else if (!mem.eql(u8, &in_env, copy.sha256)) {
+                return fail("{s}: the env's file is not {s}'s (its sha256 differs, and conda does not rewrite it): reinstall the env (pixi reinstall)", .{ f.from, copy.record.name });
+            }
+            if (!mem.eql(u8, &here, &in_env)) {
+                const by = f.dir.how orelse
+                    return fail("{s}: not the env's {s}, and nothing that puts it in the tree changes it: rebuild the tree", .{ f.to, f.from });
+                try how.print(arena, "{s}{s}", .{ if (how.items.len == 0) "" else "; ", by });
+            }
+            copy.changed = .{ .how = how.items, .sha256 = b.dupe(&here) };
+            n_changed += 1;
+        }
+        try copies.append(arena, copy);
+    }
+    if (copies.items.len == 0) return fail("{s}: no file from the env in the tree (run pixi run build first)", .{prefix});
+
+    const dest: std.Build.InstallDir = .{ .custom = share };
+    var packages: std.ArrayList(*const conda.Record) = .empty;
+    for (copies.items) |c| {
+        if (mem.indexOfScalar(*const conda.Record, packages.items, c.record) != null) continue;
+        try packages.append(arena, c.record);
+    }
+    for (records.items) |*r| {
+        if (mem.indexOfScalar(*const conda.Record, packages.items, r) == null) continue;
+        r.upstream = try readUpstream(b, io, r);
+        try installLicenses(b, io, r, dest, r.name);
+    }
+    var sources: std.Io.Writer.Allocating = .init(arena);
+    try conda.writeSources(arena, &sources.writer, copies.items);
+    const wf = b.addWriteFiles();
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(wf.add("SOURCES", sources.written()), dest, "SOURCES").step);
+    std.debug.print("r-zig: the R tree's records {s}/{s}: {d} files from the env ({d} changed), {d} packages\n", .{
+        prefix, share, copies.items.len, n_changed, packages.items.len,
+    });
+}
+
+fn realPath(b: *std.Build, io: std.Io, p: []const u8) ![]const u8 {
+    const real = std.Io.Dir.cwd().realPathFileAlloc(io, p, b.allocator) catch |err|
+        return fail("cannot resolve {s} ({t})", .{ p, err });
+    return mem.replaceOwned(u8, b.allocator, real, "\\", "/");
+}
+
+fn sha256Hex(b: *std.Build, io: std.Io, p: []const u8) ![64]u8 {
+    const data = std.Io.Dir.cwd().readFileAlloc(io, p, b.allocator, .limited(1024 * 1024 * 1024)) catch |err|
+        return fail("cannot read {s} ({t})", .{ p, err });
+    defer b.allocator.free(data);
+    var sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(data, &sha, .{});
+    return std.fmt.bytesToHex(sha, .lower);
 }
 
 /// zig/ from the wheel fetch-zig unpacked into `dir` (B4; PHASE5 open
@@ -506,16 +693,14 @@ fn fail(comptime fmt: []const u8, args: anytype) error{ToolchainBuild} {
     return error.ToolchainBuild;
 }
 
-/// The env's conda-meta records that may own a file the directories copy:
-/// those whose JSON has one of the files' names, quoted, at the end of a
-/// path, or for a tree its `name` so, else the last component of its
-/// `from` anywhere (`flang`: every record listing a file under it). No
-/// needle holds a separator, so they match Windows' `\` paths and any
-/// JSON spacing, and every record that lists a tree's file is read, so
-/// conda.find sees a second owner of it (PHASE6 open point W, Cc10).
-/// Reading only those keeps the configure step quick (zig's own record
-/// alone lists 19,546 files); conda.find then matches whole paths.
-fn readRecords(b: *std.Build, io: std.Io, env: []const u8, dirs: []const Dir) ![]conda.Record {
+/// What readRecords looks for in the records, for the directories' files:
+/// each file's name, quoted, at the end of a path, or for a tree its
+/// `name` so, else the last component of its `from` anywhere (`flang`:
+/// every record listing a file under it). No needle holds a separator, so
+/// they match Windows' `\` paths and any JSON spacing, and every record
+/// that lists a tree's file is read, so conda.find sees a second owner of
+/// it (PHASE6 open point W, Cc10).
+fn dirNeedles(b: *std.Build, dirs: []const Dir) ![]const []const u8 {
     const arena = b.allocator;
     var needles: std.ArrayList([]const u8) = .empty;
     for (dirs) |d| {
@@ -532,6 +717,15 @@ fn readRecords(b: *std.Build, io: std.Io, env: []const u8, dirs: []const Dir) ![
             }
         }
     }
+    return needles.items;
+}
+
+/// The env's conda-meta records whose JSON has one of `needles`, or every
+/// record when `needles` is null. Reading only those keeps the toolchain
+/// tree's configure step quick (zig's own record alone lists 19,546
+/// files); conda.find then matches whole paths.
+fn readRecords(b: *std.Build, io: std.Io, env: []const u8, needles: ?[]const []const u8) ![]conda.Record {
+    const arena = b.allocator;
     const meta = b.fmt("{s}/conda-meta", .{env});
     var dir = std.Io.Dir.cwd().openDir(io, meta, .{ .iterate = true }) catch |err|
         return fail("cannot read {s} ({t}): the toolchain tree's records come from the env's conda-meta", .{ meta, err });
@@ -541,13 +735,13 @@ fn readRecords(b: *std.Build, io: std.Io, env: []const u8, dirs: []const Dir) ![
     while (try it.next(io)) |e| {
         if (e.kind != .file or !mem.endsWith(u8, e.name, ".json")) continue;
         const json = try dir.readFileAlloc(io, e.name, arena, .limited(256 * 1024 * 1024));
-        for (needles.items) |n| {
-            if (mem.indexOf(u8, json, n) == null) continue;
-            const r = conda.parse(arena, json) catch |err|
-                return fail("{s}/{s}: not a conda-meta record ({t})", .{ meta, e.name, err });
-            try records.append(arena, r);
-            break;
-        }
+        const wanted = if (needles) |ns| for (ns) |n| {
+            if (mem.indexOf(u8, json, n) != null) break true;
+        } else false else true;
+        if (!wanted) continue;
+        const r = conda.parse(arena, json) catch |err|
+            return fail("{s}/{s}: not a conda-meta record ({t})", .{ meta, e.name, err });
+        try records.append(arena, r);
     }
     return records.items;
 }
@@ -588,8 +782,8 @@ fn readUpstream(b: *std.Build, io: std.Io, r: *const conda.Record) !conda.Upstre
     }
     if (u.sources.len == 0 and mem.indexOf(u8, r.license, "GPL") != null)
         return fail("{s} ({s}): its recipe in {s}/recipe lists no source, and SOURCES must name the source of a GPL package's binaries", .{ r.name, r.license, info });
-    if (mem.startsWith(u8, r.name, "m2-") and !try hasLicenseFiles(b, io, r))
-        u.licenses_from = try m2Licenses(b, io, r);
+    if (!try hasLicenseFiles(b, io, r))
+        u.licenses_from = try ownLicenses(b, io, r);
     return u;
 }
 
@@ -609,24 +803,26 @@ fn hasLicenseFiles(b: *std.Build, io: std.Io, r: *const conda.Record) !bool {
     return false;
 }
 
-/// An m2 package's licence texts, r-zig's (PHASE7 open point E a):
-/// m2-licenses/<name>/ beside this file, taken by hand from the package's
-/// MSYS2 source archive for the version and build its VERSION names.
+/// The licence texts of a package that ships none, r-zig's (PHASE7 open
+/// point E a, PHASE8 open point H a): licenses/<name>/ beside this file,
+/// taken by hand from the package's source archive for the version its
+/// VERSION names: `<version> <build>` (an m2 package: MSYS2's release is
+/// in the build), or `<version>` alone where the build differs per
+/// platform and the source does not (libgcc, libstdcxx, libfreetype6).
 /// Returns the archive's URL, ORIGIN's `source:`, which SOURCES names as
 /// where the texts come from. No such directory, or one for another
-/// version or build (a re-lock moved the pin), stops the build.
-fn m2Licenses(b: *std.Build, io: std.Io, r: *const conda.Record) ![]const u8 {
+/// version (a re-lock moved the pin), stops the build.
+fn ownLicenses(b: *std.Build, io: std.Io, r: *const conda.Record) ![]const u8 {
     const arena = b.allocator;
-    const dir = m2LicensesDir(b, r);
-    const how = "its README says how to take them from the package's MSYS2 source archive";
+    const dir = licensesDir(b, r);
+    const how = "its README says how to take them from the package's source archive";
     const version = std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/VERSION", .{dir}), arena, .limited(4096)) catch
-        return fail("{s} {s} {s} ships no licence file, and zigbuild/toolchain/m2-licenses/{s}/ does not hold its texts ({s})", .{ r.name, r.version, r.build, r.name, how });
-    const want = b.fmt("{s} {s}", .{ r.version, r.build });
+        return fail("{s} {s} {s} ships no licence file, and zigbuild/toolchain/licenses/{s}/ does not hold its texts ({s})", .{ r.name, r.version, r.build, r.name, how });
     const got = mem.trim(u8, version, " \t\r\n");
-    if (!mem.eql(u8, got, want))
-        return fail("{s} {s} {s} ships no licence file, and zigbuild/toolchain/m2-licenses/{s}/ does not hold its texts: its VERSION is {s} ({s})", .{ r.name, r.version, r.build, r.name, got, how });
+    if (!mem.eql(u8, got, b.fmt("{s} {s}", .{ r.version, r.build })) and !mem.eql(u8, got, r.version))
+        return fail("{s} {s} {s} ships no licence file, and zigbuild/toolchain/licenses/{s}/ does not hold its texts: its VERSION is {s} ({s})", .{ r.name, r.version, r.build, r.name, got, how });
     const origin = std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/ORIGIN", .{dir}), arena, .limited(64 * 1024)) catch |err|
-        return fail("{s}: cannot read zigbuild/toolchain/m2-licenses/{s}/ORIGIN ({t}); {s}", .{ r.name, r.name, err, how });
+        return fail("{s}: cannot read zigbuild/toolchain/licenses/{s}/ORIGIN ({t}); {s}", .{ r.name, r.name, err, how });
     var lines = mem.splitScalar(u8, origin, '\n');
     while (lines.next()) |raw| {
         const l = mem.trimEnd(u8, raw, " \r");
@@ -634,26 +830,27 @@ fn m2Licenses(b: *std.Build, io: std.Io, r: *const conda.Record) ![]const u8 {
         var words = mem.tokenizeScalar(u8, l["source: ".len..], ' ');
         if (words.next()) |url| return url;
     }
-    return fail("{s}: zigbuild/toolchain/m2-licenses/{s}/ORIGIN has no source: line; {s}", .{ r.name, r.name, how });
+    return fail("{s}: zigbuild/toolchain/licenses/{s}/ORIGIN has no source: line; {s}", .{ r.name, r.name, how });
 }
 
-fn m2LicensesDir(b: *std.Build, r: *const conda.Record) []const u8 {
-    return mem.replaceOwned(u8, b.allocator, b.pathFromRoot(b.fmt("m2-licenses/{s}", .{r.name})), "\\", "/") catch @panic("OOM");
+fn licensesDir(b: *std.Build, r: *const conda.Record) []const u8 {
+    return mem.replaceOwned(u8, b.allocator, b.pathFromRoot(b.fmt("licenses/{s}", .{r.name})), "\\", "/") catch @panic("OOM");
 }
 
-/// LICENSES/<package>/: every file of the package's info/licenses/ in the
-/// package cache, subdirectories kept (a link to a file arrives as that
-/// file), or for an m2 package r-zig's texts of it (readUpstream set
-/// licenses_from): every file of m2-licenses/<name>/ but its VERSION and
-/// ORIGIN. None stops the build: pixi keeps the cache, but an env restored
-/// from a CI cache (setup-pixi's `cache: true`) has a record whose
-/// directory does not exist (PHASE3 C33, risk 2).
-fn installLicenses(b: *std.Build, io: std.Io, r: *const conda.Record, dest: std.Build.InstallDir) !void {
+/// `sub` (LICENSES/<package> in a group directory, <package> in the R
+/// tree's share/licenses): every file of the package's info/licenses/ in
+/// the package cache, subdirectories kept (a link to a file arrives as
+/// that file), or for a package that ships none r-zig's texts of it
+/// (readUpstream set licenses_from): every file of licenses/<name>/ but
+/// its VERSION and ORIGIN. None stops the build: pixi keeps the cache, but
+/// an env restored from a CI cache (setup-pixi's `cache: true`) has a
+/// record whose directory does not exist (PHASE3 C33, risk 2).
+fn installLicenses(b: *std.Build, io: std.Io, r: *const conda.Record, dest: std.Build.InstallDir, sub: []const u8) !void {
     const arena = b.allocator;
     if (r.extracted_package_dir.len == 0)
         return fail("{s}: its conda-meta record names no extracted_package_dir; {s}", .{ r.name, cache_how });
-    const m2 = if (r.upstream) |u| u.licenses_from != null else false;
-    const src = if (m2) m2LicensesDir(b, r) else b.fmt("{s}/info/licenses", .{r.extracted_package_dir});
+    const own = if (r.upstream) |u| u.licenses_from != null else false;
+    const src = if (own) licensesDir(b, r) else b.fmt("{s}/info/licenses", .{r.extracted_package_dir});
     var dir = std.Io.Dir.cwd().openDir(io, src, .{ .iterate = true }) catch |err|
         return fail("{s}: cannot read {s} ({t}); {s}", .{ r.name, src, err, cache_how });
     defer dir.close(io);
@@ -671,8 +868,8 @@ fn installLicenses(b: *std.Build, io: std.Io, r: *const conda.Record, dest: std.
             else => continue,
         }
         const rel = try mem.replaceOwned(u8, arena, e.path, "\\", "/");
-        if (m2 and (mem.eql(u8, rel, "VERSION") or mem.eql(u8, rel, "ORIGIN"))) continue;
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = from }, dest, b.fmt("LICENSES/{s}/{s}", .{ r.name, rel })).step);
+        if (own and (mem.eql(u8, rel, "VERSION") or mem.eql(u8, rel, "ORIGIN"))) continue;
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = from }, dest, b.fmt("{s}/{s}", .{ sub, rel })).step);
         n += 1;
     }
     if (n == 0) return fail("{s}: no licence files in {s}; {s}", .{ r.name, src, cache_how });

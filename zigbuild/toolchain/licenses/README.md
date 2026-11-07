@@ -1,32 +1,54 @@
-# The m2 packages' licence texts
+# Licence texts of packages that ship none
 
+Every directory of copied conda files carries its packages' licence
+texts: each toolchain group directory in `LICENSES/<package>/`
+(zigbuild/toolchain/build.zig), and the R tree in
+`share/licenses/<package>/` (Windows: `Library/share/licenses/`; the same
+build file's `-Dbase`, feat-standalone-toolchain B33 a, PHASE8). They come
+from the package's `info/licenses/`. A few packages ship none:
 conda-forge's m2 packages (MSYS2's binary packages, repackaged by
-m2-binary-packages-feedstock) ship no `info/licenses/`. The Windows
-build-tools group copies files of 18 of them into
-`R_HOME/bin/toolchain/usr/bin` (zigbuild/toolchain/build.zig, the `usr`
-directory), and every group directory carries its packages' licence texts
-in `LICENSES/<package>/`. For a package whose `info/licenses/` is missing or
-empty and whose name starts with `m2-`, the toolchain build installs the
-files of this directory's `<package>/` instead, after checking that its
-`VERSION` equals the record's `<version> <build>`; `usr/SOURCES` then says
-`licenses: from <the source archive>` (feat-standalone-toolchain PHASE7 open
-point E a).
+m2-binary-packages-feedstock), whose files the Windows build-tools group
+copies into `R_HOME/bin/toolchain/usr/bin`, and libgcc, libstdcxx and
+libfreetype6, whose libraries the linux R tree vendors. For a package
+whose `info/licenses/` is missing or empty, the build installs the files
+of this directory's `<package>/` instead, after checking that its
+`VERSION` equals the record's `<version> <build>` (an m2 package: MSYS2's
+release is in the build) or `<version>` (the others: the build differs per
+platform, the source does not); SOURCES then says `licenses: from <the
+source archive>` (PHASE7 open point E a, PHASE8 open point H a).
 
 Each `<package>/` holds:
 
 - the licence files, at their path in the upstream source;
-- `VERSION`: `<version> <build>` of the conda package the texts are for;
-- `ORIGIN`: the package and conda-meta's licence, the MSYS2 source archive
+- `VERSION`: `<version> <build>` or `<version>` of the conda package the
+  texts are for;
+- `ORIGIN`: the package and conda-meta's licence, the source archive
   (`source:`, the recipe's URL and sha256; `mirror:`, conda-forge's copy),
   a `file:` line per text (its path here, its sha256, and where it is in
   the archive), and a `note:` where the texts name another licence than
-  conda-meta's `license:` (SOURCES keeps conda-meta's).
+  conda-meta's `license:` (SOURCES keeps conda-meta's), or where the
+  package's own files hold one of them.
 
-No code fetches these. They are taken by hand, once per m2 pin: a re-lock
-that moves an m2 package's version or build stops the Windows toolchain
+No code fetches these. They are taken by hand, once per pin: a re-lock
+that moves such a package's version (an m2 package's build too) stops the
 build until its directory is taken again ("... does not hold its texts").
 
 ## How to take them
+
+libgcc, libstdcxx and libfreetype6: the source archive is the first `url:`
+of the package's `info/recipe/meta.yaml` `source:` (gcc-<ver>.tar.gz;
+freetype-<ver>.tar.gz), checked against the `sha256:` beside it; the files
+come from its top directory.
+
+| package | archive | files |
+|---|---|---|
+| libgcc, libstdcxx | gcc-16.2.0.tar.gz | COPYING3, COPYING.RUNTIME |
+| libfreetype6 | freetype-2.14.3.tar.gz | LICENSE.TXT, docs/FTL.TXT, docs/GPLv2.TXT |
+
+Taken on 2026-11-07 (pixi.lock fbb64b7b...), from ftp.gnu.org and
+download.savannah.gnu.org.
+
+The m2 packages:
 
 1. The source archive: the second `url:` entry of the package's
    `info/recipe/rendered_recipe.yaml` `finalized_sources` (the

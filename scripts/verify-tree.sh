@@ -51,10 +51,16 @@
 #   - macOS (every tree): etc/r-zig.cmake, a CMake toolchain file that
 #     leaves out Homebrew's, Fink's and MacPorts' prefixes, and
 #     etc/Renviron makes it CMAKE_TOOLCHAIN_FILE's default;
-#   - unix (a tree that is not a conda env): etc/ca-bundle.crt holds
-#     certificates and etc/Renviron names it in R_ZIG_CA_BUNDLE; with
-#     tcltk (full), Tcl/Tk's script libraries and Tcl's modules are in
-#     <prefix>/lib and etc/Renviron points TCL_LIBRARY there;
+#   - every OS (a tree that is not a conda env): share/licenses/SOURCES
+#     (Windows: Library/share/licenses) records every file the tree has
+#     from the env, with its package and sha256, and each package's
+#     licence texts are beside it (feat-standalone-toolchain B33 a);
+#   - unix (a tree that is not a conda env): <prefix>/ssl/cacert.pem
+#     holds certificates and etc/Renviron names it in R_ZIG_CA_BUNDLE;
+#     with fonts (slim, full), etc/Renviron points FONTCONFIG_PATH at
+#     <prefix>/etc/fonts; with tcltk (full), Tcl/Tk's script libraries
+#     and Tcl's modules are in <prefix>/lib and etc/Renviron points
+#     TCL_LIBRARY there; Windows: no fontconfig configuration;
 #   - x86_64 (every OS): no binary of R's own has a VEX or EVEX
 #     instruction (AVX, AVX2, FMA, AVX-512, on any register width): R is
 #     compiled for the baseline CPU, not the build machine's;
@@ -459,6 +465,69 @@ if [ -z "$conda_tree" ]; then
   fi
 fi
 
+# The tree's records (feat-standalone-toolchain B33 a, PHASE8; written
+# by zigbuild/toolchain/build.zig's installBase, which zig-build.sh runs
+# after vendor-libs.sh), in a tree that is not a conda env:
+# share/licenses/SOURCES (Windows: Library/share/licenses/SOURCES) has a
+# `file:` line for every file the tree has from the env, and for no
+# other, and each file's sha256 is its line's (the package's), or the
+# `changed:` line's under it; every package named there has its licence
+# texts in share/licenses/<package>/, and nothing else is there. The
+# files, as installBase lists them: vendor-libs.sh's (vendored_files,
+# links left out: they name a copy), and what build.zig's
+# installEnvRuntime installs, unix ssl/ (the CA bundle), etc/fonts/ and
+# full's lib/{tcl8.6,tk8.6,tcl8}/, Windows R_HOME/Tcl/{bin,lib,include}/.
+if [ -z "$conda_tree" ]; then
+  if [ "$OS" = windows ]; then
+    lic="Library/share/licenses"
+    env_dirs=("$rh/Tcl/bin" "$rh/Tcl/lib" "$rh/Tcl/include")
+  else
+    lic="share/licenses"
+    env_dirs=(ssl etc/fonts lib/tcl8.6 lib/tk8.6 lib/tcl8)
+  fi
+  [ -f "$TREE/$lic/SOURCES" ] ||
+    { echo "error: $lic/SOURCES is missing (zig-build.sh writes it after vendor-libs.sh)" >&2; exit 1; }
+  {
+    while IFS= read -r f; do
+      [ -L "$f" ] || printf '%s\n' "${f#"$TREE"/}"
+    done < "$WORK/vendored.txt"
+    for d in "${env_dirs[@]}"; do
+      if [ -d "$TREE/$d" ]; then (cd "$TREE" && find "$d" -type f); fi
+    done
+  } | LC_ALL=C sort > "$WORK/from-env.txt"
+  # "<path here> <sha256> <package>" per file line, the changed: line's
+  # sha256 when there is one.
+  awk '/^package: / {p = $2}
+       /^file: / {if (t != "") print t, s, q; t = $4; s = $5; q = p}
+       /^changed: / {s = $NF}
+       END {if (t != "") print t, s, q}' "$TREE/$lic/SOURCES" | LC_ALL=C sort > "$WORK/records.txt"
+  bad=""
+  while IFS= read -r f; do bad="$bad
+  $f: from the env, no file: line"; done < <(cut -d' ' -f1 "$WORK/records.txt" | LC_ALL=C comm -23 "$WORK/from-env.txt" -)
+  while IFS= read -r f; do bad="$bad
+  $f: a file: line, not a file from the env here"; done < <(cut -d' ' -f1 "$WORK/records.txt" | LC_ALL=C comm -13 "$WORK/from-env.txt" -)
+  while read -r f sha pkg; do
+    [ -f "$TREE/$f" ] || continue
+    got="$(sha256sum "$TREE/$f" | cut -d' ' -f1)"
+    [ "$got" = "$sha" ] || bad="$bad
+  $f: sha256 $got, its record says $sha ($pkg)"
+  done < "$WORK/records.txt"
+  cut -d' ' -f3 "$WORK/records.txt" | LC_ALL=C sort -u > "$WORK/record-pkgs.txt"
+  while IFS= read -r pkg; do
+    [ -n "$(find "$TREE/$lic/$pkg" -type f 2>/dev/null | head -1)" ] || bad="$bad
+  $lic/$pkg/: no licence texts"
+  done < "$WORK/record-pkgs.txt"
+  while IFS= read -r e; do
+    grep -qxF -- "$e" "$WORK/record-pkgs.txt" || bad="$bad
+  $lic/$e: no package of SOURCES"
+  done < <(cd "$TREE/$lic" && ls | grep -vx SOURCES)
+  if [ -n "$bad" ]; then
+    echo "error: the tree's records ($lic):$bad" >&2
+    exit 1
+  fi
+  echo "== records verified: $lic/SOURCES, $(wc -l < "$WORK/records.txt" | tr -d ' ') files from the env ($(grep -c '^changed: ' "$TREE/$lic/SOURCES" || true) changed, each with its sha256), $(wc -l < "$WORK/record-pkgs.txt" | tr -d ' ') packages, each with its licence texts"
+fi
+
 # OpenMP for packages (feat-standalone-toolchain B22, B40), in a tree that
 # is not a conda env (there conda-forge's llvm-openmp brings headers and
 # runtime in one package, B41). The compile-time files, llvm-openmp's
@@ -619,6 +688,14 @@ if [ "$OS" = windows ]; then
     fi
     echo "== Tcl/Tk verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), Makeconf's TCL_VERSION = $tclv, $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib, $(find "$TREE/$rh/Tcl/include" -type f | wc -l | tr -d ' ') headers in Tcl/include"
 
+    # No fontconfig configuration (PHASE8 open point D a): R on Windows
+    # picks its fonts through Win32 and never loads one.
+    if [ -e "$TREE/$rh/etc/fonts" ] || [ -e "$TREE/Library/etc/fonts" ] ||
+      grep -qs FONTCONFIG_PATH "$TREE/$rh/etc/Renviron.site"; then
+      echo "error: a fontconfig configuration or FONTCONFIG_PATH in the Windows tree (build.zig installs none)" >&2
+      exit 1
+    fi
+
     # The DLL closure: every DLL a PE file in the tree imports is found in
     # the tree, where the loader looks for it (the file's own directory;
     # R_HOME/bin/x64, the directory of R's executables, where vendor-libs.sh
@@ -679,22 +756,34 @@ if [ "$OS" = macos ]; then
 fi
 
 # TLS trust (build.zig's installEnvRuntime): a tree that is not a conda env
-# ships the env's Mozilla bundle as etc/ca-bundle.crt, and etc/Renviron
-# names it in R_ZIG_CA_BUNDLE, the patched libcurl.c's last fallback
+# ships the env's Mozilla bundle as ssl/cacert.pem, conda's place for it
+# (feat-standalone-toolchain B27 a), and etc/Renviron names it in
+# R_ZIG_CA_BUNDLE, the patched libcurl.c's last fallback
 # (zigbuild/patches/); without either, HTTPS fails on any other machine.
 # (HTTPS with it: verify-bundle.sh, on the extracted archive.)
 if [ -z "$conda_tree" ]; then
-  ca="lib/R/etc/ca-bundle.crt"
+  ca="ssl/cacert.pem"
   n_ca="$(grep -c 'BEGIN CERTIFICATE' "$TREE/$ca" 2>/dev/null || true)"
   if [ "${n_ca:-0}" -eq 0 ]; then
     echo "error: $ca is missing or holds no certificates" >&2
     exit 1
   fi
-  if ! grep -qxF 'R_ZIG_CA_BUNDLE=${R_HOME}/etc/ca-bundle.crt' "$TREE/lib/R/etc/Renviron"; then
-    echo "error: lib/R/etc/Renviron does not set R_ZIG_CA_BUNDLE=\${R_HOME}/etc/ca-bundle.crt" >&2
+  if ! grep -qxF 'R_ZIG_CA_BUNDLE=${R_HOME}/../../ssl/cacert.pem' "$TREE/lib/R/etc/Renviron"; then
+    echo "error: lib/R/etc/Renviron does not set R_ZIG_CA_BUNDLE=\${R_HOME}/../../ssl/cacert.pem" >&2
     exit 1
   fi
   echo "== CA bundle verified: $ca ($n_ca certificates), named by R_ZIG_CA_BUNDLE in etc/Renviron"
+
+  # fontconfig (slim, full): the vendored libfontconfig names only the
+  # build env's etc/fonts, so etc/Renviron points FONTCONFIG_PATH at the
+  # tree's (build.zig's finalRenviron), for R however it is started.
+  if [ -d "$TREE/etc/fonts" ]; then
+    { [ -s "$TREE/etc/fonts/fonts.conf" ] &&
+      grep -qxF 'R_ZIG_FONTCONFIG_PATH=${R_HOME}/../../etc/fonts' "$TREE/lib/R/etc/Renviron" &&
+      grep -qxF 'FONTCONFIG_PATH=${FONTCONFIG_PATH-${R_ZIG_FONTCONFIG_PATH}}' "$TREE/lib/R/etc/Renviron"; } ||
+      { echo "error: etc/fonts without etc/fonts/fonts.conf, or etc/Renviron does not point FONTCONFIG_PATH at it" >&2; exit 1; }
+    echo "== fontconfig verified: etc/fonts/fonts.conf, FONTCONFIG_PATH in etc/Renviron"
+  fi
 
   # tcltk (full): the vendored libtcl names only the build env's script
   # library, so the tree carries Tcl's and Tk's, and Tcl's modules, in

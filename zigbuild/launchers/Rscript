@@ -21,10 +21,6 @@ case "$here" in
   *)           R_HOME="$(cd "$here/../lib/R" && pwd)" ;;
 esac
 export R_HOME
-prefix="$(cd "$R_HOME/../.." && pwd)"
-if [ -d "$prefix/etc/fonts" ]; then
-  FONTCONFIG_PATH="$prefix/etc/fonts"; export FONTCONFIG_PATH
-fi
 if [ $# -eq 0 ]; then
   echo "Usage: Rscript [options] file [args]" >&2
   echo "   or: Rscript [options] -e expr [-e expr2 ...] [args]" >&2

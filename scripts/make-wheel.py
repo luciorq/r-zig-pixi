@@ -5,9 +5,12 @@ Input is the tree `pixi run -e minimal build` leaves in
 dist/minimal/R-<ver>-zig, the same tree the standalone archive packs
 (feat-no-host-paths F1.7): installed by zig build (location-independent
 launchers, $ORIGIN/@loader_path rpaths, rzig in lib/R/bin/toolchain, a
-Makeconf that names no build path, the env's CA bundle named in
+Makeconf that names no build path, the env's CA bundle in ssl/ named in
 etc/Renviron) with the conda libraries it needs vendored into lib/ by
-zig-build.sh (vendor-libs.sh). GNU make is not in it: it is the
+zig-build.sh (vendor-libs.sh), and the records of those (share/licenses:
+SOURCES and each package's licence texts, B33 a), which r-zig's
+dist-info/licenses also holds beside R's COPYING (PHASE8 open point E a).
+GNU make is not in it: it is the
 build-tools group's, in the toolchain tree `pixi run -e minimal
 toolchain` leaves in dist/toolchain/R-<ver>-zig, as
 lib/R/bin/toolchain/usr/bin/make with its SOURCES and LICENSES/
@@ -450,8 +453,10 @@ def main() -> None:
         die(f"no vendored libraries in {prefix}/lib — run `pixi run -e minimal build` first")
     with open(os.path.join(prefix, "lib", "R", "etc", "Renviron"), "rb") as f:
         has_ca = b"\nR_ZIG_CA_BUNDLE=" in b"\n" + f.read()
-    if not (has_ca and os.path.isfile(os.path.join(prefix, "lib", "R", "etc", "ca-bundle.crt"))):
-        die(f"{prefix} has no CA bundle (etc/ca-bundle.crt, R_ZIG_CA_BUNDLE) — run `pixi run -e minimal build` first")
+    if not (has_ca and os.path.isfile(os.path.join(prefix, "ssl", "cacert.pem"))):
+        die(f"{prefix} has no CA bundle (ssl/cacert.pem, R_ZIG_CA_BUNDLE) — run `pixi run -e minimal build` first")
+    if not os.path.isfile(os.path.join(prefix, "share", "licenses", "SOURCES")):
+        die(f"{prefix} has no records (share/licenses/SOURCES) — run `pixi run -e minimal build` first")
     if not os.path.isfile(os.path.join(tc_prefix, "lib", "R", "bin", "toolchain", "usr", "bin", "make")):
         die(f"no GNU make in the toolchain tree {tc_prefix} — run `pixi run -e minimal toolchain` first")
     if args.build_tag and not args.build_tag[0].isdigit():
@@ -518,23 +523,30 @@ def main() -> None:
 
     with open(os.path.join(prefix, "lib", "R", "COPYING"), "rb") as f:
         copying = f.read()
+    # r-zig's licences: R's COPYING, and the tree's records, SOURCES and
+    # each vendored package's texts, at their place under share/licenses
+    # (B33 a; PHASE8 open point E a). No License-File lines: METADATA is
+    # version 2.1, and License-File is 2.4's.
+    records = [(rel[len("share/licenses/"):], data) for rel, data in files if rel.startswith("share/licenses/")]
     entry_points = f"[console_scripts]\nR = {IMPORT_NAME}:main\nRscript = {IMPORT_NAME}:main_rscript\n"
-    write_wheel(args, DIST_NAME, tags, build, entries, metadata(DIST_NAME, args.version, r_version), entry_points, copying)
+    write_wheel(args, DIST_NAME, tags, build, entries, metadata(DIST_NAME, args.version, r_version), entry_points,
+                [("COPYING", copying)] + records)
 
     # the build tools under make's licence, and two wheels of
     # requirements alone (E a; B29 a)
     bt_entries = [(base + rel, data, modes[rel]) for rel, data in sorted(bt_files)]
     write_wheel(args, BUILD_TOOLS_DIST, tags, build, bt_entries,
-                metadata(BUILD_TOOLS_DIST, args.version, r_version), None, make_copying)
+                metadata(BUILD_TOOLS_DIST, args.version, r_version), None, [("COPYING", make_copying)])
     for dist in (COMPILERS_DIST, TOOLCHAIN_DIST):
-        write_wheel(args, dist, tags, build, [], metadata(dist, args.version, r_version), None, copying)
+        write_wheel(args, dist, tags, build, [], metadata(dist, args.version, r_version), None, [("COPYING", copying)])
 
 
 def write_wheel(args: argparse.Namespace, dist: str, tags: list[str], build: str,
                 entries: list[tuple[str, bytes, int]], meta: str,
-                entry_points: str | None, copying: bytes) -> None:
-    """Write dist's wheel; `copying` is its dist-info licence. No entries:
-    a wheel of its .dist-info alone."""
+                entry_points: str | None, licenses: list[tuple[str, bytes]]) -> None:
+    """Write dist's wheel; `licenses` are its dist-info licences, (path
+    under licenses/, content). No entries: a wheel of its .dist-info
+    alone."""
     name = dist.replace("-", "_")  # the wheel file's and the dist-info's name (PEP 427)
     plat = ".".join(tags)
     dist_info = f"{name}-{args.version}.dist-info"
@@ -546,8 +558,7 @@ def write_wheel(args: argparse.Namespace, dist: str, tags: list[str], build: str
     entries = entries + [
         (f"{dist_info}/METADATA", meta.encode(), 0o644),
         (f"{dist_info}/WHEEL", wheel_meta.encode(), 0o644),
-        (f"{dist_info}/licenses/COPYING", copying, 0o644),
-    ]
+    ] + [(f"{dist_info}/licenses/{rel}", data, 0o644) for rel, data in licenses]
     if entry_points:
         entries.append((f"{dist_info}/entry_points.txt", entry_points.encode(), 0o644))
 

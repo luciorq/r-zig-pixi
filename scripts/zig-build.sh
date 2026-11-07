@@ -65,3 +65,12 @@ fi
 R_INSTALL_PREFIX="$PREFIX" bash "$(dirname "$0")/vendor-libs.sh"
 "$ZIG" build --prefix "$PREFIX" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"
 R_INSTALL_PREFIX="$PREFIX" bash "$(dirname "$0")/vendor-libs.sh"
+
+# The tree's records (feat-standalone-toolchain B33 a, PHASE8): which
+# conda package each file it has from the env comes from, and that
+# package's licences, in <prefix>/share/licenses (Windows:
+# <prefix>/Library/share/licenses). The toolchain build's conda-meta
+# reader and SOURCES writer write them (zigbuild/toolchain/build.zig,
+# installBase), after vendor-libs.sh, on the tree as it ships. Nothing
+# for the conda build, whose packages keep their own.
+"$ZIG" build --build-file "$ROOT/zigbuild/toolchain/build.zig" --prefix "$PREFIX" -Dbase

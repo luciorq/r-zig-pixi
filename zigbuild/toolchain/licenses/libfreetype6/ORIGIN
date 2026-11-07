@@ -1,0 +1,6 @@
+package: libfreetype6 2.14.3
+license: GPL-2.0-only OR FTL (conda-meta)
+source: https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.gz sha256:e61b31ab26358b946e767ed7eb7f4bb2e507da1cfefeb7a8861ace7fd5c899a1
+file: LICENSE.TXT bd36c8b474855fa294c2ec5c184544478ef3720aad37d65a6296a4f264fd2d3b <- freetype-2.14.3/LICENSE.TXT
+file: docs/FTL.TXT 5a5ee54c5001bbad1cdc1a57cc3dd4c42199b2da09d39c7ee41fab002d02967f <- freetype-2.14.3/docs/FTL.TXT
+file: docs/GPLv2.TXT c4120c6752c910c299e3bd9cb3a46ff262c268303ca2069b61f92f10a5656c18 <- freetype-2.14.3/docs/GPLv2.TXT
