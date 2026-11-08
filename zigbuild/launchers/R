@@ -14,8 +14,4 @@ while [ -h "$_s" ]; do
 done
 case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
 here="$(cd -P "${_d:-/}" && pwd)"
-# standalone trees carry a fontconfig configuration; harmless if absent
-if [ -d "$here/../etc/fonts" ]; then
-  FONTCONFIG_PATH="$here/../etc/fonts"; export FONTCONFIG_PATH
-fi
 exec "$here/../lib/R/bin/R" "$@"

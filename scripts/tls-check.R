@@ -3,8 +3,8 @@
 ## `Rscript --vanilla` in an emptied environment (`env -i`).
 ##
 ## The vendored libcurl/OpenSSL carry the build env's CA paths compiled
-## in. The tree ships etc/ca-bundle.crt and sets R_ZIG_CA_BUNDLE in
-## etc/Renviron; R's libcurl.c (patched by scripts/zig-build.sh) picks
+## in. The tree ships ssl/cacert.pem (beside lib/R, conda's place) and
+## sets R_ZIG_CA_BUNDLE in etc/Renviron; R's libcurl.c (patched by scripts/zig-build.sh) picks
 ## CURL_CA_BUNDLE, else SSL_CERT_FILE, else the system bundle, else the
 ## shipped file. Callers read the "TLS: " lines: "requests OK" is printed
 ## only when HTTPS requests really ran, so an offline machine is reported
@@ -15,7 +15,8 @@ fail <- function(...) {
   quit(status = 1)
 }
 
-home <- normalizePath(R.home())
+## The tree's top: R_HOME is <top>/lib/R.
+top <- normalizePath(file.path(R.home(), "..", ".."))
 
 ## R must not export CURL_CA_BUNDLE: every program R starts (curl,
 ## Python's requests, ...) would drop its own trust for the shipped copy.
@@ -24,8 +25,9 @@ if (nzchar(Sys.getenv("CURL_CA_BUNDLE")))
        "); only R_ZIG_CA_BUNDLE should be")
 
 ca <- Sys.getenv("R_ZIG_CA_BUNDLE")
-if (!nzchar(ca) || !file.exists(ca) || !startsWith(normalizePath(ca), home))
-  fail("R_ZIG_CA_BUNDLE is not a file inside R_HOME: '", ca, "'")
+if (!nzchar(ca) || !file.exists(ca) ||
+    !identical(normalizePath(ca), file.path(top, "ssl", "cacert.pem")))
+  fail("R_ZIG_CA_BUNDLE is not the tree's ssl/cacert.pem: '", ca, "'")
 if (!any(grepl("BEGIN CERTIFICATE", readLines(ca, warn = FALSE), fixed = TRUE)))
   fail("R_ZIG_CA_BUNDLE has no certificates: ", ca)
 
@@ -65,4 +67,4 @@ if (!cert_error(res)) fail("unexpected error with an empty SSL_CERT_FILE: ", res
 Sys.unsetenv("SSL_CERT_FILE")
 
 cat("TLS: requests OK (default trust, shipped bundle, CA rule active; bundle ",
-    sub(home, "R_HOME", normalizePath(ca), fixed = TRUE), ")\n", sep = "")
+    sub(top, "<top>", normalizePath(ca), fixed = TRUE), ")\n", sep = "")

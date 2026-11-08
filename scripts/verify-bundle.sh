@@ -539,6 +539,50 @@ cat('bundle OK\n')
   fi
   echo "== standalone base verified relocatable ($OS/$FLAVOR)"
 
+  # Fonts (every variant but minimal, which has no cairo; PHASE8 open
+  # points D a, G a): svg() draws text in the generic families with no
+  # fontconfig error. unix: etc/Renviron points FONTCONFIG_PATH at the
+  # tree's etc/fonts, for R started through <top>/bin and as
+  # R_HOME/bin/R alike (without it fontconfig prints "Cannot load default
+  # config file"). Windows: R picks its fonts through Win32 and the tree
+  # ships no configuration, so no FONTCONFIG_PATH.
+  if [ "$VARIANT" != minimal ]; then
+    cat > "$VERIFY_DIR/fonts.R" <<'RCODE'
+f <- tempfile(fileext = ".svg")
+svg(f)
+plot(1, main = "r-zig fonts")
+for (fam in c("sans", "serif", "mono")) text(1, 1, fam, family = fam)
+invisible(dev.off())
+stopifnot(file.size(f) > 1000)
+fc <- Sys.getenv("FONTCONFIG_PATH")
+if (.Platform$OS.type == "windows") {
+  if (nzchar(fc)) stop("FONTCONFIG_PATH is set (", fc, "); the Windows tree ships no configuration")
+} else if (!nzchar(fc) || !identical(normalizePath(fc), normalizePath(file.path(R.home(), "..", "..", "etc", "fonts")))) {
+  stop("FONTCONFIG_PATH is '", fc, "', not the tree's etc/fonts")
+}
+cat("fonts OK:", if (nzchar(fc)) fc else "no FONTCONFIG_PATH", "\n")
+RCODE
+    if [ "$OS" = windows ]; then
+      runs=("$RSCRIPT")
+      fonts_how="Rscript.exe"
+      fonts_path="$R_BINDIR:$sys32"
+    else
+      runs=("$RSCRIPT" "$RHD/bin/Rscript")
+      fonts_how="<top>/bin/Rscript and lib/R/bin/Rscript"
+      fonts_path=/usr/bin:/bin
+    fi
+    for r in "${runs[@]}"; do
+      (cd "$VERIFY_DIR" && env -i "${base_env[@]}" PATH="$fonts_path" "$r" --vanilla fonts.R) 2> "$VERIFY_DIR/fonts.err" ||
+        { cat "$VERIFY_DIR/fonts.err" >&2; echo "error: svg() text through $r" >&2; exit 1; }
+      if grep -qi 'fontconfig error' "$VERIFY_DIR/fonts.err"; then
+        cat "$VERIFY_DIR/fonts.err" >&2
+        echo "error: fontconfig errors through $r" >&2
+        exit 1
+      fi
+    done
+    echo "== fonts verified: svg() text in sans, serif and mono, no fontconfig error ($fonts_how)"
+  fi
+
   # The build tools first on PATH at run time (B25, C27), with the base
   # alone, where the directory does not exist yet (harmless: the host's make,
   # if any, comes next). unix: etc/Renviron's line, which R reads at start

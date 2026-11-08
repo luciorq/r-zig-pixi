@@ -164,7 +164,7 @@ run Rscript -e '
 
 echo "== TLS trust (CA bundle shipped in the wheel, also under --vanilla)"
 # conda-forge's libcurl/OpenSSL in the wheel carry the build env's CA path
-# compiled in; the wheel ships etc/ca-bundle.crt and R's libcurl.c picks
+# compiled in; the wheel ships ssl/cacert.pem and R's libcurl.c picks
 # the trust anchors itself (build.zig's installEnvRuntime,
 # zigbuild/patches/). Same
 # check as verify-bundle.sh: scripts/tls-check.R.

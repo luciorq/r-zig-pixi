@@ -58,8 +58,9 @@ pub const Upstream = struct {
     feedstock: []const u8 = "",
     commit: []const u8 = "",
     /// Set when LICENSES/ holds texts r-zig took from this source archive,
-    /// not the package's info/licenses/: an m2 package, which ships none
-    /// (zigbuild/toolchain/m2-licenses/; PHASE7 open point E a).
+    /// not the package's info/licenses/: a package that ships none, an m2
+    /// one or libgcc, libstdcxx and libfreetype6 (zigbuild/toolchain/licenses/;
+    /// PHASE7 open point E a, PHASE8 open point H a).
     licenses_from: ?[]const u8 = null,
 };
 
@@ -219,15 +220,24 @@ pub fn inDir(path: []const u8, strip: []const u8) []const u8 {
     return if (mem.startsWith(u8, path, strip)) path[strip.len..] else path;
 }
 
-/// One file a group directory copies from the env, as SOURCES records it.
+/// One file a group directory, or the R tree, copies from the env, as
+/// SOURCES records it.
 pub const Copy = struct {
     record: *const Record,
     /// Its path in the package, which is its path in the env.
     from: []const u8,
-    /// Its path in the directory.
+    /// Its path in the directory (the R tree's records: in the tree).
     to: []const u8,
-    /// The package's sha256 of it, which the copy has: no prefix
+    /// The package's sha256 of it. A group's copy has it: no prefix
     /// placeholder, so conda installed it unchanged.
+    sha256: []const u8,
+    /// Set when the copy is not the package's file (the R tree's records,
+    /// PHASE8 open point B a): what changed it, and the copy's sha256.
+    changed: ?Changed = null,
+};
+
+pub const Changed = struct {
+    how: []const u8,
     sha256: []const u8,
 };
 
@@ -248,6 +258,23 @@ pub const Error = error{
 /// The file `from` (relative to the env) copied as `to`: its owner, found
 /// by path, and its sha256 from the owner's paths_data.
 pub fn find(records: []const Record, from: []const u8, to: []const u8) Error!Copy {
+    const f = try findInEnv(records, from, to);
+    if (f.rewritten) return error.PrefixPlaceholder;
+    return f.copy;
+}
+
+/// What findInEnv found: the copy, and whether conda rewrote the env's
+/// file at install (a prefix placeholder), so that it is not the
+/// package's.
+pub const Found = struct {
+    copy: Copy,
+    rewritten: bool,
+};
+
+/// As find, for the R tree's records, which also cover files conda
+/// rewrote at install (vendored libraries, fonts.conf): the caller says
+/// how the copy differs (Copy.changed).
+pub fn findInEnv(records: []const Record, from: []const u8, to: []const u8) Error!Found {
     const r = owner(records, from) orelse return error.NoOwner;
     for (records) |*o| {
         if (o == r) continue;
@@ -257,8 +284,10 @@ pub fn find(records: []const Record, from: []const u8, to: []const u8) Error!Cop
     }
     for (r.paths_data.paths) |p| {
         if (!samePath(p._path, from)) continue;
-        if (p.prefix_placeholder != null) return error.PrefixPlaceholder;
-        return .{ .record = r, .from = from, .to = to, .sha256 = p.sha256 orelse return error.NoSha256 };
+        return .{
+            .copy = .{ .record = r, .from = from, .to = to, .sha256 = p.sha256 orelse return error.NoSha256 },
+            .rewritten = p.prefix_placeholder != null,
+        };
     }
     return error.NotInPathsData;
 }
@@ -279,9 +308,12 @@ fn copyLess(_: void, a: Copy, b: Copy) bool {
 /// `licenses: from` line when LICENSES/ holds texts from that archive and
 /// not the package's (Upstream.licenses_from); then a
 /// `file:` line per copy (by its path here), the path in the package, the
-/// path here (relative to the directory SOURCES is in) and the sha256 of
-/// both; a blank line between blocks. verify-toolchain.sh reads the `file:`
-/// lines as five space-separated fields, so a path with a blank is refused.
+/// path here (relative to the directory SOURCES is in; the R tree's: to
+/// its top) and the package's sha256 of it, followed, when the copy is not
+/// the package's file, by a `changed:` line, how, then the copy's sha256
+/// last; a blank line between blocks. verify-toolchain.sh and
+/// verify-tree.sh read the `file:` lines as five space-separated fields,
+/// so a path with a blank is refused.
 pub fn writeSources(gpa: mem.Allocator, w: *std.Io.Writer, copies: []const Copy) !void {
     const sorted = try gpa.dupe(Copy, copies);
     defer gpa.free(sorted);
@@ -298,6 +330,10 @@ pub fn writeSources(gpa: mem.Allocator, w: *std.Io.Writer, copies: []const Copy)
             last = r;
         }
         try w.print("file: {s} -> {s} {s}\n", .{ c.from, c.to, c.sha256 });
+        if (c.changed) |ch| {
+            if (mem.indexOfAny(u8, ch.how, "\r\n") != null) return error.NewlineInHow;
+            try w.print("changed: {s} {s}\n", .{ ch.how, ch.sha256 });
+        }
     }
 }
 
@@ -400,6 +436,27 @@ test "find: a file in no record, one missing from paths_data, a prefix placehold
     try std.testing.expectEqual(@as(?*const Record, null), owner(&rs, "bin/gmake"));
     try std.testing.expectError(error.NotInPathsData, find(&rs, "share/info/make.info", "x"));
     try std.testing.expectError(error.PrefixPlaceholder, find(&rs, "lib/libomp.so", "lib/libomp.so"));
+}
+
+test "findInEnv: a prefix placeholder found, and said so; SOURCES' changed: line" {
+    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer a.deinit();
+    const rs = try fixtures(a.allocator());
+    const f = try findInEnv(&rs, "lib/libomp.so", "lib/libomp.so");
+    try std.testing.expect(f.rewritten);
+    try std.testing.expectEqualStrings("aaaa", f.copy.sha256);
+    try std.testing.expect(!(try findInEnv(&rs, "bin/make", "bin/make")).rewritten);
+    try std.testing.expectError(error.NoOwner, findInEnv(&rs, "bin/gmake", "bin/make"));
+    var c = f.copy;
+    c.changed = .{ .how = "conda's prefix at install; strip --strip-debug (vendor-libs.sh)", .sha256 = "bbbb" };
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeSources(std.testing.allocator, &aw.writer, &.{c});
+    try std.testing.expect(mem.endsWith(u8, aw.written(),
+        \\file: lib/libomp.so -> lib/libomp.so aaaa
+        \\changed: conda's prefix at install; strip --strip-debug (vendor-libs.sh) bbbb
+        \\
+    ));
 }
 
 test "SOURCES: one block per package by name, its upstream, its files by their path here" {

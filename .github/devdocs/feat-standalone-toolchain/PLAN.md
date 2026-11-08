@@ -6550,6 +6550,14 @@ Tests: scenario 1 on every OS (TLS with the shipped bundle, an svg
 device with fonts, also under `--vanilla` on Windows, tcltk on full and
 Windows), wheel-test's TLS check, verify-tree.
 
+Done (2026-11-07; phase8/PHASE8-IMPLEMENTATION.md): as above, except
+Windows. R on Windows never reads fontconfig's configuration (its cairo
+device picks fonts through Win32), so the tree ships none and sets no
+`FONTCONFIG_PATH` (open point D a). unix sets `FONTCONFIG_PATH` in
+etc/Renviron, not in the launchers (G a). The records are written by
+zigbuild/toolchain/build.zig `-Dbase`, the groups' conda-meta reader and
+SOURCES writer (A a).
+
 ### Phase 9 — finish
 
 Decisions (answered): B14 (a), with B37 (a).

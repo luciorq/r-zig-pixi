@@ -920,17 +920,22 @@ fail on Windows; conda-forge's pkgconf 3.0.7 fixed both (kappa,
 
 Needs (answered): B27, B33.
 
-- [ ] unix: CA bundle at `<top>/ssl/cacert.pem`; Renviron's
-      `R_ZIG_CA_BUNDLE`, make-wheel.py's check (368-371) follow
-- [ ] Windows: fontconfig at `<top>/Library/etc/fonts`; `FONTCONFIG_PATH`
-      moves to a place R reads under `--vanilla`
-- [ ] `<env dir>/share/licenses/<package>/` and `SOURCES` for every
-      vendored package; the wheel's dist-info/licenses the same;
-      verify-tree requires an entry for every vendored file
-- [ ] verify-bundle scenario 1 on every OS: TLS, an svg device with
-      fonts (Windows also under `--vanilla`), tcltk (full, Windows);
-      wheel-test's TLS check
-- [ ] Tested: linux-64, omicron (both), kappa, CI
+Plan and record: phase8/PHASE8-IMPLEMENTATION.md (open points A to H,
+all ★, user 2026-11-07).
+
+- [x] unix: CA bundle at `<top>/ssl/cacert.pem`; Renviron's
+      `R_ZIG_CA_BUNDLE`, make-wheel.py's check follow
+- [x] Windows: no fontconfig configuration at all (D a, revising B27's
+      move: R on Windows never reads one); unix: `FONTCONFIG_PATH` in
+      etc/Renviron (G a)
+- [x] `<env dir>/share/licenses/<package>/` and `SOURCES` for every
+      file from the env (zigbuild/toolchain/build.zig `-Dbase`); the
+      wheel's dist-info/licenses the same; verify-tree requires an entry
+      for every one; zigbuild/toolchain/licenses/ (was m2-licenses/)
+- [x] verify-bundle scenario 1 on every OS: an svg device with fonts
+      under `--vanilla`; TLS and tcltk as before; wheel-test's TLS check
+- [x] Tested: linux-64 (slim, minimal and wheel, full), omicron (both), kappa
+- [ ] CI: core, full-ci, conda-package, upstream-zig
 
 ## Phase 9 — finish
 

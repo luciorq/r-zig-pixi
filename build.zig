@@ -1542,8 +1542,8 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
 
     try installWindowsCompilerContract(ctx, io);
     // The env's runtime data, for a tree that is not the env (Tcl/Tk with
-    // its headers, and fontconfig's configuration), and etc/Renviron.site
-    // (in the conda build: MY_TCLTK, the env's Tcl/Tk).
+    // its headers), and etc/Renviron.site (in the conda build: MY_TCLTK,
+    // the env's Tcl/Tk).
     try installEnvRuntime(ctx, io);
 
     // ------------------------------------------------------------------
@@ -3131,11 +3131,13 @@ fn pathExists(io: std.Io, p: []const u8) bool {
 /// the env's own packages (ca-certificates, fontconfig, tk) provide it
 /// where conda-forge's libraries look for it. Windows' tcltk is the one
 /// exception, below.
-///   - unix: the env's CA bundle as R_HOME/etc/ca-bundle.crt, which
-///     etc/Renviron names (finalRenviron); the build fails without it.
-///     fontconfig's configuration as <prefix>/etc/fonts, without the
-///     env's own directories (installFontconfig), when the env has one
-///     (minimal has no fontconfig). full (the variant that builds
+///   - unix: the env's CA bundle as <prefix>/ssl/cacert.pem, conda's
+///     place for it (feat-standalone-toolchain B27 a), which etc/Renviron
+///     names (finalRenviron); the build fails without it. fontconfig's
+///     configuration as <prefix>/etc/fonts, without the env's own
+///     directories (installFontconfig), when the env has one (minimal has
+///     no fontconfig); etc/Renviron points FONTCONFIG_PATH there
+///     (finalRenviron). full (the variant that builds
 ///     tcltk): Tcl's and Tk's script libraries and Tcl's modules as
 ///     <prefix>/lib/{tcl8.6,tk8.6,tcl8}, beside the libtcl and libtk
 ///     vendor-libs.sh copies, the layout of a Tcl install; etc/Renviron
@@ -3146,12 +3148,14 @@ fn pathExists(io: std.Io, p: []const u8) bool {
 ///     there. Also Tcl/Tk's headers in R_HOME/Tcl/include, for packages
 ///     that compile against Tcl/Tk (tkrplot): compile-time files, kept
 ///     in the base by T1 (feat-standalone-toolchain PLAN.md; below).
-///     fontconfig's configuration (installFontconfig) as
-///     R_HOME/etc/fonts, which
-///     etc/Renviron.site points FONTCONFIG_PATH at. etc/Renviron.site is
-///     written here, for the conda build too (Windows R reads
-///     Renviron.site, not etc/Renviron, which finalRenviron writes for
-///     unix): in the conda build it carries MY_TCLTK: tcltk's .onLoad
+///     No fontconfig configuration: R on Windows picks its fonts through
+///     Win32 and never loads one (PHASE8 open point D a: cairoFns.c's
+///     fontconfig branch is not compiled there, and fontconfig's own
+///     fallback lists Windows' font folders), so the tree ships the DLLs
+///     cairo imports and nothing else of fontconfig's. etc/Renviron.site
+///     is written here for the conda build (Windows R reads Renviron.site,
+///     not etc/Renviron, which finalRenviron writes for unix): it carries
+///     MY_TCLTK: tcltk's .onLoad
 ///     (src/library/tcltk/R/windows/zzz.R) stops with "Tcl/Tk support
 ///     files were not installed" unless R_HOME/Tcl/bin exists or MY_TCLTK
 ///     names the directory of the Tcl/Tk DLLs, which in a conda env is the
@@ -3162,7 +3166,6 @@ fn pathExists(io: std.Io, p: []const u8) bool {
 ///     hand.
 fn installEnvRuntime(ctx: *const Ctx, io: std.Io) !void {
     const b = ctx.b;
-    const fonts = !ctx.prefix_is_env and pathExists(io, ctx.condaDir("etc/fonts"));
     if (ctx.os != .windows) {
         if (ctx.prefix_is_env) return;
         // TLS trust. The vendored libcurl and OpenSSL are conda-forge's,
@@ -3185,11 +3188,11 @@ fn installEnvRuntime(ctx: *const Ctx, io: std.Io) !void {
         const ca = ctx.condaDir("ssl/cacert.pem");
         const ca_size = if (std.Io.Dir.cwd().statFile(io, ca, .{})) |st| st.size else |_| 0;
         if (ca_size == 0) {
-            std.debug.print("error: {s} is missing or empty (ca-certificates not in the env?); the tree ships it as etc/ca-bundle.crt\n", .{ca});
+            std.debug.print("error: {s} is missing or empty (ca-certificates not in the env?); the tree ships it as ssl/cacert.pem\n", .{ca});
             return error.MissingCaBundle;
         }
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ca }, ctx.rhomeInstallDir("etc"), "ca-bundle.crt").step);
-        if (fonts) try installFontconfig(ctx, io, .{ .custom = "etc/fonts" });
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ca }, .{ .custom = "ssl" }, "cacert.pem").step);
+        if (shipsFonts(ctx, io)) try installFontconfig(ctx, io, .{ .custom = "etc/fonts" });
         // tcltk (full). conda-forge's libtcl has the env's lib/tcl8.6
         // compiled in as its script library, and R starts Tcl with no
         // executable name to search from (Tcl_FindExecutable(NULL)), so
@@ -3258,10 +3261,6 @@ fn installEnvRuntime(ctx: *const Ctx, io: std.Io) !void {
             }
             b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = ctx.condaDir("include/" ++ h) }, ctx.rhomeInstallDir("Tcl/include"), h).step);
         }
-        if (fonts) {
-            try installFontconfig(ctx, io, ctx.rhomeInstallDir("etc/fonts"));
-            try site.appendSlice(b.allocator, "FONTCONFIG_PATH=${R_HOME}/etc/fonts\n");
-        }
     }
     if (site.items.len > 0) {
         const site_wf = b.addWriteFiles();
@@ -3299,22 +3298,28 @@ fn installEnvDir(ctx: *const Ctx, io: std.Io, src: []const u8, dest: std.Build.I
     }
 }
 
-/// fontconfig's configuration, for a tree that is not the env
-/// (installEnvRuntime): the env's etc/fonts (Library/etc/fonts on
-/// Windows), without the env. conda-forge builds fontconfig with the env
-/// as its prefix, so its fonts.conf names <env>/share/fonts and <env>/fonts
-/// as font directories and <env>/var/cache/fontconfig as the first cache
-/// (linux; macOS only the cache; Windows none), and conf.d/README says the
+/// Whether the tree ships fontconfig's configuration: a unix tree that is
+/// not the env, from an env that has one (installEnvRuntime).
+fn shipsFonts(ctx: *const Ctx, io: std.Io) bool {
+    return ctx.os != .windows and !ctx.prefix_is_env and pathExists(io, ctx.condaDir("etc/fonts"));
+}
+
+/// fontconfig's configuration, for a unix tree that is not the env
+/// (installEnvRuntime): the env's etc/fonts, without the env. conda-forge
+/// builds fontconfig with the env as its prefix, so its fonts.conf names
+/// <env>/share/fonts and <env>/fonts as font directories and
+/// <env>/var/cache/fontconfig as the first cache (linux; macOS only the
+/// cache), and conf.d/README says the
 /// env's share/fontconfig/conf.avail holds the conf.d files. fonts.conf is
 /// installed without those lines (fontsConfWithoutEnv), README not at all
 /// (fontconfig reads only conf.d's *.conf files, and this tree's are
 /// copies, not links into conf.avail). What remains are the system's and
 /// the user's font directories and caches: /usr/share/fonts on linux,
-/// /System/Library/Fonts and the rest on macOS, Windows' font folders,
-/// then the XDG ones and ~/.fonts; the cache in the XDG cache directory
-/// (~/.cache/fontconfig) and ~/.fontconfig. The launchers point
-/// FONTCONFIG_PATH here (zigbuild/launchers/; Windows: etc/Renviron.site),
-/// since the vendored libfontconfig names only the build env's etc/fonts.
+/// /System/Library/Fonts and the rest on macOS, then the XDG ones and
+/// ~/.fonts; the cache in the XDG cache directory (~/.cache/fontconfig)
+/// and ~/.fontconfig. etc/Renviron points FONTCONFIG_PATH here
+/// (finalRenviron), since the vendored libfontconfig names only the build
+/// env's etc/fonts.
 fn installFontconfig(ctx: *const Ctx, io: std.Io, dest: std.Build.InstallDir) !void {
     const b = ctx.b;
     const src = ctx.condaDir("etc/fonts");
@@ -3694,7 +3699,7 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     _ = stage.addCopyFile(ctx.path("doc/html/index-default.html"), "doc/html/index.html");
 
     // --- etc/ ---
-    _ = stage.add("etc/Renviron", try finalRenviron(ctx, try substFile(ctx, io, "etc/Renviron.in")));
+    _ = stage.add("etc/Renviron", try finalRenviron(ctx, io, try substFile(ctx, io, "etc/Renviron.in")));
     _ = stage.add("etc/ldpaths", ldpaths(ctx));
     const makeconf_in = try readSrcFile(ctx, io, "etc/Makeconf.in");
     const makeconf = try substituteWith(ctx, makeconf_in, &ctx.mk_subst);
@@ -3867,13 +3872,14 @@ const macos_cmake_toolchain =
 /// the build-tools group's usr/bin leads PATH (feat-standalone-toolchain
 /// B25), on macOS CMake's default toolchain file is etc/r-zig.cmake
 /// (macos_cmake_toolchain), and a tree that is not the env names its CA
-/// bundle and, in full, Tcl's script library (installEnvRuntime).
+/// bundle, its fontconfig configuration and, in full, Tcl's script
+/// library (installEnvRuntime).
 /// `${X-default}` keeps a value set in the environment, as upstream's
 /// Renviron does; Renviron expands a nested default only when it is a
 /// whole ${...} term, hence the R_ZIG_ helper variables below. The tool
 /// defaults PAGER/R_BROWSER/... come from the normalized configure table
 /// (zigbuild/tools/normalize-subst.sh).
-fn finalRenviron(ctx: *const Ctx, raw: []const u8) ![]u8 {
+fn finalRenviron(ctx: *const Ctx, io: std.Io, raw: []const u8) ![]u8 {
     const b = ctx.b;
     var out = std.ArrayList(u8).empty;
     var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, raw, "\n"), '\n');
@@ -3903,10 +3909,24 @@ fn finalRenviron(ctx: *const Ctx, raw: []const u8) ![]u8 {
     // etc/Renviron, not Renviron.site: `R --vanilla`/`Rscript --vanilla`
     // imply --no-environ, which skips Renviron.site but still reads this
     // file. Why R_ZIG_CA_BUNDLE and not CURL_CA_BUNDLE: installEnvRuntime.
+    // Both files are outside R_HOME (<prefix>/lib/R), in conda's places
+    // under <prefix> (B27 a).
     if (!ctx.prefix_is_env) {
         try out.appendSlice(b.allocator,
             \\## r-zig: fallback trust anchors (read by the patched libcurl.c).
-            \\R_ZIG_CA_BUNDLE=${R_HOME}/etc/ca-bundle.crt
+            \\R_ZIG_CA_BUNDLE=${R_HOME}/../../ssl/cacert.pem
+            \\
+        );
+    }
+    // fontconfig's configuration: the vendored libfontconfig names only
+    // the build env's etc/fonts. Here rather than in the launchers, so that
+    // R started as lib/R/bin/R, or embedded, finds it too (PHASE8 open
+    // point G a).
+    if (shipsFonts(ctx, io)) {
+        try out.appendSlice(b.allocator,
+            \\## r-zig: fontconfig's configuration, shipped in the tree.
+            \\R_ZIG_FONTCONFIG_PATH=${R_HOME}/../../etc/fonts
+            \\FONTCONFIG_PATH=${FONTCONFIG_PATH-${R_ZIG_FONTCONFIG_PATH}}
             \\
         );
     }

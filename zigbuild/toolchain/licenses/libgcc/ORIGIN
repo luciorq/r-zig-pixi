@@ -1,0 +1,6 @@
+package: libgcc 16.2.0
+license: GPL-3.0-only WITH GCC-exception-3.1 (conda-meta)
+source: https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.gz sha256:071d00a097579e5ef7ce97fc4a9e58e73fd3503c0a013c765c970370a5a53b9b
+file: COPYING3 8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903 <- gcc-16.2.0/COPYING3
+file: COPYING.RUNTIME 9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74 <- gcc-16.2.0/COPYING.RUNTIME
+note: the package's own share/licenses/ holds RUNTIME.LIBRARY.EXCEPTION, the text of COPYING.RUNTIME
