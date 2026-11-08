@@ -102,7 +102,7 @@ jobs:
         with:
           pixi-version: v0.81.0  # as build-r.yaml, which says why
           environments: ${{ matrix.dist == 'conda' && inputs.channel == 'local' && 'default stress pkg' || 'default stress' }}
-          cache: true
+          cache: false  # as build-r.yaml, which says why
       # This runner's toolchain groups, as the toolchain job archived
       # them, into dist/ and from there the toolchain tree (as
       # build-r.yaml's legs): the stress task's compile tree needs it.

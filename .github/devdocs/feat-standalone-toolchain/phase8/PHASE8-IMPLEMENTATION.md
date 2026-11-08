@@ -316,3 +316,16 @@ bundle <top>/ssl/cacert.pem"), unix fonts through `<top>/bin/Rscript`
 and `lib/R/bin/Rscript` with `FONTCONFIG_PATH` from etc/Renviron. The
 remote scratch directories are deleted. Left: CI (core tier, full-ci,
 conda-package, upstream-zig).
+
+CI, PR #42's first run (42419649199, 42419649366): every R build leg
+failed in `-Dbase`, `<pkg>: cannot read .../info/about.json
+(FileNotFound)` (linux pango, macOS libfreetype6, Windows bzip2).
+build-r.yaml's setup-pixi had `cache: true`: the restored env was not
+installed on the runner, so pixi's package cache was empty (the
+toolchain job's C33, which is why toolchain.yaml has `cache: false`).
+Fix: `cache: false` in build-r.yaml and in stress.yaml (its `pixi run
+build` runs the same step). Cost, from the same run: setup-pixi took
+10 s (linux), 21 s (macOS) and 70 s (Windows) without the cache, 10 s,
+9 s and 37 s with it. conda-package's legs passed, and so did the two
+R legs whose env had no cache entry (macos-latest minimal,
+macos-15-intel full: "Cache miss", the env installed from packages).

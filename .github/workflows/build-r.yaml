@@ -52,7 +52,11 @@ jobs:
           pixi-version: v0.81.0
           # minimal also needs the python-only `wheel` env for its last steps
           environments: ${{ inputs.env == 'minimal' && 'minimal wheel' || inputs.env }}
-          cache: true
+          # No cache, as toolchain.yaml: the build's last step (-Dbase)
+          # copies the licence files of the packages the tree takes files
+          # from, out of pixi's package cache. An env restored from
+          # setup-pixi's cache leaves that cache empty and the build stops.
+          cache: false
       # This platform's toolchain groups, as the caller's toolchain job
       # archived them (toolchain.yaml; with upstream zig, its -upstream
       # artifact), into dist/, where package-toolchain leaves them, and
