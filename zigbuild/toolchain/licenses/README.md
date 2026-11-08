@@ -8,8 +8,9 @@ build file's `-Dbase`, feat-standalone-toolchain B33 a, PHASE8). They come
 from the package's `info/licenses/`. A few packages ship none:
 conda-forge's m2 packages (MSYS2's binary packages, repackaged by
 m2-binary-packages-feedstock), whose files the Windows build-tools group
-copies into `R_HOME/bin/toolchain/usr/bin`, and libgcc, libstdcxx and
-libfreetype6, whose libraries the linux R tree vendors. For a package
+copies into `R_HOME/bin/toolchain/usr/bin`, and libgcc, libstdcxx,
+libgfortran5 and libfreetype6, whose libraries the linux R tree vendors
+(libgfortran5: the openblas flavor's, with libquadmath). For a package
 whose `info/licenses/` is missing or empty, the build installs the files
 of this directory's `<package>/` instead, after checking that its
 `VERSION` equals the record's `<version> <build>` (an m2 package: MSYS2's
@@ -35,14 +36,14 @@ build until its directory is taken again ("... does not hold its texts").
 
 ## How to take them
 
-libgcc, libstdcxx and libfreetype6: the source archive is the first `url:`
+The gcc packages and libfreetype6: the source archive is the first `url:`
 of the package's `info/recipe/meta.yaml` `source:` (gcc-<ver>.tar.gz;
 freetype-<ver>.tar.gz), checked against the `sha256:` beside it; the files
 come from its top directory.
 
 | package | archive | files |
 |---|---|---|
-| libgcc, libstdcxx | gcc-16.2.0.tar.gz | COPYING3, COPYING.RUNTIME |
+| libgcc, libstdcxx, libgfortran5 | gcc-16.2.0.tar.gz | COPYING3, COPYING.RUNTIME |
 | libfreetype6 | freetype-2.14.3.tar.gz | LICENSE.TXT, docs/FTL.TXT, docs/GPLv2.TXT |
 
 Taken on 2026-11-07 (pixi.lock fbb64b7b...), from ftp.gnu.org and

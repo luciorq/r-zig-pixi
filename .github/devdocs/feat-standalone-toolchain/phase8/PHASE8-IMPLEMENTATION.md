@@ -329,3 +329,13 @@ build` runs the same step). Cost, from the same run: setup-pixi took
 9 s and 37 s with it. conda-package's legs passed, and so did the two
 R legs whose env had no cache entry (macos-latest minimal,
 macos-15-intel full: "Cache miss", the env installed from packages).
+
+Second run (9d87132): the two openblas legs failed in `-Dbase`,
+`libgfortran5 16.2.0 h6b99dfc_7 ships no licence file`. The openblas
+flavor vendors libgfortran.so.5 and libquadmath.so.0, both libgfortran5's
+(OpenMP is llvm-openmp's, with its licence). Fix:
+zigbuild/toolchain/licenses/libgfortran5/, gcc's COPYING3 and
+COPYING.RUNTIME as libgcc's; the package's own
+share/licenses/libgfortran/RUNTIME.LIBRARY.EXCEPTION is COPYING.RUNTIME's
+bytes (cmp). Local linux-64 slim-openblas: build, verify-tree, smoke ok;
+records: 77 files (52 changed), 37 packages.
