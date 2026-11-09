@@ -1,8 +1,7 @@
 # feat-standalone-toolchain — R as a base plus toolchain groups, on three channels
 
-**Status (2026-11-08): phases 0 to 8 merged (#15 to #42); phase 9, the
-finish, is on branch chore-phase9 (build number 10), its record under
-"Phase 9" below.** The status blocks that follow are as of their dates.
+**Status (2026-11-09): phases 0 to 9 merged (#15 to #43) and published
+as `_10` on 2026-11-09; the record is under "Phase 9" below.** The status blocks that follow are as of their dates.
 Next (the user's order, 2026-10-22): pkgconf from source (TODO.md), the
 zig 0.17 port, Windows on ARM.
 
@@ -6601,8 +6600,19 @@ fbb64b7b..., unchanged):
   conda-package ran its four packages' tests ("all tests passed" four
   times). The R trees did not change since phase 8's round and PR
   #42's CI (31 checks green on 50a3aca), so no tree was rebuilt by hand.
-- CI: this PR with `full-ci` and `upstream-zig`. After the merge: the
-  publish (TODO.md, phase 9).
+- CI: PR #43 with `full-ci` and `upstream-zig` (run 42605096793 on
+  228af6a): 31 checks passed, including the six upstream-zig legs
+  (default and toolchain on ubuntu-latest, macos-latest and
+  windows-latest); 4 matrix rows skipped, as on every PR.
+- Published (2026-11-09): #43 merged as 4e2b015. The user set
+  CONDA_PUBLISH and ran the `ci-trigger` dispatch (build.yaml run
+  42644467377 on main): all 26 jobs passed, packaging skipped. The
+  post-publish check (PHASE4 section 7): `conda-channel-list` shows the
+  four `_10` files on all five subdirs. In a fresh universe-only pixi env
+  on linux-64 (fresh caches), `pixi add r-zig-toolchain` resolved all
+  four packages at `_10`, recipe/test-toolchain.R passed every check, and
+  the launchers have no `FONTCONFIG_PATH`. The user then deleted
+  CONDA_PUBLISH.
 
 ## Verification
 

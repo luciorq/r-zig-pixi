@@ -959,15 +959,21 @@ Needs (answered): B14 (a), with B37 (a).
 - [x] feat-no-host-paths PLAN.md: What remains 3 points here; the T
       record and the OpenMP note (467-470) updated
 - [x] This PLAN.md: status and records with dates and test results
-- [ ] upstream-zig label run green
-- [ ] Last round: linux-64, omicron (osx-arm64, osx-64), kappa, CI all
+- [x] upstream-zig label run green (PR #43, run 42605096793: six
+      upstream-zig legs passed, 2026-11-09)
+- [x] Last round: linux-64, omicron (osx-arm64, osx-64), kappa, CI all
       green; hand the commit and PR commands to the user. Local round
       done (2026-11-08: conda-package and conda-consume on linux-64,
-      osx-arm64, osx-64 and win-64; linux-aarch64 in CI); CI left
-- [ ] After the merge: `gh variable set CONDA_PUBLISH --body true`, a
+      osx-arm64, osx-64 and win-64; linux-aarch64 in CI); CI green on
+      PR #43 (31 checks, 2026-11-09), merged as 4e2b015
+- [x] After the merge: `gh variable set CONDA_PUBLISH --body true`, a
       `pixi run ci-trigger` dispatch on main, phase 4's post-publish
       check with `_10`, then `gh variable delete CONDA_PUBLISH`; the
-      README's and build.yaml's "`_9` was published" notes move to `_10`
+      README's and build.yaml's "`_9` was published" notes move to `_10`.
+      Done: published as `_10` on 2026-11-09 (build.yaml dispatch
+      42644467377 on main; four files on all five subdirs; a fresh
+      universe-only env passed test-toolchain.R). Only build.yaml had
+      the note; the README has none
 
 ## Later / future checks
 
