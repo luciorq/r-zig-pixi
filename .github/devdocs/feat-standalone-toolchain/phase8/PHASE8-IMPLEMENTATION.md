@@ -229,6 +229,15 @@ The standalone archives and the wheel change; no conda package does
 vendor-libs.sh copies nothing). So no bump (B14 a). Only D (b) would
 change one: win-64 r-zig-slim's system profile.
 
+Correction (2026-11-08, phase 9): G (a) changed the unix conda packages
+too. r-zig-slim ships the launchers as bin/R, bin/Rscript and
+lib/R/bin/Rscript, and their `FONTCONFIG_PATH` lines are gone (linux-64
+`_9` against phase 9's local `_10`). In a conda env that changes
+nothing: conda-forge's libfontconfig carries the env's own etc/fonts as
+its default (made the env's path at install), and `fc-match sans` with
+no `FONTCONFIG_PATH` loads `<env>/etc/fonts/fonts.conf` (FC_DEBUG=1024)
+and finds DejaVu Sans. It publishes with phase 9's bump.
+
 ## 7. User decisions (2026-11-07)
 
 All ★: A (a), B (a), C (a), D (a), E (a), F (a), G (a), H (a).

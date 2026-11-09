@@ -850,6 +850,8 @@ a); the record is PLAN.md's "Phase 7 record".
       ci-trigger` dispatch on main) and run phase 4's post-publish check
       with the new number; then delete the variable (a release switch,
       the user's option c of 2026-10-27). Done: published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check)
+      from #35's merge (1e5c7bf): #36 and #37 merged after the dispatch
+      and publish with `_10` (phase 9)
 
 ## After `_9`: follow-ups (from the final test, 2026-10-31)
 
@@ -935,13 +937,15 @@ all ★, user 2026-11-07).
 - [x] verify-bundle scenario 1 on every OS: an svg device with fonts
       under `--vanilla`; TLS and tcltk as before; wheel-test's TLS check
 - [x] Tested: linux-64 (slim, minimal and wheel, full), omicron (both), kappa
-- [ ] CI: core, full-ci, conda-package, upstream-zig
+- [x] CI: core, full-ci, conda-package, upstream-zig (PR #42, 31 checks
+      green on 50a3aca, 2026-11-08, after two follow-ups: setup-pixi
+      `cache: false` for the R legs, licenses/libgfortran5)
 
 ## Phase 9 — finish
 
 Needs (answered): B14 (a), with B37 (a).
 
-- [ ] Build number per B14 (a): a bump only if a package changed since
+- [x] Build number per B14 (a): a bump only if a package changed since
       the last bump; conda-package on all five platforms.
       feat-zig-pkg-build's PR changes r-zig-slim (patches 0009, 0012,
       0013, share/zig/rpkg) and r-zig-toolchain (rzig's new modes and
@@ -949,13 +953,21 @@ Needs (answered): B14 (a), with B37 (a).
       publishes phase 4 publishes both, together (phase 4's item says
       why); since 2026-10-19 that is phase 7's bump, not a 9 in phase 4
       (done: `_9`, 2026-11-05). From here on a bump also sets
-      CONDA_PUBLISH for its publish dispatch and deletes it after
-- [ ] feat-no-host-paths PLAN.md: What remains 3 points here; the T
+      CONDA_PUBLISH for its publish dispatch and deletes it after.
+      Done (2026-11-08): 9 to 10, for #36, #37 and phase 8's launchers
+      (PLAN.md, phase 9)
+- [x] feat-no-host-paths PLAN.md: What remains 3 points here; the T
       record and the OpenMP note (467-470) updated
-- [ ] This PLAN.md: status and records with dates and test results
+- [x] This PLAN.md: status and records with dates and test results
 - [ ] upstream-zig label run green
 - [ ] Last round: linux-64, omicron (osx-arm64, osx-64), kappa, CI all
-      green; hand the commit and PR commands to the user
+      green; hand the commit and PR commands to the user. Local round
+      done (2026-11-08: conda-package and conda-consume on linux-64,
+      osx-arm64, osx-64 and win-64; linux-aarch64 in CI); CI left
+- [ ] After the merge: `gh variable set CONDA_PUBLISH --body true`, a
+      `pixi run ci-trigger` dispatch on main, phase 4's post-publish
+      check with `_10`, then `gh variable delete CONDA_PUBLISH`; the
+      README's and build.yaml's "`_9` was published" notes move to `_10`
 
 ## Later / future checks
 
