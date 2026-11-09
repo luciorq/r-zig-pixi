@@ -1,5 +1,11 @@
 # feat-standalone-toolchain — R as a base plus toolchain groups, on three channels
 
+**Status (2026-11-08): phases 0 to 8 merged (#15 to #42); phase 9, the
+finish, is on branch chore-phase9 (build number 10), its record under
+"Phase 9" below.** The status blocks that follow are as of their dates.
+Next (the user's order, 2026-10-22): pkgconf from source (TODO.md), the
+zig 0.17 port, Windows on ARM.
+
 **Status (2026-10-08): the menus are answered (2026-10-08; "Resolved
 decisions"). Implementation may start per B37 (a): #15 merges with
 phases 0-1 and these documents once its checks pass, which needs the
@@ -6510,7 +6516,9 @@ Tests (2026-10-21; `phase7m2/implementer2/RESULTS.md`):
   run ci-trigger`, then phase 4's post-publish check with `_9`; the
   CONDA_PUBLISH notes in build.yaml, pixi.toml and README are reworded
   then. Done: phase 7 merged as #34 (2026-11-05), and the queue (#28 to
-  #37) was published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check;
+  #35) was published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check;
+  the dispatch ran on #35's merge, 1e5c7bf, at 00:37 UTC, before #36
+  and #37 merged, so those two publish with `_10`, phase 9;
   that run's windows-latest default leg failed, fixed by #38 and #39,
   while its five conda-package legs passed and published). The variable is a release switch (the user's
   option c, 2026-10-27): set for a bump's publish dispatch, deleted after
@@ -6570,6 +6578,31 @@ Steps:
 - This PLAN: status and records with dates and test results.
 - An upstream-zig label run; a last round on linux-64, omicron (both),
   kappa and CI; hand the commit and PR commands to the user.
+
+Done (2026-11-08, branch chore-phase9 from main e409bae, pixi.lock
+fbb64b7b..., unchanged):
+- Build number 9 to 10. universe's newest is `_9` on all five subdirs.
+  `_9` was built from #35's merge (dispatch 41942729382, 00:37 UTC on
+  2026-11-05), before #36 and #37 merged, so they publish here (earlier
+  records said #28 to #37 went into `_9`; corrected). linux-64 `_9`
+  against the local `_10`: r-zig-slim gains
+  lib/R/bin/toolchain/dso_fini.o (#37), loses
+  share/zig/rpkg/build_t1.zig (#36), and its launchers (bin/R,
+  bin/Rscript, lib/R/bin/Rscript) lose the `FONTCONFIG_PATH` lines
+  (phase 8's G a; PHASE8-IMPLEMENTATION.md section 6 corrected: conda's
+  fontconfig defaults to the env's etc/fonts, checked with fc-match on
+  linux and macOS). Its depends are `_9`'s, `icu >=78.3,<79.0a0`
+  included. The other three packages change only their exact pins.
+- feat-no-host-paths PLAN.md: an update note at the top, What remains 3
+  done, phase T superseded by the layered model, the OpenMP note says
+  where the headers are now (B22, B40; phase 3's C14).
+- Tests (conda-package, then conda-consume): linux-64 (gamma), osx-arm64
+  and osx-64 (omicron, Rosetta), win-64 (kappa): all ok. Each
+  conda-package ran its four packages' tests ("all tests passed" four
+  times). The R trees did not change since phase 8's round and PR
+  #42's CI (31 checks green on 50a3aca), so no tree was rebuilt by hand.
+- CI: this PR with `full-ci` and `upstream-zig`. After the merge: the
+  publish (TODO.md, phase 9).
 
 ## Verification
 

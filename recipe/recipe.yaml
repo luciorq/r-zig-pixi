@@ -167,7 +167,18 @@ build:
   # (Windows packages of a few hundred objects linked past 32,767
   # characters), Windows package DLLs link ws2_32 by default, and the
   # build tools carry patch (feat-win-link-fixes PLAN.md).
-  number: 9
+  # 9 → 10 (2026-11-08, feat-standalone-toolchain phase 9; universe's
+  # newest is _9 on all five subdirs): `_9` was built from #35's merge
+  # (build.yaml dispatch 41942729382), so what merged after it publishes
+  # here. rzig runs tier 1 itself, with no zig build runner
+  # (feat-tier1-engine, #36); R_HOME/bin/toolchain carries rzig's link
+  # objects, dso_fini.o (linux) and cfguard.o (x86_64 Windows), built
+  # once with R (feat-r-home-link-objects, #37); r-zig-build's icu pin
+  # has a floor, `icu 78.*` (fix-icu-pin, #40); the unix launchers no
+  # longer set FONTCONFIG_PATH, which conda's fontconfig never needed:
+  # its default is the env's etc/fonts (feat-standalone-toolchain phase
+  # 8, #42).
+  number: 10
 
 outputs:
   # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), four

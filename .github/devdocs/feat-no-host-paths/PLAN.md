@@ -1,5 +1,13 @@
 # feat-no-host-paths — no build-machine paths, and a base R that installs without a toolchain
 
+**Update (2026-11-08).** What remains 3, phase T's standalone split, is
+done: feat-standalone-toolchain (its PLAN.md, phases 0 to 9, PRs #15 to
+#42) replaced T's two-way split with the layered model, a base (R, rzig
+and R's runtime libraries) and toolchain groups (compilers, build-tools),
+with the same boundaries on the standalone, conda and PyPI channels.
+Phase T below and its OpenMP note are updated to that; the rest of this
+record is as of its dates.
+
 **Status and handoff (2026-10-05).** Read this first; the sections
 below hold the detail and the reasons.
 
@@ -162,7 +170,10 @@ What remains, in order (proposed; ask the user before starting each):
    2026-10-08 (C1 a, C2 a, C3 a): as analysed, after
    feat-standalone-toolchain's phase 7.
 3. T's standalone split (a standalone toolchain archive), then the
-   recipe's host which/sed/grep cleanup.
+   recipe's host which/sed/grep cleanup. Done: the cleanup in
+   feat-standalone-toolchain's phase 1 (9bbce0b), the split as that
+   record's layered model, phases 2 to 8 (2026-10-09 to 2026-11-07),
+   finished in its phase 9 (2026-11-08).
 4. Later, test carefully first: the toolchain in an environment of its
    own (F3 section). Answered 2026-10-08 (D14 a): still later.
 5. Small, open: Windows Makeconf's TCL_VERSION (86 vs conda's 86t) for
@@ -424,6 +435,18 @@ rzig.
 
 ## Packaging (phase T)
 
+Superseded (2026-11-08) by feat-standalone-toolchain's layered model,
+on every channel: the base (standalone `R-<ver>-<flavor>-<plat>`
+archive; conda r-zig-slim; wheel `r-zig`) holds R, rzig under the
+compiler names in R_HOME/bin/toolchain and R's runtime libraries; the
+compilers group (`R-<ver>-<plat>-compilers` archive; conda
+r-zig-compilers; wheel `r-zig-compilers`, which requires PyPI ziglang)
+and the build-tools group (`R-<ver>-<plat>-build-tools` archive; conda
+r-zig-build-tools; wheel `r-zig-build-tools`) hold the third-party
+compile-time software; `r-zig-toolchain` is the metapackage of both
+groups on conda and PyPI. Each group pins its exact base. The text
+below is T's design as of 2026-09-30.
+
 - **conda:** one recipe, two outputs.
   - base: R and its runtime libraries. No zig, flang, make or m2 run
     dependencies.
@@ -499,7 +522,13 @@ rzig.
   the caller links `-lomp` itself. Since F1.5 (2026-10-02) Makeconf's
   CPPFLAGS is `-I$(R_HOME)/../../include` and build.zig installs the
   OpenMP headers there for a non-conda tree, until phase T's standalone
-  toolchain archive takes them over.
+  toolchain archive takes them over. Done (feat-standalone-toolchain
+  B22, B40; phase 3, its C14): the compilers group carries them in
+  `R_HOME/bin/toolchain/openmp/include/` (omp.h, ompx.h, omp-tools.h,
+  ompt.h; Windows omp.h, ompx.h and libomp.lib), from llvm-openmp, and
+  rzig adds that directory for a -fopenmp compile; build.zig's
+  installOpenMP is gone. In a conda env omp.h is llvm-openmp's own
+  `include/omp.h`. The wheel offers no OpenMP (make-wheel.py).
 - **Preflight** (small `install.R` patch): before running `configure`
   or make, if the package needs compilation and the compiler Makeconf
   names doesn't exist, stop with one message naming the package to
