@@ -307,8 +307,9 @@ jobs:
       # coupling feat-zig-pkg-build's N5 records). For a release: merge
       # the bump, `gh variable set CONDA_PUBLISH --body true`, dispatch
       # this workflow on main, check universe and a fresh env, then
-      # `gh variable delete CONDA_PUBLISH`. `_9` was published this way
-      # on 2026-11-05 (run 41942729382).
+      # `gh variable delete CONDA_PUBLISH`. `_10` was published this way
+      # on 2026-11-09 (run 42644467377), `_9` on 2026-11-05 (run
+      # 41942729382).
       - name: Publish to prefix.dev (OIDC trusted publishing)
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CONDA_PUBLISH == 'true'
         run: pixi run -e pkg conda-publish
