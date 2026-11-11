@@ -46,6 +46,17 @@ source:
       - url: https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.10.tar.xz
         sha256: 9371b2f6372da574d4c6dc96fe9b1463037bcf6afcb6671c1555afde7b17e2de
         target_directory: pkgconf-src
+  # Windows: cairo's source, which R's build compiles and links statically
+  # into winCairo.dll (zigbuild/cairo.zig; recipe/build.sh passes the
+  # directory as -Dcairo). conda-forge has no win-arm64 cairo; one build
+  # keeps both Windows arches alike. The url and sha256 are cairo.zig's,
+  # as its test checks (pixi run toolchain-test); the standalone build
+  # fetches the same tarball (build.zig.zon).
+  - if: win
+    then:
+      - url: https://cairographics.org/releases/cairo-1.18.6.tar.xz
+        sha256: 1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4
+        target_directory: cairo-src
 
 build:
   # 2: first zig-built release (recipe/build.sh switched from configure-
@@ -205,7 +216,10 @@ build:
   # win-64's binutils are rzig's (nm, objdump, strip, dlltool, windres,
   # as beside gcc.exe in R_HOME/bin/toolchain, owned by r-zig-slim), on
   # zig 0.17's dlltool and rc: binutils_impl_win-64 and binutils/ are
-  # gone (feat-win-zig-binutils).
+  # gone (feat-win-zig-binutils). Windows' winCairo.dll links cairo
+  # 1.18.6, built from source by R's build (zigbuild/cairo.zig), in place
+  # of conda-forge's cairo, pango and harfbuzz; the recipe renders for
+  # win-arm64 (feat-win-arm64).
   number: 11
 
 outputs:
@@ -274,9 +288,13 @@ outputs:
         # zig shim scripts) plus uutils for the coreutils build.sh itself
         # uses. m2-bash is also what runs *this* build.sh in the first place
         # (rattler-build has no bld.bat here, same as conda-build convention).
-        - if: win
+        # uutils-coreutils on win-64 only: its win-arm64 builds refuse
+        # m2-coreutils (pixi.toml's [target.win-64.dependencies])
+        - if: build_platform == "win-64"
           then:
             - uutils-coreutils
+        - if: win
+          then:
             - m2-bash
             - m2-make
             - m2-coreutils
@@ -291,7 +309,7 @@ outputs:
             - m2-gawk
             - m2-unzip
             - m2-zip
-            - m2-patch  # zigbuild/patches/; conda-forge has no win-64 `patch`
+            - m2-patch  # zigbuild/patches/; conda-forge has no Windows `patch`
       host:
         # Fortran runtime: linked into libR (statically for flang's
         # libflang_rt.runtime.a on every platform, see build.zig's
@@ -326,9 +344,17 @@ outputs:
         # Its run export (>= the host version, 23.1.2 today) is the only
         # bound r-zig-slim's run gets (below).
         - llvm-openmp 23.*
-        - cairo
+        # cairo and pango on unix only: Windows builds its cairo
+        # (zigbuild/cairo.zig) against the env's pixman, libpng and zlib,
+        # and R's Windows device has no pango
+        - if: unix
+          then:
+            - cairo
+            - pango
+        - if: win
+          then:
+            - pixman
         - expat
-        - pango
         - fontconfig
         - freetype
         - libpng
@@ -344,8 +370,11 @@ outputs:
         # hit this because something else in its much larger dependency graph
         # happens to pull the headers package in transitively too. Build-time
         # only: end users don't need hb.h, and libharfbuzz.so is already
-        # pulled in at runtime via pango's own run dependency.
-        - harfbuzz
+        # pulled in at runtime via pango's own run dependency. unix only,
+        # as pango.
+        - if: unix
+          then:
+            - harfbuzz
         # conda-forge's linux cairo needs xorg proto headers even though R
         # builds --with-x=no (pkg-config chain, not an actual X11 dep)
         - if: linux
@@ -420,9 +449,15 @@ outputs:
         # runs code built against an older omp.h, so a ceiling would only
         # clash with packages built against the next LLVM's llvm-openmp
         - llvm-openmp
-        - cairo
+        # Windows: pixman, which winCairo.dll's cairo (r-zig's build) needs
+        - if: unix
+          then:
+            - cairo
+            - pango
+        - if: win
+          then:
+            - pixman
         - expat
-        - pango
         - fontconfig
         - freetype
         - libpng
@@ -545,8 +580,13 @@ outputs:
                   - Library/lib/R/bin/toolchain/dlltool.exe
                   - Library/lib/R/bin/toolchain/windres.exe
                   - Library/lib/R/bin/toolchain/as.exe
-                  - Library/lib/R/bin/toolchain/cfguard.o
                   - Library/lib/R/share/zig/rpkg/build_t2.zig
+                  # cairo, r-zig's build, linked into winCairo.dll
+                  - Library/lib/R/library/grDevices/libs/x64/winCairo.dll
+                  - Library/lib/R/share/licenses/cairo/COPYING
+                  - Library/lib/R/share/licenses/cairo/COPYING-LGPL-2.1
+                  - Library/lib/R/share/licenses/cairo/COPYING-MPL-1.1
+                  - Library/lib/R/share/licenses/cairo/SOURCE
                 else:
                   - lib/R/bin/toolchain/rzig
                   - lib/R/bin/toolchain/zig-cc
@@ -554,6 +594,10 @@ outputs:
               - if: linux
                 then:
                   - lib/R/bin/toolchain/dso_fini.o
+              # x86_64 code (cfguard.zig); win-arm64 has none
+              - if: target_platform == "win-64"
+                then:
+                  - Library/lib/R/bin/toolchain/cfguard.o
             not_exists:
               - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
               - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
@@ -562,6 +606,9 @@ outputs:
     # really slim is a later aim.
     about:
       summary: R built with the zig toolchain, with its compiler front rzig (headless slim profile; Windows slim has full's content)
+      # Windows: R's and, linked into winCairo.dll, cairo's (r-zig's
+      # build, zigbuild/cairo.zig; its texts in R_HOME/share/licenses/cairo)
+      license: ${{ "(GPL-2.0-only OR GPL-3.0-only) AND (LGPL-2.1-only OR MPL-1.1)" if win else "GPL-2.0-only OR GPL-3.0-only" }}
       description: |
         R built from source with the zig toolchain, in the headless slim
         profile: no X11, Tcl/Tk, JPEG, TIFF or NLS. Windows slim has full's

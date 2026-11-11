@@ -1,4 +1,4 @@
-S["CAIRO_LIBS"]="-lcairo -lfontconfig"
+S["CAIRO_LIBS"]="-lpixman-1 -llibpng -lz"
 S["WIN_INTERNET_LIBS"]="-llibcurl -lwininet -lws2_32"
 S["WIN_BITMAP_LIBS"]="-llibpng -ltiff -ljpeg -lzstd -lz -llzma"
 S["WIN_R_DLL_LIBS"]="-lgdi32 -luser32 -lcomctl32 -lole32 -luuid -lwinmm -lversion -ldeflate -lpcre2-8 -lz -llibbz2 -llzma -lzstd -licuin -licuuc -licudt"

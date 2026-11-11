@@ -9,7 +9,7 @@ authors = ["luciorq <luciorqueiroz@gmail.com>"]
 # which can lag (feat-standalone-toolchain phase 4, kappa).
 channels = ["conda-forge", "https://prefix.dev/universe"]
 name = "r-zig-pixi"
-platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64", "win-arm64"]
 version = "0.1.0"
 
 # Everything needed to build R comes from conda-forge through this manifest.
@@ -52,7 +52,7 @@ R_VERSION = "4.6.1"
 [feature.pipeline.activation.env]
 R_ZIG_EXTRA_ENV = "$CONDA_PREFIX"
 
-[feature.pipeline.target.win-64.activation.env]
+[feature.pipeline.target.win.activation.env]
 R_ZIG_EXTRA_ENV = "%CONDA_PREFIX%"
 
 [feature.pipeline.tasks]
@@ -270,16 +270,11 @@ libdeflate = "*"  # faster lazyload compression; was only transitive via libtiff
 # upper bound.
 llvm-openmp = "23.*"
 # --- headless graphics: cairo + png only in slim ---
-cairo = "*"
+# cairo, pango and harfbuzz: unix only ([target.unix.dependencies]).
+# Windows builds its cairo (zigbuild/cairo.zig) against pixman
+# ([target.win.dependencies]): conda-forge has none of the three for
+# win-arm64, and R's Windows device has no pango.
 expat = "*"
-# pango/harfbuzz pinned to the lockfile's current generation: a fresh solve
-# (flang-zig-validation worktree, 2026-09-19) pulled pango 1.58 + the split
-# libharfbuzz 14.3, which break R 4.6.1's cairo device compile (hb.h
-# include churn). Independent of any toolchain choice; lift the pin only
-# together with a fix on the R side (or a newer R). harfbuzz is not a
-# direct dependency otherwise — listed only to hold its version.
-pango = "1.56.*"
-harfbuzz = "14.2.*"
 fontconfig = "*"
 freetype = "*"
 libpng = "*"
@@ -288,8 +283,9 @@ libpng = "*"
 # glib ships it (lib/glib-2.0/include). R links -lgobject-2.0 -lglib-2.0,
 # and the unversioned libraries those name are in glib-tools, which glib
 # brings; libglib has only the versioned ones. glib needs python, so
-# python is in R's build envs on unix. On win-64 harfbuzz's
-# libharfbuzz-devel needs glib anyway.
+# python is in R's build envs on unix. R's Windows build uses none of
+# glib, fontconfig, freetype and expat (its cairo has none of their
+# backends; zigbuild/cairo.zig); they stay in every env, as before.
 glib = "*"
 
 # conda-forge's linux cairo is built with X11 backends; its pkg-config
@@ -299,6 +295,15 @@ xorg-xorgproto = "*"
 
 # Shell + GNU text tools for running autoconf configure (all from conda-forge)
 [target.unix.dependencies]
+cairo = "*"
+# pango/harfbuzz pinned to the lockfile's current generation: a fresh solve
+# (flang-zig-validation worktree, 2026-09-19) pulled pango 1.58 + the split
+# libharfbuzz 14.3, which break R 4.6.1's cairo device compile (hb.h
+# include churn). Independent of any toolchain choice; lift the pin only
+# together with a fix on the R side (or a newer R). harfbuzz is not a
+# direct dependency otherwise — listed only to hold its version.
+pango = "1.56.*"
+harfbuzz = "14.2.*"
 bash = "*"
 which = "*"
 sed = "*"
@@ -323,17 +328,20 @@ binutils = "*"
 # conda-forge, not the host: in CI those checks fail without it.
 strace = "*"
 
-# win-64: flang-zig is the MinGW-ABI flang (see [dependencies]); it
-# replaced conda-forge's MinGW gfortran (gcc_impl_win-64), Phase 2,
-# platform 2. binutils_impl_win-64: the verification scripts' own
-# x86_64-w64-mingw32-objdump (verify-helpers.sh's needed_of, the import
+# Windows (win-64 and win-arm64): flang-zig is the MinGW-ABI flang (see
+# [dependencies]); it replaced conda-forge's MinGW gfortran
+# (gcc_impl_win-64), Phase 2, platform 2. llvm-tools: the verification
+# scripts' own llvm-objdump (verify-helpers.sh's needed_of, the import
 # closure of what ships; verify-tree.sh's baseline-CPU disassembly;
-# pkg-parity.sh's exports). Nothing R builds or ships runs it: build.zig's
-# import stubs and Makeconf.win's binutils are rzig's (binutils.zig;
-# feat-win-zig-binutils), and the toolchain tree copies none.
-[target.win-64.dependencies]
-binutils_impl_win-64 = "*"
-uutils-coreutils = "*"
+# pkg-parity.sh's exports), on both arches (conda-forge's MinGW binutils
+# are x86_64 only) and independent of rzig. Nothing R builds or ships
+# runs it: build.zig's import stubs and Makeconf.win's binutils are
+# rzig's (binutils.zig; feat-win-zig-binutils), and the toolchain tree
+# copies none. pixman: cairo's, which R's build compiles for winCairo.dll
+# (zigbuild/cairo.zig) with the env's libpng and zlib.
+[target.win.dependencies]
+llvm-tools = "*"
+pixman = "*"
 # gnuwin32 has no slim switches: Windows R unconditionally builds the
 # bitmap devices (jpeg/tiff) and the tcltk package, so slim-on-Windows
 # carries these (parity caveat, tracked in TODO.md)
@@ -363,7 +371,7 @@ m2-grep = "*"
 m2-gawk = "*"
 m2-unzip = "*"
 m2-zip = "*"
-m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no win-64 `patch`; also TC/usr/bin's patch
+m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no Windows `patch`; also TC/usr/bin's patch
 
 [target.osx-64.dependencies]
 uutils-coreutils = "*"
@@ -380,6 +388,13 @@ coreutils = "*"
 patchelf = "*"
 binutils = "*"  # binutils and strace: see linux-64
 strace = "*"
+
+# uutils-coreutils on win-64 only: its builds for win-arm64 (0.11, 0.12)
+# refuse m2-coreutils (a run constraint), which the build-tools group
+# copies; win-64 keeps the older build its lock has. win-arm64 has
+# m2-coreutils' tools alone.
+[target.win-64.dependencies]
+uutils-coreutils = "*"
 
 # --- optional capabilities (compile-time: only via the 'full' environment) ---
 
@@ -625,6 +640,9 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 [feature.pkg.target.win-64.tasks]
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/win-64/*.conda"
 
+[feature.pkg.target.win-arm64.tasks]
+conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/win-arm64/*.conda"
+
 # linux-aarch64 became a real platform when the repo went public
 # (GitHub-hosted ubuntu-24.04-arm runners): CI's conda-package-hosted
 # job builds and publishes through this task via OIDC trusted
@@ -644,6 +662,11 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 # full, full-openblas, openblas, minimal and pkg). One env needs no group.
 # Each name is a sysdeps entry in stress/packages.tsv. stress.R warns when a
 # row's sysdep is missing here.
+[feature.stress]
+# not win-arm64: conda-forge has no libgdal-core (and other of the
+# libraries below) for it (2026-11-10)
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+
 [feature.stress.dependencies]
 cmake = "*"             # nloptr, s2 (linux), RcppParallel, Rhdf5lib, arrow:source
 libgdal-core = "*"      # sf, terra, gdalraster (gdal-config, gdal.pc)
@@ -675,8 +698,10 @@ zstd = "*"              # qs2
 # nloptr has no configure.win: its Makevars.ucrt links -lnlopt. Not on unix,
 # where nloptr then builds its bundled NLopt with cmake.
 [feature.stress.target.win-64.dependencies]
-nlopt = "*"
+nlopt = "*"  # none for win-arm64 on conda-forge (2026-11-10)
+
 # RPostgres includes Rtools' boost headers (round 1's S1, decision 18).
+[feature.stress.target.win.dependencies]
 libboost-headers = "*"
 
 # RcppParallel:system-tbb. Not on win-64, where conda-forge's TBB is an
@@ -700,7 +725,7 @@ libheif = "<1.23.4"
 [feature.stress.tasks]
 stress = { cmd = "build/compile-tree/slim/R-$R_VERSION-zig/bin/Rscript stress/stress.R", depends-on = ["compile-tree"] }
 
-[feature.stress.target.win-64.tasks]
+[feature.stress.target.win.tasks]
 stress = { cmd = "build/compile-tree/slim/R-$R_VERSION-zig/Library/lib/R/bin/x64/Rscript.exe stress/stress.R", depends-on = ["compile-tree"] }
 
 # The R environments are one solve group, "r": pixi solves them together,

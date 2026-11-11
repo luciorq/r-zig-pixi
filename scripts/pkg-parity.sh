@@ -147,7 +147,7 @@ exports_of() {
   case "$OS" in
     linux) nm -D --defined-only "$1" | awk '{print $3}' ;;
     macos) nm -gU "$1" | awk '{print $3}' ;;
-    windows) x86_64-w64-mingw32-objdump -p "$1" | awk '/\[Ordinal\/Name Pointer\] Table/ {f=1; next} f && NF == 0 {exit} f {print $NF}' ;;
+    windows) llvm-objdump -p "$1" | awk '/^ Ordinal +RVA +Name$/ {f=1; next} f && NF == 0 {exit} f {print $NF}' ;;
   esac | LC_ALL=C sort
 }
 # rzig's command lines from a traced install log, normalised (see the

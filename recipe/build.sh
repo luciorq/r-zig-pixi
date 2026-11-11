@@ -35,7 +35,13 @@ chmod +x scripts/*.sh
 # out here, since the prefix is the env: its own packages provide all of
 # it. On Windows, etc/Renviron.site points tcltk at the tk package's DLLs
 # instead (MY_TCLTK, installEnvRuntime).
-bash scripts/zig-build.sh
+# On Windows, winCairo.dll links cairo, which R's build compiles from the
+# recipe's cairo source (-Dcairo; zigbuild/cairo.zig).
+cairo=()
+if [ -d cairo-src ]; then
+  cairo=("-Dcairo=$(cygpath -m "$PWD/cairo-src")")
+fi
+bash scripts/zig-build.sh "${cairo[@]}"
 # The toolchain build (zigbuild/toolchain/build.zig), into the env itself,
 # as the dev tree's groups are installed into dist/toolchain/R-<ver>-zig.
 # Here too conda's own packages provide the groups' files where they are

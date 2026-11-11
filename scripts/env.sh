@@ -30,14 +30,17 @@ case "$(uname -s)" in
 esac
 
 # The platform, as conda names it (linux-64, linux-aarch64, osx-64,
-# osx-arm64, win-64), and the archive format: the archives' names say
-# both (feat-standalone-toolchain B17).
+# osx-arm64, win-64, win-arm64), and the archive format: the archives'
+# names say both (feat-standalone-toolchain B17). On Windows not uname:
+# the MSYS2 tools are x86_64 binaries, which Windows on ARM runs under
+# emulation, so their uname says x86_64 there; PROCESSOR_IDENTIFIER is
+# the machine's ("ARMv8 (64-bit) Family 8 ..." on ARM).
 case "$OS-$(uname -m)" in
   linux-x86_64) PLAT=linux-64 ;;
   linux-*) PLAT="linux-$(uname -m)" ;;
   macos-x86_64) PLAT=osx-64 ;;
   macos-*) PLAT="osx-$(uname -m)" ;;
-  windows-*) PLAT=win-64 ;;
+  windows-*) case "${PROCESSOR_IDENTIFIER:-}" in ARM*) PLAT=win-arm64 ;; *) PLAT=win-64 ;; esac ;;
   *) PLAT=unknown ;;
 esac
 if [ "$OS" = windows ]; then ARCHIVE_EXT=zip; else ARCHIVE_EXT=tar.gz; fi

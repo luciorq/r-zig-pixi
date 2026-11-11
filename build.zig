@@ -47,6 +47,7 @@ const floors = @import("zigbuild/tools/rzig/floors.zig");
 // The static-libc++ mirror against conda-forge zig's shared one, rzig's
 // for packages and R's own build's (staticLibcxxLibDir).
 const libcxx_mirror = @import("zigbuild/tools/rzig/libcxx_mirror.zig");
+const cairo = @import("zigbuild/cairo.zig");
 
 const r_version = "4.6.1";
 
@@ -133,6 +134,9 @@ const Ctx = struct {
     // (staticLibcxxLibDir). Set on every unix link (addSharedLib, R.bin);
     // always null on Windows, whose links leave it alone.
     zig_lib_dir: ?std.Build.LazyPath,
+    // Windows: cairo's unpacked source (-Dcairo), else null for
+    // build.zig.zon's lazy `cairo` (zigbuild/cairo.zig; winCairo.dll).
+    cairo_dir: ?[]const u8,
     prefix_is_env: bool, // the install prefix is the env R is built in (the conda build): samePhysicalDir
     // Every C compile of R's own starts with these (addCGroup, the cairo
     // module): no directory of the build machine in __FILE__, the debug
@@ -314,6 +318,7 @@ pub fn build(b: *std.Build) !void {
 
     var variant = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal (unix only)") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
+    const cairo_dir = b.option([]const u8, "cairo", "cairo's source tarball, unpacked (the conda build's; else build.zig.zon's cairo): Windows' winCairo.dll");
 
     const native = b.resolveTargetQuery(.{});
     const os: Os = switch (native.result.os.tag) {
@@ -422,7 +427,15 @@ pub fn build(b: *std.Build) !void {
         .macos => ".dylib",
         .windows => ".dll",
     };
-    const config_dir = b.fmt("zigbuild/config/{s}-{s}", .{ platform, @tagName(variant) });
+    // Windows: one directory for both arches, zigbuild/config/win-full.
+    // gnuwin32's config.h is R's own fixed one, which picks R_CPU and
+    // R_PLATFORM by __aarch64__, and R's Windows build keeps R_ARCH /x64
+    // on aarch64 too (MkRules.rules: WIN = 64), so nothing in it is the
+    // arch's.
+    const config_dir = if (os == .windows)
+        b.fmt("zigbuild/config/win-{s}", .{@tagName(variant)})
+    else
+        b.fmt("zigbuild/config/{s}-{s}", .{ platform, @tagName(variant) });
 
     // R_HOME: <prefix>/lib/R on unix. On Windows this MUST NOT be "lib/R"
     // — NTFS case-folds it into a conda/pixi env's own "Lib" (Python's
@@ -495,6 +508,7 @@ pub fn build(b: *std.Build) !void {
         .config_dir = config_dir,
         .sdk = sdk,
         .zig_lib_dir = try staticLibcxxLibDir(b, io, os),
+        .cairo_dir = cairo_dir,
         .prefix_is_env = samePhysicalDir(io, arena, install_prefix, conda),
         // Windows keeps these defaults. Its compile graph never passes
         // `.openmp = true`, so R itself has no OpenMP there, and `openmp`
@@ -1636,24 +1650,29 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // documented "still deferred" note). Ground truth from gnuwin32's real
     // src/library/grDevices/src/cairo/Makefile.win: one source (cairoBM.c),
     // linked against grDevices.dll itself (-lgrDevices) plus cairo
-    // (CAIRO_LIBS/CAIRO_CPPFLAGS). CAIRO_LIBS now comes from this config
-    // dir's own vendored subst.txt (-lcairo -lfontconfig — hand-populated
-    // rather than captured from a config.status, since gnuwin32 has none;
-    // same values this used to hardcode directly here before Phase 4 of
-    // feat-cross-platform-standardization unified the mechanism with
-    // unix's applyLinkFlags/ctx.subst.get pattern).
+    // (CAIRO_LIBS/CAIRO_CPPFLAGS). cairo itself is r-zig's build
+    // (zigbuild/cairo.zig), linked in statically, as CRAN's Rtools links
+    // it: conda-forge has no cairo for win-arm64, and one cairo keeps both
+    // Windows arches alike. CAIRO_LIBS, from this config dir's vendored
+    // subst.txt (hand-populated: gnuwin32 has no config.status), names the
+    // env's libraries cairo needs (pixman, libpng, zlib); cairo.zig names
+    // the Windows ones.
     const win_cairo = blk: {
+        const built = try buildCairo(ctx, io);
         const m = newCMod(ctx);
         m.addIncludePath(ctx.geninc);
         m.addIncludePath(ctx.path("src/include"));
+        m.addIncludePath(built.generated);
+        m.addIncludePath(built.include);
         addCGroup(ctx, m, "src/library/grDevices/src/cairo", &.{"cairoBM.c"}, .{
             .extra = &.{
                 "-I%S/src/library/grDevices/src/cairo",
                 "-I%S/src/library/grDevices/src",
-                "-I%C/Library/include/cairo",
-                "-I%C/Library/include/freetype2",
+                cairo.user_define,
             },
         });
+        m.linkLibrary(built.lib);
+        for (cairo.system_libs) |l| m.linkSystemLibrary(l, .{});
         // cairoBM.c/cairoFns.c call R API + graphics-engine functions
         // (Rf_cons, R_GlobalEnv, GEcurrentDevice, ...) directly, not just
         // through grDevices.dll — gnuwin32's real Makefile.win link line
@@ -2015,6 +2034,33 @@ fn installCommonPayload(ctx: *Ctx) void {
         .install_subdir = "",
         .exclude_extensions = &.{ "Makefile.in", ".texi", "R.aux", "Rscript.aux" },
     }).step);
+}
+
+/// libcairo.a for winCairo.dll (zigbuild/cairo.zig), from -Dcairo's
+/// directory (the conda build's unpacked source), else build.zig.zon's lazy
+/// `cairo`, which zig fetches (and then runs this configure step again).
+/// pixman's, libpng's and zlib's headers are the env's.
+fn buildCairo(ctx: *Ctx, io: std.Io) !cairo.Built {
+    const b = ctx.b;
+    const src = if (ctx.cairo_dir) |d| d else blk: {
+        const dep = try b.dependencyLazy("cairo", .{});
+        break :blk dep.builder.root.root_dir.path orelse ".";
+    };
+    const real = std.Io.Dir.cwd().realPathFileAlloc(io, src, b.allocator) catch |err| {
+        std.debug.print("error: cairo: cannot resolve {s} ({t})\n", .{ src, err });
+        return error.CairoBuild;
+    };
+    const abs = std.mem.replaceOwned(u8, b.allocator, real, "\\", "/") catch @panic("OOM");
+    const built = try cairo.add(b, ctx.target, abs, &.{ ctx.condaDir("include/pixman-1"), ctx.condaDir("include") });
+    // cairo's licence texts and where it came from, in R_HOME (both
+    // channels: the conda package and the standalone tree ship the same
+    // R_HOME); winCairo.dll holds it, no file of the env
+    const dest = ctx.rhomeInstallDir("share/licenses/cairo");
+    for (cairo.license_files) |f|
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.graph.cwdRelativePath(b.fmt("{s}/{s}", .{ abs, f })), dest, f).step);
+    const record = b.addWriteFiles().add("SOURCE", cairo.record(b, ctx.target.result.cpu.arch));
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(record, dest, "SOURCE").step);
+    return built;
 }
 
 fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win_cairo: *std.Build.Step.Compile) !*std.Build.Step.WriteFile {

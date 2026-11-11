@@ -607,14 +607,15 @@ fi
 # there, rzig's link object included). conda-forge's binaries are built
 # for its own baseline, and some carry AVX2 code behind a run-time CPU
 # check (libdeflate, libcrypto), so they are not counted. objdump: on
-# Windows the env's x86_64-w64-mingw32-objdump; on macOS
+# Windows the env's llvm-objdump (llvm-tools, pixi.toml); on macOS
 # /usr/bin/objdump, which is llvm-objdump, from the Command Line Tools
 # the SDK needs anyway; on linux the env's, conda-forge's binutils
 # (pixi.toml). Without one the check fails, everywhere, saying so.
-# aarch64: the check does not apply.
-case "$(uname -m)" in
-  x86_64|amd64)
-    if [ "$OS" = windows ]; then objdump_cmd=x86_64-w64-mingw32-objdump; else objdump_cmd=objdump; fi
+# aarch64: the check does not apply. By PLAT (env.sh), not uname: on
+# Windows on ARM the MSYS2 tools' uname says x86_64.
+case "$PLAT" in
+  linux-64|osx-64|win-64)
+    if [ "$OS" = windows ]; then objdump_cmd=llvm-objdump; else objdump_cmd=objdump; fi
     if ! command -v "$objdump_cmd" > /dev/null 2>&1; then
       echo "error: no $objdump_cmd on PATH for the baseline CPU check" >&2
       exit 1
@@ -665,7 +666,7 @@ case "$(uname -m)" in
     n_conda=$(($(wc -l < "$WORK/r-bins-all.txt") - n_rb))
     echo "== baseline CPU verified: $n_rb binaries of R's own under R_HOME, $n_vex VEX/EVEX instructions (AVX, FMA, AVX-512), $n_ymm on %ymm, $n_zmm on %zmm ($objdump_cmd -d; $n_conda conda binaries there not counted)"
     ;;
-  *) echo "== baseline CPU: the VEX/EVEX check is x86_64's; on $(uname -m) it does not apply" ;;
+  *) echo "== baseline CPU: the VEX/EVEX check is x86_64's; on $PLAT it does not apply" ;;
 esac
 
 # Windows has no rpaths, glibc or Mach-O: the binary checks further down

@@ -12,6 +12,8 @@ toolchain plus a separate build system.
 
 The packages target `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64`
 and `win-64`, and are published to the `universe` channel on prefix.dev.
+`win-arm64` (Windows on ARM) builds in CI behind the `win-arm64` label
+and is not published yet.
 The channel is public: adding it is all it takes, with no login.
 Publishing is paused until the next build-number bump: until then
 universe has build 8's two packages, `r-zig-slim` and `r-zig-toolchain`
@@ -179,7 +181,11 @@ pixi run verify-package      # the base archive, then the three scenarios with t
 Three variants are available as pixi environments: `default` (slim —
 headless, no X11/tcltk/NLS), `full` (adds tcltk, readline, NLS, jpeg
 and tiff devices), and `minimal` (smaller than slim: also no cairo/png,
-ICU, OpenMP or libdeflate; linux/macOS only). `minimal` is the variant
+ICU, OpenMP or libdeflate; linux/macOS only). On Windows, R's cairo
+devices (`svg()`, `cairo_pdf()`, `cairo_ps()`, `type = "cairo"`) use a
+cairo that R's build compiles from source and links into winCairo.dll,
+the same on x86_64 and ARM; its licence texts are in
+`R_HOME/share/licenses/cairo`. `minimal` is the variant
 the Python wheel wraps. minimal has no OpenMP: a Fortran `use omp_lib`
 compiles but does not link.
 
