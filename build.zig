@@ -2582,8 +2582,20 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     UserNM, else an nm on PATH (tools' sotools.R), and PATH has none;
 ///     the build-tools group's binutils/nm.exe, as RC names its windres
 ///     (feat-standalone-toolchain PHASE7 open point H a).
-/// CMAKE_GENERATOR, RC, RCFLAGS and UserNM are defaults: one set in the
-/// environment wins (`${VAR-default}`). The first three were tested in
+///   - PKG_CONFIG_PATH: the build-tools group's pkg-config is pkgconf,
+///     built from source (zigbuild/toolchain/pkgconf.zig), whose own
+///     search path is beside it (usr/lib/pkgconfig, empty). The default
+///     is R's env's Library/lib/pkgconfig and Library/share/pkgconfig
+///     (R_HOME/../..), where a conda env's libraries put their .pc files:
+///     conda-forge's pkg-config, whose activation set PKG_CONFIG_PATH, is
+///     no longer a dependency (AMENDMENTS Am2, Am3 b). pkgconf derives
+///     each package's prefix from its .pc file's place. In the standalone
+///     tree it names <top>/Library/lib/pkgconfig, which does not exist.
+/// CMAKE_GENERATOR, RC, RCFLAGS, UserNM and PKG_CONFIG_PATH are defaults:
+/// one set in the environment wins (`${VAR-default}`), in double quotes:
+/// unquoted, R's environ reader (Renviron.c) takes each `\` of the
+/// expanded value as an escape, and a user's `C:\x\nm.exe` or
+/// PKG_CONFIG_PATH arrived as `C:xnm.exe` (kappa, 2026-11-09). The first three were tested in
 /// stress round 1 on kappa with these values in the environment
 /// (feat-stress-suite stress/results/2026-10-08.md, T3).
 fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
@@ -2600,14 +2612,17 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
         "R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/../../usr/bin",
         "PATH=\"${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/\"",
         "## r-zig: CMake for packages that build a bundled library with it.",
-        "CMAKE_GENERATOR=${CMAKE_GENERATOR-'MSYS Makefiles'}",
+        "CMAKE_GENERATOR=\"${CMAKE_GENERATOR-MSYS Makefiles}\"",
         "R_ZIG_RC=${R_HOME}/bin/toolchain/binutils/windres.exe",
-        "RC=${RC-${R_ZIG_RC}}",
+        "RC=\"${RC-${R_ZIG_RC}}\"",
         "R_ZIG_RCFLAGS=--preprocessor=${R_HOME}/bin/toolchain/gcc.exe --preprocessor-arg=-E --preprocessor-arg=-xc --preprocessor-arg=-DRC_INVOKED",
-        "RCFLAGS=${RCFLAGS-${R_ZIG_RCFLAGS}}",
+        "RCFLAGS=\"${RCFLAGS-${R_ZIG_RCFLAGS}}\"",
         "## r-zig: R CMD check reads objects' symbols with UserNM, else nm on PATH.",
         "R_ZIG_NM=${R_HOME}/bin/toolchain/binutils/nm.exe",
-        "UserNM=${UserNM-${R_ZIG_NM}}",
+        "UserNM=\"${UserNM-${R_ZIG_NM}}\"",
+        "## r-zig: pkgconf's search path, unless set: R's env's .pc files.",
+        "R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig",
+        "PKG_CONFIG_PATH=\"${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}\"",
     }) |line| {
         try out.appendSlice(b.allocator, line);
         try out.appendSlice(b.allocator, eol);

@@ -903,20 +903,27 @@ The user's decision D0 (a) of 2026-10-21: pkgconf left phase 7, whose
 fail on Windows; conda-forge's pkgconf 3.0.7 fixed both (kappa,
 2026-10-20), and s2's Makevars.ucrt calls `pkgconf`.
 
-- [ ] build.zig builds pkgconf from source: one static exe answering
+Record: pkgconf/PKGCONF.md (branch feat-zig-pkgconf, build 11).
+
+- [x] build.zig builds pkgconf from source: one static exe answering
       both `pkg-config` and `pkgconf`, on both channels (standalone
       TC/usr/bin; conda's r-zig-build-tools), no DLL and no conda-forge
       pkgconf pin. The parked wt/feat-userland worktree has a zig build
       of pkgconf 3.0.7 to read first (its record, not its code as is)
-- [ ] Its search path (PKG_CONFIG_PATH, the exe-relative defaults, the
+      (zigbuild/toolchain/pkgconf.zig, pkgconf 3.0.10)
+- [x] Its search path (PKG_CONFIG_PATH, the exe-relative defaults, the
       registry key), its INCLUDE/CPATH/LIBRARY_PATH filters and the space
-      escape, checked as AMENDMENTS Am1, Am3 and Am9 describe
-- [ ] verify-toolchain's names gain `pkgconf`; verify-bundle's btPc gets
-      back its pkgconf leg and the `--libs` without Libs.private check;
-      stress/packages.tsv's ncdf4 and RPostgres rows move when a Windows
-      dispatch shows them ok
-- [ ] verify-tree.sh's conda exception, if conda's TC gains usr/ (kappa's
-      F1 of 2026-10-20)
+      escape, checked as AMENDMENTS Am1, Am3 and Am9 describe (README;
+      Rcmd_environ's PKG_CONFIG_PATH default, Am3 b; btPc)
+- [x] verify-toolchain's names gain `pkgconf`; verify-bundle's btPc gets
+      back its pkgconf leg and the `--libs` without Libs.private check
+- [x] stress/packages.tsv's ncdf4 and RPostgres rows move when a Windows
+      dispatch shows them ok: stress.R on kappa's tree, 2026-11-10, both
+      ok (ncdf4 was fail-upstream, RPostgres fail-abi); a CI dispatch
+      confirms it
+- [x] verify-tree.sh's conda exception, if conda's TC gains usr/ (kappa's
+      F1 of 2026-10-20): it does (usr/, pkgconf)
+- [ ] CI on the PR (`full-ci`, `upstream-zig`), then the `_11` publish
 
 ## Phase 8 — the base's runtime files
 

@@ -8,8 +8,8 @@
 //! needs no R source and runs no R configure. scripts/zig-toolchain.sh
 //! (pixi run toolchain) installs dist/toolchain/R-<ver>-zig with it, and
 //! package-standalone.sh's toolchain mode archives the groups from there
-//! (B17). `test` runs conda.zig's and wheel.zig's unit tests (pixi run
-//! toolchain-test). With -Dbase it writes the R tree's records instead
+//! (B17). `test` runs conda.zig's, wheel.zig's and pkgconf.zig's unit
+//! tests (pixi run toolchain-test). With -Dbase it writes the R tree's records instead
 //! (PHASE8 open points A a, F a; installBase, below):
 //!   zig build --build-file zigbuild/toolchain/build.zig --prefix <R tree> -Dbase
 //! which scripts/zig-build.sh runs after vendor-libs.sh.
@@ -33,9 +33,11 @@
 //!                           every file of conda-forge's m2 packages'
 //!                           usr/bin/ (MSYS2's bash, make, coreutils, sed,
 //!                           grep, gawk, which, findutils, patch) with the MSYS
-//!                           DLLs they import, and conda-forge's native
-//!                           pkg-config with the DLLs it loads (B11;
-//!                           PHASE7 open points A-C)
+//!                           DLLs they import (B11; PHASE7 open points
+//!                           A-C), and pkgconf as pkgconf.exe and
+//!                           pkg-config.exe, which this build compiles
+//!                           from source (pkgconf.zig, installPkgconf;
+//!                           B43), on both channels
 //!   etc/       build-tools  Windows: fstab, r-zig's own MSYS mount table,
 //!                           written here, not copied (PHASE7 open point D)
 //!   binutils/  build-tools  Windows: conda-forge's MinGW nm, dlltool, as,
@@ -69,9 +71,12 @@
 //! itself, with R_TOOLCHAIN_PREFIX=$PREFIX: there conda's own packages
 //! provide every file where it is looked for, except Windows' binutils,
 //! which Makeconf.win names by path under R_HOME (B24): only those are
-//! installed, with their records (B41). No usr/, etc/, zig/ or flang/
-//! there: the env's MSYS tools and pkg-config are its own m2 and
-//! pkg-config packages (Library/usr/bin, Library/bin), and conda keeps
+//! installed, with their records (B41), and Windows' usr/bin/pkgconf,
+//! which no conda package provides, built from the recipe's pkgconf
+//! source (-Dpkgconf=<dir>; the standalone build fetches the same tarball
+//! as build.zig.zon's lazy `pkgconf`). No etc/, zig/ or flang/ and no
+//! other usr/ file there: the env's MSYS tools are its own m2 packages
+//! (Library/usr/bin), and conda keeps
 //! conda-forge's zig and flang-pixi's flang-zig, through r-zig-compilers
 //! (B30); the conda build fetches nothing (PHASE5 open point J;
 //! zig-toolchain.sh skips fetch-zig by the same test as prefix_is_env
@@ -80,6 +85,7 @@ const std = @import("std");
 const mem = std.mem;
 const conda = @import("conda.zig");
 const wheel = @import("wheel.zig");
+const pkgconf = @import("pkgconf.zig");
 
 /// A file a directory copies from the env.
 const Copy = struct {
@@ -221,17 +227,8 @@ const windows_dirs = [_]Dir{
             usrBin("Library/usr/bin/msys-readline8.dll"),
             usrBin("Library/usr/bin/msys-ncursesw6.dll"),
             usrBin("Library/usr/bin/msys-gcc_s-seh-1.dll"),
-            // pkg-config (B43): conda-forge's native build (MSVC) with its
-            // glib closure. No pkgconf name yet: a later change builds
-            // pkgconf from source as one exe answering both names (PHASE7
-            // user decision D0 a, 2026-10-21).
-            usrBin("Library/bin/pkg-config.exe"),
-            usrBin("Library/bin/glib-2.0-0.dll"),
-            usrBin("Library/bin/iconv.dll"),
-            usrBin("Library/bin/charset.dll"),
-            usrBin("Library/bin/intl-8.dll"),
-            usrBin("Library/bin/pcre2-8.dll"),
-            usrBin("Library/bin/vcruntime140.dll"),
+            // pkg-config (B43) is not a copy: pkgconf, built from source
+            // (pkgconf.zig; installPkgconf), on both channels.
         },
         .trees = &[_]Tree{
             m2Tool("m2-bash"),
@@ -266,15 +263,20 @@ pub fn build(b: *std.Build) !void {
     const arena = b.allocator;
     const io = b.graph.io;
 
-    const test_step = b.step("test", "Run the conda-meta and wheel readers' and SOURCES writer's unit tests");
-    for ([_][]const u8{ "conda.zig", "wheel.zig" }) |root| {
-        const tests = b.addTest(.{ .root_module = b.createModule(.{
+    const test_step = b.step("test", "Run the conda-meta and wheel readers', SOURCES writer's and pkgconf pins' unit tests");
+    // pkgconf.zig's pin test reads the recipe (paths.recipe).
+    const paths = b.addOptions();
+    paths.addOption([]const u8, "recipe", b.pathFromRoot("../../recipe/recipe.yaml"));
+    for ([_][]const u8{ "conda.zig", "wheel.zig", "pkgconf.zig" }) |root| {
+        const mod = b.createModule(.{
             .root_source_file = b.path(root),
             .target = b.graph.host,
-        }) });
-        test_step.dependOn(&b.addRunArtifact(tests).step);
+        });
+        mod.addOptions("paths", paths);
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
     }
     const ziglang = b.option([]const u8, "ziglang", "PyPI's ziglang wheel, unpacked (scripts/fetch-zig.sh's directory): the compilers group's zig/");
+    const pkgconf_dir = b.option([]const u8, "pkgconf", "pkgconf's source tarball, unpacked (the conda build's; else build.zig.zon's pkgconf): Windows' usr/bin/pkgconf.exe");
     const base = b.option(bool, "base", "Write the records of the R tree at --prefix (its files from the env) instead of the toolchain tree") orelse false;
 
     const env = b.graph.environ_map.get("CONDA_PREFIX") orelse
@@ -288,6 +290,10 @@ pub fn build(b: *std.Build) !void {
 
     const records = try readRecords(b, io, env, try dirNeedles(b, dirs));
     var summary: std.ArrayList(u8) = .empty;
+    // Windows' usr/bin/pkgconf.exe, built (installPkgconf): on both
+    // channels. Null while zig fetches the lazy dependency (the configure
+    // step then runs again).
+    const built: ?BuiltDir = if (os == .windows) try installPkgconf(b, io, tc, pkgconf_dir) else null;
     for (dirs) |d| {
         const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/{s}", .{ tc, d.name }) };
         var copies: std.ArrayList(conda.Copy) = .empty;
@@ -320,7 +326,8 @@ pub fn build(b: *std.Build) !void {
                 t.package, t.name orelse "file", t.from, env, d.name, if (t.name == null) "every file there" else "it",
             });
         }
-        if (copies.items.len == 0) continue;
+        const own: []const SourcesStep.Built = if (built != null and mem.eql(u8, d.name, built.?.dir)) built.?.files else &.{};
+        if (copies.items.len == 0 and own.len == 0) continue;
         for (records) |*r| {
             if (r.upstream != null) continue;
             for (copies.items) |c| {
@@ -331,10 +338,7 @@ pub fn build(b: *std.Build) !void {
             }
         }
 
-        var sources: std.Io.Writer.Allocating = .init(arena);
-        try conda.writeSources(arena, &sources.writer, copies.items);
-        const wf = b.addWriteFiles();
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(wf.add("SOURCES", sources.written()), dest, "SOURCES").step);
+        b.getInstallStep().dependOn(&SourcesStep.create(b, copies.items, own, dest).step);
 
         try summary.print(arena, "{s}{s}/ (", .{ if (summary.items.len == 0) "" else ", ", d.name });
         var packages: std.ArrayList(*const conda.Record) = .empty;
@@ -345,6 +349,7 @@ pub fn build(b: *std.Build) !void {
             try summary.appendSlice(arena, c.record.name);
             try packages.append(arena, c.record);
         }
+        if (own.len > 0) try summary.print(arena, "{s}{s} (built)", .{ if (packages.items.len > 0) ", " else "", own[0].record.name });
         try summary.appendSlice(arena, ")");
     }
     // Windows' etc/ (PHASE7 open point D a): written, never into the env.
@@ -392,6 +397,118 @@ fn copyOf(b: *std.Build, records: []const conda.Record, src: []const u8, from: [
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = src }, dest, to).step);
     return copy;
 }
+
+/// What the toolchain build compiles itself for a group directory, not a
+/// copy from the env: its files and their record.
+const BuiltDir = struct {
+    /// The group directory.
+    dir: []const u8,
+    files: []const SourcesStep.Built,
+};
+
+/// Windows' usr/bin/pkgconf.exe and pkg-config.exe, one exe (pkgconf.zig),
+/// for this machine's arch, on both channels; LICENSES/pkgconf/, its
+/// COPYING and the mingw-w64 CRT's (zig links its CRT startup into every
+/// exe); and the record SOURCES writes for it: the tarball's URL and
+/// sha256 (pkgconf.zig's, which the recipe and build.zig.zon pin), the
+/// zig that built it in place of a conda build string, and this repository
+/// as its recipe. The source: `dir` (-Dpkgconf, the conda build's
+/// unpacked source), else build.zig.zon's lazy `pkgconf`, which zig
+/// fetches into zigbuild/toolchain/zig-pkg/; null until it has.
+fn installPkgconf(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !?BuiltDir {
+    const arena = b.allocator;
+    const src = if (dir) |d| d else blk: {
+        const dep = b.lazyDependency("pkgconf", .{}) orelse return null;
+        break :blk dep.path("").getPath(dep.builder);
+    };
+    const abs = try realPath(b, io, src);
+    const arch = b.graph.host.result.cpu.arch;
+    const exe = pkgconf.add(b, arch, abs) catch return error.ToolchainBuild;
+    const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/usr", .{tc}) };
+    const bin = exe.getEmittedBin();
+    for ([_][]const u8{ "pkgconf.exe", "pkg-config.exe" }) |name|
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(bin, dest, b.fmt("bin/{s}", .{name})).step);
+    const crt = b.graph.zig_lib_directory.join(arena, &.{ "libc", "mingw", "COPYING" }) catch @panic("OOM");
+    for ([_][2][]const u8{
+        .{ b.fmt("{s}/COPYING", .{abs}), "COPYING" },
+        .{ crt, "mingw-w64-crt-COPYING" },
+    }) |l| {
+        if (!pathExists(io, l[0])) return fail("pkgconf: {s} is missing (LICENSES/pkgconf/{s})", .{ l[0], l[1] });
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = l[0] }, dest, b.fmt("LICENSES/pkgconf/{s}", .{l[1]})).step);
+    }
+    const record = try arena.create(conda.Record);
+    record.* = .{
+        .name = "pkgconf",
+        .version = pkgconf.version,
+        .build = b.fmt("zig{s}_{t}-windows-gnu", .{ @import("builtin").zig_version_string, arch }),
+        .url = pkgconf.url,
+        .sha256 = pkgconf.sha256,
+        .license = pkgconf.license,
+        .upstream = .{
+            .sources = try arena.dupe(conda.Source, &.{.{ .url = pkgconf.url, .sha256 = pkgconf.sha256 }}),
+            .feedstock = "https://github.com/luciorq/r-zig-pixi",
+            .commit = "zigbuild/toolchain/pkgconf.zig",
+        },
+    };
+    const files = try arena.alloc(SourcesStep.Built, 2);
+    files[0] = .{ .record = record, .from = "pkgconf.exe", .to = "bin/pkgconf.exe", .file = bin };
+    files[1] = .{ .record = record, .from = "pkgconf.exe", .to = "bin/pkg-config.exe", .file = bin };
+    return .{ .dir = "usr", .files = files };
+}
+
+/// A group directory's SOURCES (conda.zig's writer), written when the
+/// directory's files are made: the copies' lines are known at configure
+/// time, a built file's sha256 only once it is built.
+const SourcesStep = struct {
+    step: std.Build.Step,
+    copies: []const conda.Copy,
+    built: []const Built,
+    /// The install path of SOURCES.
+    path: []const u8,
+
+    const Built = struct {
+        record: *const conda.Record,
+        from: []const u8,
+        to: []const u8,
+        file: std.Build.LazyPath,
+    };
+
+    fn create(b: *std.Build, copies: []const conda.Copy, built: []const Built, dest: std.Build.InstallDir) *SourcesStep {
+        const s = b.allocator.create(SourcesStep) catch @panic("OOM");
+        s.* = .{
+            .step = .init(.{ .id = .custom, .name = b.fmt("SOURCES of {s}", .{dest.custom}), .owner = b, .makeFn = make }),
+            .copies = copies,
+            .built = built,
+            .path = b.getInstallPath(dest, "SOURCES"),
+        };
+        for (built) |f| f.file.addStepDependencies(&s.step);
+        return s;
+    }
+
+    fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {
+        const s: *SourcesStep = @fieldParentPtr("step", step);
+        const b = step.owner;
+        const io = b.graph.io;
+        const arena = b.allocator;
+        var all: std.ArrayList(conda.Copy) = .empty;
+        try all.appendSlice(arena, s.copies);
+        for (s.built) |f| {
+            const p = f.file.getPath3(b, step);
+            const data = p.root_dir.handle.readFileAlloc(io, p.sub_path, arena, .limited(256 * 1024 * 1024)) catch |err|
+                return step.fail("cannot read {f} ({t})", .{ p, err });
+            var sha: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(data, &sha, .{});
+            try all.append(arena, .{ .record = f.record, .from = f.from, .to = f.to, .sha256 = b.dupe(&std.fmt.bytesToHex(sha, .lower)) });
+        }
+        var out: std.Io.Writer.Allocating = .init(arena);
+        try conda.writeSources(arena, &out.writer, all.items);
+        const cwd = std.Io.Dir.cwd();
+        if (std.fs.path.dirname(s.path)) |d| cwd.createDirPath(io, d) catch |err|
+            return step.fail("cannot create {s} ({t})", .{ d, err });
+        cwd.writeFile(io, .{ .sub_path = s.path, .data = out.written() }) catch |err|
+            return step.fail("cannot write {s} ({t})", .{ s.path, err });
+    }
+};
 
 /// A directory of the R tree whose files came from the env (PHASE8 open
 /// point F a): every file under `to` (relative to the tree's top), from
@@ -754,7 +871,7 @@ const cache_how = "the toolchain tree copies the licence files and sources from 
 /// info/recipe/meta.yaml), and its feedstock, from info/about.json. A
 /// rattler-build output built from a staging output has its sources under
 /// finalized_cache_sources, its finalized_sources empty (libglib, which
-/// pkg-config loads: PHASE7 user decision D0 a). A GPL package (GPL, LGPL,
+/// conda-forge's pkg-config loaded until build 10). A GPL package (GPL, LGPL,
 /// AGPL) whose recipe lists no source stops the build: its binaries ship
 /// only with a pointer to their source.
 fn readUpstream(b: *std.Build, io: std.Io, r: *const conda.Record) !conda.Upstream {

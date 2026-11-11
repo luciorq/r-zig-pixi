@@ -19,7 +19,7 @@
 #     feat-r-home-link-objects), nothing else:
 #     the groups' files are the toolchain tree's (feat-standalone-toolchain
 #     B19, B30; verify-toolchain.sh), a conda env's win-64 binutils/
-#     excepted (B41);
+#     and usr/ (pkgconf) excepted (B41);
 #   - Makeconf names no build path and has no rpath; CPPFLAGS and LDFLAGS
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
 #   - Windows (every tree): CRAN's layout, Makeconf's R_ARCH is /x64 and
@@ -112,7 +112,8 @@ trap 'rm -rf "$WORK"' EXIT
 # vendor-libs.sh copies. A conda env (<tree>/conda-meta, the conda build's
 # prefix) has both from its own packages, and gets neither. On win-64 it
 # also has the build-tools group's binutils/ in R_HOME/bin/toolchain,
-# r-zig-build-tools' copies (feat-standalone-toolchain B41).
+# r-zig-build-tools' copies (feat-standalone-toolchain B41), and its usr/,
+# pkgconf, which the toolchain build compiles (zigbuild/toolchain/pkgconf.zig).
 conda_tree=""
 if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
 
@@ -153,14 +154,16 @@ done
 # (openmp/, usr/, binutils/) are the toolchain tree's (zig-toolchain.sh,
 # verify-toolchain.sh), whose archives a user extracts beside this tree's.
 # A conda env is the exception: on win-64 r-zig-build-tools carries
-# binutils/ here (B41). zig's install never removes a file, so a tree
+# binutils/ and usr/ (pkgconf) here (B41). zig's install never removes a file, so a tree
 # built before phase 3 still has the files that left it (PHASE3 C25).
 lo="$(link_object)"
 bad=""
 while IFS= read -r f; do
   n="${f##*/}"
   if [ -d "$f" ]; then
-    if [ -n "$conda_tree" ] && [ "$OS" = windows ] && [ "$n" = binutils ]; then continue; fi
+    if [ -n "$conda_tree" ] && [ "$OS" = windows ]; then
+      case "$n" in binutils|usr) continue ;; esac
+    fi
     bad="$bad $n/"
   else
     case " $tc_names $lo " in *" $n "*) ;; *) bad="$bad $n" ;; esac
@@ -306,7 +309,10 @@ if [ "$OS" = windows ]; then
   done < "$WORK/binpref.txt"
   for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/../../usr/bin' \
     'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"' \
-    'R_ZIG_RC=${R_HOME}/bin/toolchain/binutils/windres.exe'; do
+    'R_ZIG_RC=${R_HOME}/bin/toolchain/binutils/windres.exe' \
+    'R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig' \
+    'PKG_CONFIG_PATH="${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}"' \
+    'UserNM="${UserNM-${R_ZIG_NM}}"' 'RC="${RC-${R_ZIG_RC}}"'; do
     has_line "$TREE/$rh/etc/Rcmd_environ" "$l" || bad="$bad
   $rh/etc/Rcmd_environ lacks: $l"
   done
@@ -321,7 +327,7 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 if [ "$OS" = windows ]; then
-  echo "== build tools verified: Makeconf's AR and RANLIB are rzig, its binutils in \$(R_HOME)/bin/toolchain/binutils/, PKG_CONFIG = pkg-config; etc/Rcmd_environ puts bin/toolchain/usr/bin first on PATH"
+  echo "== build tools verified: Makeconf's AR and RANLIB are rzig, its binutils in \$(R_HOME)/bin/toolchain/binutils/, PKG_CONFIG = pkg-config; etc/Rcmd_environ puts bin/toolchain/usr/bin first on PATH and gives PKG_CONFIG_PATH R's env's .pc directories as its default"
 else
   echo "== build tools verified: etc/Renviron puts bin/toolchain/usr/bin first on PATH, MAKE=\${MAKE-'make'}"
 fi
@@ -586,7 +592,7 @@ fi
 # vendor-libs.sh copied there (vendored_files: Windows' bin/x64) and the
 # env files build.zig copies as they are (Windows' Tcl/Tk in R_HOME/Tcl;
 # in the toolchain directory only rzig is R's own binary, not a conda
-# env's win-64 binutils/, B41; the loop below takes no other file from
+# env's win-64 binutils/ and usr/, B41; the loop below takes no other file from
 # there, rzig's link object included). conda-forge's binaries are built
 # for its own baseline, and some carry AVX2 code behind a run-time CPU
 # check (libdeflate, libcrypto), so they are not counted. objdump: on

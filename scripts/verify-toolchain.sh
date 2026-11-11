@@ -5,9 +5,12 @@
 # archives it, one archive per group. Every file in it is a third-party
 # file copied unchanged from a conda package (flang/: flang-pixi's
 # flang-zig and flang-rt-zig, from universe, B9 a, phase 6; Windows' usr/:
-# conda-forge's m2 packages and pkg-config, phase 7) or, in zig/, from PyPI's
+# conda-forge's m2 packages, phase 7) or, in zig/, from PyPI's
 # ziglang wheel (B4, phase 5), or that package's record, except
-# etc/fstab (Windows), r-zig's own MSYS mount table (PHASE7 open point D):
+# etc/fstab (Windows), r-zig's own MSYS mount table (PHASE7 open point D),
+# and Windows' usr/bin/pkgconf.exe and pkg-config.exe, pkgconf built from
+# its source tarball by the toolchain build (zigbuild/toolchain/pkgconf.zig),
+# whose SOURCES block has the built file's sha256:
 #   - layout: group directories under R_HOME/bin/toolchain only (env.sh's
 #     group_dirs), and no file directly in it;
 #   - records: each directory has SOURCES, each package block of it with
@@ -19,7 +22,8 @@
 #     paths_data; the wheel's RECORD), and every such target is there;
 #   - build paths: SOURCES and LICENSES name none of the checkout, the
 #     tree's own place, zig's caches, the env or $HOME (verify-tree.sh's
-#     list). A copy that names one is listed, not failed: the copies are
+#     list), and neither does pkgconf, which r-zig builds. A copy that
+#     names one is listed, not failed: the copies are
 #     third-party bytes as their packages ship them. conda-forge's macOS
 #     make names its build path, /Users/runner/..., which is under $HOME on
 #     GitHub's macOS runners (PHASE3 C18), and every OS's flang driver and
@@ -209,6 +213,20 @@ while IFS= read -r f; do
      ${f#"$TREE"/}: $(first_match "$f")"
   n_named=$((n_named + 1))
 done < <([ -s "$WORK/copies.txt" ] && tr '\n' '\0' < "$WORK/copies.txt" | LC_ALL=C xargs -0 grep -laE "${icase[@]}" -e "$re" || true)
+# pkgconf is r-zig's build, not a third-party copy: one that names one
+# fails (pkgconf.zig maps the source directory away).
+bad=""
+for f in "$TREE/$tc/usr/bin/pkgconf.exe" "$TREE/$tc/usr/bin/pkg-config.exe"; do
+  [ -f "$f" ] || continue
+  if LC_ALL=C grep -qaE "${icase[@]}" -e "$re" "$f"; then
+    bad="$bad
+  ${f#"$TREE"/}: $(first_match "$f")"
+  fi
+done
+if [ -n "$bad" ]; then
+  echo "error: pkgconf, which the toolchain build compiles, names the build machine:$bad" >&2
+  exit 1
+fi
 echo "== build paths verified: SOURCES and LICENSES name none of the checkout, zig's caches, the env, the tree or \$HOME"
 if [ "$n_named" -gt 0 ]; then
   echo "   third-party copies that name one of them, as their packages ship them: $n_named$named"
@@ -326,7 +344,8 @@ echo "== OpenMP verified: $omp (in $tc)"
 
 # Windows' build tools (B39; PHASE7 open point O a, amendment Am10), when
 # the tree has usr/ (the build-tools group): B39's names, coreutils' that
-# R's makefiles and configure scripts run, and pkg-config (B43), each an
+# R's makefiles and configure scripts run, and pkg-config and pkgconf
+# (B43; pkgconf built from source), each an
 # .exe in usr/bin that runs `--version` with PATH = System32 alone from a
 # scratch directory (`[` runs `[ 1 = 1 ]`): a copy that does not
 # start (a DLL of the wrong package, a missing runtime) fails here, where
@@ -343,7 +362,7 @@ echo "== OpenMP verified: $omp (in $tc)"
 # and says the env's root and /tmp (seen on kappa, 2026-10-20).
 if [ "$OS" = windows ] && [ -d "$TREE/$tc/usr" ]; then
   ub="$TREE/$tc/usr/bin"
-  names="sh bash make sed grep gawk awk which find xargs patch pkg-config
+  names="sh bash make sed grep gawk awk which find xargs patch pkg-config pkgconf
     basename rm cp mv mkdir cat tr sort uname chmod ln ls expr touch head
     tail wc env printf mktemp test ["
   mkdir -p "$WORK/run" "$WORK/temp"

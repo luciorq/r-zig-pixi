@@ -1,0 +1,14 @@
+.{
+    .name = .r_zig_toolchain,
+    .version = "0.0.0",
+    .fingerprint = 0xdd5a39c059d920a8,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .pkgconf = .{
+            .url = "https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.10.tar.xz",
+            .hash = "N-V-__8AAEIvLQAcTV0V_--qfqG14rkuXW1VEz95S5KD8YYn",
+            .lazy = true,
+        },
+    },
+    .paths = .{""},
+}

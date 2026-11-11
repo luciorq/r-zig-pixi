@@ -42,7 +42,13 @@ bash scripts/zig-build.sh
 # looked for (llvm-openmp's omp.h, make), so on unix it installs nothing.
 # On win-64 it installs R_HOME/bin/toolchain/binutils/: conda-forge's
 # MinGW binutils, which Makeconf.win names by path under R_HOME, with
-# their SOURCES and LICENSES/ (feat-standalone-toolchain B24, B41).
+# their SOURCES and LICENSES/ (feat-standalone-toolchain B24, B41), and
+# usr/bin/pkgconf.exe and pkg-config.exe, which it builds from the
+# recipe's pkgconf source (-Dpkgconf; zigbuild/toolchain/pkgconf.zig).
 # r-zig-build-tools owns them (B41); r-zig-slim owns rzig, the rest of
 # R_HOME/bin/toolchain (B28).
-R_TOOLCHAIN_PREFIX="$PREFIX" bash scripts/zig-toolchain.sh
+pkgconf=()
+if [ -d pkgconf-src ]; then
+  pkgconf=("-Dpkgconf=$(cygpath -m "$PWD/pkgconf-src")")
+fi
+R_TOOLCHAIN_PREFIX="$PREFIX" bash scripts/zig-toolchain.sh "${pkgconf[@]}"

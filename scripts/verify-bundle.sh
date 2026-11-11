@@ -109,9 +109,10 @@
 #      build and load with only bin\x64 and System32 on PATH; LTO is recorded, not
 #      checked (B43-2, C9), with a tier-1 twin that MAKEFLAGS' assignment
 #      sends to make (N4); B39's tools through a configure.win, a
-#      cleanup.win and a Makevars rule (btTools), pkg-config (0.29.2,
-#      B43) through a configure.win and a .pc file under a path with a
-#      space (btPc), R
+#      cleanup.win and a Makevars rule (btTools), pkg-config and pkgconf
+#      (pkgconf built from source, B43) through a configure.win and a .pc
+#      file under a path with a space (btPc), PKG_CONFIG_PATH's default
+#      under R CMD, R
 #      CMD check's nm (UserNM, PHASE7 open point H), and, where Git for
 #      Windows' MSYS is installed, the same with its usr\bin first on PATH
 #      (with a configure.win that runs its diff and cygpath through TC's
@@ -2680,12 +2681,13 @@ echo "btTools: cleanup.win ran"
 CLEANUP
       chmod +x "$d/configure.win" "$d/cleanup.win"
     }
-    # btPc (PHASE7 amendment Am9, less its pkgconf parts: user decision D0
-    # a): a configure.win that asks the group's pkg-config (0.29.2, B43)
+    # btPc (PHASE7 amendment Am9): a configure.win that asks the group's
+    # pkg-config (pkgconf, built from source: zigbuild/toolchain/pkgconf.zig)
     # about btpc.pc, under a directory whose name has a space: --libs has
-    # the public libraries (0.29.2 adds the private ones too, without
-    # --static: printed, not asserted; PHASE7 KN d), --static the private
-    # too, the prefix is the .pc file's (Windows' prefix redefinition),
+    # the public libraries and not the private ones (conda-forge's
+    # pkg-config 0.29.2, which the group had until build 10, printed both:
+    # PHASE7 KN d, ncdf4), --static the private too, pkgconf the same
+    # --libs, the prefix is the .pc file's (Windows' prefix redefinition),
     # --cflags escapes the space; the package compiles with those --cflags
     # through make and sh and f() returns BTPC, 7.
     pc_dir="$VERIFY_DIR/pc dir"
@@ -2702,6 +2704,9 @@ CLEANUP
 libs=`pkg-config --libs btpc | tr -d '\r'` || { echo "btPc: pkg-config --libs btpc failed"; exit 1; }
 echo "btPc: pkg-config --libs: $libs"
 case " $libs " in *" -lbtpc_pub "*) ;; *) echo "btPc: --libs has no -lbtpc_pub"; exit 1 ;; esac
+case " $libs " in *" -lbtpc_priv "*) echo "btPc: --libs has -lbtpc_priv (Libs.private without --static)"; exit 1 ;; esac
+plibs=`pkgconf --libs btpc | tr -d '\r'` || { echo "btPc: pkgconf --libs btpc failed"; exit 1; }
+[ "$plibs" = "$libs" ] || { echo "btPc: pkgconf --libs is '$plibs', pkg-config's '$libs'"; exit 1; }
 slibs=`pkg-config --static --libs btpc | tr -d '\r'`
 echo "btPc: pkg-config --static --libs: $slibs"
 case " $slibs " in *" -lbtpc_priv "*) ;; *) echo "btPc: --static --libs has no -lbtpc_priv"; exit 1 ;; esac
@@ -2747,7 +2752,26 @@ CONFIGURE
     tools_pc_install "$bt_path" "$VERIFY_DIR/tools-pc"
     echo "== B39's tools: btTools' configure.win ran $n steps through the group's sh (awk, gawk, sed, grep, expr, tr, sort, uniq, cut, head, tail, basename, dirname, uname, mktemp, mkdir, cat, cp, mv, ln, chmod, touch, ls, find | xargs, which, printf, env, patch -p0), its cleanup.win under --preclean, its Makevars rule through make; loads, f() = $n"
     echo "   btPc: $(tr -d '\r' < "$VERIFY_DIR/tools-pc/btPc.log" | grep '^btPc: pkg-config --\(libs\|static\|cflags\)' | sed 's/^btPc: //' | tr '\n' ';')"
-    echo "== pkg-config (the group's, 0.29.2): btPc's configure.win under a path with a space: the public libraries, the private ones with --static, the prefix the .pc file's, --cflags escaped and compiled through make and sh; loads, f() = 7"
+    echo "== pkg-config and pkgconf (the group's pkgconf): btPc's configure.win under a path with a space: the public libraries only, the private ones with --static, pkgconf's --libs the same, the prefix the .pc file's, --cflags escaped and compiled through make and sh; loads, f() = 7"
+
+    # PKG_CONFIG_PATH under R CMD (Rcmd_environ; AMENDMENTS Am3 b): unset,
+    # R's env's Library/lib/pkgconfig and Library/share/pkgconfig
+    # (R_HOME/../..); one the user set is kept.
+    cat > "$tw/pcpath.R" <<'RCODE'
+want <- commandArgs(trailingOnly = TRUE)[1L]
+p <- Sys.getenv("PKG_CONFIG_PATH", NA)
+if (want == "env") {
+    rh <- Sys.getenv("R_HOME")
+    want <- paste0(rh, "/../../lib/pkgconfig;", rh, "/../../share/pkgconfig")
+}
+if (is.na(p) || p != want) stop("PKG_CONFIG_PATH is '", p, "', not ", want)
+cat("   PKG_CONFIG_PATH under R CMD:", p, "\n")
+RCODE
+    (cd "$tw" && env -i "${base_env[@]}" PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla pcpath.R env) ||
+      { echo "error: under R CMD with no PKG_CONFIG_PATH, it is not R's env's Library/lib/pkgconfig and Library/share/pkgconfig (Rcmd_environ)" >&2; exit 1; }
+    (cd "$tw" && env -i "${base_env[@]}" PKG_CONFIG_PATH='C:\r-zig-user\pkg config' PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla pcpath.R 'C:\r-zig-user\pkg config') ||
+      { echo "error: under R CMD, a PKG_CONFIG_PATH the user set is not kept (Rcmd_environ's \${PKG_CONFIG_PATH-...})" >&2; exit 1; }
+    echo "== PKG_CONFIG_PATH under R CMD: R's env's .pc directories when unset (Rcmd_environ), the user's kept"
 
     # R CMD check's nm (PHASE7 open point H a): sotools.R reads an object's
     # symbols with UserNM, else an nm on PATH, which has none: under R
@@ -2767,7 +2791,7 @@ if (want == "group") {
 RCODE
     (cd "$tw" && env -i "${base_env[@]}" PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla nm.R group) ||
       { echo "error: under R CMD, UserNM is not the group's binutils/nm.exe, or R CMD check's symbol table of an object is not read with it" >&2; exit 1; }
-    (cd "$tw" && env -i "${base_env[@]}" UserNM=C:/r-zig-user/nm.exe PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla nm.R C:/r-zig-user/nm.exe) ||
+    (cd "$tw" && env -i "${base_env[@]}" UserNM='C:\r-zig-user\nm.exe' PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla nm.R 'C:\r-zig-user\nm.exe') ||
       { echo "error: under R CMD, a UserNM the user set is not kept (Rcmd_environ's \${UserNM-...})" >&2; exit 1; }
     echo "== R CMD check's nm: UserNM is binutils/nm.exe under R CMD (a user's is kept), and tools:::read_symbols_from_object_file reads t.o with it"
 

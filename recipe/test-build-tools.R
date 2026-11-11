@@ -4,8 +4,9 @@
 ## in this env but not on PATH (on Windows R CMD then finds them itself,
 ## PHASE7 F2 b); R CMD config reads Makeconf through make. On Windows the
 ## package's own files: the MinGW binutils, with the records of where they
-## come from (B24, B41), which load the env's zstd.dll (E2); and B39's
-## tools and pkg-config from this env (B11, B43).
+## come from (B24, B41), which load the env's zstd.dll (E2); pkgconf,
+## built from source, as pkgconf and pkg-config, and PKG_CONFIG_PATH's
+## default under R CMD (B43); and B39's tools from this env (B11).
 windows <- .Platform$OS.type == "windows"
 d <- tempfile("rzig-"); dir.create(d)
 ## the caller's settings (pixi run, conda run, wheel-test; rattler-build's
@@ -131,10 +132,58 @@ if (windows) {
     r <- run_to(file.path(bu, "nm.exe"), "--version")
     narrow(usr_bin = TRUE)
     stopifnot(r$status == 0L, grepl("GNU nm", r$out[1L], fixed = TRUE))
-    ## Makeconf.win names a bare pkg-config (B43): this env's
-    r <- run_to("pkg-config", "--version")
-    stopifnot(r$status == 0L, length(r$out) > 0L)
-    cat("build tools: binutils/ has its SOURCES and LICENSES, nm runs with this env's zstd.dll, pkg-config", r$out[1L], ": OK\n")
+    cat("build tools: binutils/ has its SOURCES and LICENSES, nm runs with this env's zstd.dll: OK\n")
+
+    ## Makeconf.win names a bare pkg-config (B43): the package's pkgconf,
+    ## which the toolchain build compiles from source
+    ## (zigbuild/toolchain/pkgconf.zig) into usr/bin as pkgconf.exe and
+    ## pkg-config.exe; usr/SOURCES has its block, with each name's sha256,
+    ## LICENSES/pkgconf/ its texts, and it runs with System32 alone
+    ub <- file.path(R.home(), "bin", "toolchain", "usr")
+    src <- readLines(file.path(ub, "SOURCES"))
+    i <- match("package: pkgconf", src)
+    stopifnot(!is.na(i), length(list.files(file.path(ub, "LICENSES", "pkgconf"))) >= 2L)
+    blk <- src[i:length(src)]
+    blk <- blk[cumsum(blk == "") == 0L]
+    fl <- grep("^file: pkgconf[.]exe -> bin/", blk, value = TRUE)
+    want <- sub("^.* ", "", fl)
+    names(want) <- sub("^file: pkgconf[.]exe -> (bin/[^ ]+) .*$", "\\1", fl)
+    stopifnot(any(grepl("^sha256: [0-9a-f]{64}$", blk)),
+              setequal(names(want), c("bin/pkgconf.exe", "bin/pkg-config.exe")),
+              unname(tools::sha256sum(file.path(ub, names(want)))) == unname(want))
+    Sys.setenv(PATH = file.path(Sys.getenv("SystemRoot"), "System32"))
+    for (n in c("pkgconf", "pkg-config")) {
+        r <- run_to(file.path(ub, "bin", paste0(n, ".exe")), "--version")
+        stopifnot(r$status == 0L, length(r$out) > 0L)
+    }
+    narrow(usr_bin = TRUE)
+    cat("build tools: usr/bin's pkgconf", r$out[1L], "under both names, with its SOURCES and LICENSES: OK\n")
+
+    ## under R CMD (Rcmd_environ): the group's pkg-config first on PATH,
+    ## and PKG_CONFIG_PATH, unset, this env's Library/lib/pkgconfig and
+    ## Library/share/pkgconfig, where pkg-config finds this env's .pc files
+    ## (conda-forge's pkg-config, whose activation set it, is no longer a
+    ## dependency)
+    pcs <- sub("[.]pc$", "", list.files(file.path(env_bin, "..", "lib", "pkgconfig"), pattern = "[.]pc$"))
+    pc <- if ("zlib" %in% pcs) "zlib" else pcs[1L]
+    rs <- file.path(d, "pc.R")
+    writeLines(c('rh <- Sys.getenv("R_HOME")',
+                 'want <- paste0(rh, "/../../lib/pkgconfig;", rh, "/../../share/pkgconfig")',
+                 'p <- Sys.getenv("PKG_CONFIG_PATH", NA)',
+                 'if (is.na(p) || p != want) stop("PKG_CONFIG_PATH is \'", p, "\', not ", want)',
+                 'cat("pkg-config:", Sys.which("pkg-config"), "\\n")',
+                 'a <- commandArgs(TRUE)',
+                 'if (length(a) && !is.na(a[1L])) quit(status = system2("pkg-config", c("--exists", "--print-errors", a[1L])))'), rs)
+    old <- Sys.getenv("PKG_CONFIG_PATH", NA)
+    Sys.unsetenv("PKG_CONFIG_PATH")
+    r <- run_to(file.path(R.home("bin"), "Rcmd.exe"), c("Rscript.exe", "--vanilla", shQuote(rs), if (!is.na(pc)) pc))
+    if (!is.na(old)) Sys.setenv(PKG_CONFIG_PATH = old)
+    cat(r$out, sep = "\n")
+    w <- sub("^pkg-config: ", "", grep("^pkg-config: ", r$out, value = TRUE))
+    stopifnot(r$status == 0L, length(w) == 1L, same_path(shown(dirname(w)), shown(file.path(ub, "bin"))))
+    cat("build tools: under R CMD, PKG_CONFIG_PATH is this env's .pc directories",
+        if (is.na(pc)) "(this env has no .pc file to look up)" else paste0("and pkg-config finds ", pc),
+        ": OK\n")
 
     ## B39's tools from this env (B11): m2's, in Library/usr/bin. R's
     ## Sys.which looks in System32 before PATH, so a name System32 has too
