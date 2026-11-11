@@ -154,7 +154,8 @@ fi
 # toolchain-test) build, compile and test with it. Not conda-package,
 # whose rattler-build gives the recipe a clean environment and so its
 # build env's zig, nor wheel-test, which compiles with the venv's
-# ziglang. On win-64 conda-forge's real binary is x86_64-w64-mingw32-zig:
+# ziglang. On Windows conda-forge's real binary is <arch>-w64-mingw32-zig
+# (x86_64 on win-64, aarch64 on win-arm64):
 # its `zig` is a .bat, which MSYS bash cannot run.
 # Empty with no zig at all (scripts that run none still work).
 #
@@ -173,7 +174,7 @@ if [ -n "${ZIG_BIN:-}" ]; then
     *) ZIG="$(command -v "$ZIG_BIN" || true)" ;;
   esac
 else
-  ZIG="$(command -v zig || command -v x86_64-w64-mingw32-zig || true)"
+  ZIG="$(command -v zig || command -v x86_64-w64-mingw32-zig || command -v aarch64-w64-mingw32-zig || true)"
 fi
 case "$ZIG" in
   ''|/*|[A-Za-z]:[/\\]*) ;;
