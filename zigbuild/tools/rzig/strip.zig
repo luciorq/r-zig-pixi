@@ -97,7 +97,7 @@ fn debugSection(r: *Io.File.Reader) !bool {
     while (i < count) : (i += 1) {
         const s = try section(r, h, i);
         // DWARF's sections are PROGBITS and not loaded
-        if (s.sh_type != @intFromEnum(elf.SHT.PROGBITS) or s.sh_flags & elf.SHF_ALLOC != 0) continue;
+        if (s.sh_type != @backingInt(elf.SHT.PROGBITS) or s.sh_flags & elf.SHF_ALLOC != 0) continue;
         var name: [".zdebug_info".len]u8 = undefined;
         const n = try r.file.readPositionalAll(r.io, &name, names_offset +| s.sh_name);
         if (mem.startsWith(u8, name[0..n], ".debug_info") or mem.startsWith(u8, name[0..n], ".zdebug_info")) return true;
@@ -160,7 +160,7 @@ test hasDebugInfo {
     try testing.expect(!hasDebugInfo(c, f.path("x-g0.o")));
     // not a relocatable object: f-g.o's bytes as a shared library's (ET_DYN)
     const dyn = try c.arena.dupe(u8, f_g);
-    mem.writeInt(u16, dyn[16..18], @intFromEnum(elf.ET.DYN), .little);
+    mem.writeInt(u16, dyn[16..18], @backingInt(elf.ET.DYN), .little);
     try f.write("dyn.o", dyn, .default_file);
     try testing.expect(!hasDebugInfo(c, f.path("dyn.o")));
     // cut short, empty, an archive, text, a directory, no file: none

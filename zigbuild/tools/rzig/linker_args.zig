@@ -1,4 +1,4 @@
-//! Linker options zig cc (0.16, conda-forge's and upstream's alike) cannot
+//! Linker options zig cc (0.16 and 0.17, conda-forge's and upstream's alike) cannot
 //! take, which GNU ld, lld and ld64 do (stress round 1, Z2, Z3, Z8). One
 //! rule each, for every spelling: inside -Wl, (as one item, or two:
 //! `-Wl,-L,dir`), after -Xlinker (`-Xlinker -L -Xlinker dir`), and for
@@ -8,14 +8,6 @@
 //!   -L...". RcppParallel's `-Wl,-Ltbb/build/lib_release`, on every OS.
 //!   It becomes the driver's own -L<dir>, in the same place: zig searches
 //!   it as the linker would.
-//! - --dependency-file=<file>: zig panics ("index out of bounds",
-//!   conda-forge's) or crashes (upstream's). CMake (4.4 in round 1) adds
-//!   `-Xlinker --dependency-file=...` to every ELF link when the linker it
-//!   found lists the option in --help, as lld-zig's ld.lld does (on PATH in
-//!   the dev env, through flang-zig): RcppParallel's TBB, Rhdf5lib's
-//!   libaec, arrow's bundled zlib. Dropped: the file only tells CMake when
-//!   to relink, and CMake builds and rebuilds without it. Which linker
-//!   CMake finds then no longer matters.
 //! - --allow-multiple-definition and -z muldefs: "unsupported linker arg"
 //!   (StanHeaders' Makevars.win). Dropped: with nothing defined twice the
 //!   link is the same, and a real duplicate now fails loudly instead of
@@ -103,15 +95,13 @@ fn item(x: []const u8, next: ?[]const u8) Item {
         if (d.len == 0) return .{ .what = .keep };
         return .{ .what = .lib_dir, .value = d, .items = 2 };
     }
-    if (mem.eql(u8, x, "--dependency-file")) return .{ .what = .drop, .items = if (next != null) 2 else 1 };
     if (mem.eql(u8, x, "-z")) {
         const n = next orelse return .{ .what = .keep };
         return if (mem.eql(u8, n, "muldefs")) .{ .what = .drop, .items = 2 } else .{ .what = .keep };
     }
     if (cmdline.flagValue(x, "-L")) |d| return .{ .what = .lib_dir, .value = d };
     if (cmdline.flagValue(x, "--library-path=")) |d| return .{ .what = .lib_dir, .value = d };
-    if (mem.startsWith(u8, x, "--dependency-file=") or
-        mem.eql(u8, x, "--allow-multiple-definition") or
+    if (mem.eql(u8, x, "--allow-multiple-definition") or
         mem.eql(u8, x, "-allow-multiple-definition") or
         mem.eql(u8, x, "-zmuldefs")) return .{ .what = .drop };
     return .{ .what = .keep };
@@ -141,17 +131,22 @@ test "-L out of -Wl, and -Xlinker, in every spelling" {
     try expectArgs(dangling, try rewrite(c, dangling));
 }
 
-test "--dependency-file dropped, in every spelling" {
+// zig 0.16 panicked on CMake's `-Xlinker --dependency-file=...` (stress
+// round 1, Z3) and rzig dropped it; zig 0.17 links with it and writes the
+// file, on every target (feat-zig-017's audit), so it passes through.
+test "--dependency-file kept, in every spelling" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
     const c = &f.ctx;
     // CMake's
-    try expectArgs(&.{ "-shared", "-o", "l.so" }, try rewrite(c, &.{ "-shared", "-Xlinker", "--dependency-file=CMakeFiles/t.dir/link.d", "-o", "l.so" }));
-    try expectArgs(&.{ "-o", "x" }, try rewrite(c, &.{ "-Wl,--dependency-file=x.d", "-o", "x" }));
-    try expectArgs(&.{ "-Wl,-z,now", "-o", "x" }, try rewrite(c, &.{ "-Wl,--dependency-file,x.d,-z,now", "-o", "x" }));
-    try expectArgs(&.{ "-o", "x" }, try rewrite(c, &.{ "-Xlinker", "--dependency-file", "-Xlinker", "x.d", "-o", "x" }));
-    try expectArgs(&.{"a.o"}, try rewrite(c, &.{ "a.o", "-Wl,--dependency-file" }));
+    const lines = [_]Args{
+        &.{ "-shared", "-Xlinker", "--dependency-file=CMakeFiles/t.dir/link.d", "-o", "l.so" },
+        &.{ "-Wl,--dependency-file=x.d", "-o", "x" },
+        &.{ "-Wl,--dependency-file,x.d,-z,now", "-o", "x" },
+        &.{ "-Xlinker", "--dependency-file", "-Xlinker", "x.d", "-o", "x" },
+    };
+    for (lines) |l| try expectArgs(l, try rewrite(c, l));
     // clang's own -dependency-file (a compile's) is no linker option
     try expectArgs(&.{ "-dependency-file", "a.d", "-c", "a.c" }, try rewrite(c, &.{ "-dependency-file", "a.d", "-c", "a.c" }));
 }

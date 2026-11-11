@@ -63,7 +63,9 @@ fi
 # rpath before the fallback path): after a `pixi update` it would be the
 # env's old one. A no-op for the conda build, whose prefix is the env.
 R_INSTALL_PREFIX="$PREFIX" bash "$(dirname "$0")/vendor-libs.sh"
-"$ZIG" build --prefix "$PREFIX" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"
+# -Dprefix repeats --prefix: zig 0.17's configure step never sees
+# --prefix, and the build reads the tree and names R_HOME at configure.
+"$ZIG" build --prefix "$PREFIX" "-Dprefix=$PREFIX" -Dvariant="$VARIANT" -Dblas="$BLAS" "$@"
 R_INSTALL_PREFIX="$PREFIX" bash "$(dirname "$0")/vendor-libs.sh"
 
 # The tree's records (feat-standalone-toolchain B33 a, PHASE8): which
@@ -73,4 +75,4 @@ R_INSTALL_PREFIX="$PREFIX" bash "$(dirname "$0")/vendor-libs.sh"
 # reader and SOURCES writer write them (zigbuild/toolchain/build.zig,
 # installBase), after vendor-libs.sh, on the tree as it ships. Nothing
 # for the conda build, whose packages keep their own.
-"$ZIG" build --build-file "$ROOT/zigbuild/toolchain/build.zig" --prefix "$PREFIX" -Dbase
+"$ZIG" build --build-file "$ROOT/zigbuild/toolchain/build.zig" --prefix "$PREFIX" "-Dprefix=$PREFIX" -Dbase

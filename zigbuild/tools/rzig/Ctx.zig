@@ -188,8 +188,8 @@ pub fn capture(ctx: *const Ctx, argv: []const []const u8) Output {
     const term = child.wait(ctx.io) catch |err| return .{ .ok = false, .stdout = out, .not_run = @errorName(err) };
     return switch (term) {
         .exited => |code| .{ .ok = code == 0, .stdout = out },
-        .signal => |sig| .{ .ok = false, .stdout = out, .not_run = ctx.fmt("killed by signal {d}", .{@intFromEnum(sig)}) catch "killed by a signal" },
-        .stopped => |sig| .{ .ok = false, .stdout = out, .not_run = ctx.fmt("stopped by signal {d}", .{@intFromEnum(sig)}) catch "stopped by a signal" },
+        .signal => |sig| .{ .ok = false, .stdout = out, .not_run = ctx.fmt("killed by signal {d}", .{@backingInt(sig)}) catch "killed by a signal" },
+        .stopped => |sig| .{ .ok = false, .stdout = out, .not_run = ctx.fmt("stopped by signal {d}", .{@backingInt(sig)}) catch "stopped by a signal" },
         .unknown => |status| .{ .ok = false, .stdout = out, .not_run = ctx.fmt("ended with status {d}", .{status}) catch "ended with an unknown status" },
     };
 }

@@ -211,6 +211,11 @@ njobs() {
 # macOS deployment target: build.zig's macos_min, the shims'
 # "<arch>-native.13.0". The checks assert every Mach-O is at or below it.
 MACOS_MIN=13.0
+# zig's own floor: zig 0.17 supports macOS 15 and later (std.Target's
+# default range), and the zig binary of PyPI's ziglang 0.17.1 wheel, the
+# compilers group's zig/, says minos 15.0. It still builds R and packages
+# for MACOS_MIN; only compiling needs macOS 15 (feat-zig-017).
+ZIG_MACOS_MIN=15.0
 # A Mach-O file's minos (LC_BUILD_VERSION; LC_VERSION_MIN_MACOSX on old
 # files), empty when it has neither.
 macho_minos() {

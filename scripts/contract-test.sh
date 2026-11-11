@@ -343,6 +343,33 @@ cat > "$NM/nomake.R" <<'RCODE'
   pak::local_install(p, lib = tl, dependencies = FALSE, ask = FALSE)
   stopifnot(getExportedValue(loadNamespace("rzigpak", lib.loc = tl), "f")() == 1L)
   cat("no make: pak's install of a package with C code: OK\n")
+  # Tier 2 (zigbuild/rpkg): a package whose src/build.zig builds its zig
+  # code through R's share/zig/rpkg (rbuild), with zig build and rzig t1;
+  # those files are zig build scripts, so a zig release that changes
+  # std.Build breaks them here first (the zig 0.17 port)
+  p2 <- file.path(d, "rzigt2")
+  dir.create(file.path(p2, "src"), recursive = TRUE); dir.create(file.path(p2, "R"))
+  writeLines(c("Package: rzigt2", "Version: 0.1", "Title: Test", "Description: Test package.", "License: MIT",
+               "Author: r-zig", "Maintainer: r-zig <r-zig@example.org>"), file.path(p2, "DESCRIPTION"))
+  writeLines(c("useDynLib(rzigt2, .registration = TRUE)", "export(f)"), file.path(p2, "NAMESPACE"))
+  writeLines("f <- function() .Call(rzigt2_answer)", file.path(p2, "R", "f.R"))
+  writeLines(c('const std = @import("std");',
+               "pub fn build(b: *std.Build) void {", "    _ = b;", "}",
+               "pub fn rbuild(comptime rpkg: type, b: *std.Build, opts: rpkg.Options) std.Build.LazyPath {",
+               '    return rpkg.addLibrary(b, opts, .{ .root_source_file = b.path("answer.zig") });', "}"),
+             file.path(p2, "src", "build.zig"))
+  writeLines(c('const R = @import("R");',
+               "fn answer() callconv(.c) R.SEXP {", "    return R.Rf_ScalarInteger(42);", "}",
+               "const routines = [_]R.R_CallMethodDef{",
+               '    .{ .name = "rzigt2_answer", .fun = @ptrCast(&answer), .numArgs = 0 },',
+               "    .{ .name = null, .fun = null, .numArgs = 0 },", "};",
+               "export fn R_init_rzigt2(dll: ?*R.DllInfo) void {",
+               "    _ = R.R_registerRoutines(dll, null, &routines, null, null);",
+               "    _ = R.R_useDynamicSymbols(dll, 0);", "}"),
+             file.path(p2, "src", "answer.zig"))
+  install.packages(p2, lib = tl, repos = NULL, type = "source")
+  stopifnot(getExportedValue(loadNamespace("rzigt2", lib.loc = tl), "f")() == 42L)
+  cat("no make: a tier-2 package (src/build.zig, zigbuild/rpkg) builds and loads: OK\n")
   cat("no-make program ran to the end\n")
 RCODE
 (cd "$NM" && env -i "${nm_env[@]}" PKG_SYSREQS_LOOKUP_SYSTEM=false "$base_rscript" --vanilla nomake.R) 2>&1 | tee "$NM/nomake.out"

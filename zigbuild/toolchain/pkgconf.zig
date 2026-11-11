@@ -105,9 +105,9 @@ pub fn add(b: *std.Build, arch: std.Target.Cpu.Arch, dir: []const u8) Error!*std
         .link_libc = true,
     });
     mod.addIncludePath(gen.getDirectory());
-    mod.addIncludePath(.{ .cwd_relative = dir });
-    mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/libpkgconf", .{dir}) });
-    mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/cli", .{dir}) });
+    mod.addIncludePath(b.graph.cwdRelativePath(dir));
+    mod.addIncludePath(b.graph.cwdRelativePath(b.fmt("{s}/libpkgconf", .{dir})));
+    mod.addIncludePath(b.graph.cwdRelativePath(b.fmt("{s}/cli", .{dir})));
     // -fno-file-reproducible keeps the mapped path's `/` (once a map
     // applies, clang otherwise writes the target's `\`).
     const flags: []const []const u8 = &.{
@@ -116,7 +116,7 @@ pub fn add(b: *std.Build, arch: std.Target.Cpu.Arch, dir: []const u8) Error!*std
         "-DPKGCONFIG_IS_STATIC",                  "-Wall",             "-Wextra",                   "-fno-file-reproducible",
         b.fmt("-ffile-prefix-map={s}/=", .{dir}),
     };
-    for (sources) |s| mod.addCSourceFile(.{ .file = .{ .cwd_relative = b.fmt("{s}/{s}.c", .{ dir, s }) }, .flags = flags });
+    for (sources) |s| mod.addCSourceFile(.{ .file = b.graph.cwdRelativePath(b.fmt("{s}/{s}.c", .{ dir, s })), .flags = flags });
     mod.linkSystemLibrary("advapi32", .{});
     return b.addExecutable(.{
         .name = "pkgconf",

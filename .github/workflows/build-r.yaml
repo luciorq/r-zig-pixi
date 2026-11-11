@@ -73,7 +73,7 @@ jobs:
           path: dist
       - name: Unpack the toolchain tree
         run: pixi run -e ${{ inputs.env }} unpack-toolchain
-      # Upstream zig (feat-no-host-paths F4): PyPI's ziglang 0.16.0, the
+      # Upstream zig (feat-no-host-paths F4): PyPI's ziglang 0.17.1, the
       # ziglang.org release, sha256-pinned (scripts/fetch-zig.sh). ZIG_BIN
       # makes every step below build, compile and test with it instead of
       # the env's zig: zig-build.sh and rzig's tests (scripts/env.sh), rzig

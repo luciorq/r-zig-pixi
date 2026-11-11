@@ -154,7 +154,7 @@ fn key(arena: Allocator, real: []const u8, names: []const []const u8) !u32 {
 /// POSIX `cksum`: CRC-32 (polynomial 0x04C11DB7, unreflected) over the
 /// data, then over its length in as few bytes as it takes, low first.
 fn cksum(data: []const u8) u32 {
-    var crc = std.hash.crc.Crc32Cksum.init();
+    var crc = std.hash.crc.@"CRC-32/CKSUM".init();
     crc.update(data);
     var n = data.len;
     while (n != 0) : (n >>= 8) crc.update(&.{@as(u8, @truncate(n))});

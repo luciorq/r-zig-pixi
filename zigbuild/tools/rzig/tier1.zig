@@ -96,7 +96,7 @@ fn runJob(io: Io, job: *const Job, index: usize) Result {
     const term = child.wait(io) catch |err| return .{ .index = index, .code = 1, .err = err };
     return switch (term) {
         .exited => |c| .{ .index = index, .code = c },
-        .signal => |sig| .{ .index = index, .code = 1, .signal = if (builtin.os.tag == .windows) null else @intCast(@intFromEnum(sig)) },
+        .signal => |sig| .{ .index = index, .code = 1, .signal = if (builtin.os.tag == .windows) null else @intCast(@backingInt(sig)) },
         else => .{ .index = index, .code = 1 },
     };
 }
@@ -322,7 +322,8 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         return 1;
     };
     @setEvalBranchQuota(20_000);
-    var plan = std.zon.parse.fromSliceAlloc(pkgplan.Plan, ctx.arena, text, null, .{}) catch {
+    var diag: std.zon.parse.Diagnostics = undefined;
+    var plan = std.zon.parse.fromSlice(pkgplan.Plan, .{ .gpa = ctx.arena, .arena = ctx.arena, .source = text, .diagnostics = &diag }) catch {
         ctx.warn("cannot parse {s}", .{plan_path.?});
         return 1;
     };

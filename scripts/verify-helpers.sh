@@ -249,12 +249,12 @@ cxx_deps() {
 }
 
 # macOS: succeeds, printing the file's minos ("none" when it has none),
-# when a Mach-O file is above the MACOS_MIN floor or carries no minos at
-# all; fails when it is at or below the floor.
+# when a Mach-O file is above the floor ($2, default MACOS_MIN) or
+# carries no minos at all; fails when it is at or below the floor.
 minos_over_floor() {
   local m
   m="$(macho_minos "$1")"
-  if [ -z "$m" ] || version_gt "$m" "$MACOS_MIN"; then
+  if [ -z "$m" ] || version_gt "$m" "${2:-$MACOS_MIN}"; then
     echo "${m:-none}"
     return 0
   fi

@@ -69,7 +69,7 @@ cc <- file.path(R.home(), "bin", "toolchain", if (windows) "gcc.exe" else "zig-c
 r <- run_to(cc, "--rzig-check=fortran"); cat(r$out, sep = "\n")
 fl <- sub("^.*; flang at ", "", r$out[1L])
 zg <- sub("^.*: zig [^ ]+ at (.*); flang at .*$", "\\1", r$out[1L])
-stopifnot(r$status == 0L, startsWith(r$out[1L], "zig-cc: compilers ok: zig 0.16."),
+stopifnot(r$status == 0L, startsWith(r$out[1L], "zig-cc: compilers ok: zig 0.17."),
           grepl("; flang at ", r$out[1L], fixed = TRUE),
           same_path(shown(dirname(fl)), shown(env_bin)))
 cat("compilers: the check finds the env's zig and flang, and the env has no build tools: OK\n")

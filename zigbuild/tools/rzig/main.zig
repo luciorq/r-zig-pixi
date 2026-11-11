@@ -470,7 +470,7 @@ fn runSteps(ctx: *Ctx, blocks: []const Block, tmp: []const u8, env: ?*const std.
         };
         const code: u8 = switch (term) {
             .exited => |c| c,
-            .signal => |sig| if (builtin.os.tag == .windows) 1 else 128 +| @as(u8, @truncate(@intFromEnum(sig))),
+            .signal => |sig| if (builtin.os.tag == .windows) 1 else 128 +| @as(u8, @truncate(@backingInt(sig))),
             else => 1,
         };
         if (code != 0) return code;

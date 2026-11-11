@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Upstream zig, to build and test R with it (feat-no-host-paths F4): R
 # builds with conda-forge's zig (the env's) and with upstream zig. This
-# fetches PyPI's ziglang 0.16.0 wheel for this machine, which carries the
+# fetches PyPI's ziglang 0.17.1 wheel for this machine, which carries the
 # ziglang.org release (its zig and lib/ byte-identical to the official
 # archive's, compared 2026-10-04), checks the sha256 pinned below, unpacks
 # it once under build/zig-upstream/ and prints its zig's path, so that
@@ -21,36 +21,34 @@
 unset ZIG_BIN
 . "$(dirname "$0")/env.sh"
 
-version=0.16.0
-# The source of this zig, for the toolchain tree's SOURCES (zig/, B4):
-# ziglang.org's release tarball, which the wheels' zig is built from. One
-# pin per version, not per platform.
+version=0.17.1
 src_url=https://ziglang.org/download/$version/zig-$version.tar.xz
-src_sha=43186959edc87d5c7a1be7b7d2a25efffd22ce5807c7af99067f86f99641bfdf
-# https://pypi.org/project/ziglang/0.16.0/#files: per platform (env.sh's
-# PLAT), the wheel's directory on files.pythonhosted.org, its file name
-# and sha256.
+src_sha=1e89bf06610b769a8c77676c6c8d54b093a0db60f4891f2f91014829012f0e24
 case "$PLAT" in
   linux-64)
-    path=3e/ed/7b79023aa27ceb5d461ecf761181e7c33c57bbc1a6256a39535d1c7083d2
-    whl=ziglang-0.16.0-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl
-    sha=9fcda73f62b851dd72a54b710ad40a209896db14cfb13649e62191243556342b ;;
+    path=59/e3/2a34676370a11c36b7cd04ffb2439c1089c0530cf4b01408c77cf7f8d9c3
+    whl=ziglang-0.17.1-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl
+    sha=ea6cc5d87b033cf0aedfbc8f9549a908cae6c50ac31f1698188fa48a74524b54 ;;
   linux-aarch64)
-    path=7e/ed/d6663a5e52c504944d578b9e0bfcb7857f292803bcd09ebe0d10fe2b293d
-    whl=ziglang-0.16.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
-    sha=e27d409812b11e0fb89ed0200cf2e55b6464d43f9461553104e4a4f9a94a1fd5 ;;
+    path=91/72/bb7c4f098ba3e535fa2ebefd9f26327ba63fb0672562959255cb5dd37aff
+    whl=ziglang-0.17.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
+    sha=b7c5f02fccd40f89b999ee16a1f5ddced56e6182370f8affe494bcf8a28cf07e ;;
   osx-arm64)
-    path=cd/59/012f0c2800f7428b87bb16c5c78db7ef806efed274491998155955c02558
-    whl=ziglang-0.16.0-py3-none-macosx_12_0_arm64.whl
-    sha=b61e5413c49508d9d62e5dcea543e3af491594154d74a00ff52f84ed508260cc ;;
+    path=ea/e1/4a9a97324fcf2d292c14a2e0121ea0df86c01d0c307ea24fa35aebaccd15
+    whl=ziglang-0.17.1-py3-none-macosx_13_0_arm64.whl
+    sha=09953b6af7f64168b915180a42774f520f92d86ef6331b28e33915c7e1f0bb23 ;;
   osx-64)
-    path=75/60/f924aa24b95a1ad347e845acc7ab6b5d062ae5b0b540d494654cd40d4e0b
-    whl=ziglang-0.16.0-py3-none-macosx_12_0_x86_64.whl
-    sha=18e14f6b25678d7b7c65708c82501ee6090fe39ed5c783477d56267af1fa5629 ;;
+    path=17/f6/f4dfc8cf0e510980fda251a8edf99823b9446f5d7a2a6a24801e55e09c28
+    whl=ziglang-0.17.1-py3-none-macosx_13_0_x86_64.whl
+    sha=4e0b4b9c02b8d0d220e9948010f860b62ff11d96abb39762eca5fa2ef3f7bc97 ;;
   win-64)
-    path=a6/3c/baff40b3fc8ab4e83530246a52e8f3a5186c3606562712dfb58483b04f79
-    whl=ziglang-0.16.0-py3-none-win_amd64.whl
-    sha=089a16a4eb5a2f45151993342f8fabad24ff1a0723dc146642895c29208a3939 ;;
+    path=c8/6c/2013114fa780f0cf490cdc98bdd5bf7dce706a5dbd86e50ec4132cf7d4b1
+    whl=ziglang-0.17.1-py3-none-win_amd64.whl
+    sha=69c3dfc3aff6a297ec4017aa904782c0e450eb988982d7f675d83edce27526fb ;;
+  win-arm64)
+    path=70/34/a1d775ceaf325b08c3aca909865e057919d0fe1355e2b59081500ef230a1
+    whl=ziglang-0.17.1-py3-none-win_arm64.whl
+    sha=27a8da5f8eaa0e76ebbc7c2594130ed4646c1101ada2ce0aa86fe580c74154b9 ;;
   *)
     echo "error: no ziglang $version wheel pinned for $PLAT" >&2
     exit 1 ;;

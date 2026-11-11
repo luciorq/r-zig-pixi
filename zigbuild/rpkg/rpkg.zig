@@ -42,11 +42,12 @@ pub const Plan = struct {
 pub fn readPlan(b: *std.Build) *const Plan {
     const plan_path = b.option([]const u8, "plan", "plan.zon") orelse @panic("-Dplan=<file> is required");
     const raw = std.Io.Dir.cwd().readFileAlloc(b.graph.io, plan_path, b.allocator, .limited(16 * 1024 * 1024)) catch @panic("cannot read the plan");
-    const z = b.allocator.dupeZ(u8, raw) catch @panic("OOM");
+    const z = b.allocator.dupeSentinel(u8, raw, 0) catch @panic("OOM");
     const plan = b.allocator.create(Plan) catch @panic("OOM");
-    plan.* = std.zon.parse.fromSliceAlloc(Plan, b.allocator, z, null, .{ .ignore_unknown_fields = true }) catch @panic("cannot parse the plan");
+    var diag: std.zon.parse.Diagnostics = undefined; // the callee initializes it
+    plan.* = std.zon.parse.fromSlice(Plan, .{ .gpa = b.allocator, .arena = b.allocator, .source = z, .diagnostics = &diag, .ignore_unknown_fields = true }) catch @panic("cannot parse the plan");
     // absolute: rzig passes it so, with `/` (pkgbuild.zig)
-    plan.path = if (std.fs.path.isAbsolute(plan_path)) plan_path else b.pathResolve(&.{ b.graph.cache.cwd, plan_path });
+    plan.path = if (std.fs.path.isAbsolute(plan_path)) plan_path else b.pathResolve(&.{ std.process.currentPathAlloc(b.graph.io, b.allocator) catch @panic("cwd"), plan_path });
     plan.root = std.fs.path.dirname(plan.path) orelse ".";
     plan.jobs = b.option(usize, "jobs", "-j for rzig t1 (rzig build's -j)") orelse 0;
     return plan;
@@ -61,7 +62,7 @@ pub const Options = struct {
     /// the package's plan (readPlan), which `rzig t1` builds from
     plan: *const Plan,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     /// R_HOME/include
     r_include: []const u8,
 };

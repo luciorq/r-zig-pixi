@@ -9,7 +9,7 @@ const floors = @import("floors.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Default: " ++ @tagName(default_optimize)) orelse default_optimize;
+    const optimize = b.option(std.lang.Optimize, "optimize", "Default: " ++ @tagName(default_optimize)) orelse default_optimize;
     // the repo's build.zig passes R's own; a test build has none
     const r_version = b.option([]const u8, "r-version", "R's version, for the text that names a missing toolchain group (default: dev)") orelse "dev";
     const steps = add(b, b.path("."), target, optimize, r_version);
@@ -37,7 +37,7 @@ pub const LinkObject = struct { name: []const u8, file: std.Build.LazyPath };
 
 /// Safety checks stay on: a bounds error in an argument rewrite should stop
 /// the compile, not pass zig a wrong command line.
-pub const default_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
+pub const default_optimize: std.lang.Optimize = .safe;
 
 /// The rzig executable and its tests, from the sources in `dir`. No libc
 /// on linux: a static binary that runs on any kernel, whatever glibc the
@@ -46,14 +46,14 @@ pub const default_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
 /// copies (a wheel has no symlinks, Windows needs gcc.exe and g++.exe).
 /// `r_version` is R's: the text that names a missing toolchain group says
 /// which R it is for (groups.zig); the platform there is the target's.
-pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, r_version: []const u8) Artifacts {
+pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, r_version: []const u8) Artifacts {
     const options = b.addOptions();
     options.addOption([]const u8, "r_version", r_version);
     const mod = b.createModule(.{
         .root_source_file = dir.path(b, "main.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = optimize != .Debug,
+        .strip = optimize != .debug,
     });
     mod.addOptions("build_options", options);
     const exe = b.addExecutable(.{ .name = "rzig", .root_module = mod });
@@ -123,7 +123,7 @@ pub fn addTests(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.Resolv
     const mod = b.createModule(.{
         .root_source_file = dir.path(b, "main.zig"),
         .target = target,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     mod.addOptions("build_options", options);
     // tier1.zig's scheduler tests run this compiler and linker stand-in
@@ -132,7 +132,7 @@ pub fn addTests(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.Resolv
     const fake_cc = b.addExecutable(.{ .name = "fake-cc", .root_module = b.createModule(.{
         .root_source_file = dir.path(b, "testdata/fake_cc.zig"),
         .target = target,
-        .optimize = .ReleaseSafe,
+        .optimize = .safe,
         .strip = true,
     }) });
     mod.addAnonymousImport("fake_cc", .{ .root_source_file = fake_cc.getEmittedBin() });

@@ -11,7 +11,10 @@ const std = @import("std");
 pub const glibc: std.SemanticVersion = .{ .major = 2, .minor = 17, .patch = 0 };
 
 /// macOS deployment target: every Mach-O's LC_BUILD_VERSION minos. zig
-/// 0.16's own supported floor; ziglang, the wheel's compiler, needs 12.
+/// 0.16's own supported floor; zig 0.17 supports macOS 15 and later as a
+/// host (its own binary, ziglang 0.17.1's, says minos 15.0), and still
+/// builds for 13.0, so R and the packages it compiles run on 13 while
+/// compiling needs 15 (feat-zig-017; env.sh's ZIG_MACOS_MIN).
 pub const macos: std.SemanticVersion = .{ .major = 13, .minor = 0, .patch = 0 };
 
 /// The macOS floor as flang spells it. flang stamps its objects with the

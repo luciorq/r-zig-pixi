@@ -722,7 +722,7 @@ pub fn printCommands(ctx: *Ctx, plan: *const pkgplan.Plan, output: []const u8, w
 /// the install log), from the toolchain compilers' --version; and the zig
 /// of a tier-2 build.
 fn reportCompilers(ctx: *Ctx, plan: *const pkgplan.Plan, tier: pkgplan.Tier, zig: []const []const u8) !void {
-    var langs = std.EnumSet(pkgplan.Lang).initEmpty();
+    var langs = std.EnumSet(pkgplan.Lang).empty;
     for (plan.sources) |s| if (std.meta.stringToEnum(pkgplan.Lang, s.lang)) |l| langs.insert(l);
     const report = [_]struct { lang: pkgplan.Lang, what: []const u8, tool: []const u8 }{
         .{ .lang = .c, .what = "C", .tool = plan.cc_tool },
