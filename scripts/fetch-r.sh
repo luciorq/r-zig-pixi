@@ -10,8 +10,20 @@ fi
 mkdir -p "$BUILD_DIR"
 
 if [ ! -f "$TARBALL" ]; then
-  echo "Downloading R $R_VERSION from $CRAN_URL"
-  curl -fL --retry 3 -o "$TARBALL.part" "$CRAN_URL"
+  # CRAN, then its CDN (cloud.r-project.org): CRAN refused or reset
+  # connections for three CI legs at once (2026-11-11), and curl's --retry
+  # gives up on a reset (35) without --retry-all-errors. The checksum
+  # below is pinned, so any mirror's bytes are checked the same.
+  ok=""
+  for url in "$CRAN_URL" "$CRAN_CDN_URL"; do
+    echo "Downloading R $R_VERSION from $url"
+    if curl -fL --retry 3 --retry-all-errors --connect-timeout 30 -o "$TARBALL.part" "$url"; then
+      ok=1
+      break
+    fi
+    rm -f "$TARBALL.part"
+  done
+  [ -n "$ok" ] || { echo "error: could not download R $R_VERSION" >&2; exit 1; }
   mv "$TARBALL.part" "$TARBALL"
 fi
 

@@ -124,6 +124,7 @@ COMPILE_TREE="$BUILD_DIR/compile-tree/$FLAVOR/$TOP"
 TOOLCHAIN="$ROOT/toolchain"
 TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
 CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
+CRAN_CDN_URL="https://cloud.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
 CHECKSUM_FILE="$ROOT/scripts/checksums/R-$R_VERSION.sha256"
 
 # macOS defaults to 256 open files; zig's linker opens every object of
