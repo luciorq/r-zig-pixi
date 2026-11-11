@@ -108,11 +108,19 @@ feat-win-zig-binutils (rzig/stdio.zig, recorded in its PLAN.md), whose
 files this branch carries. Linux (gamma): build, smoke, verify-tree,
 toolchain, contract, toolchain-test, rzig-test.
 
-win-arm64 itself is CI's: the first run will show
-what x86_64 assumptions remain in the scripts' Windows branches (they
-were written on win-64). Unverified until then: that
-PROCESSOR_IDENTIFIER names the ARM CPU inside the x64-emulated MSYS2
-bash (env.sh's PLAT); if it does not, every PLAT-keyed step says win-64.
+win-arm64 itself is CI's (windows-11-arm, win-arm64.yaml). What its runs
+found (2026-11-11):
+- No zig: conda-forge's win-arm64 zig is Library/bin/aarch64-w64-mingw32-zig.exe;
+  env.sh, rzig's find_zig.zig and the toolchain shims now look for it
+  after x86_64-w64-mingw32-zig.
+- PROCESSOR_IDENTIFIER names the ARM CPU inside the x64-emulated MSYS2
+  bash: package-toolchain made R-4.6.1-win-arm64-* archives.
+- verify-toolchain's build-tools check: every MSYS2 program in the tree's
+  usr/bin exited non-zero with no output when the script's own MSYS2 bash
+  started it, while the tree's sh.exe started from cmd.exe ran (the
+  mount-table check passed). R starts them from a native process, so the
+  check now runs each through cmd.exe (run_cmd), and a failure names the
+  exit status. Unchanged on win-64 (kappa: toolchain, verify-toolchain).
 
 Checked without the runner (2026-11-10): `rattler-build build
 --render-only --with-solve --target-platform win-arm64` renders and

@@ -370,6 +370,17 @@ if [ "$OS" = windows ] && [ -d "$TREE/$tc/usr" ]; then
     basename rm cp mv mkdir cat tr sort uname chmod ln ls expr touch head
     tail wc env printf mktemp test ["
   mkdir -p "$WORK/run" "$WORK/temp"
+  # program, its arguments (one word list): run from cmd.exe with PATH =
+  # System32 in the scratch directory, as R starts them (a native parent).
+  # Not as this script's child: on windows-11-arm (CI, 2026-11-11) every
+  # MSYS2 program in TC exited non-zero with no output when this script's
+  # own MSYS2 bash (the env's m2, x86_64 under emulation) started it, while
+  # the same sh.exe started from cmd.exe (the mount-table check below)
+  # ran. A child of an MSYS2 process inherits from it; R's are not.
+  run_cmd() {
+    printf '@"%s" %s\r\n' "$(cygpath -w "$1")" "$2" > "$WORK/run/run.bat"
+    (cd "$WORK/run" && PATH="$WIN_SYSTEM32" "$WIN_SYSTEM32/cmd.exe" //c run.bat 2>&1 < /dev/null)
+  }
   bad=""
   n=0
   for x in $names; do
@@ -378,18 +389,20 @@ if [ "$OS" = windows ] && [ -d "$TREE/$tc/usr" ]; then
   usr/bin/$x.exe (missing)"
       continue
     fi
-    args=(--version)
-    [ "$x" != "[" ] || args=(1 = 1 "]")
-    if ! out="$(cd "$WORK/run" && PATH="$WIN_SYSTEM32" "$ub/$x.exe" "${args[@]}" 2>&1 < /dev/null)"; then
+    args="--version"
+    [ "$x" != "[" ] || args="1 = 1 ]"
+    rc=0
+    out="$(run_cmd "$ub/$x.exe" "$args")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
       bad="$bad
-  usr/bin/$x.exe ${args[*]}: $(printf '%s' "$out" | tr -d '\r' | head -3 | tr '\n' ' ')"
+  usr/bin/$x.exe $args: exit $rc: $(printf '%s' "$out" | tr -d '\r' | head -3 | tr '\n' ' ')"
       continue
     fi
     n=$((n + 1))
   done
   want="$(awk '{ sub(/\r$/, "") } $1 == "package:" { p = $2 } p == "m2-make" && $1 == "version:" && v == "" { v = $2 } END { print v }' "$TREE/$tc/usr/SOURCES")"
   want="${want%.*}"
-  got="$(cd "$WORK/run" && PATH="$WIN_SYSTEM32" "$ub/make.exe" --version 2>&1 | tr -d '\r' | sed -n '1s/^GNU Make //p')" || true
+  got="$(run_cmd "$ub/make.exe" --version | tr -d '\r' | sed -n '1s/^GNU Make //p')" || true
   [ -n "$want" ] && [ "$got" = "$want" ] || bad="$bad
   usr/bin/make.exe says GNU Make '$got', SOURCES records m2-make '${want:-(none)}' (less MSYS's release)"
   fstab="$TREE/$tc/etc/fstab"
