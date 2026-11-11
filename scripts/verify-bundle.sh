@@ -98,8 +98,9 @@
 #      Rprofile put it first; PHASE7 open point I): rzig's check mode
 #      under R CMD names its make and sh, Sys.which("make") in a session
 #      is its make.exe, every
-#      tool Makeconf.win names is the group's binutils or rzig (B24,
-#      B43), R CMD check's DLL check runs the group's objdump, a tools.mk
+#      tool Makeconf.win names is rzig (B43; its binutils names since
+#      feat-win-zig-binutils), R CMD check's DLL check runs rzig's
+#      objdump, a tools.mk
 #      runs each of the binutils (C10, C11), CMake's ar and ranlib beside
 #      CC are rzig, and the OpenMP C and Fortran packages (through R CMD
 #      SHLIB, make by R_ZIG_PKG_BUILDER=make, and as packages through rzig
@@ -2134,8 +2135,8 @@ echo "== scenario 3: base + compilers + build-tools"
 # builds through rzig build (patch 0013), btLib (a static library through
 # $(AR) and $(RANLIB), mkpkg's `lib`: a Makevars rule) through the group's
 # make, and on Windows btRc, whose OBJECTS hold a .rc file compiled by
-# Makeconf's %.o: %.rc rule ($(RESCOMP), the group's windres.exe with
-# rzig's gcc.exe as its preprocessor; B24), through make too; each
+# Makeconf's %.o: %.rc rule ($(RESCOMP), rzig's windres.exe, zig rc),
+# through make too; each
 # asserted from its kept install log (keep_outputs, RZIG_TRACE=1). A
 # repository, not repos = NULL: install.packages installs local paths one
 # at a time and never reads Ncpus, while from a repository Ncpus = 2 has it
@@ -2264,7 +2265,7 @@ else
   # Windows. sh, make and the rest: the group's usr/bin (phase 7), which
   # R CMD (Rcmd_environ) and an R session (base's Rprofile, patch 0014)
   # put first on PATH: PATH here is bin\x64 and System32 alone, so no
-  # tool of the env's (its MSYS, binutils, zig, pkg-config) can stand in
+  # tool of the env's (its MSYS, zig, pkg-config) can stand in
   # for the group's; zig is the pass's (TC/zig's, or ZIG_BIN's in the
   # build pass).
   usr_bin="$TC/usr/bin"
@@ -2275,13 +2276,13 @@ else
   mk_m="$(cygpath -m "$mk")"
   tc_m="$(cygpath -m -l "$TC")"
   lower() { tr '[:upper:]' '[:lower:]'; }
-  # Whether rzig's check line ("make at <path>; sh at <path>; binutils at
-  # <dir>") names each tool where it should: bt_names <line> <name>=<path>...
+  # Whether rzig's check line ("make at <path>; sh at <path>") names each
+  # tool where it should: bt_names <line> <name>=<path>...
   # rzig prints a tool found on PATH in the form R put on PATH, with 8.3
   # short names (RUNNER~1) and .exe, and one beside it in the long form,
   # so a tool compares by its directory (same_dir: long form, case
-  # ignored) and its file name, with or without .exe; a directory
-  # (binutils) by same_dir alone. Prints what does not match.
+  # ignored) and its file name, with or without .exe; a directory by
+  # same_dir alone. Prints what does not match.
   bt_names() {
     local line="$1" item name want got gb wb; shift
     for item in "$@"; do
@@ -2321,7 +2322,7 @@ else
     while IFS= read -r p; do
       case "$p" in */) continue ;; esac   # BINPREF itself: the directory
       u="$(cygpath -u "$p")"
-      case "$u" in */binutils/objdump) u="$u.exe" ;; esac
+      case "$u" in */toolchain/objdump) u="$u.exe" ;; esac
       if [ -f "$u" ]; then
         case " $tools " in *" ${p##*/toolchain/} "*) ;; *) tools="$tools ${p##*/toolchain/}" ;; esac
       elif [ "$f" = vars.out ]; then
@@ -2338,10 +2339,10 @@ else
   echo "== Makeconf's tools are files:$tools (and the LTO block's gcc-nm, which does not ship: B43-2)"
 
   # R CMD config AR, NM and OBJDUMP (R CMD check reads OBJDUMP through it)
-  # name those files: rzig's zig-ar.exe, the group's nm.exe and objdump,
-  # which is objdump.exe as R CMD check finds it: R CMD config's value
-  # with .exe added (sotools.R, read_symbols_from_dll).
-  for v in AR:zig-ar.exe NM:binutils/nm.exe OBJDUMP:binutils/objdump; do
+  # name those files: rzig's zig-ar.exe, nm.exe and objdump, which is
+  # objdump.exe as R CMD check finds it: R CMD config's value with .exe
+  # added (sotools.R, read_symbols_from_dll).
+  for v in AR:zig-ar.exe NM:nm.exe OBJDUMP:objdump; do
     val="$(cd "$VERIFY_DIR" && env -i "${base_env[@]}" PATH="$bt_path" "$R_EXE" CMD config "${v%%:*}" | tr -d '\r' | sed 's/[[:space:]]*$//')" ||
       { echo "error: R CMD config ${v%%:*} failed" >&2; exit 1; }
     ext=""; [ "${v%%:*}" != OBJDUMP ] || ext=.exe
@@ -2351,17 +2352,17 @@ else
       exit 1
     fi
   done
-  echo "== R CMD config AR, NM, OBJDUMP: R_HOME/bin/toolchain/{zig-ar.exe,binutils/nm.exe,binutils/objdump}"
+  echo "== R CMD config AR, NM, OBJDUMP: R_HOME/bin/toolchain/{zig-ar.exe,nm.exe,objdump}"
 
   # R CMD check's compiled-code check reads a DLL's imports as sotools.R
   # does: tools:::read_symbols_from_dll runs R CMD config OBJDUMP when
   # its .exe is a file, else objdump.exe from PATH, which has none here.
-  # It must take the group's and read R.dll's imports with it.
+  # It must take rzig's and read R.dll's imports with it.
   cat > "$VERIFY_DIR/sotools.R" <<'RCODE'
 s <- tools:::read_symbols_from_dll(file.path(R.home("bin"), "R.dll"))
 od <- get0("DLL_nm", envir = tools:::read_symbols_from_dll_state, inherits = FALSE)
 long <- function(p) tolower(normalizePath(p, "/", mustWork = FALSE))
-want <- long(file.path(R.home(), "bin", "toolchain", "binutils", "objdump.exe"))
+want <- long(file.path(R.home(), "bin", "toolchain", "objdump.exe"))
 if (is.null(od) || !length(s) || long(paste0(od, ".exe")) != want)
     stop("read_symbols_from_dll read ", length(s), " symbols of R.dll with '", format(od), "', not ", want)
 cat("   R CMD check's objdump:", od, "-", length(s), "symbols R.dll imports\n")
@@ -2369,33 +2370,36 @@ RCODE
   (cd "$VERIFY_DIR" && env -i "${base_env[@]}" PATH="$bt_path" "$RSCRIPT" --vanilla sotools.R) ||
     { echo "error: R CMD check's DLL check (tools:::read_symbols_from_dll) does not run R CMD config OBJDUMP" >&2; exit 1; }
 
-  # The binutils load with nothing beside them but the system: PATH is
-  # System32 alone, and nm.exe finds its DLLs (zstd.dll, vcruntime140.dll)
-  # in its own directory (verify-toolchain.sh checks the closure).
-  nm_out="$(env -i "${base_env[@]}" PATH="$sys32" "$TC/binutils/nm.exe" --version | tr -d '\r')" ||
-    { echo "error: binutils/nm.exe --version failed with PATH = System32" >&2; exit 1; }
-  case "${nm_out%%$'\n'*}" in
-    "GNU nm"*) echo "== binutils/nm.exe runs with PATH = System32: ${nm_out%%$'\n'*}" ;;
-    *) echo "error: binutils/nm.exe --version says '${nm_out%%$'\n'*}'" >&2; exit 1 ;;
-  esac
+  # The binutils are rzig: each name runs with PATH = System32 alone and
+  # says so (binutils.zig).
+  for t in nm objdump strip dlltool windres as; do
+    t_out="$(env -i "${base_env[@]}" PATH="$sys32" "$TC/$t.exe" --version | tr -d '\r')" ||
+      { echo "error: $t.exe --version failed with PATH = System32" >&2; exit 1; }
+    case "${t_out%%$'\n'*}" in
+      "GNU-compatible $t (rzig"*) ;;
+      *) echo "error: $t.exe --version says '${t_out%%$'\n'*}', not rzig's" >&2; exit 1 ;;
+    esac
+  done
+  echo "== the binutils are rzig and run with PATH = System32: ${t_out%%$'\n'*} (nm, objdump, strip, dlltool, windres, as)"
 
-  # rzig's check mode under R CMD names what R runs: make and sh from PATH,
-  # and the binutils beside rzig (B24). The full path (C5): R CMD runs a
+  # rzig's check mode under R CMD names what R runs: make and sh from
+  # PATH. The full path (C5): R CMD runs a
   # command it does not know from PATH, where R_HOME/bin/toolchain is
   # not. It goes into cmd.exe's line unquoted (rcmdfn.c), hence the short
   # form, which has no spaces.
   out="$(cd "$VERIFY_DIR" && env -i "${base_env[@]}" PATH="$bt_path" \
     "$R_EXE" CMD "$(cygpath -w -s "$cc")" --rzig-check=build-tools | tr -d '\r')" ||
     { echo "error: R CMD gcc.exe --rzig-check=build-tools failed with the build-tools group extracted" >&2; exit 1; }
-  bad="$(bt_names "$out" make="$tc_m/usr/bin/make" sh="$tc_m/usr/bin/sh" binutils="$tc_m/binutils")" ||
+  bad="$(bt_names "$out" make="$tc_m/usr/bin/make" sh="$tc_m/usr/bin/sh")" ||
     { echo "error: R CMD gcc.exe --rzig-check=build-tools says '$out': $bad" >&2; exit 1; }
   echo "   $out"
 
   # Each of Makeconf.win's binutils, as R's makefiles run them (C10, C11):
   # a tools.mk read after Makeconf by `R CMD make`. $(NM) on an object
   # prints its symbol (a missing nm would pass silently in a package's
-  # link: winshlib.mk pipes it into sed); Makeconf's lib%.dll.a rule runs
-  # $(DLLTOOL) with its --as; its %.a rule $(AR) crs, then $(RANLIB) and
+  # link: winshlib.mk pipes it into sed), and on the import library;
+  # Makeconf's lib%.dll.a rule runs $(DLLTOOL) (zig dlltool); its %.a
+  # rule $(AR) crs, then $(RANLIB) and
   # $(STRIP_STATIC_LIB) on the archive; its %.o: %.rc rule $(RESCOMP) -i
   # r.rc -o r.o; $(OBJDUMP) -p on R.dll. (R CMD INSTALL --strip reads
   # R_STRIP_SHARED_LIB, not Makeconf's STRIP_SHARED_LIB, and R runs
@@ -2417,8 +2421,8 @@ RCODE
     } > "$tw/tools.mk"
     (cd "$tw" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$bt_path" \
       "$R_EXE" CMD make -f "$mk_m" -f tools.mk all) > "$tw/log" 2>&1 ||
-      { cat "$tw/log" >&2; echo "error: Makeconf's binutils (tools.mk: \$(NM), \$(DLLTOOL) --as, \$(AR), \$(RANLIB), \$(STRIP_STATIC_LIB), \$(RESCOMP), \$(OBJDUMP)) did not all run" >&2; exit 1; }
-    echo "== Makeconf's binutils run as R's makefiles run them: \$(NM) finds a symbol, \$(DLLTOOL) --as makes an import library, \$(AR) crs, \$(RANLIB), \$(STRIP_STATIC_LIB), \$(RESCOMP) -i r.rc, \$(OBJDUMP) -p"
+      { cat "$tw/log" >&2; echo "error: Makeconf's binutils (tools.mk: \$(NM), \$(DLLTOOL), \$(AR), \$(RANLIB), \$(STRIP_STATIC_LIB), \$(RESCOMP), \$(OBJDUMP)) did not all run" >&2; exit 1; }
+    echo "== Makeconf's binutils run as R's makefiles run them: \$(NM) finds a symbol, \$(DLLTOOL) makes an import library \$(NM) reads, \$(AR) crs, \$(RANLIB), \$(STRIP_STATIC_LIB), \$(RESCOMP) -i r.rc, \$(OBJDUMP) -p"
 
     # CMake's archiver (CMakeFindBinUtils): for a GNU-like compiler it
     # looks for ar and ranlib in the C compiler's directory before PATH,
@@ -2429,7 +2433,7 @@ RCODE
     (cd "$tw" && cmp -s "$TC/ar.exe" "$cc" && cmp -s "$TC/ranlib.exe" "$cc" &&
       env -i "${base_env[@]}" "${zig_env[@]}" PATH="$sys32" "$TC/ar.exe" qc libcm.a t.o &&
       env -i "${base_env[@]}" "${zig_env[@]}" PATH="$sys32" "$TC/ranlib.exe" libcm.a &&
-      "$TC/binutils/nm.exe" libcm.a > cm.out && grep -q " T tools_sym" cm.out) > "$tw/cmake-ar.log" 2>&1 ||
+      "$TC/nm.exe" libcm.a > cm.out && grep -q " T tools_sym" cm.out) > "$tw/cmake-ar.log" 2>&1 ||
       { cat "$tw/cmake-ar.log" >&2; echo "error: CMake's archiver: rzig's ar.exe and ranlib.exe beside gcc.exe did not make a static library with PATH = System32" >&2; exit 1; }
     echo "== CMake's archiver beside CC: ar.exe and ranlib.exe are rzig, and make a static library with PATH = System32"
   fi
@@ -2553,7 +2557,7 @@ RCODE
     (cd "$bt" && env -i "${base_env[@]}" PATH="$R_BINDIR:$sys32" "$RSCRIPT" --vanilla bt-load.R) ||
       { echo "error: the packages ($bt_pkgs) did not load with PATH = bin\\x64 + System32" >&2; exit 1; }
     rc_dll="$(find "$bt/lib/btRc/libs" -name btRc.dll | head -1)"
-    "$TC/binutils/objdump.exe" -h "$rc_dll" | grep -q 'rsrc' ||
+    "$TC/objdump.exe" -h "$rc_dll" | grep -q 'rsrc' ||
       { echo "error: btRc.dll has no .rsrc section: its .rc file did not reach the link" >&2; exit 1; }
     echo "== packages built under the default builder, install.packages with Ncpus = 2: btA through rzig build, btLib and btRc through make (a static library through rzig's zig-ar.exe and zig-ranlib.exe; a .rc file through \$(RESCOMP), its resources in btRc.dll), each from its log; load with PATH = bin\\x64 + System32"
 
@@ -2775,13 +2779,13 @@ RCODE
 
     # R CMD check's nm (PHASE7 open point H a): sotools.R reads an object's
     # symbols with UserNM, else an nm on PATH, which has none: under R
-    # CMD, Rcmd_environ's UserNM is the group's binutils/nm.exe, and it
+    # CMD, Rcmd_environ's UserNM is rzig's nm.exe, and it
     # reads tools.mk's t.o; one set by the user is kept.
     cat > "$tw/nm.R" <<'RCODE'
 want <- commandArgs(trailingOnly = TRUE)[1L]
 nm <- Sys.getenv("UserNM")
 if (want == "group") {
-    want <- file.path(R.home(), "bin", "toolchain", "binutils", "nm.exe")
+    want <- file.path(R.home(), "bin", "toolchain", "nm.exe")
     if (tolower(normalizePath(nm, "/", mustWork = FALSE)) != tolower(normalizePath(want, "/")))
         stop("UserNM is '", nm, "', not ", want)
     s <- tools:::read_symbols_from_object_file("t.o")
@@ -2790,10 +2794,10 @@ if (want == "group") {
 } else if (nm != want) stop("UserNM is '", nm, "', not the user's ", want)
 RCODE
     (cd "$tw" && env -i "${base_env[@]}" PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla nm.R group) ||
-      { echo "error: under R CMD, UserNM is not the group's binutils/nm.exe, or R CMD check's symbol table of an object is not read with it" >&2; exit 1; }
+      { echo "error: under R CMD, UserNM is not rzig's nm.exe, or R CMD check's symbol table of an object is not read with it" >&2; exit 1; }
     (cd "$tw" && env -i "${base_env[@]}" UserNM='C:\r-zig-user\nm.exe' PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla nm.R 'C:\r-zig-user\nm.exe') ||
       { echo "error: under R CMD, a UserNM the user set is not kept (Rcmd_environ's \${UserNM-...})" >&2; exit 1; }
-    echo "== R CMD check's nm: UserNM is binutils/nm.exe under R CMD (a user's is kept), and tools:::read_symbols_from_object_file reads t.o with it"
+    echo "== R CMD check's nm: UserNM is rzig's nm.exe under R CMD (a user's is kept), and tools:::read_symbols_from_object_file reads t.o with it"
 
     # The clash with Git for Windows' MSYS (PHASE7 open point M a,
     # amendment Am4), where it is installed (every windows-latest image):
@@ -2874,7 +2878,7 @@ fi
 # leaves its marker, and the compile then fails with rzig's no-zig line.
 # Here, not with the base alone: the install runs R CMD config before
 # configure (for CC and the other variables), and R CMD config needs the
-# build tools (patch 0010; on Windows the binutils too). PATH: unix
+# build tools (patch 0010; on Windows make and sh). PATH: unix
 # /usr/bin:/bin, the group's make first (etc/Renviron); Windows as for the
 # builds above. A zig of the host's own (scenario 1) would let the compile
 # through: then this is skipped with a note. The compilers group brings

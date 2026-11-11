@@ -44,8 +44,8 @@ pixi add r-zig-toolchain
   Rcpp's `sourceCpp()`, inline, TMB, knitr's engines) with no make: R
   builds both with `rzig build`. Once pkgbuild or pak is installed,
   their compiler check passes too.
-- `r-zig-build-tools` (make; on Windows also sh, the MSYS2 tools,
-  pkg-config and the MinGW binutils) is for configure scripts, Makevars
+- `r-zig-build-tools` (make; on Windows also sh, the MSYS2 tools and
+  pkg-config) is for configure scripts, Makevars
   rules, Objective-C and `R CMD config` (rstan on macOS calls it).
   Installing pkgbuild, pak, devtools or the packages cpp11's
   `cpp_source()` requires from source needs it once: processx has
@@ -149,7 +149,7 @@ pixi run build         # zig build, no autoconf/make/gnuwin32
 pixi run verify-tree   # static checks of the installed tree (Makeconf, rpaths, floors)
 pixi run smoke         # quick sanity check
 pixi run check         # R's own regression suite
-pixi run toolchain     # the toolchain tree: the groups' files (zig, flang, OpenMP headers, make; Windows binutils)
+pixi run toolchain     # the toolchain tree: the groups' files (zig, flang, OpenMP headers, make; Windows sh, make, pkg-config)
 pixi run contract      # CRAN packages compiled with the tree and the groups (Rcpp, data.table, minqa)
 ```
 
@@ -290,10 +290,13 @@ beside it:
   on Windows sh, make and the tools R's makefiles and `configure.win`
   scripts run (MSYS2's, from conda-forge's m2 packages: bash, make,
   coreutils, sed, grep, gawk, which, findutils, patch) and pkg-config
-  (conda-forge's native build), with the DLLs they load, in `usr/bin`,
-  MSYS's mount table in `etc/fstab`, and the MinGW binutils R's Makeconf
-  names (nm, dlltool, as, strip, windres, objdump). R puts `usr/bin` first on
-  `PATH`, in R and under `R CMD`.
+  (pkgconf, built from source), with the DLLs they load, in `usr/bin`,
+  and MSYS's mount table in `etc/fstab`. R puts `usr/bin` first on
+  `PATH`, in R and under `R CMD`. The binutils R's Makeconf names on
+  Windows (nm, objdump, strip, dlltool, windres, as) come with R itself,
+  in `R_HOME/bin/toolchain` beside gcc.exe: they are rzig, which reads
+  and writes COFF itself and runs `zig dlltool`, `zig rc` and `zig cc`,
+  on x86_64 and arm64 alike.
 
 Every archive has the same top directory, `R-<ver>-zig/`, and a group
 archive's files sit under its `R_HOME/bin/toolchain/`, each directory
@@ -309,7 +312,7 @@ tar -xzf R-4.6.1-slim-linux-64.tar.gz           # R-4.6.1-zig/
 tar -xJf R-4.6.1-linux-64-compilers.tar.xz      # + R-4.6.1-zig/lib/R/bin/toolchain/zig/, flang/ and openmp/
 tar -xzf R-4.6.1-linux-64-build-tools.tar.gz    # + R-4.6.1-zig/lib/R/bin/toolchain/usr/bin/make
 R-4.6.1-zig/bin/Rscript -e 'R.version.string'
-# Windows: R-4.6.1-win-64-build-tools.zip + R-4.6.1-zig\Library\lib\R\bin\toolchain\usr\bin\ (sh, make, ...), etc\ and binutils\
+# Windows: R-4.6.1-win-64-build-tools.zip + R-4.6.1-zig\Library\lib\R\bin\toolchain\usr\bin\ (sh, make, ...) and etc\
 ```
 
 On macOS, `tar -xf` extracts all three, the `.tar.xz` too. On Windows,

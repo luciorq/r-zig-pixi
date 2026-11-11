@@ -215,9 +215,8 @@ cat > "$LIB/contract.R" <<'RCODE'
             sub(".exe$", "", basename(cc1)) %in% c("zig-cc", "gcc"),
             basename(dirname(fc1)) == "toolchain",
             sub(".exe$", "", basename(fc1)) == "zig-fc")
-  # Windows: NM names a file that exists (PHASE3 C11). Makeconf names it
-  # under R_HOME/bin/toolchain/binutils/, the build-tools group directory
-  # (feat-standalone-toolchain B24), which the compile tree has. A missing
+  # Windows: NM names a file that exists (PHASE3 C11): rzig's nm.exe beside
+  # gcc.exe in R_HOME/bin/toolchain (binutils.zig). A missing
   # nm.exe fails no package above: winshlib.mk pipes $(NM) into sed for a
   # DLL linked without a .def file, and the linker then exports everything.
   if (.Platform$OS.type == "windows") {

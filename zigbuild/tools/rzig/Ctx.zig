@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const mem = std.mem;
 const Io = std.Io;
 const Allocator = mem.Allocator;
+const stdio = @import("stdio.zig");
 
 pub const Os = enum {
     linux,
@@ -103,7 +104,7 @@ pub fn warn(ctx: *const Ctx, comptime f: []const u8, args: anytype) void {
         std.debug.print("{s}: " ++ f ++ "\n", .{ctx.name} ++ args);
         return;
     };
-    Io.File.stderr().writeStreamingAll(ctx.io, text) catch {};
+    stdio.writeAll(ctx.io, .stderr(), text) catch {};
 }
 
 /// A command line on stdout before the command runs, as make echoes its
@@ -115,7 +116,7 @@ pub fn echo(ctx: *const Ctx, line: []const u8) void {
         return;
     }
     const text = ctx.fmt("{s}\n", .{line}) catch return;
-    Io.File.stdout().writeStreamingAll(ctx.io, text) catch {};
+    stdio.writeAll(ctx.io, .stdout(), text) catch {};
 }
 
 /// What an applet runs: zig, with these arguments after its own path

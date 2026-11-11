@@ -202,6 +202,10 @@ build:
   # platform (feat-zig-017): conda-forge's zig 0.17.0, flang-pixi's zig
   # 0.17 builds (flang-zig 7, lld-zig 6, flang-rt-zig 11); r-zig-slim's
   # run_constraints and r-zig-compilers' depends move to zig 0.17.*.
+  # win-64's binutils are rzig's (nm, objdump, strip, dlltool, windres,
+  # as beside gcc.exe in R_HOME/bin/toolchain, owned by r-zig-slim), on
+  # zig 0.17's dlltool and rc: binutils_impl_win-64 and binutils/ are
+  # gone (feat-win-zig-binutils).
   number: 11
 
 outputs:
@@ -211,9 +215,10 @@ outputs:
   # which Makeconf points at, and share/zig/rpkg), as the standalone base
   # archive does (B19). Each group package owns, or depends on,
   # third-party software only: r-zig-compilers depends on zig, flang and
-  # llvm-openmp; r-zig-build-tools on make (win-64: the MSYS2 tools and
-  # pkg-config), and on win-64 owns R_HOME/bin/toolchain/binutils/, the
-  # MinGW binutils Makeconf.win names (B41). r-zig-toolchain is the
+  # llvm-openmp; r-zig-build-tools on make (win-64: the MSYS2 tools), and
+  # on win-64 owns R_HOME/bin/toolchain/usr/ (pkgconf, built from source).
+  # Windows' binutils are rzig's own names, r-zig-slim's
+  # (feat-win-zig-binutils). r-zig-toolchain is the
   # metapackage of both groups. Without a group, an install that needs it
   # stops with rzig's text naming that package (the preflight, patch
   # 0009).
@@ -237,9 +242,6 @@ outputs:
         - flang-zig ==23.1.1 *_7
         - lld-zig ==23.1.1 *_6
         - flang-rt-zig ==23.1.1 *_11
-        - if: win
-          then:
-            - binutils_impl_win-64  # x86_64-w64-mingw32-nm/-dlltool for build.zig's import-stub steps
         - make >=4.4
         - pkg-config
         - if: linux
@@ -295,18 +297,6 @@ outputs:
         # libflang_rt.runtime.a on every platform, see build.zig's
         # linkFortranRt), must be in host too; pinned as in build
         - flang-rt-zig ==23.1.1 *_11
-        # The toolchain build (zigbuild/toolchain/build.zig, run by build.sh
-        # into this prefix) copies its nm, dlltool, as, strip, windres and
-        # objdump from $PREFIX/Library/bin into R_HOME/bin/toolchain/
-        # binutils/, where Makeconf.win names them, with SOURCES and
-        # LICENSES/ from its conda-meta record and package (feat-standalone-
-        # toolchain B24, B41), so it must be in *host* too (gfortran used
-        # to drag it in here; conda-package win-64 failed with "unable to
-        # update file from ...x86_64-w64-mingw32-windres.exe: FileNotFound"
-        # the moment it left).
-        - if: win
-          then:
-            - binutils_impl_win-64
         - zlib
         - bzip2
         - xz
@@ -365,7 +355,7 @@ outputs:
         # libR — the full runtime closure, not just pixi.toml's direct deps.
         # zstd on every OS (feat-standalone-toolchain E2, widened from
         # win-64 by phase 4's survey): libR.so, libR.dylib and R.dll link
-        # it (HAVE_ZSTD in every config), and win-64's MinGW binutils too
+        # it (HAVE_ZSTD in every config)
         - zstd
         - if: linux
           then:
@@ -401,9 +391,11 @@ outputs:
     build:
       # everything but the groups' directories under R_HOME/bin/toolchain
       # (feat-standalone-toolchain B20, B28): rzig's names and its link
-      # object stay here. Of these, the conda build makes only win-64's
-      # binutils/ and usr/ (pkgconf), which r-zig-build-tools owns; etc/ is
-      # the standalone tree's only on win-64 (PHASE7 Cr5)
+      # object stay here (win-64: with the binutils, rzig's names too). Of
+      # these, the conda build makes only win-64's usr/ (pkgconf), which
+      # r-zig-build-tools owns; etc/ is the standalone tree's only on
+      # win-64 (PHASE7 Cr5); binutils/ is gone (feat-win-zig-binutils) and
+      # stays excluded so no old tree's copy can ride along
       files:
         exclude:
           - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
@@ -546,6 +538,13 @@ outputs:
                 then:
                   - Library/lib/R/bin/toolchain/rzig.exe
                   - Library/lib/R/bin/toolchain/gcc.exe
+                  # the binutils, rzig's names (feat-win-zig-binutils)
+                  - Library/lib/R/bin/toolchain/nm.exe
+                  - Library/lib/R/bin/toolchain/objdump.exe
+                  - Library/lib/R/bin/toolchain/strip.exe
+                  - Library/lib/R/bin/toolchain/dlltool.exe
+                  - Library/lib/R/bin/toolchain/windres.exe
+                  - Library/lib/R/bin/toolchain/as.exe
                   - Library/lib/R/bin/toolchain/cfguard.o
                   - Library/lib/R/share/zig/rpkg/build_t2.zig
                 else:
@@ -640,17 +639,14 @@ outputs:
       from: r-zig-build
       run_exports: false
     build:
-      # win-64: conda-forge's MinGW binutils, copied by the toolchain build
-      # with SOURCES and LICENSES/ (B24, B41; Makeconf.win names them by
-      # path under R_HOME), and usr/bin's pkgconf.exe and pkg-config.exe,
-      # which it builds from source (zigbuild/toolchain/pkgconf.zig), with
+      # win-64: usr/bin's pkgconf.exe and pkg-config.exe, which the
+      # toolchain build compiles from source (zigbuild/toolchain/pkgconf.zig), with
       # usr/SOURCES and usr/LICENSES/pkgconf/. R puts usr/bin first on
       # PATH, before the env's. unix: nothing (no branch matches: an empty
       # package)
       files:
         - if: win
           then:
-            - Library/lib/R/bin/toolchain/binutils/**
             - Library/lib/R/bin/toolchain/usr/**
     requirements:
       run:
@@ -704,8 +700,6 @@ outputs:
             # a configure script that patches its sources (hdf5r's unix
             # configure; feat-win-link-fixes item 4)
             - m2-patch
-            # E2: the six binutils import zstd.dll
-            - zstd
     tests:
       - package_contents:
           files:
@@ -715,14 +709,6 @@ outputs:
                   # one entry per tool: an `exists` glob passes when it
                   # matches one file, so a {a,b} list would not catch a
                   # missing tool
-                  - Library/lib/R/bin/toolchain/binutils/nm.exe
-                  - Library/lib/R/bin/toolchain/binutils/dlltool.exe
-                  - Library/lib/R/bin/toolchain/binutils/as.exe
-                  - Library/lib/R/bin/toolchain/binutils/strip.exe
-                  - Library/lib/R/bin/toolchain/binutils/windres.exe
-                  - Library/lib/R/bin/toolchain/binutils/objdump.exe
-                  - Library/lib/R/bin/toolchain/binutils/SOURCES
-                  - Library/lib/R/bin/toolchain/binutils/LICENSES/binutils_impl_win-64/**
                   - Library/lib/R/bin/toolchain/usr/bin/pkgconf.exe
                   - Library/lib/R/bin/toolchain/usr/bin/pkg-config.exe
                   - Library/lib/R/bin/toolchain/usr/SOURCES
@@ -731,6 +717,7 @@ outputs:
             not_exists:
               - lib/R/**
               - Library/lib/R/bin/toolchain/{gcc,rzig}.exe
+              - Library/lib/R/bin/toolchain/binutils/**
               - Library/lib/R/etc/**
       - script:
           content:
@@ -746,11 +733,10 @@ outputs:
           recipe:
             - test-build-tools.R
     about:
-      summary: The r-zig build tools for r-zig-slim (make; on Windows also sh, the MSYS2 tools, pkg-config and the MinGW binutils)
-      # win-64 holds GNU binutils' copies (PHASE4 open point E a) and
-      # pkgconf (ISC), with the mingw-w64 CRT startup zig links into it
-      # (ZPL-2.1); unix holds no file
-      license: ${{ "GPL-3.0-or-later AND ISC AND ZPL-2.1" if win else "GPL-2.0-only OR GPL-3.0-only" }}
+      summary: The r-zig build tools for r-zig-slim (make; on Windows also sh, the MSYS2 tools and pkg-config)
+      # win-64 holds pkgconf (ISC), with the mingw-w64 CRT startup zig
+      # links into it (ZPL-2.1); unix holds no file
+      license: ${{ "ISC AND ZPL-2.1" if win else "GPL-2.0-only OR GPL-3.0-only" }}
 
   - package:
       name: r-zig-toolchain
@@ -791,6 +777,6 @@ outputs:
 about:
   homepage: https://www.r-project.org
   # R's own (PHASE4 open point E a), as the r-zig wheel says; win-64
-  # r-zig-build-tools states its binutils' own
+  # r-zig-build-tools states its pkgconf's own
   license: GPL-2.0-only OR GPL-3.0-only
   summary: R built with the zig toolchain (headless slim profile)

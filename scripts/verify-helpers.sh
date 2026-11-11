@@ -38,13 +38,15 @@ tree_files() {
 # gcc.exe and g++.exe (CC, CXX), zig-fc.exe (FC), zig-ar.exe and
 # zig-ranlib.exe (AR, RANLIB) and the LTO block's gcc-ar.exe and
 # gcc-ranlib.exe (B43), and ar.exe and ranlib.exe (what CMake finds
-# beside CC); no extensionless zig-cc or zig-cxx, since the compile
+# beside CC), and the binutils Makeconf, Rcmd_environ and CMake run
+# (nm.exe, objdump.exe, strip.exe, dlltool.exe, windres.exe, as.exe:
+# binutils.zig, feat-win-zig-binutils); no extensionless zig-cc or zig-cxx, since the compile
 # preflight and R CMD config run gcc.exe's check mode (B26 a). rzig /
 # rzig.exe: the name install.R's hook runs `rzig build` and `rzig def`
 # by (patch 0013; feat-zig-pkg-build PLAN.md).
 rzig_names() {
   if [ "$OS" = windows ]; then
-    echo "gcc.exe g++.exe zig-fc.exe zig-ar.exe zig-ranlib.exe gcc-ar.exe gcc-ranlib.exe ar.exe ranlib.exe rzig.exe"
+    echo "gcc.exe g++.exe zig-fc.exe zig-ar.exe zig-ranlib.exe gcc-ar.exe gcc-ranlib.exe ar.exe ranlib.exe nm.exe objdump.exe strip.exe dlltool.exe windres.exe as.exe rzig.exe"
   else
     echo "zig-cc zig-cxx zig-fc zig-ar zig-ranlib rzig"
   fi

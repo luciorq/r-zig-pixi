@@ -74,6 +74,7 @@ const builtin = @import("builtin");
 const mem = std.mem;
 const Io = std.Io;
 const Ctx = @import("Ctx.zig");
+const stdio = @import("stdio.zig");
 const pkgplan = @import("pkgplan.zig");
 const find_zig = @import("find_zig.zig");
 const groups = @import("groups.zig");
@@ -394,7 +395,7 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     if (args.flat) plan.libs_dir = "";
     if (args.plan_only) {
         var buf: [4096]u8 = undefined;
-        var w = Io.File.stdout().writerStreaming(ctx.io, &buf);
+        var w: stdio.Writer = .init(ctx.io, .stdout(), &buf);
         try pkgplan.writeZon(&plan, &w.interface);
         try w.interface.flush();
         return 0;
@@ -586,7 +587,7 @@ fn runShlib(ctx: *Ctx, args: Args) !u8 {
     const r_home = canonical(ctx, r_home_in) catch return 2;
     const cwd = canonical(ctx, ".") catch return 2;
     var buf: [4096]u8 = undefined;
-    var w = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    var w: stdio.Writer = .init(ctx.io, .stdout(), &buf);
     const code = try shlibIn(ctx, args, r_home, cwd, &w.interface);
     try w.interface.flush();
     return code;
@@ -848,7 +849,7 @@ fn isSet(ctx: *const Ctx, name: []const u8) bool {
 
 fn stdoutPrint(ctx: *Ctx, comptime f: []const u8, args: anytype) !void {
     var buf: [1024]u8 = undefined;
-    var w = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    var w: stdio.Writer = .init(ctx.io, .stdout(), &buf);
     try w.interface.print(f, args);
     try w.interface.flush();
 }

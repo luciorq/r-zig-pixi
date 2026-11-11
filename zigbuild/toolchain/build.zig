@@ -44,9 +44,8 @@
 //!                           B43), on both channels
 //!   etc/       build-tools  Windows: fstab, r-zig's own MSYS mount table,
 //!                           written here, not copied (PHASE7 open point D)
-//!   binutils/  build-tools  Windows: conda-forge's MinGW nm, dlltool, as,
-//!                           strip, windres and objdump (B24, B43), with
-//!                           the conda DLLs they load
+//! (Windows' binutils are rzig's own names beside it, R's base, since
+//! feat-win-zig-binutils: no binutils/ directory, B24's conda copies gone.)
 //! Which group holds which directory: scripts/env.sh's group_dirs.
 //!
 //! Each file's package is the conda-meta record whose `files` lists its
@@ -73,10 +72,9 @@
 //!
 //! The conda build (recipe/build.sh, from step 3) runs this into the env
 //! itself, with R_TOOLCHAIN_PREFIX=$PREFIX: there conda's own packages
-//! provide every file where it is looked for, except Windows' binutils,
-//! which Makeconf.win names by path under R_HOME (B24): only those are
-//! installed, with their records (B41), and Windows' usr/bin/pkgconf,
-//! which no conda package provides, built from the recipe's pkgconf
+//! provide every file where it is looked for: only Windows'
+//! usr/bin/pkgconf is installed, which no conda package provides, built
+//! from the recipe's pkgconf
 //! source (-Dpkgconf=<dir>; the standalone build fetches the same tarball
 //! as build.zig.zon's lazy `pkgconf`). No etc/, zig/ or flang/ and no
 //! other usr/ file there: the env's MSYS tools are its own m2 packages
@@ -100,8 +98,6 @@ const Copy = struct {
     to: []const u8,
     /// A missing file stops the build; an optional one is left out.
     required: bool = true,
-    /// Installed when the prefix is the env too (the conda build, B41).
-    in_conda: bool = false,
 };
 
 /// Every regular file of `package`'s record under `from` (relative to
@@ -109,8 +105,8 @@ const Copy = struct {
 /// flang-rt-zig's modules and runtime, whose triple directory differs per
 /// platform and whose module set follows LLVM (B9 a; PHASE6 open point A),
 /// and an m2 package's usr/bin/ (PHASE7 open point C a). None stops the
-/// build. Never installed into the env (the conda build), as a copy that
-/// is not `in_conda` (PHASE6 Cc4).
+/// build. Never installed into the env (the conda build), as no copy is
+/// (PHASE6 Cc4).
 const Tree = struct {
     package: []const u8,
     from: []const u8,
@@ -171,13 +167,6 @@ const unix_dirs = [_]Dir{
     .{ .name = "usr", .copies = &.{.{ .from = "bin/make", .to = "bin/make" }} },
 };
 
-/// The binutils Makeconf.win names (B24, B43), under their own names; ar
-/// and ranlib are rzig's (B43), ld is named nowhere. They ship only under
-/// the x86_64-w64-mingw32- prefix.
-fn mingwTool(comptime t: []const u8) Copy {
-    return .{ .from = "Library/bin/x86_64-w64-mingw32-" ++ t ++ ".exe", .to = t ++ ".exe", .in_conda = true };
-}
-
 /// A file of the env's Library/usr/bin/ or Library/bin/ in usr/bin/.
 fn usrBin(comptime from: []const u8) Copy {
     return .{ .from = from, .to = "bin/" ++ comptime from[mem.lastIndexOfScalar(u8, from, '/').? + 1 ..] };
@@ -193,26 +182,6 @@ const windows_dirs = [_]Dir{
     .{ .name = "openmp", .copies = &(ompHeaders("Library/include/") ++ [_]Copy{
         .{ .from = "Library/lib/libomp.lib", .to = "lib/libomp.lib" },
     }) },
-    .{
-        .name = "binutils",
-        .copies = &[_]Copy{
-            mingwTool("nm"),
-            mingwTool("dlltool"),
-            mingwTool("as"),
-            mingwTool("strip"),
-            mingwTool("windres"),
-            mingwTool("objdump"),
-            // The conda DLLs those load, so that they load with nothing beside
-            // them but the system (binutils_impl_win-64 2.46.1 and zstd 1.5.7,
-            // read with objdump -p on 2026-10-10; every other import is
-            // KERNEL32 or an API set): the six import zstd.dll, and zstd.dll
-            // imports VCRUNTIME140.dll (vc14_runtime). verify-toolchain.sh
-            // checks the closure. In the conda build their packages provide
-            // them in Library/bin, on PATH.
-            .{ .from = "Library/bin/zstd.dll", .to = "zstd.dll" },
-            .{ .from = "Library/bin/vcruntime140.dll", .to = "vcruntime140.dll" },
-        },
-    },
     .{
         // B39's tools (B11; PHASE7 open points A-C, G): MSYS2's, from
         // conda-forge's m2 packages, every file of each tool package's
@@ -320,7 +289,10 @@ pub fn build(b: *std.Build) !void {
         const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/{s}", .{ tc, d.name }) };
         var copies: std.ArrayList(conda.Copy) = .empty;
         for (d.copies) |c| {
-            if (prefix_is_env and !c.in_conda) continue;
+            // the env's own packages provide every copy where it is
+            // looked for (the conda build; B41's binutils were the one
+            // exception until feat-win-zig-binutils)
+            if (prefix_is_env) continue;
             const src = b.fmt("{s}/{s}", .{ env, c.from });
             if (!pathExists(io, src)) {
                 if (!c.required) continue;
@@ -329,7 +301,7 @@ pub fn build(b: *std.Build) !void {
             try copies.append(arena, try copyOf(b, records, src, c.from, c.to, dest));
         }
         // Trees are the standalone tree's only: skipped when the prefix is
-        // the env, as a copy that is not in_conda is, before their files are
+        // the env, as copies are, before their files are
         // listed or an empty one stops the build (PHASE6 Cc4).
         for (d.trees) |t| {
             if (prefix_is_env) continue;

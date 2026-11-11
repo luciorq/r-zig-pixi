@@ -132,7 +132,7 @@ package = { cmd = "bash scripts/package-standalone.sh", depends-on = ["install"]
 # base archive extracted elsewhere, then the compilers archive and then
 # the build-tools archive beside it; R and packages compiled with them run
 # with nothing from the build env (unix: env -i, TLS with the shipped CA
-# bundle; Windows: rzig's dry runs, the binutils Makeconf names, OpenMP C
+# bundle; Windows: rzig's dry runs, the binutils Makeconf names (rzig's), OpenMP C
 # and Fortran packages loaded with PATH = bin\x64 + System32), and the
 # install preflight (patch 0009) stops a compiled package with the text
 # of the group it misses, before configure (B26). It needs
@@ -144,7 +144,7 @@ verify-package = { cmd = "bash scripts/verify-bundle.sh", depends-on = ["package
 # groups' third-party files, each directory with SOURCES and LICENSES/,
 # copied unchanged from this env by their own zig build
 # (zigbuild/toolchain/build.zig) into dist/toolchain/R-<ver>-zig: openmp/
-# (compilers); unix usr/bin/make, Windows binutils/ (build-tools). Phase
+# (compilers); unix usr/bin/make, Windows usr/ and etc/ (build-tools). Phase
 # 5 adds the compilers group's zig/, upstream zig from PyPI's ziglang
 # wheel, which it runs fetch-zig for (once per platform; B4), and phase 6
 # its flang/, from this env's flang-zig and flang-rt-zig (B9 a). Needs no
@@ -172,8 +172,8 @@ unpack-toolchain = "bash scripts/unpack-toolchain.sh"
 # point B): a fresh copy of the installed tree with the toolchain tree's
 # group directories, but zig/ and flang/, in its R_HOME/bin/toolchain.
 # contract, pkg-parity and stress compile packages with it [phase3-P3-5]:
-# the installed tree is the base alone (B19), and Windows' Makeconf names
-# the build-tools group's binutils under R_HOME (B24). Needs `build` and
+# the installed tree is the base alone (B19), and packages' configure
+# scripts and makefiles run the build-tools group's sh and make. Needs `build` and
 # the toolchain tree (`toolchain`, or `unpack-toolchain`).
 compile-tree = "bash scripts/compile-tree.sh"
 # Tier 0/1 with an empty environment and only the tree's own programs on
@@ -325,9 +325,12 @@ strace = "*"
 
 # win-64: flang-zig is the MinGW-ABI flang (see [dependencies]); it
 # replaced conda-forge's MinGW gfortran (gcc_impl_win-64), Phase 2,
-# platform 2. binutils_impl_win-64 used to arrive through gfortran and
-# is what provides the x86_64-w64-mingw32-nm/-dlltool that build.zig's
-# import-stub steps call; keep it explicitly.
+# platform 2. binutils_impl_win-64: the verification scripts' own
+# x86_64-w64-mingw32-objdump (verify-helpers.sh's needed_of, the import
+# closure of what ships; verify-tree.sh's baseline-CPU disassembly;
+# pkg-parity.sh's exports). Nothing R builds or ships runs it: build.zig's
+# import stubs and Makeconf.win's binutils are rzig's (binutils.zig;
+# feat-win-zig-binutils), and the toolchain tree copies none.
 [target.win-64.dependencies]
 binutils_impl_win-64 = "*"
 uutils-coreutils = "*"

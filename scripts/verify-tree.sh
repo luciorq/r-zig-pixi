@@ -18,8 +18,8 @@
 #     the same bytes once unsigned), and its link object (linux, Windows;
 #     feat-r-home-link-objects), nothing else:
 #     the groups' files are the toolchain tree's (feat-standalone-toolchain
-#     B19, B30; verify-toolchain.sh), a conda env's win-64 binutils/
-#     and usr/ (pkgconf) excepted (B41);
+#     B19, B30; verify-toolchain.sh), a conda env's win-64 usr/
+#     (pkgconf) excepted;
 #   - Makeconf names no build path and has no rpath; CPPFLAGS and LDFLAGS
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
 #   - Windows (every tree): CRAN's layout, Makeconf's R_ARCH is /x64 and
@@ -27,9 +27,9 @@
 #     every front-end carries R's UTF-8 manifest;
 #   - the build tools (every tree): R puts the build-tools group's usr/bin
 #     first on PATH (unix: etc/Renviron, and MAKE is make; Windows:
-#     etc/Rcmd_environ; B25), and Windows' Makeconf runs ar and ranlib as
-#     rzig, names each binutils tool by its path under
-#     R_HOME/bin/toolchain/binutils/ and pkg-config bare (B24, B43);
+#     etc/Rcmd_environ; B25), and Windows' Makeconf runs ar, ranlib and
+#     the binutils as rzig, each $(BINPREF) name a file beside it, and
+#     pkg-config bare (B43; feat-win-zig-binutils);
 #   - every OS (a tree that is not a conda env): no file of R's own names
 #     the build machine's checkout, the tree's own place, zig's caches,
 #     the env or $HOME, R's lazy-load databases and .rds files read
@@ -111,9 +111,9 @@ trap 'rm -rf "$WORK"' EXIT
 # data build.zig installs (installEnvRuntime) and the shared libraries
 # vendor-libs.sh copies. A conda env (<tree>/conda-meta, the conda build's
 # prefix) has both from its own packages, and gets neither. On win-64 it
-# also has the build-tools group's binutils/ in R_HOME/bin/toolchain,
-# r-zig-build-tools' copies (feat-standalone-toolchain B41), and its usr/,
-# pkgconf, which the toolchain build compiles (zigbuild/toolchain/pkgconf.zig).
+# also has the build-tools group's usr/ in R_HOME/bin/toolchain:
+# r-zig-build-tools' pkgconf, which the toolchain build compiles
+# (zigbuild/toolchain/pkgconf.zig).
 conda_tree=""
 if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
 
@@ -122,7 +122,9 @@ if [ -d "$TREE/conda-meta" ]; then conda_tree=1; fi
 # rzig's zig-fc (F3c). Windows: AR and RANLIB are rzig's zig-ar.exe and
 # zig-ranlib.exe, the LTO block's gcc-ar and gcc-ranlib its gcc-ar.exe
 # and gcc-ranlib.exe (B43), and CMake's ar and ranlib, which it looks for
-# beside CC, its ar.exe and ranlib.exe. The names: rzig_names
+# beside CC, its ar.exe and ranlib.exe; and the binutils, its nm.exe,
+# objdump.exe, strip.exe, dlltool.exe, windres.exe and as.exe
+# (binutils.zig). The names: rzig_names
 # (verify-helpers.sh), which verify-bundle.sh holds the base archive to.
 # In a macOS conda env the copies differ in their code signatures alone:
 # rattler-build relinks every Mach-O it packages (rzig gets the rpath
@@ -151,10 +153,10 @@ for t in $tc_names; do
   fi
 done
 # And nothing else is there (B19, B30): the toolchain groups' files
-# (openmp/, usr/, binutils/) are the toolchain tree's (zig-toolchain.sh,
+# (openmp/, usr/) are the toolchain tree's (zig-toolchain.sh,
 # verify-toolchain.sh), whose archives a user extracts beside this tree's.
-# A conda env is the exception: on win-64 r-zig-build-tools carries
-# binutils/ and usr/ (pkgconf) here (B41). zig's install never removes a file, so a tree
+# A conda env is the exception: on win-64 r-zig-build-tools carries usr/
+# (pkgconf) here. zig's install never removes a file, so a tree
 # built before phase 3 still has the files that left it (PHASE3 C25).
 lo="$(link_object)"
 bad=""
@@ -162,7 +164,7 @@ while IFS= read -r f; do
   n="${f##*/}"
   if [ -d "$f" ]; then
     if [ -n "$conda_tree" ] && [ "$OS" = windows ]; then
-      case "$n" in binutils|usr) continue ;; esac
+      [ "$n" = usr ] && continue
     fi
     bad="$bad $n/"
   else
@@ -280,36 +282,45 @@ fi
 # variable (Renviron.c expands a default only when it is a whole ${...}
 # term). Windows' Makeconf runs ar and ranlib as rzig, in its LTO block
 # too (gcc-ar, gcc-ranlib; its gcc-nm names a file that does not ship,
-# B43-2), names each of conda-forge's binutils by its path under
-# R_HOME/bin/toolchain/binutils/, the build-tools group's directory
-# (objdump without .exe, which R CMD check adds: sotools.R), and
-# none through BINPREF (the template sets NM twice, and make takes the
-# last), and pkg-config bare, found on PATH (B43-3); Rcmd_environ's RC,
-# for CMake, is the same windres. The lines are the vendored
+# B43-2), names the binutils through BINPREF, rzig's names beside it
+# (binutils.zig; objdump without .exe, which R CMD check adds:
+# sotools.R), every $(BINPREF) name a file there but the LTO block's
+# gcc-nm, none through LLVMPREF, and pkg-config bare, found on PATH
+# (B43-3); Rcmd_environ's RC and UserNM, for CMake and R CMD check, are
+# the same windres and nm. The lines are the vendored
 # Makeconf.win's and build.zig's (rcmdEnviron, finalRenviron), as PHASE3
 # sections 5 and 6 give them, each compared whole with its CR dropped
 # (has_line, above).
 bad=""
 if [ "$OS" = windows ]; then
-  bu='$(R_HOME)/bin/toolchain/binutils'
   for l in 'AR = $(BINPREF)zig-ar.exe' 'RANLIB = $(BINPREF)zig-ranlib.exe' \
-    "NM = $bu/nm.exe" "DLLTOOL = $bu/dlltool.exe --as $bu/as.exe \$(DT_ARCH)" \
-    "RESCOMP = $bu/windres.exe --preprocessor=\$(BINPREF)gcc.exe --preprocessor-arg=-E --preprocessor-arg=-xc --preprocessor-arg=-DRC_INVOKED \$(RC_ARCH)" \
-    "OBJDUMP = $bu/objdump" "STRIP_SHARED_LIB = $bu/strip.exe --strip-unneeded" \
-    "STRIP_STATIC_LIB = $bu/strip.exe --strip-debug" 'PKG_CONFIG = pkg-config' \
+    'NM = $(BINPREF)nm.exe' 'DLLTOOL = $(BINPREF)dlltool.exe $(DT_ARCH)' \
+    'RESCOMP = $(BINPREF)windres.exe $(RC_ARCH)' \
+    'OBJDUMP = $(BINPREF)objdump' 'STRIP_SHARED_LIB = $(BINPREF)strip.exe --strip-unneeded' \
+    'STRIP_STATIC_LIB = $(BINPREF)strip.exe --strip-debug' 'PKG_CONFIG = pkg-config' \
     '  AR = $(BINPREF)gcc-ar' '  NM = $(BINPREF)gcc-nm' '  RANLIB = $(BINPREF)gcc-ranlib'; do
     has_line "$mk" "$l" || bad="$bad
   ${mk#$TREE/} lacks: $l"
   done
-  grep -E '\$\(BINPREF\)(\$\(LLVMPREF\))?(pkg-config|dlltool|as|nm|windres|objdump|strip|ar|ranlib)([^a-z]|$)' "$mk" |
-    tr -d '\r' > "$WORK/binpref.txt" || true
+  # every name through BINPREF is a file beside rzig (objdump and the LTO
+  # block's names without .exe), but gcc-nm, which does not ship (B43-2),
+  # and flang, upstream's FC in its USE_LLVM block, which R never takes
+  # (FC is zig-fc); nothing through LLVMPREF
+  while IFS= read -r t; do
+    case "$t" in gcc-nm|gcc-nm.exe|flang) continue ;; esac
+    f="$TREE/$rh/bin/toolchain/${t%.exe}.exe"
+    [ -f "$f" ] || bad="$bad
+  ${mk#$TREE/} names \$(BINPREF)$t, and $rh/bin/toolchain has no ${t%.exe}.exe"
+  done < <(tr -d '\r' < "$mk" | grep -v '^ *#' | grep -oE '\$\(BINPREF\)[A-Za-z0-9_.+-]+' | sed 's/^\$(BINPREF)//' | sort -u)
+  grep -n 'LLVMPREF)[a-z]' "$mk" | grep -v '^[0-9]*: *#' > "$WORK/llvmpref.txt" || true
   while IFS= read -r l; do
     bad="$bad
-  ${mk#$TREE/} names a tool through BINPREF: $l"
-  done < "$WORK/binpref.txt"
+  ${mk#$TREE/} names a tool through LLVMPREF: $l"
+  done < "$WORK/llvmpref.txt"
   for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/../../usr/bin' \
     'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"' \
-    'R_ZIG_RC=${R_HOME}/bin/toolchain/binutils/windres.exe' \
+    'R_ZIG_RC=${R_HOME}/bin/toolchain/windres.exe' \
+    'R_ZIG_NM=${R_HOME}/bin/toolchain/nm.exe' \
     'R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig' \
     'PKG_CONFIG_PATH="${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}"' \
     'UserNM="${UserNM-${R_ZIG_NM}}"' 'RC="${RC-${R_ZIG_RC}}"'; do
@@ -327,7 +338,7 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 if [ "$OS" = windows ]; then
-  echo "== build tools verified: Makeconf's AR and RANLIB are rzig, its binutils in \$(R_HOME)/bin/toolchain/binutils/, PKG_CONFIG = pkg-config; etc/Rcmd_environ puts bin/toolchain/usr/bin first on PATH and gives PKG_CONFIG_PATH R's env's .pc directories as its default"
+  echo "== build tools verified: Makeconf's AR, RANLIB and binutils are rzig's names in \$(BINPREF), each a file there, PKG_CONFIG = pkg-config; etc/Rcmd_environ puts bin/toolchain/usr/bin first on PATH and gives PKG_CONFIG_PATH R's env's .pc directories as its default"
 else
   echo "== build tools verified: etc/Renviron puts bin/toolchain/usr/bin first on PATH, MAKE=\${MAKE-'make'}"
 fi
@@ -366,9 +377,9 @@ fi
 #     copy that names the checkout, zig's caches or the env fails: the
 #     tree uses these files as they are, so the path would leave the
 #     machine with them (fonts.conf's did, before installFontconfig
-#     rewrote it). minimal's make, the OpenMP headers and Windows'
-#     binutils left the R tree in phase 3: they are the toolchain tree's
-#     (feat-standalone-toolchain B22, B23, B24), and verify-toolchain.sh
+#     rewrote it). minimal's make and the OpenMP headers left the R tree
+#     in phase 3: they are the toolchain tree's (feat-standalone-toolchain
+#     B22, B23), and verify-toolchain.sh
 #     lists its copies that name a build path the same way (C18).
 # A library directly in <prefix>/lib that the env no longer has (unix;
 # the build installs only directories there) was left by an earlier
@@ -592,7 +603,7 @@ fi
 # vendor-libs.sh copied there (vendored_files: Windows' bin/x64) and the
 # env files build.zig copies as they are (Windows' Tcl/Tk in R_HOME/Tcl;
 # in the toolchain directory only rzig is R's own binary, not a conda
-# env's win-64 binutils/ and usr/, B41; the loop below takes no other file from
+# env's win-64 usr/; the loop below takes no other file from
 # there, rzig's link object included). conda-forge's binaries are built
 # for its own baseline, and some carry AVX2 code behind a run-time CPU
 # check (libdeflate, libcrypto), so they are not counted. objdump: on

@@ -3,8 +3,8 @@
 # build/compile-tree/<flavor>/R-<ver>-zig: a fresh copy of the flavor's R
 # tree ($PREFIX) with the toolchain tree's group directories in its
 # R_HOME/bin/toolchain, every one but zig/ and flang/ (C12): openmp/, and
-# the build-tools group's directories (unix usr/; Windows usr/, etc/ and
-# binutils/, phase 7). contract, pkg-parity and stress compile packages
+# the build-tools group's directories (unix usr/; Windows usr/ and etc/,
+# phase 7). contract, pkg-parity and stress compile packages
 # with it (their pixi tasks depend on compile-tree) [phase3-P3-5], as a
 # user who extracted the base and both group archives into one directory
 # does. On Windows they then run the group's usr/bin first, under R CMD
@@ -15,11 +15,10 @@
 # the libomp runtime.
 #
 # Why a copy: the R tree is the base alone, rzig the only file in its
-# R_HOME/bin/toolchain (feat-standalone-toolchain B19, B30), and Windows'
-# Makeconf names the build-tools group's binutils by their path under
-# R_HOME (B24, B41). With the R tree alone a package's DLL links there
-# without $(NM), which winshlib.mk pipes into sed, and passes: contract
-# would prove nothing (C11). With openmp/, rzig's B40 rule runs on every
+# R_HOME/bin/toolchain (feat-standalone-toolchain B19, B30), and a
+# package's configure and makefiles run the build-tools group's sh and
+# make (the binutils Makeconf names are rzig's own, beside it in the
+# base, since feat-win-zig-binutils). With openmp/, rzig's B40 rule runs on every
 # leg: it counts openmp/ where the base has the libomp runtime (slim,
 # full) and leaves it alone on minimal (C12). zig/ and flang/ stay out
 # (C12): dev compiles use the zig that built R and the env's flang, with

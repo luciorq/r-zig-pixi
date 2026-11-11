@@ -9,7 +9,7 @@ name: toolchain
 # need. The toolchain tree, dist/toolchain/R-<ver>-zig, holds the
 # groups' third-party files copied unchanged from the env, each directory
 # with SOURCES and LICENSES/ (zigbuild/toolchain/build.zig): openmp/
-# (compilers), unix usr/bin/make and Windows binutils/ (build-tools),
+# (compilers), unix usr/bin/make and Windows usr/ and etc/ (build-tools),
 # from phase 5 the compilers group's zig/, upstream zig from PyPI's
 # ziglang wheel (B4), which the toolchain build fetches on every leg
 # (scripts/zig-toolchain.sh runs fetch-zig; on the upstream legs the
