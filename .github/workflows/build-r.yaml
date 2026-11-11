@@ -121,8 +121,10 @@ jobs:
         run: pixi run -e ${{ inputs.env }} contract
       # TEMPORARY (feat-win-arm64): windows-11-arm's first contract run
       # (2026-11-11) ended in a segfault with no line telling which step.
-      # Each step again, one R process each, with its exit status, and a
-      # plain OpenMP library from R CMD SHLIB (libomp without data.table).
+      # Each step again, one R process each, with its exit status; a plain
+      # OpenMP library from R CMD SHLIB (libomp without data.table);
+      # data.table's grouped sum (the second run's crash) in parts; and
+      # under cdb when the image has it.
       # Removed once win-arm64's contract passes.
       - name: win-arm64 probe (the contract's steps, one R process each)
         if: failure() && runner.os == 'Windows' && runner.arch == 'ARM64'
@@ -131,6 +133,7 @@ jobs:
           mkdir -p build/arm-probe
           cat > build/arm-probe/probe.sh <<'PROBE'
           . scripts/env.sh
+          set +e +o pipefail
           bin="$COMPILE_TREE/$RH/bin/x64"
           export R_LIBS="$(cygpath -m "$BUILD_DIR/testlib-$VARIANT")"
           d="$BUILD_DIR/arm-probe"
@@ -140,19 +143,37 @@ jobs:
             "$bin/Rscript.exe" --vanilla "$(cygpath -m "$d/p.R")" 2>&1 | tail -20
             echo "== rc ${PIPESTATUS[0]}: $1"
           }
-          probe load-all 'for (p in c("Rcpp","data.table","minqa","quadprog","pak","ps")) { library(p, character.only = TRUE); cat("loaded", p, "\n") }'
-          probe evalCpp 'library(Rcpp); print(evalCpp("2 + 2"))'
-          probe dt-1thread 'library(data.table); setDTthreads(1); dt <- data.table(g = rep(1:3, 4), x = 1:12); print(dt[, sum(x), by = g])'
-          probe dt-default 'library(data.table); dt <- data.table(g = rep(1:3, 4), x = 1:12); print(dt[, sum(x), by = g])'
+          # a plain OpenMP library first: libomp without data.table
+          printf '%s\n' '#include <omp.h>' 'void omp_probe(int *n, int *s) { int t = 0;' '#pragma omp parallel reduction(+:t)' '  t += 1;' '  *n = omp_get_max_threads(); *s = t; }' 'void omp_one(int *s) { int t = 0;' '#pragma omp parallel num_threads(1) reduction(+:t)' '  t += 1;' '  *s = t; }' > "$d/omp.c"
+          printf '%s\n' 'PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$d/Makevars"
+          echo "== SHLIB omp.c"
+          (cd "$d" && "$bin/R.exe" CMD SHLIB omp.c 2>&1 | tail -20; echo "== rc ${PIPESTATUS[0]}: SHLIB omp.c")
+          omp="$(cygpath -m "$d/omp.dll")"
+          probe omp-one "dyn.load('$omp'); print(.C('omp_one', s = 0L))"
+          probe omp-all "dyn.load('$omp'); print(.C('omp_probe', n = 0L, s = 0L))"
+          dt='library(data.table); setDTthreads(1); dt <- data.table(g = rep(1:3, 4), x = 1:12)'
+          probe dt-create "$dt; print(dt)"
+          probe dt-sum "$dt; print(dt[, sum(x)])"
+          probe dt-order "$dt; print(dt[order(-g)])"
+          probe dt-forderv "$dt; print(data.table:::forderv(dt, 'g'))"
+          probe dt-by-no-gforce "$dt; options(datatable.optimize = 0L); print(dt[, sum(x), by = g])"
+          probe dt-by "$dt; print(dt[, sum(x), by = g])"
           probe dt-threads 'library(data.table); getDTthreads(verbose = TRUE)'
           probe minqa 'library(minqa); print(bobyqa(c(1, 1), function(x) sum((x - 3)^2))$par)'
           probe quadprog 'library(quadprog); print(solve.QP(diag(2, 2), c(2, 6), diag(2), c(0, 0))$solution)'
           probe ps 'print(ps::ps_pid(ps::ps_handle()) == Sys.getpid())'
-          printf '%s\n' '#include <omp.h>' 'void omp_probe(int *n, int *s) { int t = 0;' '#pragma omp parallel reduction(+:t)' '  t += 1;' '  *n = omp_get_max_threads(); *s = t; }' > "$d/omp.c"
-          printf '%s\n' 'PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)' 'PKG_LIBS = $(SHLIB_OPENMP_CFLAGS)' > "$d/Makevars"
-          echo "== SHLIB omp.c"
-          (cd "$d" && "$bin/R.exe" CMD SHLIB omp.c 2>&1 | tail -20; echo "== rc ${PIPESTATUS[0]}: SHLIB omp.c")
-          probe omp-shlib "dyn.load('$(cygpath -m "$d/omp.dll")'); print(.C('omp_probe', n = 0L, s = 0L))"
+          # the grouped sum under Windows' debugger, when the image has one: the
+          # faulting module, registers and stack (Rterm itself: Rscript starts it
+          # as a child)
+          cdb=""
+          for c in "/c/Program Files (x86)/Windows Kits/10/Debuggers/arm64/cdb.exe" "/c/Program Files/Windows Kits/10/Debuggers/arm64/cdb.exe"; do
+            [ -f "$c" ] && { cdb="$c"; break; }
+          done
+          echo "== cdb: ${cdb:-none}"
+          if [ -n "$cdb" ]; then
+            printf '%s\n' "$dt; print(dt[, sum(x), by = g])" > "$d/p.R"
+            "$cdb" -g -G -c ".lastevent; r; kn 40; ub @pc L8; u @pc L4; lm; q" "$(cygpath -w "$bin/Rterm.exe")" --vanilla --no-echo -f "$(cygpath -m "$d/p.R")" 2>&1 | tail -150
+          fi
           PROBE
           pixi run -e ${{ inputs.env }} bash build/arm-probe/probe.sh
       # Packages built without make (feat-zig-pkg-build): R CMD INSTALL

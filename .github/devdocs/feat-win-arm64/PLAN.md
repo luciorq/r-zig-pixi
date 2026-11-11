@@ -127,7 +127,13 @@ found (2026-11-11):
   grouped sum, its OpenMP, evalCpp or a package load: the run does not
   say which). build-r.yaml has a TEMPORARY probe step for windows-11-arm
   after a failure: each contract step in its own R process, and an OpenMP
-  library from R CMD SHLIB. It goes once the contract passes.
+  library from R CMD SHLIB. It goes once the contract passes. Its first
+  run: every package loads and evalCpp gives 4 (a run-time C++ compile
+  and load works), then data.table's `dt[, sum(x), by = g]` with
+  setDTthreads(1) segfaults; set -e ended the probe there. The probe now
+  goes on past a crash, runs the OpenMP library first, data.table's
+  grouped sum in parts, and the grouped sum under cdb when the image has
+  Windows' debugger.
 - upstream zig on windows-latest (not ARM): `zig fetch` of cairo from
   cairographics.org failed once with TlsInitializationFailed; on kappa the
   same zig 0.17.1 failed once, then fetched it seven times from both hosts
