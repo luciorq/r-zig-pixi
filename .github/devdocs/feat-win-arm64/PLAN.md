@@ -121,6 +121,18 @@ found (2026-11-11):
   mount-table check passed). R starts them from a native process, so the
   check now runs each through cmd.exe (run_cmd), and a failure names the
   exit status. Unchanged on win-64 (kappa: toolchain, verify-toolchain).
+- With that, the toolchain leg passed, and the build leg built R and passed
+  verify-tree and smoke. contract: Rscript ended in a segfault after
+  attaching data.table and before getDTthreads' lines (data.table's
+  grouped sum, its OpenMP, evalCpp or a package load: the run does not
+  say which). build-r.yaml has a TEMPORARY probe step for windows-11-arm
+  after a failure: each contract step in its own R process, and an OpenMP
+  library from R CMD SHLIB. It goes once the contract passes.
+- upstream zig on windows-latest (not ARM): `zig fetch` of cairo from
+  cairographics.org failed once with TlsInitializationFailed; on kappa the
+  same zig 0.17.1 failed once, then fetched it seven times from both hosts
+  (same hash). Intermittent; conda-forge's zig fetched it on both Windows
+  legs. Re-run.
 
 Checked without the runner (2026-11-10): `rattler-build build
 --render-only --with-solve --target-platform win-arm64` renders and
