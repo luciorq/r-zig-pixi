@@ -134,6 +134,23 @@ found (2026-11-11):
   goes on past a crash, runs the OpenMP library first, data.table's
   grouped sum in parts, and the grouped sum under cdb when the image has
   Windows' debugger.
+- Its second run: a plain OpenMP library (one shared variable) runs on
+  one thread and on four; data.table creates, prints and sums a table,
+  and crashes in everything that sorts (order, forderv, the grouped sum,
+  with or without GForce), on one thread too; minqa, quadprog and ps
+  pass. cdb: an access violation (`ldr w0,[x11]`, x11 = 0) in
+  data.table's outlined parallel region, called from
+  `libomp!__kmp_invoke_microtask+0xcc`.
+- Cause: conda-forge's win-arm64 libomp.dll (llvm-openmp 23.1.5
+  hef4af3d_0, clang-cl) carries libomp's C fallback for
+  __kmp_invoke_microtask (z_Windows_NT-586_util.cpp), not the assembly
+  one (z_Linux_asm.S). For a region with more than six shared variables
+  that C code copies the rest into an alloca buffer it expects at the
+  stack pointer; the compiler drops the copy as dead code. Disassembled:
+  the argc > 6 path loads x2..x7 and calls `blr x8` with nothing on the
+  stack, returning to +0xcc, cdb's frame. The 7th and later arguments are
+  garbage. data.table's sort regions have more than six; the probe's had
+  one. win-64 is not affected (x86_64 uses the MASM file).
 - upstream zig on windows-latest (not ARM): `zig fetch` of cairo from
   cairographics.org failed once with TlsInitializationFailed; on kappa the
   same zig 0.17.1 failed once, then fetched it seven times from both hosts
