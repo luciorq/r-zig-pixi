@@ -35,6 +35,17 @@ source:
     target_directory: .
   - path: ../zigbuild
     target_directory: zigbuild
+  # win-64: pkgconf's source, which the toolchain build compiles into
+  # R_HOME/bin/toolchain/usr/bin as pkgconf.exe and pkg-config.exe
+  # (zigbuild/toolchain/pkgconf.zig; recipe/build.sh passes the directory
+  # as -Dpkgconf). The url and sha256 are pkgconf.zig's, as its test
+  # checks (pixi run toolchain-test); the standalone build fetches the
+  # same tarball (zigbuild/toolchain/build.zig.zon).
+  - if: win
+    then:
+      - url: https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.10.tar.xz
+        sha256: 9371b2f6372da574d4c6dc96fe9b1463037bcf6afcb6671c1555afde7b17e2de
+        target_directory: pkgconf-src
 
 build:
   # 2: first zig-built release (recipe/build.sh switched from configure-
@@ -178,7 +189,17 @@ build:
   # longer set FONTCONFIG_PATH, which conda's fontconfig never needed:
   # its default is the env's etc/fonts (feat-standalone-toolchain phase
   # 8, #42).
-  number: 10
+  # 10 → 11 (2026-11-09; universe's newest is _10 on all five subdirs):
+  # win-64's pkg-config is pkgconf 3.0.10, which the toolchain build
+  # compiles from source with zig into R_HOME/bin/toolchain/usr/bin as
+  # pkgconf.exe and pkg-config.exe, on both channels (r-zig-build-tools
+  # owns it here); conda-forge's pkg-config 0.29.2, which printed
+  # Libs.private without --static (ncdf4, RPostgres), and its glib DLLs
+  # are gone, from the standalone tree and from r-zig-build-tools' run
+  # deps. etc/Rcmd_environ gives PKG_CONFIG_PATH a default, R's env's
+  # Library/lib/pkgconfig and Library/share/pkgconfig, which that
+  # package's activation used to set (feat-zig-pkgconf).
+  number: 11
 
 outputs:
   # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), four
@@ -379,8 +400,8 @@ outputs:
       # everything but the groups' directories under R_HOME/bin/toolchain
       # (feat-standalone-toolchain B20, B28): rzig's names and its link
       # object stay here. Of these, the conda build makes only win-64's
-      # binutils/, which r-zig-build-tools owns; usr/ and etc/ are the
-      # standalone tree's only on win-64 (PHASE7 Cr5)
+      # binutils/ and usr/ (pkgconf), which r-zig-build-tools owns; etc/ is
+      # the standalone tree's only on win-64 (PHASE7 Cr5)
       files:
         exclude:
           - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
@@ -619,12 +640,16 @@ outputs:
     build:
       # win-64: conda-forge's MinGW binutils, copied by the toolchain build
       # with SOURCES and LICENSES/ (B24, B41; Makeconf.win names them by
-      # path under R_HOME). unix: nothing (no branch matches: an empty
+      # path under R_HOME), and usr/bin's pkgconf.exe and pkg-config.exe,
+      # which it builds from source (zigbuild/toolchain/pkgconf.zig), with
+      # usr/SOURCES and usr/LICENSES/pkgconf/. R puts usr/bin first on
+      # PATH, before the env's. unix: nothing (no branch matches: an empty
       # package)
       files:
         - if: win
           then:
             - Library/lib/R/bin/toolchain/binutils/**
+            - Library/lib/R/bin/toolchain/usr/**
     requirements:
       run:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
@@ -635,9 +660,10 @@ outputs:
           then:
             - make >=4.4
         # win-64: the build-tools group's set on both channels (B11; PHASE7
-        # open points A-C): MSYS2's userland from conda-forge's m2 packages
-        # and the native pkg-config; the standalone tree copies the same
-        # packages' files into R_HOME/bin/toolchain/usr/bin. R puts this
+        # open points A-C): MSYS2's userland from conda-forge's m2 packages;
+        # the standalone tree copies the same packages' files into
+        # R_HOME/bin/toolchain/usr/bin. pkg-config is pkgconf, built by
+        # the toolchain build on both channels (files, above). R puts this
         # env's Library/usr/bin on PATH itself, after the group's usr/bin,
         # in R and under R CMD (PHASE7 F2 b)
         - if: win
@@ -676,10 +702,6 @@ outputs:
             # a configure script that patches its sources (hdf5r's unix
             # configure; feat-win-link-fixes item 4)
             - m2-patch
-            # B43: Makeconf.win names a bare pkg-config (pkg-config only:
-            # the pkgconf name comes with a pkgconf built from source, a
-            # later change after phase 7, PHASE4 open point F a)
-            - pkg-config
             # E2: the six binutils import zstd.dll
             - zstd
     tests:
@@ -699,6 +721,11 @@ outputs:
                   - Library/lib/R/bin/toolchain/binutils/objdump.exe
                   - Library/lib/R/bin/toolchain/binutils/SOURCES
                   - Library/lib/R/bin/toolchain/binutils/LICENSES/binutils_impl_win-64/**
+                  - Library/lib/R/bin/toolchain/usr/bin/pkgconf.exe
+                  - Library/lib/R/bin/toolchain/usr/bin/pkg-config.exe
+                  - Library/lib/R/bin/toolchain/usr/SOURCES
+                  - Library/lib/R/bin/toolchain/usr/LICENSES/pkgconf/COPYING
+                  - Library/lib/R/bin/toolchain/usr/LICENSES/pkgconf/mingw-w64-crt-COPYING
             not_exists:
               - lib/R/**
               - Library/lib/R/bin/toolchain/{gcc,rzig}.exe
@@ -718,9 +745,10 @@ outputs:
             - test-build-tools.R
     about:
       summary: The r-zig build tools for r-zig-slim (make; on Windows also sh, the MSYS2 tools, pkg-config and the MinGW binutils)
-      # win-64 holds GNU binutils' copies (PHASE4 open point E a); unix
-      # holds no file
-      license: ${{ "GPL-3.0-or-later" if win else "GPL-2.0-only OR GPL-3.0-only" }}
+      # win-64 holds GNU binutils' copies (PHASE4 open point E a) and
+      # pkgconf (ISC), with the mingw-w64 CRT startup zig links into it
+      # (ZPL-2.1); unix holds no file
+      license: ${{ "GPL-3.0-or-later AND ISC AND ZPL-2.1" if win else "GPL-2.0-only OR GPL-3.0-only" }}
 
   - package:
       name: r-zig-toolchain

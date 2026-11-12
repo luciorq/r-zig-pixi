@@ -2,7 +2,8 @@
 
 **Status (2026-11-09): phases 0 to 9 merged (#15 to #43) and published
 as `_10` on 2026-11-09; the record is under "Phase 9" below.** The status blocks that follow are as of their dates.
-Next (the user's order, 2026-10-22): pkgconf from source (TODO.md), the
+Next (the user's order, 2026-10-22): pkgconf from source (TODO.md; in
+progress on branch feat-zig-pkgconf, record pkgconf/PKGCONF.md), the
 zig 0.17 port, Windows on ARM.
 
 **Status (2026-10-08): the menus are answered (2026-10-08; "Resolved

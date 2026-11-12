@@ -79,16 +79,19 @@ the environment (`pixi shell`, `conda activate`) or start R with
   naming `-lws2_32` (ragg with a conda environment's libraries) links
   (whether Rtools' libraries bring it for CRAN is not verified). A DLL
   imports from it only what it calls.
-- On Windows, `pkg-config` is conda-forge's pkg-config 0.29.2 (the
-  standalone tree's `R_HOME/bin/toolchain/usr/bin`; a conda
-  environment's own). It prints `Libs.private` without `--static`, and
-  the standalone tree's copy searches only `PKG_CONFIG_PATH`. A conda or
-  pixi environment's activation sets `PKG_CONFIG_PATH` when the
-  environment has the `pkg-config` package (r-zig-build-tools brings it);
-  for another libraries environment set
-  `PKG_CONFIG_PATH=<env>\Library\lib\pkgconfig`. Neither R's install path
-  nor that environment's path may contain spaces (pkg-config's output
-  then splits), and keep R's install path short (past about 260
+- On Windows, `pkg-config` and `pkgconf` are pkgconf 3.0.10, built from
+  source with zig into `R_HOME/bin/toolchain/usr/bin` (the build tools,
+  on both channels). Under `R CMD`, when `PKG_CONFIG_PATH` is not set, R
+  sets it to its own environment's `Library\lib\pkgconfig` and
+  `Library\share\pkgconfig`, so a conda or pixi environment's libraries
+  are found with or without activation; for another libraries
+  environment set `PKG_CONFIG_PATH=<env>\Library\lib\pkgconfig`. pkgconf
+  also reads the registry key `Software\pkgconfig\PKG_CONFIG_PATH`, and
+  drops from its output the `-I` directories named in `INCLUDE`,
+  `CPATH`, `C_INCLUDE_PATH` and `CPLUS_INCLUDE_PATH` and the `-L` ones in
+  `LIBRARY_PATH`. Neither R's install path nor that environment's path
+  may contain spaces (pkg-config escapes them, and some packages'
+  scripts then split), and keep R's install path short (past about 260
   characters R and make stop finding files).
 - From Git Bash on Windows (`MSYSTEM=MINGW64`), configure scripts see
   the build system `x86_64-pc-mingw64`, not `x86_64-pc-msys`; packages

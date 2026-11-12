@@ -15,3 +15,6 @@ __pycache__/
 *.whl
 *.egg-info/
 .venv/
+
+# zig 0.16 fetches build.zig.zon dependencies (zigbuild/toolchain: pkgconf) here
+zig-pkg/
