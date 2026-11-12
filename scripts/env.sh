@@ -76,15 +76,16 @@ R_HOME_DIR="$PREFIX/$RH"
 # The toolchain groups (feat-standalone-toolchain B38) and the directories
 # under R_HOME/bin/toolchain each one holds (B20, B23, B24): compilers,
 # zig/ (upstream zig, B4), flang/ (flang-zig, B9) and openmp/; build-tools,
-# usr/, Windows' etc/ (MSYS's mount table, phase 7) and Windows'
-# binutils/. Only those that exist count: a group's
+# usr/ and Windows' etc/ (MSYS's mount table, phase 7); Windows'
+# binutils are rzig's own names since feat-win-zig-binutils, the base's.
+# Only those that exist count: a group's
 # archive holds its directories that the toolchain tree has
 # (package-standalone.sh).
 TOOLCHAIN_GROUPS="compilers build-tools"
 group_dirs() {
   case "$1" in
     compilers) echo "zig flang openmp" ;;
-    build-tools) echo "usr etc binutils" ;;
+    build-tools) echo "usr etc" ;;
     *) echo "error: no toolchain group named '$1'" >&2; return 1 ;;
   esac
 }
@@ -110,8 +111,8 @@ same_dir() {
 # copy of the flavor's R tree with the toolchain tree's group directories,
 # but zig/ and flang/, in its R_HOME/bin/toolchain. contract, pkg-parity
 # and stress compile packages with it [phase3-P3-5], since the R tree is
-# the base alone (B19) and Windows' Makeconf names the build-tools group's
-# binutils by their path under R_HOME (B24). Under build/, not dist/: it
+# the base alone (B19) and a package's configure and makefiles run the
+# build-tools group's usr/bin (B25). Under build/, not dist/: it
 # never ships.
 COMPILE_TREE="$BUILD_DIR/compile-tree/$FLAVOR/$TOP"
 # The bash compiler shims, for configure-only.sh's capture (gen-subst.sh

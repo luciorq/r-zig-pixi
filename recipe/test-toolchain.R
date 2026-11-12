@@ -254,23 +254,19 @@ stopifnot(rzigar::f() == 42L)
 cat("toolchain: AR and RANLIB are rzig; a static library built with them (make: a Makevars rule) links and loads: OK\n")
 
 if (windows) {
-    ## The binutils Makeconf.win names by path (NM, DLLTOOL, RESCOMP,
-    ## OBJDUMP, STRIP_*) are conda-forge's MinGW copies in
-    ## R_HOME/bin/toolchain/binutils/, r-zig-build-tools' files
-    ## (feat-standalone-toolchain B24, B41; their SOURCES and LICENSES are
-    ## test-build-tools.R's). nm runs, loading zstd.dll from this env's
-    ## Library/bin.
+    ## The binutils Makeconf.win names (NM, DLLTOOL, RESCOMP, OBJDUMP,
+    ## STRIP_*) are rzig's names beside gcc.exe in R_HOME/bin/toolchain
+    ## (binutils.zig; feat-win-zig-binutils).
     nm <- cfg("NM")
-    stopifnot(basename(nm) == "nm.exe", basename(dirname(nm)) == "binutils",
-              basename(dirname(dirname(nm))) == "toolchain", file.exists(nm))
+    stopifnot(basename(nm) == "nm.exe", basename(dirname(nm)) == "toolchain", file.exists(nm))
     out <- system2(nm, "--version", stdout = TRUE)
-    stopifnot(grepl("GNU nm", out[1L], fixed = TRUE))
+    stopifnot(grepl("GNU-compatible nm (rzig", out[1L], fixed = TRUE))
     cat("toolchain: NM is", nm, ": OK\n")
     ## R CMD check's DLL check reads OBJDUMP as sotools.R's
     ## read_symbols_from_dll does: R CMD config's value, kept only when it
     ## plus ".exe" is a file (Makeconf.win names objdump without .exe).
     od <- cfg("OBJDUMP")
-    stopifnot(basename(od) == "objdump", basename(dirname(od)) == "binutils",
+    stopifnot(basename(od) == "objdump", basename(dirname(od)) == "toolchain",
               file.exists(paste0(od, ".exe")),
               length(tools:::read_symbols_from_dll(file.path(R.home("bin"), "R.dll"))) > 0L)
     used <- get0("DLL_nm", envir = tools:::read_symbols_from_dll_state, inherits = FALSE)

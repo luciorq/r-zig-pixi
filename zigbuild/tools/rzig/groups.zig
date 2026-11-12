@@ -1,7 +1,7 @@
 //! The toolchain's groups and the text that names a missing one
 //! (feat-standalone-toolchain B35, B38). Two groups: compilers (zig,
-//! flang, the OpenMP files) and build-tools (make; on Windows also sh, the
-//! binutils and the other tools R's makefiles run). rzig prints a group's
+//! flang, the OpenMP files) and build-tools (make; on Windows also sh and
+//! the other tools R's makefiles run). rzig prints a group's
 //! text when a compile finds no zig, when zig-fc finds no flang, when
 //! `rzig build` finds no zig (pkgbuild.zig), and from its check mode
 //! (check.zig), which the install preflight (patch 0009,
@@ -25,8 +25,9 @@
 //!   phase 6 (archiveExt), R-<ver>-<plat>-build-tools.tar.gz (.zip on
 //!   Windows). The text names it for what it holds and the tools
 //!   themselves for the rest. build-tools holds unix make, and on Windows
-//!   sh, make and the tools R's makefiles run (usr/bin, phase 7) and the
-//!   binutils (B24). compilers holds zig (from phase 5, PyPI's ziglang
+//!   sh, make and the tools R's makefiles run (usr/bin, phase 7); the
+//!   binutils are rzig's own names since feat-win-zig-binutils (B24's
+//!   copies gone). compilers holds zig (from phase 5, PyPI's ziglang
 //!   wheel, B4), flang (from phase 6, flang-pixi's flang-zig and
 //!   flang-rt-zig, B9) and the OpenMP files (C19).
 //!
@@ -129,7 +130,7 @@ pub fn text(a: mem.Allocator, g: Group, p: Platform) ![]const u8 {
         .compilers => try std.fmt.allocPrint(a, "Compiling needs the r-zig compilers for R {s} on {s}: zig {s}, and flang for Fortran.\n" ++
             "  standalone:  extract {s} where you extracted R (zig {s}, flang and the OpenMP files)\n", .{ p.r, p.name, p.zig, archive, p.zig }),
         .build_tools => if (p.windows)
-            try std.fmt.allocPrint(a, "Building packages needs the r-zig build tools for R {s} on {s}: sh, make, binutils and the tools R's makefiles run.\n" ++
+            try std.fmt.allocPrint(a, "Building packages needs the r-zig build tools for R {s} on {s}: sh, make and the tools R's makefiles run.\n" ++
                 "  standalone:  extract {s} where you extracted R\n", .{ p.r, p.name, archive })
         else
             try std.fmt.allocPrint(a, "Building packages needs the r-zig build tools for R {s} on {s}: make.\n" ++
@@ -220,7 +221,7 @@ test "one text per group, the same on every channel" {
         \\
     , try text(a, .build_tools, mac));
     try testing.expectEqualStrings(
-        \\Building packages needs the r-zig build tools for R 4.6.1 on win-64: sh, make, binutils and the tools R's makefiles run.
+        \\Building packages needs the r-zig build tools for R 4.6.1 on win-64: sh, make and the tools R's makefiles run.
         \\  standalone:  extract R-4.6.1-win-64-build-tools.zip where you extracted R
         \\  conda, pixi: pixi add r-zig-build-tools (or conda install r-zig-build-tools); r-zig-toolchain installs every group
         \\  pip:         no wheels for Windows

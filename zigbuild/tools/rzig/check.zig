@@ -13,9 +13,9 @@
 //!                             word of $MAKE (etc/Renviron sets it), else
 //!                             make; on Windows make, whatever MAKE says
 //!                             (install.R and R CMD config run make there),
-//!                             sh, which runs configure.win, and the
-//!                             binutils Makeconf.win names by path, in
-//!                             <rzig dir>/binutils (B24)
+//!                             and sh, which runs configure.win (the
+//!                             binutils Makeconf.win names are rzig's own
+//!                             names beside it, binutils.zig)
 //!   --rzig-check=package      the install preflight for the package in
 //!                             the working directory (patch 0009), decided
 //!                             as `rzig build` decides (pkgbuild.decide: the
@@ -192,11 +192,6 @@ pub fn shlibCompilers(ctx: *Ctx, label: []const u8, fortran: bool) !u8 {
     };
 }
 
-/// The binutils Makeconf.win names by path, R_HOME/bin/toolchain/binutils/
-/// <tool>.exe (B24, B43): the build-tools group's on Windows (B20). AR and
-/// RANLIB are rzig's own names.
-const binutils = [_][]const u8{ "nm", "dlltool", "as", "windres", "strip", "objdump" };
-
 fn buildTools(ctx: *Ctx) !Result {
     return switch (try buildToolsFound(ctx)) {
         .ok => |line| .{ .code = 0, .line = line },
@@ -225,15 +220,7 @@ fn buildToolsFound(ctx: *Ctx) !Found {
     // R runs configure.win and config.sh through sh (install.R, rcmdfn.c)
     if (ctx.os != .windows) return .{ .ok = line };
     const sh = (try find_zig.onPath(ctx, "sh")) orelse return .{ .missing = try notOnPath(ctx, "no sh on PATH", "sh") };
-    // the binutils beside rzig, as Makeconf.win names them, not on PATH;
-    // with no directory of its own (the OS would not say) rzig finds none
-    const tc = environment.toolchain(ctx);
-    const dir = try ctx.fmt("{s}/binutils", .{tc orelse "R_HOME/bin/toolchain"});
-    for (binutils) |tool| {
-        const exe = try ctx.fmt("{s}/{s}.exe", .{ dir, tool });
-        if (tc == null or !ctx.isFile(exe)) return .{ .missing = try ctx.fmt("no {s}", .{try display(ctx, exe)}) };
-    }
-    return .{ .ok = try ctx.fmt("{s}; sh at {s}; binutils at {s}", .{ line, try display(ctx, sh), try display(ctx, dir) }) };
+    return .{ .ok = try ctx.fmt("{s}; sh at {s}", .{ line, try display(ctx, sh) }) };
 }
 
 /// `what`, the line for a build tool PATH does not have, saying so when R's
@@ -532,7 +519,7 @@ test "fortran: zig and flang; no flang, exit 127 and the compilers group's text"
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 
-test "build-tools: make as R runs it; on Windows also sh and the binutils" {
+test "build-tools: make as R runs it; on Windows also sh" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
@@ -564,34 +551,19 @@ test "build-tools: make as R runs it; on Windows also sh and the binutils" {
     try f.env.put("MAKE", "");
     r = try run(c, .build_tools);
     try testing.expectEqualStrings(f.fmt("build-tools ok: make at {s}", .{make}), r.line);
-    // no binutils asked for on unix
-    try testing.expect(mem.find(u8, r.line, "binutils") == null);
-    // Windows: make whatever MAKE says, sh, and the binutils beside rzig
+    // Windows: make whatever MAKE says, and sh
     c.os = .windows;
     c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
     try f.env.put("MAKE", "nosuchmake -j4");
     try testing.expectEqual(127, (try run(c, .build_tools)).code);
     try testing.expectEqualStrings(f.fmt("rzig-test: no sh on PATH\n{s}", .{text}), f.takeWarnings());
     const sh = try f.touchProgram("p/sh");
-    // each of Makeconf.win's binutils, in turn: not on PATH, a directory
-    // of that name or one without .exe does not count
-    const bu = f.path("env/Library/lib/R/bin/toolchain/binutils");
-    _ = try f.touchProgram("p/nm");
-    try f.touch("env/Library/lib/R/bin/toolchain/binutils/nm");
-    try f.tmp.dir.createDirPath(testing.io, "env/Library/lib/R/bin/toolchain/binutils/nm.exe/x");
-    for (binutils) |tool| {
-        try testing.expectEqual(127, (try run(c, .build_tools)).code);
-        try testing.expectEqualStrings(f.fmt("rzig-test: no {s}/{s}.exe\n{s}", .{ bu, tool, text }), f.takeWarnings());
-        if (mem.eql(u8, tool, "nm")) try f.tmp.dir.deleteTree(testing.io, "env/Library/lib/R/bin/toolchain/binutils/nm.exe");
-        try f.touch(f.fmt("env/Library/lib/R/bin/toolchain/binutils/{s}.exe", .{tool}));
-    }
     r = try run(c, .build_tools);
     try testing.expectEqual(0, r.code);
-    try testing.expectEqualStrings(f.fmt("build-tools ok: make at {s}; sh at {s}; binutils at {s}", .{ slashed(&f, make), slashed(&f, sh), bu }), r.line);
-    // no directory of its own (the OS would not say): no binutils
+    try testing.expectEqualStrings(f.fmt("build-tools ok: make at {s}; sh at {s}", .{ slashed(&f, make), slashed(&f, sh) }), r.line);
+    // nothing beside rzig is asked for: its binutils are its own names
     c.self_exe = null;
-    try testing.expectEqual(127, (try run(c, .build_tools)).code);
-    try testing.expectEqualStrings(f.fmt("rzig-test: no R_HOME/bin/toolchain/binutils/nm.exe\n{s}", .{text}), f.takeWarnings());
+    try testing.expectEqual(0, (try run(c, .build_tools)).code);
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 
@@ -614,10 +586,9 @@ test "Windows: one separator in the lines, `/` (display only)" {
     try testing.expect(mem.findScalar(u8, make, '\\') != null);
     try f.env.put("PATH", w);
     c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
-    for (binutils) |tool| try f.touch(f.fmt("env/Library/lib/R/bin/toolchain/binutils/{s}.exe", .{tool}));
     var r = try run(c, .build_tools);
     try testing.expectEqual(0, r.code);
-    try testing.expectEqualStrings(f.fmt("build-tools ok: make at {s}; sh at {s}; binutils at {s}", .{ slashed(&f, make), slashed(&f, sh), f.path("env/Library/lib/R/bin/toolchain/binutils") }), r.line);
+    try testing.expectEqualStrings(f.fmt("build-tools ok: make at {s}; sh at {s}", .{ slashed(&f, make), slashed(&f, sh) }), r.line);
     try testing.expect(mem.findScalar(u8, r.line, '\\') == null);
     // zig (a shell-script stand-in), its version and flang
     if (builtin.os.tag == .windows) return;
@@ -817,7 +788,7 @@ test "package: a tier-2 package whose plan needs make, 1 and why, no group's tex
     try testing.expect(mem.startsWith(u8, f.takeWarnings(), f.fmt("rzig-test: t needs make: CC = ccache is not a compiler of R's toolchain ({s}/bin/toolchain); no make on PATH\n", .{r})));
 }
 
-test "package on Windows: a configure.win script needs make, its reason before the missing binutils" {
+test "package on Windows: a configure.win script needs make, its reason before the missing make" {
     // [preflight-PF-8]
     if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-ins
     var f: testutil.Fixture = undefined;
@@ -826,25 +797,23 @@ test "package on Windows: a configure.win script needs make, its reason before t
     const c = &f.ctx;
     const r = try pkgplan.rHome(&f);
     try f.env.put("ZIG_BIN", try fakeZig(&f, "bin/zig", same_zig));
-    _ = try f.touchProgram("p/make");
     _ = try f.touchProgram("p/sh");
     try f.env.put("PATH", f.path("p"));
     c.os = .windows;
     c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
     const text = try groups.text(c.arena, .build_tools, groups.this);
-    const bu = f.path("env/Library/lib/R/bin/toolchain/binutils");
     try f.touch("w/configure.win");
     try f.touch("w/src/a.c");
     try testing.expectEqual(127, (try packageIn(c, r, f.path("w"))).code);
-    try testing.expectEqualStrings(f.fmt("rzig-test: w needs make: a configure.win script; no {s}/nm.exe\n{s}", .{ bu, text }), f.takeWarnings());
+    try testing.expectEqualStrings(f.fmt("rzig-test: w needs make: a configure.win script; no make on PATH\n{s}", .{text}), f.takeWarnings());
     // configure.ucrt first, as R runs it
     try f.touch("w/configure.ucrt");
     try testing.expectEqual(127, (try packageIn(c, r, f.path("w"))).code);
-    try testing.expectEqualStrings(f.fmt("rzig-test: w needs make: a configure.ucrt script; no {s}/nm.exe\n{s}", .{ bu, text }), f.takeWarnings());
+    try testing.expectEqualStrings(f.fmt("rzig-test: w needs make: a configure.ucrt script; no make on PATH\n{s}", .{text}), f.takeWarnings());
     // R_ZIG_CONFIGURE=1 (0009 runs it): that reason
     try f.env.put("R_ZIG_CONFIGURE", "1");
     try testing.expectEqual(127, (try packageIn(c, r, f.path("w"))).code);
-    try testing.expectEqualStrings(f.fmt("rzig-test: w needs make: a configure script R runs; no {s}/nm.exe\n{s}", .{ bu, text }), f.takeWarnings());
+    try testing.expectEqualStrings(f.fmt("rzig-test: w needs make: a configure script R runs; no make on PATH\n{s}", .{text}), f.takeWarnings());
 }
 
 test "compilers: a zig that does not run, exit 1 and why" {

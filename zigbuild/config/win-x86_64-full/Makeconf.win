@@ -73,27 +73,28 @@ ifdef USE_LLVM
 endif
 CCBASE = $(if $(USE_LLVM),clang,gcc)
 ## r-zig: these lines and AR, NM, OBJDUMP, RANLIB and STRIP_* below name
-## the tools r-zig ships, by file (feat-standalone-toolchain B24, B43).
-## The MinGW binutils are the build-tools group's conda-forge copies in
-## R_HOME/bin/toolchain/binutils/, each named by its path, not through
-## BINPREF, which is rzig's directory, or LLVMPREF (B24). OBJDUMP alone
-## has no .exe: R CMD check takes R CMD config OBJDUMP only when
-## OBJDUMP.exe is a file (sotools.R's read_symbols_from_dll, written for
-## upstream's OBJDUMP, which has none), and R's system() and sh run
-## objdump.exe from it. AR and RANLIB are rzig's zig-ar.exe and
-## zig-ranlib.exe, as on unix, .exe included as for CC (CMake); the LTO
-## block's gcc-ar and gcc-ranlib are rzig too, and its gcc-nm names a
-## file that does not ship (B43, B43-2). PKG_CONFIG is bare, found on
-## PATH as SED is (B43-3). RESCOMP hands windres rzig's gcc.exe as its
-## preprocessor, with the arguments windres gives its own default one,
-## since windres looks for gcc beside itself and then on PATH; that path
-## relies on R CMD's 8.3 R_HOME when R_HOME has a space, as
-## Rcmd_environ's RCFLAGS do (S15).
+## the tools r-zig ships, by file (feat-standalone-toolchain B24, B43),
+## all rzig's names in BINPREF, R_HOME/bin/toolchain/, as R's own
+## Makeconf.win names MinGW's there: nm, objdump and strip read and write
+## COFF in rzig, dlltool, windres and as run zig dlltool, zig rc and zig cc
+## (binutils.zig; feat-win-zig-binutils: until then conda-forge's MinGW
+## binutils, x86_64 only, in the build-tools group's binutils/). Not
+## LLVMPREF. OBJDUMP alone has no .exe: R CMD check takes R CMD config
+## OBJDUMP only when OBJDUMP.exe is a file (sotools.R's
+## read_symbols_from_dll, written for upstream's OBJDUMP, which has none),
+## and R's system() and sh run objdump.exe from it. AR and RANLIB are
+## rzig's zig-ar.exe and zig-ranlib.exe, as on unix, .exe included as for
+## CC (CMake); the LTO block's gcc-ar and gcc-ranlib are rzig too, and its
+## gcc-nm names a file that does not ship (B43, B43-2). PKG_CONFIG is
+## bare, found on PATH as SED is (B43-3). DLLTOOL takes no --as and
+## RESCOMP no --preprocessor: zig dlltool writes the library itself and
+## zig rc preprocesses itself (DT_ARCH and RC_ARCH stay empty: the
+## machine is rzig's target).
 PKG_CONFIG = pkg-config
-DLLTOOL = $(R_HOME)/bin/toolchain/binutils/dlltool.exe --as $(R_HOME)/bin/toolchain/binutils/as.exe $(DT_ARCH)
+DLLTOOL = $(BINPREF)dlltool.exe $(DT_ARCH)
 DLLTOOLFLAGS = -k
-NM = $(R_HOME)/bin/toolchain/binutils/nm.exe
-RESCOMP = $(R_HOME)/bin/toolchain/binutils/windres.exe --preprocessor=$(BINPREF)gcc.exe --preprocessor-arg=-E --preprocessor-arg=-xc --preprocessor-arg=-DRC_INVOKED $(RC_ARCH)
+NM = $(BINPREF)nm.exe
+RESCOMP = $(BINPREF)windres.exe $(RC_ARCH)
 ## MAIN_LD needs to be set by the package
 LINKER = $(MAIN_LD)
 ## as a default
@@ -223,14 +224,14 @@ LTO_OPT =
 # MAIN_LINK = $(MAIN_LD) $(MAIN_LDFLAGS) $(LDFLAGS)
 # assume suitable mkdir on PATH (e.g. from Msys2)
 MKINSTALLDIRS = mkdir -p
-NM = $(R_HOME)/bin/toolchain/binutils/nm.exe
+NM = $(BINPREF)nm.exe
 ## There is no ObjC support in the recommended toolchain,
 ## but if a toolchain had support, this it what it would be.
 OBJC = $(CC)
 OBJCFLAGS = -O2
 OBJC_LIBS = -lobjc
 OBJCXX =
-OBJDUMP = $(R_HOME)/bin/toolchain/binutils/objdump
+OBJDUMP = $(BINPREF)objdump
 R_ARCH = @R_ARCH@
 RANLIB = $(BINPREF)zig-ranlib.exe
 SAFE_FFLAGS = -O2
@@ -270,8 +271,8 @@ SHLIB_OPENMP_CXXFLAGS = @OPENMP@
 SHLIB_OPENMP_FCFLAGS = @OPENMP@
 SHLIB_OPENMP_FFLAGS = @OPENMP@
 SHLIB_PTHREAD_FLAGS = @PTHREAD@
-STRIP_SHARED_LIB = $(R_HOME)/bin/toolchain/binutils/strip.exe --strip-unneeded
-STRIP_STATIC_LIB = $(R_HOME)/bin/toolchain/binutils/strip.exe --strip-debug
+STRIP_SHARED_LIB = $(BINPREF)strip.exe --strip-unneeded
+STRIP_STATIC_LIB = $(BINPREF)strip.exe --strip-debug
 TCLTK_CPPFLAGS = -I "$(TCL_HOME)/include" -DWin32
 TCLTK_LIBS = -L"$(TCL_HOME)/bin" -ltcl$(TCL_VERSION) -ltk$(TCL_VERSION)
 

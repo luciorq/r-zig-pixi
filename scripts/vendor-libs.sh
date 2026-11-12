@@ -64,10 +64,8 @@ done < <(vendored_files "$PREFIX" "$CONDA")
 # Windows: every PE file in the tree (R's own, rzig's in bin/toolchain,
 # and the Tcl DLLs build.zig installs into R_HOME/Tcl/bin: tcl86t.dll
 # needs zlib1.dll) and, where packages get OpenMP, libomp.dll (below),
-# then a fixed-point walk over the DLLs copied by this run. The
-# build-tools group's binutils are not in the R tree
-# (feat-standalone-toolchain B30): its binutils/ carries the DLLs they
-# load (verify-toolchain.sh).
+# then a fixed-point walk over the DLLs copied by this run. rzig's
+# binutils names (binutils.zig) load nothing but the system's.
 # The Tcl DLLs stay only in Tcl/bin, CRAN's layout: a copy in bin/x64
 # wins the search order but then looks for init.tcl relative to itself
 # and fails. (needed_of: verify-helpers.sh, the imports verify-tree.sh

@@ -327,7 +327,7 @@ pub fn build(b: *std.Build) !void {
     };
     // On real Windows hardware, native target resolution defaults to the
     // MSVC ABI — this whole toolchain (flang-zig's MinGW target,
-    // x86_64-w64-mingw32-* binutils, .dll.a import libraries) is built on
+    // MinGW .dll.a import libraries, rzig's GNU-style binutils) is built on
     // the GNU/MinGW ABI instead (what `zig cc` itself defaults to there,
     // and so what rzig's gcc.exe compiles packages for), so re-resolve
     // explicitly.
@@ -1776,11 +1776,10 @@ const WinPkgLib = struct { pkg: []const u8, lib: *std.Build.Step.Compile };
 /// g++.exe, zig-ar.exe, ...) — so `$(BINPREF)$(CCBASE)` etc. resolve to
 /// real, absolute, working paths rather than a bare name that Windows
 /// would resolve to whatever unrelated compiler happens to be on PATH.
-/// The MinGW binutils (nm, dlltool, as, strip, windres, objdump) are the
-/// build-tools group's, conda-forge's copies in bin/toolchain/binutils/
-/// that zigbuild/toolchain/build.zig installs into the toolchain tree, and
-/// Makeconf.win names each one by its path there, not through BINPREF
-/// (feat-standalone-toolchain B24, B43). flang is not built here: FC is
+/// The binutils (nm, dlltool, as, strip, windres, objdump) are rzig's own
+/// names in the same directory (binutils.zig; feat-win-zig-binutils),
+/// which Makeconf.win names through BINPREF, as R's own Makeconf.win does
+/// for MinGW's. flang is not built here: FC is
 /// rzig's zig-fc.exe, which runs the flang rzig finds (the toolchain's
 /// flang/, the environment's bin, PATH). The compilers group's flang/ is a
 /// copy that works (feat-standalone-toolchain phase 6, B9): its resource
@@ -2093,45 +2092,33 @@ fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win
 /// symbols, so R.dll's mutual dependency with Rblas.dll/Rgraphapp.dll
 /// needs breaking the same way gnuwin32's own make build does: derive an
 /// import library from the *object file's* exported symbols before the
-/// real DLL exists, exactly mirroring gnuwin32's own Rlapack.def/R.exp
-/// generation (`nm | sed -n <SYMPAT> | sort -u`, then `dlltool`).
+/// real DLL exists, as gnuwin32's R0.def (`nm | sed -n $(SYMPAT) | sort |
+/// uniq $(NM_FILTER)`) and `dlltool` do. Here rzig does both, for R's own
+/// target (feat-win-zig-binutils): `rzig def`, the same symbol set from
+/// the object's COFF symbol table (def.zig, which tier 1 uses for
+/// packages), then its dlltool name, `zig dlltool` with the machine of
+/// rzig's target. No shell, no pipe and no MinGW binutils: the MSYS fork
+/// flakes this step once met on GitHub's windows-latest (an empty .def,
+/// then "lld-link: undefined symbol: xerbla_" 80 steps later) have no
+/// place to happen, and the same step serves aarch64. rzig def fails on an
+/// object it cannot read; an object with no export gives a .def that
+/// dlltool turns into an empty import library, which the link then
+/// reports by symbol.
 fn winMakeImportStub(ctx: *const Ctx, obj: std.Build.LazyPath, dllname: []const u8, out_stem: []const u8) std.Build.LazyPath {
     const b = ctx.b;
-    // No pipes, one command per line, plus an export-count check: MSYS's
-    // process spawning fails intermittently on GitHub's windows-latest
-    // ("child_info::sync: wait failed ... cygheap read copy failed, Win32
-    // error 299" — the classic Cygwin fork flake), and this step is where
-    // it lands. As a `nm | sed | sort` pipeline (conda-package win-64,
-    // 2026-09-19) a dead `sed` left `set -e` seeing only `sort`'s exit 0:
-    // the .def held a bare EXPORTS line, dlltool built an *empty* import
-    // lib, and the failure surfaced 80 steps later as "lld-link:
-    // undefined symbol: xerbla_" (Rblas) plus every R API symbol
-    // Rgraphapp uses. With `pipefail` added, the next flake instead
-    // *hung* the job for the full timeout: `nm` blocked forever writing
-    // into a pipe whose reader had died (the runner reported it as the
-    // orphan process at cancel). Files between the stages make every
-    // failure its own command's non-zero exit — loud, at the cause, and
-    // fixed by a plain re-run.
-    const run = b.addSystemCommand(&.{
-        "sh",          "-c",
-        \\set -eu
-        \\x86_64-w64-mingw32-nm "$1" > "$2.nm"
-        \\sed -n 's/^[0-9a-fA-F]* [BCDRT] //p' "$2.nm" > "$2.syms"
-        \\echo EXPORTS > "$2"
-        \\sort -u "$2.syms" >> "$2"
-        \\n=$(wc -l < "$2")
-        \\if [ "$n" -le 1 ]; then echo "error: no exported symbols found in $1 (nm/sed step broke?)" >&2; exit 1; fi
-        \\x86_64-w64-mingw32-dlltool --dllname "$4" --input-def "$2" --output-lib "$3"
-        ,
-        "make-implib",
-    });
-    run.setName(b.fmt("win import stub for {s}", .{dllname}));
-    run.addFileArg(obj);
-    const def = run.addOutputFileArg(b.fmt("{s}.def", .{out_stem}));
-    _ = def;
-    const implib = run.addOutputFileArg(b.fmt("{s}.dll.a", .{out_stem}));
-    run.addArg(dllname);
-    return implib;
+    const def_run = b.addRunFile(ctx.rzig);
+    def_run.setName(b.fmt("win import stub .def for {s}", .{dllname}));
+    def_run.addArgs(&.{ "def", "-o" });
+    const def = def_run.addOutputFileArg(b.fmt("{s}.def", .{out_stem}));
+    def_run.addFileArg(obj);
+    const lib_run = b.addRunFile(ctx.rzig);
+    lib_run.setName(b.fmt("win import stub for {s}", .{dllname}));
+    // the zig that runs this build: rzig's dlltool runs `zig dlltool`
+    lib_run.setEnvironmentVariable("ZIG_BIN", b.graph.zig_exe);
+    lib_run.addArgs(&.{ "dlltool", "--dllname", dllname, "--input-def" });
+    lib_run.addFileArg(def);
+    lib_run.addArg("--output-lib");
+    return lib_run.addOutputFileArg(b.fmt("{s}.dll.a", .{out_stem}));
 }
 
 // ----------------------------------------------------------------------
@@ -2581,17 +2568,15 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     R runs packages' own makefiles with: the build-tools group's make
 ///     and sh (R_HOME/bin/toolchain/usr/bin; in a conda env m2's, in
 ///     Library/usr/bin).
-///   - RC, RCFLAGS: CMake compiles a .rc file (TBB's) with RC, else a
-///     windres on PATH, where there is none; the tree's is the build-tools
-///     group's bin/toolchain/binutils/windres.exe (B24). windres
-///     preprocesses with a gcc it looks for by name, beside itself and then
-///     on PATH; RCFLAGS names the toolchain's, with the arguments windres
-///     gives its default one (-E -xc -DRC_INVOKED), which --preprocessor
-///     drops.
+///   - RC: CMake compiles a .rc file (TBB's) with RC, else a windres on
+///     PATH, where there is none; R's is rzig's windres.exe beside gcc.exe
+///     (binutils.zig: zig rc, which preprocesses itself, so no RCFLAGS
+///     names a preprocessor any more; until feat-win-zig-binutils GNU
+///     windres, which looked for gcc by name, and RCFLAGS named rzig's).
 ///   - UserNM: R CMD check reads compiled objects' symbol tables with
 ///     UserNM, else an nm on PATH (tools' sotools.R), and PATH has none;
-///     the build-tools group's binutils/nm.exe, as RC names its windres
-///     (feat-standalone-toolchain PHASE7 open point H a).
+///     rzig's nm.exe, as RC names its windres (feat-standalone-toolchain
+///     PHASE7 open point H a).
 ///   - PKG_CONFIG_PATH: the build-tools group's pkg-config is pkgconf,
 ///     built from source (zigbuild/toolchain/pkgconf.zig), whose own
 ///     search path is beside it (usr/lib/pkgconfig, empty). The default
@@ -2601,7 +2586,7 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     no longer a dependency (AMENDMENTS Am2, Am3 b). pkgconf derives
 ///     each package's prefix from its .pc file's place. In the standalone
 ///     tree it names <top>/Library/lib/pkgconfig, which does not exist.
-/// CMAKE_GENERATOR, RC, RCFLAGS, UserNM and PKG_CONFIG_PATH are defaults:
+/// CMAKE_GENERATOR, RC, UserNM and PKG_CONFIG_PATH are defaults:
 /// one set in the environment wins (`${VAR-default}`), in double quotes:
 /// unquoted, R's environ reader (Renviron.c) takes each `\` of the
 /// expanded value as an escape, and a user's `C:\x\nm.exe` or
@@ -2623,12 +2608,10 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
         "PATH=\"${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/\"",
         "## r-zig: CMake for packages that build a bundled library with it.",
         "CMAKE_GENERATOR=\"${CMAKE_GENERATOR-MSYS Makefiles}\"",
-        "R_ZIG_RC=${R_HOME}/bin/toolchain/binutils/windres.exe",
+        "R_ZIG_RC=${R_HOME}/bin/toolchain/windres.exe",
         "RC=\"${RC-${R_ZIG_RC}}\"",
-        "R_ZIG_RCFLAGS=--preprocessor=${R_HOME}/bin/toolchain/gcc.exe --preprocessor-arg=-E --preprocessor-arg=-xc --preprocessor-arg=-DRC_INVOKED",
-        "RCFLAGS=\"${RCFLAGS-${R_ZIG_RCFLAGS}}\"",
         "## r-zig: R CMD check reads objects' symbols with UserNM, else nm on PATH.",
-        "R_ZIG_NM=${R_HOME}/bin/toolchain/binutils/nm.exe",
+        "R_ZIG_NM=${R_HOME}/bin/toolchain/nm.exe",
         "UserNM=\"${UserNM-${R_ZIG_NM}}\"",
         "## r-zig: pkgconf's search path, unless set: R's env's .pc files.",
         "R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig",
@@ -2673,10 +2656,13 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 ///            PE executable is what R's Windows system() can run: it
 ///            resolves a bare command name by appending ".exe" only, never
 ///            through PATHEXT (found on kappa: `system("gcc --version")`
-///            reached an unrelated gcc.exe on PATH). The binutils
-///            Makeconf.win names (NM, DLLTOOL, RESCOMP, OBJDUMP, STRIP_*)
-///            are the build-tools group's, in bin/toolchain/binutils/
-///            (B24).
+///            reached an unrelated gcc.exe on PATH). nm.exe, objdump.exe,
+///            strip.exe, dlltool.exe, windres.exe and as.exe: the binutils
+///            Makeconf.win names through $(BINPREF) (NM, OBJDUMP, STRIP_*,
+///            DLLTOOL, RESCOMP), Rcmd_environ's UserNM and RC, and what
+///            CMake finds beside gcc.exe, rzig's own (binutils.zig; until
+///            feat-win-zig-binutils conda-forge's MinGW binutils in the
+///            build-tools group's bin/toolchain/binutils/, B24).
 /// Before rzig these were bash scripts (toolchain/), and on Windows a C
 /// forwarder that ran them through the env's bash; rzig needs neither
 /// bash nor CONDA_PREFIX to compile.
@@ -2684,7 +2670,10 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
     const b = ctx.b;
     const step = b.step("install-rzig", "Install rzig into R_HOME/bin/toolchain");
     const names: []const []const u8 = switch (ctx.os) {
-        .windows => &.{ "gcc.exe", "g++.exe", "zig-fc.exe", "zig-ar.exe", "zig-ranlib.exe", "gcc-ar.exe", "gcc-ranlib.exe", "ar.exe", "ranlib.exe", "rzig.exe" },
+        // nm.exe ... as.exe: Windows' binutils, rzig's own names
+        // (binutils.zig; feat-win-zig-binutils), which Makeconf.win's
+        // $(BINPREF) names and CMake finds beside gcc.exe
+        .windows => &.{ "gcc.exe", "g++.exe", "zig-fc.exe", "zig-ar.exe", "zig-ranlib.exe", "gcc-ar.exe", "gcc-ranlib.exe", "ar.exe", "ranlib.exe", "nm.exe", "objdump.exe", "strip.exe", "dlltool.exe", "windres.exe", "as.exe", "rzig.exe" },
         else => &.{ "zig-cc", "zig-cxx", "zig-fc", "zig-ar", "zig-ranlib", "rzig" },
     };
     for (names) |n| {

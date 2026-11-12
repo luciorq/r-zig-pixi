@@ -1,13 +1,12 @@
 //! `rzig def -o <pkg>.def <objects>`: the module-definition file
 //! winshlib.mk builds with `nm | sed -n 's/^.* [BCDRT] / /p' $(NM_FILTER)`
-//! for a package DLL, from the objects' COFF symbol tables (std.coff's
-//! records, read at the object's own offsets: std.coff.Coff reads PE
-//! images). The make path's exports exactly, without nm and sed; lld's
+//! for a package DLL, from the objects' COFF symbol tables (binutils.zig's
+//! reader, below). The make path's exports exactly, without nm and sed; lld's
 //! auto-export (`--export-all-symbols`) is not the same set (design
 //! record, step 4).
 //!
 //! nm's [BCDRT]: a global symbol defined in a code, data or bss section, or
-//! a common. Not undefined (U), not weak (w/W: a WEAK_EXTERNAL), not a
+//! a common. Not undefined (U), not weak (w: a WEAK_EXTERNAL), not a
 //! local (lowercase), not a section or debug symbol. Then NM_FILTER, as
 //! CRAN's R has it (src/gnuwin32/MkRules.rules' default, which
 //! fixed/Makefile writes into the installed Makeconf, and build.zig into
@@ -21,15 +20,16 @@
 //! empty and rzig def kept them, to match it; cli exported 195 names so on
 //! kappa, 2026-10-12, and 185 without them in M5).
 //!
-//! Not read: a bigobj object (its own header, which clang writes for more
-//! than 65,279 sections). That is BadObject, and the build fails, where
-//! make's nm reads it (feat-tier1-engine K3; no package seen with one).
+//! The objects are read by binutils.zig's COFF reader, the one rzig's nm
+//! uses for the make path, so both read a bigobj object (the header LLVM
+//! writes for more than 65,279 sections; feat-tier1-engine K3), as GNU nm
+//! did.
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
-const coff = std.coff;
 const Ctx = @import("Ctx.zig");
 const response = @import("response.zig");
+const binutils = @import("binutils.zig");
 
 pub const Error = error{ BadObject, OutOfMemory };
 
@@ -38,66 +38,41 @@ fn filtered(name: []const u8) bool {
     return mem.find(u8, name, ".refptr.") != null or mem.find(u8, name, ".weak.") != null;
 }
 
-/// The exported names of one COFF object, in symbol-table order.
+/// The exported names of one COFF object (a regular or a bigobj one), in
+/// symbol-table order.
 pub fn exports(a: mem.Allocator, data: []const u8, out: *std.ArrayList([]const u8)) Error!void {
-    if (data.len < 20) return error.BadObject;
-    const nsections = mem.readInt(u16, data[2..4], .little);
-    const symtab_off = mem.readInt(u32, data[8..12], .little);
-    const nsyms = mem.readInt(u32, data[12..16], .little);
-    const opt_size = mem.readInt(u16, data[16..18], .little);
-    if (opt_size != 0) return error.BadObject; // an image, not an object
-    const sections_off: usize = 20;
-    const section_size = @sizeOf(coff.SectionHeader);
-    if (data.len < sections_off + @as(usize, nsections) * section_size) return error.BadObject;
-    if (symtab_off == 0 or nsyms == 0) return;
-    const symtab_end = @as(usize, symtab_off) + @as(usize, nsyms) * coff.Symbol.sizeOf();
-    if (data.len < symtab_end + 4) return error.BadObject;
-    const strtab_size = mem.readInt(u32, data[symtab_end..][0..4], .little);
-    if (strtab_size < 4 or data.len < symtab_end + strtab_size) return error.BadObject;
-    const strtab = data[symtab_end .. symtab_end + strtab_size];
-
-    // Each 18-byte record read here, not through std.coff's Symtab: since
-    // zig 0.17 its SectionNumber is an i16 and its reader @intCasts the
-    // record's u16 into it, which panics on 0xfffe and 0xffff (debug,
-    // absolute) and on any section past 32,767; the sections run to
-    // 65,279 (K3).
-    var i: usize = 0;
-    while (i < nsyms) {
-        const rec = data[symtab_off + i * 18 ..][0..18];
-        // in usize: 1 + 255 aux records overflows u8
-        defer i += 1 + @as(usize, rec[17]);
-        if (rec[16] != @backingInt(coff.StorageClass.EXTERNAL)) continue;
-        const value = mem.readInt(u32, rec[8..12], .little);
-        const section = mem.readInt(u16, rec[12..14], .little);
-        if (section == 0) {
-            if (value == 0) continue; // undefined
+    if (binutils.kindOf(data) != .object) return error.BadObject; // an image, an archive, ...
+    const c = binutils.Coff.parse(a, data) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.BadObject,
+    };
+    const recs = binutils.records(a, c) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.BadObject,
+    };
+    // section flags: IMAGE_SCN_CNT_{CODE,INITIALIZED_DATA,UNINITIALIZED_DATA},
+    // and LNK_INFO, LNK_REMOVE, MEM_DISCARDABLE (.drectve, debug)
+    const contents: u32 = 0x20 | 0x40 | 0x80;
+    const not_linked: u32 = 0x200 | 0x800 | 0x02000000;
+    for (recs) |r| {
+        if (r.class != 2) continue; // IMAGE_SYM_CLASS_EXTERNAL
+        if (r.section == 0) {
+            if (r.value == 0) continue; // undefined
             // a common (nm: C)
-        } else if (section == 0xffff or section == 0xfffe) {
-            continue; // absolute, debug
+        } else if (r.section == binutils.sec_absolute or r.section == binutils.sec_debug) {
+            continue;
         } else {
-            if (section > nsections) return error.BadObject;
-            // in usize: section 1640's header is past 65,535 (K3)
-            const hdr: *align(1) const coff.SectionHeader = @ptrCast(data[sections_off + (@as(usize, section) - 1) * section_size ..].ptr);
-            const fl = hdr.flags;
-            if (!(fl.CNT_CODE or fl.CNT_INITIALIZED_DATA or fl.CNT_UNINITIALIZED_DATA)) continue;
-            if (fl.LNK_INFO or fl.LNK_REMOVE or fl.MEM_DISCARDABLE) continue; // .drectve, debug
+            if (r.section > c.sections.len) return error.BadObject;
+            const fl = c.sections[r.section - 1].flags;
+            if (fl & contents == 0 or fl & not_linked != 0) continue;
         }
-        // the name in the record (up to 8 bytes, NUL-padded), or, when its
-        // first 4 bytes are 0, an offset into the string table
-        const name: []const u8 = if (mem.readInt(u32, rec[0..4], .little) != 0)
-            rec[0 .. mem.findScalar(u8, rec[0..8], 0) orelse 8]
-        else blk: {
-            const off = mem.readInt(u32, rec[4..8], .little);
-            if (off >= strtab.len) return error.BadObject;
-            break :blk mem.sliceTo(strtab[off..], 0);
-        };
-        if (name.len == 0 or filtered(name)) continue;
+        if (r.name.len == 0 or filtered(r.name)) continue;
         var seen = false;
-        for (out.items) |x| if (mem.eql(u8, x, name)) {
+        for (out.items) |x| if (mem.eql(u8, x, r.name)) {
             seen = true;
             break;
         };
-        if (!seen) try out.append(a, try a.dupe(u8, name));
+        if (!seen) try out.append(a, try a.dupe(u8, r.name));
     }
 }
 
@@ -153,6 +128,7 @@ pub fn run(ctx: *Ctx, all: []const []const u8) u8 {
 
 const testing = std.testing;
 const testutil = @import("testutil.zig");
+const coff = std.coff;
 
 // testdata/win-syms.c compiled with `zig cc -target x86_64-windows-gnu -O2 -c`
 const win_syms = @embedFile("testdata/win-syms.o");
@@ -245,6 +221,24 @@ test "exports: a symbol with 255 aux records, the most its u8 count holds (K3)" 
     try exports(a, data, &names);
     try testing.expectEqual(1, names.items.len);
     try testing.expectEqualStrings("fn", names.items[0]);
+}
+
+test "exports: a bigobj object, symbols in sections past 65,535 (binutils.bigobjFixture)" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const data = try binutils.bigobjFixture(a, 0x8664);
+    var names: std.ArrayList([]const u8) = .empty;
+    try exports(a, data, &names);
+    // not the undefined `undef`, the weak `weak_fn`, nor `local_fn`; the
+    // last one's name from the string table
+    const want = [_][]const u8{ "first", "past_u16", "last", "long_name_in_the_string_table" };
+    try testing.expectEqual(want.len, names.items.len);
+    for (want, names.items) |w, n| try testing.expectEqualStrings(w, n);
+    // a short import object (version 0) is no object
+    var imp: [24]u8 = @splat(0);
+    mem.writeInt(u16, imp[2..4], 0xffff, .little);
+    try testing.expectError(error.BadObject, exports(a, &imp, &names));
 }
 
 test "run: the objects from a response file (rzig build's objects.rsp), as on the command line" {

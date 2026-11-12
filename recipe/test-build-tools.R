@@ -1,10 +1,9 @@
 ## r-zig-slim + r-zig-build-tools (feat-standalone-toolchain B28, phase
-## 4): rzig's check finds make (Windows: also sh and the binutils), names
+## 4): rzig's check finds make (Windows: also sh), names
 ## r-zig-compilers for what is missing, and says when make is installed
 ## in this env but not on PATH (on Windows R CMD then finds them itself,
 ## PHASE7 F2 b); R CMD config reads Makeconf through make. On Windows the
-## package's own files: the MinGW binutils, with the records of where they
-## come from (B24, B41), which load the env's zstd.dll (E2); pkgconf,
+## package's own files: pkgconf,
 ## built from source, as pkgconf and pkg-config, and PKG_CONFIG_PATH's
 ## default under R CMD (B43); and B39's tools from this env (B11).
 windows <- .Platform$OS.type == "windows"
@@ -55,7 +54,7 @@ narrow(usr_bin = TRUE)
 cc <- file.path(R.home(), "bin", "toolchain", if (windows) "gcc.exe" else "zig-cc")
 tc <- shown(file.path(R.home(), "bin", "toolchain"))
 ## the build tools, from this env: unix make in <prefix>/bin; Windows m2's
-## make and sh in <prefix>/Library/usr/bin, and the binutils beside rzig
+## make and sh in <prefix>/Library/usr/bin
 r <- run_to(cc, "--rzig-check=build-tools"); cat(r$out, sep = "\n")
 ok <- r$out[1L]
 field <- function(name) sub(paste0("^.*", name, " at ([^;]*).*$"), "\\1", ok)
@@ -63,9 +62,8 @@ make_dir <- shown(if (windows) file.path(env_bin, "..", "usr", "bin") else env_b
 stopifnot(r$status == 0L, startsWith(ok, "zig-cc: build-tools ok: make at "),
           same_path(shown(dirname(field("make"))), make_dir))
 if (windows)
-    stopifnot(grepl("; sh at ", ok, fixed = TRUE), same_path(shown(dirname(field("sh"))), make_dir),
-              same_path(field("binutils"), paste0(tc, "/binutils")))
-cat("build tools: the check finds this env's make", if (windows) "and sh, and the binutils", ": OK\n")
+    stopifnot(grepl("; sh at ", ok, fixed = TRUE), same_path(shown(dirname(field("sh"))), make_dir))
+cat("build tools: the check finds this env's make", if (windows) "and sh", ": OK\n")
 
 ## no compilers: the check names r-zig-compilers (127, through a file),
 ## with this env's programs alone, so no host zig is reached
@@ -116,23 +114,9 @@ stopifnot(r$status == 0L, basename(dirname(cfg_cc)) == "toolchain",
 cat("build tools: R CMD config CC is", cfg_cc, ": OK\n")
 
 if (windows) {
-    ## SOURCES names the binutils' package and its sha256; LICENSES/ holds
-    ## its licences (B24, B41). The six tools' files are package_contents'
-    bu <- file.path(R.home(), "bin", "toolchain", "binutils")
-    src <- readLines(file.path(bu, "SOURCES"))
-    i <- match("package: binutils_impl_win-64", src)
-    stopifnot(!is.na(i))
-    blk <- src[i:length(src)]
-    blk <- blk[cumsum(blk == "") == 0L]
-    stopifnot(any(grepl("^sha256: [0-9a-f]{64}$", blk)),
-              length(list.files(file.path(bu, "LICENSES", "binutils_impl_win-64"), recursive = TRUE)) > 0L)
-    ## nm runs with this env's Library/bin and System32 alone: zstd.dll,
-    ## which the binutils import, comes from this env (E2)
-    Sys.setenv(PATH = paste(env_bin, file.path(Sys.getenv("SystemRoot"), "System32"), sep = ";"))
-    r <- run_to(file.path(bu, "nm.exe"), "--version")
-    narrow(usr_bin = TRUE)
-    stopifnot(r$status == 0L, grepl("GNU nm", r$out[1L], fixed = TRUE))
-    cat("build tools: binutils/ has its SOURCES and LICENSES, nm runs with this env's zstd.dll: OK\n")
+    ## no binutils/ any more: the binutils are rzig's names, r-zig-slim's
+    ## (feat-win-zig-binutils)
+    stopifnot(!dir.exists(file.path(R.home(), "bin", "toolchain", "binutils")))
 
     ## Makeconf.win names a bare pkg-config (B43): the package's pkgconf,
     ## which the toolchain build compiles from source

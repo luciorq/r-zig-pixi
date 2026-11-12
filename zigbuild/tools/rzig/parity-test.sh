@@ -662,18 +662,19 @@ check "--rzig-check=build-tools: no make, 127, the build-tools group" \
   bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' --rzig-check=build-tools > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
     grep -q '^Building packages needs the r-zig build tools for R ' '$W/check.err' &&
     grep -q '^  standalone:  extract R-[^ ]*-build-tools\.tar\.gz where you extracted R, or put GNU make on PATH\$' '$W/check.err'"
-# Windows' rules from here (RZIG_OS): make and sh on PATH, and the binutils
-# Makeconf.win names, in rzig's own directory's binutils/ (B24)
+# Windows' rules from here (RZIG_OS): make and sh on PATH, and nothing
+# else: the binutils Makeconf.win names are rzig's own names beside it
+# (binutils.zig, feat-win-zig-binutils), not a group directory
 tree winbt/Library
 wtc=$W/winbt/Library/lib/R/bin/toolchain
+mkdir -p "$W/onlymake"; ln -sf "$(command -v make)" "$W/onlymake/make"
 win_env="env -i RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$(dirname "$(command -v make)"):$(dirname "$(command -v sh)")'"
-check "--rzig-check=build-tools on Windows: no binutils, 127, the build-tools group" \
-  bash -c "$win_env '$wtc/gcc' --rzig-check=build-tools > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
-    grep -qxF 'zig-cc: no $wtc/binutils/nm.exe' '$W/check.err'"
-mkdir -p "$wtc/binutils"
-for t in nm dlltool as windres strip objdump; do : > "$wtc/binutils/$t.exe"; done
-check "--rzig-check=build-tools on Windows: make, sh and the binutils" \
-  bash -c "$win_env '$wtc/gcc' --rzig-check=build-tools | grep -q '^zig-cc: build-tools ok: make at .*; sh at .*; binutils at $wtc/binutils\$'"
+check "--rzig-check=build-tools on Windows: make but no sh, 127, the build-tools group" \
+  bash -c "env -i RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$W/onlymake' '$wtc/gcc' --rzig-check=build-tools > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
+    grep -q '^zig-cc: no sh on PATH' '$W/check.err' &&
+    grep -q '^Building packages needs the r-zig build tools for R ' '$W/check.err'"
+check "--rzig-check=build-tools on Windows: make and sh, and no binutils directory asked for" \
+  bash -c "[ ! -e '$wtc/binutils' ] && $win_env '$wtc/gcc' --rzig-check=build-tools | grep -q '^zig-cc: build-tools ok: make at [^;]*; sh at [^;]*\$'"
 # --rzig-check=package: the install preflight (patch 0009) for the package
 # in the working directory, decided as `rzig build` decides (pkgbuild.decide):
 # a tier-1 package asks for the compilers alone; one that needs make (a
@@ -775,20 +776,21 @@ if [ -n "$real_zig" ]; then
   check "--rzig-check=package: an empty R_MAKEVARS_USER leaves ~/.R/Makevars out, tier 1, 0" \
     bash -c "$pc pkg_check p1 ZIG_BIN='$real_zig' PATH='$W/nothing' HOME='$W/home' R_MAKEVARS_USER= && grep -q 'p1 tier 1 (rzig build)' '$W/check.out'"
   # Windows' rules (RZIG_OS, with RZIG_PRINT_ARGV): a configure script
-  # needs make, its reason before the missing binutils [preflight-PF-8]
+  # needs make, its reason before the missing build tool (sh: the
+  # binutils are rzig's own names) [preflight-PF-8]
   tree winnobu/Library
   wnb=$W/winnobu/Library/lib/R/bin/toolchain
-  mk_sh="$(dirname "$(command -v make)"):$(dirname "$(command -v sh)")"
-  check "--rzig-check=package on Windows: a configure.win script, no binutils, 127, the reason" \
-    bash -c "$pc cc='$wnb/gcc' pkg_check pw ZIG_BIN='$real_zig' RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$mk_sh'; [ \$? = 127 ] &&
-      grep -qxF 'zig-cc: pw needs make: a configure.win script; no $wnb/binutils/nm.exe' '$W/check.err' &&
+  mk_only="$W/onlymake"
+  check "--rzig-check=package on Windows: a configure.win script, no sh, 127, the reason" \
+    bash -c "$pc cc='$wnb/gcc' pkg_check pw ZIG_BIN='$real_zig' RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$mk_only'; [ \$? = 127 ] &&
+      grep -q '^zig-cc: pw needs make: a configure.win script; no sh on PATH' '$W/check.err' &&
       grep -q '^Building packages needs the r-zig build tools for R ' '$W/check.err'"
-  check "--rzig-check=package on Windows: a configure.ucrt script, no binutils, 127, the reason" \
-    bash -c "$pc cc='$wnb/gcc' pkg_check pu ZIG_BIN='$real_zig' RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$mk_sh'; [ \$? = 127 ] &&
-      grep -qxF 'zig-cc: pu needs make: a configure.ucrt script; no $wnb/binutils/nm.exe' '$W/check.err'"
-  check "--rzig-check=package on Windows: a configure script R runs (R_ZIG_CONFIGURE=1), no binutils, 127" \
-    bash -c "$pc cc='$wnb/gcc' pkg_check pw ZIG_BIN='$real_zig' RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$mk_sh' R_ZIG_CONFIGURE=1; [ \$? = 127 ] &&
-      grep -qxF 'zig-cc: pw needs make: a configure script R runs; no $wnb/binutils/nm.exe' '$W/check.err'"
+  check "--rzig-check=package on Windows: a configure.ucrt script, no sh, 127, the reason" \
+    bash -c "$pc cc='$wnb/gcc' pkg_check pu ZIG_BIN='$real_zig' RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$mk_only'; [ \$? = 127 ] &&
+      grep -q '^zig-cc: pu needs make: a configure.ucrt script; no sh on PATH' '$W/check.err'"
+  check "--rzig-check=package on Windows: a configure script R runs (R_ZIG_CONFIGURE=1), no sh, 127" \
+    bash -c "$pc cc='$wnb/gcc' pkg_check pw ZIG_BIN='$real_zig' RZIG_PRINT_ARGV=1 RZIG_OS=windows PATH='$mk_only' R_ZIG_CONFIGURE=1; [ \$? = 127 ] &&
+      grep -q '^zig-cc: pw needs make: a configure script R runs; no sh on PATH' '$W/check.err'"
 fi
 # a tier-2 package whose plan needs make: make would ignore its build.zig,
 # so the check and rzig build stop with why, 1, not 3 [preflight-PF-1],

@@ -16,6 +16,10 @@
 //!     ar
 //!   zig-ranlib,       zig ranlib
 //!     gcc-ranlib, ranlib
+//!   nm, objdump,      Windows' binutils, as Makeconf.win, R CMD check
+//!     strip, dlltool, and CMake run them (binutils.zig): nm, objdump and
+//!     windres, as      strip read and write COFF here; dlltool, windres
+//!                      and as run zig dlltool, zig rc and zig cc
 //!   rzig <name> ...   the same, naming the tool explicitly
 //!   rzig build ...    one package's library with zig build alone
 //!                     (pkgbuild.zig; install.R's hook, patch 0013)
@@ -96,6 +100,7 @@ const builtin = @import("builtin");
 const mem = std.mem;
 const Io = std.Io;
 const Ctx = @import("Ctx.zig");
+const stdio = @import("stdio.zig");
 const compiler = @import("compiler.zig");
 const fortran = @import("fortran.zig");
 const ar = @import("ar.zig");
@@ -110,6 +115,7 @@ const check = @import("check.zig");
 const groups = @import("groups.zig");
 const testutil = @import("testutil.zig");
 const crash = @import("crash.zig");
+const binutils = @import("binutils.zig");
 
 /// A crash never exits 3, rzig build's "needs make" (crash.zig).
 pub const panic = crash.panic;
@@ -121,6 +127,12 @@ const Tool = enum {
     fc,
     ar,
     ranlib,
+    nm,
+    objdump,
+    strip,
+    dlltool,
+    windres,
+    as,
 
     fn fromName(name: []const u8) ?Tool {
         const map = std.StaticStringMap(Tool).initComptime(.{
@@ -129,7 +141,10 @@ const Tool = enum {
             .{ "zig-fc", .fc },         .{ "zig-ar", .ar },
             .{ "zig-ranlib", .ranlib }, .{ "gcc-ar", .ar },
             .{ "gcc-ranlib", .ranlib }, .{ "ar", .ar },
-            .{ "ranlib", .ranlib },
+            .{ "ranlib", .ranlib },     .{ "nm", .nm },
+            .{ "objdump", .objdump },   .{ "strip", .strip },
+            .{ "dlltool", .dlltool },   .{ "windres", .windres },
+            .{ "as", .as },
         });
         return map.get(name);
     }
@@ -142,6 +157,12 @@ const Tool = enum {
             .fc => "zig-fc",
             .ar => "zig-ar",
             .ranlib => "zig-ranlib",
+            .nm => "nm",
+            .objdump => "objdump",
+            .strip => "strip",
+            .dlltool => "dlltool",
+            .windres => "windres",
+            .as => "as",
         };
     }
 };
@@ -160,6 +181,7 @@ const Subcommand = enum {
 
 const usage =
     \\usage: zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib|gcc|g++|gcc-ar|gcc-ranlib|ar|ranlib [args...]
+    \\       nm|objdump|strip|dlltool|windres|as [args...]   (Windows' binutils)
     \\       <one of those names> --rzig-check[=fortran|build-tools|package]
     \\       rzig <one of those names> [args...]
     \\       rzig build --pkg <dir> --out <dir> [options]   (rzig build --help)
@@ -248,6 +270,23 @@ pub fn main(init: std.process.Init) !u8 {
     // zig, found first. zig-fc's compiles run flang alone, so a missing
     // zig stops only a command that runs zig (below).
     ctx.zig = if (try find_zig.find(&ctx)) |z| z.argv else null;
+    // nm, objdump and strip run here; strip's archives through zig ar.
+    // The binutils take `@file` for the words in it, as GNU's (libiberty's
+    // expandargv) do; a file that cannot be read stays a word.
+    const bu_args: []const []const u8 = switch (t) {
+        .nm, .objdump, .strip, .dlltool, .windres, .as => try response.expand(&ctx, caller),
+        else => caller,
+    };
+    switch (t) {
+        .nm, .objdump => {
+            var out: std.ArrayList(u8) = .empty;
+            const code = if (t == .nm) try binutils.nm(&ctx, bu_args, &out) else try binutils.objdump(&ctx, bu_args, &out);
+            stdio.writeAll(io, .stdout(), out.items) catch return 1;
+            return code;
+        },
+        .strip => return binutils.strip(&ctx, bu_args),
+        else => {},
+    }
     const cmd: Ctx.Command = switch (t) {
         .cc, .cxx => .{ .zig = try compiler.argv(&ctx, if (t == .cc) .c else .cxx, caller) },
         // no flang: 127, as a shell gives for a command it cannot find
@@ -257,6 +296,18 @@ pub fn main(init: std.process.Init) !u8 {
         },
         .ar => .{ .zig = try ar.argv(&ctx, caller) },
         .ranlib => .{ .zig = try mem.concat(arena, []const u8, &.{ &.{"ranlib"}, caller }) },
+        .dlltool, .windres, .as => .{
+            .zig = (switch (t) {
+                .dlltool => binutils.dlltoolArgv(&ctx, bu_args),
+                .windres => binutils.windresArgv(&ctx, bu_args),
+                else => binutils.asArgv(&ctx, bu_args),
+            }) catch |err| switch (err) {
+                // --version printed its line; anything else, why it stopped
+                error.Usage => return if (bu_args.len == 1 and mem.eql(u8, bu_args[0], "--version")) 0 else 1,
+                else => |e| return e,
+            },
+        },
+        .nm, .objdump, .strip => unreachable,
     };
     // zig, when the command is zig's: for a compile or link with the
     // libc++ mirror prepared (a flang command needs neither)
@@ -401,7 +452,7 @@ fn longPathName(arena: mem.Allocator, p: []const u8) ?[]const u8 {
 /// flang's (phase 6, Cc6).
 fn printArgv(io: Io, out_file: Io.File, env: *const std.process.Environ.Map, blocks: []const Block) !u8 {
     var buf: [4096]u8 = undefined;
-    var w = out_file.writerStreaming(io, &buf);
+    var w: stdio.Writer = .init(io, out_file, &buf);
     const out = &w.interface;
     const first_zig = for (blocks, 0..) |b, i| {
         if (b.zig) break i;
@@ -418,7 +469,7 @@ fn printArgv(io: Io, out_file: Io.File, env: *const std.process.Environ.Map, blo
 /// The check mode's line: `<name>: <line>`, on stdout (main's).
 fn printLine(io: Io, out_file: Io.File, name: []const u8, line: []const u8) !void {
     var buf: [4096]u8 = undefined;
-    var w = out_file.writerStreaming(io, &buf);
+    var w: stdio.Writer = .init(io, out_file, &buf);
     try w.interface.print("{s}: {s}\n", .{ name, line });
     try w.interface.flush();
 }
@@ -508,8 +559,10 @@ test toolName {
     // ar.exe and ranlib.exe, what CMake finds beside gcc.exe: zig-ar and zig-ranlib too
     for ([_][]const u8{ "ar.exe", "C:/env/Library/lib/R/bin/toolchain/ar.EXE" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .ar);
     for ([_][]const u8{ "ranlib.exe", "C:/env/Library/lib/R/bin/toolchain/ranlib.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == .ranlib);
-    // gcc-nm and nm are not (B43-2, B24): conda-forge's binutils/nm.exe
-    for ([_][]const u8{ "gcc-nm", "gcc-nm.exe", "nm", "nm.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == null);
+    // gcc-nm is not (B43-2): the LTO block's name for a file that does
+    // not ship; nm and the other binutils are rzig's (binutils.zig)
+    for ([_][]const u8{ "gcc-nm", "gcc-nm.exe" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == null);
+    for ([_][]const u8{ "nm", "nm.exe", "objdump.exe", "strip.exe", "dlltool.exe", "windres.exe", "as.exe" }, [_]Tool{ .nm, .nm, .objdump, .strip, .dlltool, .windres, .as }) |n, want| try std.testing.expect(Tool.fromName(toolName(n)) == want);
     // no other Fortran name: FC is zig-fc, flang and gfortran stay themselves
     for ([_][]const u8{ "flang", "gfortran.exe", "zig-f77" }) |n| try std.testing.expect(Tool.fromName(toolName(n)) == null);
     // 8.3 short names name no tool; the long path does (R1, Windows only)
@@ -607,6 +660,7 @@ test shellCommand {
 
 test {
     _ = @import("cmdline.zig");
+    _ = binutils;
     _ = @import("cache.zig");
     _ = @import("linker_args.zig");
     _ = @import("archives.zig");
@@ -623,6 +677,7 @@ test {
     _ = @import("pkgplan.zig");
     _ = pkgbuild;
     _ = @import("tier1.zig");
+    _ = stdio;
     _ = def;
     _ = check;
     _ = groups;
