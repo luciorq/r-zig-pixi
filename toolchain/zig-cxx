@@ -104,17 +104,16 @@ for a in "$@"; do
 done
 set -- "${_a[@]}"
 
-# Linker options zig cannot take: -L out of -Wl,/-Xlinker, --dependency-
-# file and --allow-multiple-definition/-z muldefs dropped. See zig-cc.
+# Linker options zig cannot take: -L out of -Wl,/-Xlinker,
+# --allow-multiple-definition/-z muldefs dropped. See zig-cc.
 _li() { # _li ITEM [NEXT]: what becomes of linker option ITEM: _act, _val, _n
   _act=keep _val= _n=1
   case "$1" in
     -L|--library-path) [ $# -ge 2 ] && [ -n "$2" ] && { _act=lib _val=$2 _n=2; } ;;
-    --dependency-file) _act=drop; [ $# -ge 2 ] && _n=2 ;;
     -z) [ $# -ge 2 ] && [ "$2" = muldefs ] && { _act=drop _n=2; } ;;
     -L?*) _act=lib _val=${1#-L} ;;
     --library-path=?*) _act=lib _val=${1#--library-path=} ;;
-    --dependency-file=*|--allow-multiple-definition|-allow-multiple-definition|-zmuldefs) _act=drop ;;
+    --allow-multiple-definition|-allow-multiple-definition|-zmuldefs) _act=drop ;;
   esac
 }
 _a=()

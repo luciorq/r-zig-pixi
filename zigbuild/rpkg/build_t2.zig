@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
     const opts: rpkg.Options = .{
         .plan = plan,
         .target = b.resolveTargetQuery(query),
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
         .r_include = plan.r_include,
     };
     const dep = b.dependency("pkg", .{});

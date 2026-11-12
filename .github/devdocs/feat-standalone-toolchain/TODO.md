@@ -183,14 +183,15 @@ D5 (a), D8-D11 (a), D13 (a), E3 (a), E4 (a).
       the re-lock pins exact builds and drops the win-64 override
 - [x] 2026-10-08, A2': no upstream report on the MinGW atexit export;
       build.zig's atexit workaround stays in the 0.17 port
-- [ ] Before our pins move to flang-rt-zig 11 (a 0.17 build): nm its
-      runtime archive on every subdir for symbols our zig 0.16 lacks, link
-      each with zig 0.16, build R and a Fortran package on kappa
-- [ ] The port of build.zig and rzig to 0.17 (`b.install_prefix`,
-      `b.pathFromRoot`, configure caching) and zig-build.sh's argument
-      order, behind a 0.16/0.17 switch, on the linux and macOS
-      upstream-zig legs; fetch-zig.sh gets a 0.17 pin once PyPI has all
-      five ziglang 0.17.0 wheels (win-64 stays on 0.16 until then)
+- [x] Superseded by the move itself: the pins go to flang-zig 7,
+      lld-zig 6 and flang-rt-zig 11 with zig 0.17 (no zig 0.16 link of
+      flang-rt-zig 11 needed)
+- [x] The port of build.zig, the toolchain build, rzig and rpkg to 0.17
+      (feat-zig-017, 2026-11-09): 0.17 only, no switch (one toolchain);
+      `-Dprefix` beside --prefix; fetch-zig.sh pins ziglang 0.17.1, which
+      has all five wheels and win_arm64. Record:
+      .github/devdocs/feat-zig-017/PLAN.md. The re-lock awaits the
+      user's approval
 
 ## Phase 2 — rzig knows the groups
 

@@ -54,18 +54,23 @@ pub fn exports(a: mem.Allocator, data: []const u8, out: *std.ArrayList([]const u
     if (data.len < symtab_end + 4) return error.BadObject;
     const strtab_size = mem.readInt(u32, data[symtab_end..][0..4], .little);
     if (strtab_size < 4 or data.len < symtab_end + strtab_size) return error.BadObject;
-    const strtab: coff.Strtab = .{ .buffer = data[symtab_end .. symtab_end + strtab_size] };
-    const symtab: coff.Symtab = .{ .buffer = data[symtab_off..symtab_end] };
+    const strtab = data[symtab_end .. symtab_end + strtab_size];
 
+    // Each 18-byte record read here, not through std.coff's Symtab: since
+    // zig 0.17 its SectionNumber is an i16 and its reader @intCasts the
+    // record's u16 into it, which panics on 0xfffe and 0xffff (debug,
+    // absolute) and on any section past 32,767; the sections run to
+    // 65,279 (K3).
     var i: usize = 0;
     while (i < nsyms) {
-        const sym = symtab.at(i, .symbol).symbol;
+        const rec = data[symtab_off + i * 18 ..][0..18];
         // in usize: 1 + 255 aux records overflows u8
-        defer i += 1 + @as(usize, sym.number_of_aux_symbols);
-        if (sym.storage_class != .EXTERNAL) continue;
-        const section = @intFromEnum(sym.section_number);
+        defer i += 1 + @as(usize, rec[17]);
+        if (rec[16] != @backingInt(coff.StorageClass.EXTERNAL)) continue;
+        const value = mem.readInt(u32, rec[8..12], .little);
+        const section = mem.readInt(u16, rec[12..14], .little);
         if (section == 0) {
-            if (sym.value == 0) continue; // undefined
+            if (value == 0) continue; // undefined
             // a common (nm: C)
         } else if (section == 0xffff or section == 0xfffe) {
             continue; // absolute, debug
@@ -77,10 +82,14 @@ pub fn exports(a: mem.Allocator, data: []const u8, out: *std.ArrayList([]const u
             if (!(fl.CNT_CODE or fl.CNT_INITIALIZED_DATA or fl.CNT_UNINITIALIZED_DATA)) continue;
             if (fl.LNK_INFO or fl.LNK_REMOVE or fl.MEM_DISCARDABLE) continue; // .drectve, debug
         }
-        const name: []const u8 = sym.getName() orelse blk: {
-            const off = sym.getNameOffset() orelse continue;
-            if (off >= strtab.buffer.len) return error.BadObject;
-            break :blk strtab.get(off);
+        // the name in the record (up to 8 bytes, NUL-padded), or, when its
+        // first 4 bytes are 0, an offset into the string table
+        const name: []const u8 = if (mem.readInt(u32, rec[0..4], .little) != 0)
+            rec[0 .. mem.findScalar(u8, rec[0..8], 0) orelse 8]
+        else blk: {
+            const off = mem.readInt(u32, rec[4..8], .little);
+            if (off >= strtab.len) return error.BadObject;
+            break :blk mem.sliceTo(strtab[off..], 0);
         };
         if (name.len == 0 or filtered(name)) continue;
         var seen = false;
@@ -201,7 +210,7 @@ test "exports: symbols in section 1640 and up to 65,279, the most a COFF object 
         const r = data[symtab_off + i * coff.Symbol.sizeOf() ..][0..18];
         @memcpy(r[0..s.name.len], s.name);
         mem.writeInt(u16, r[12..14], s.section, .little);
-        r[16] = @intFromEnum(coff.StorageClass.EXTERNAL);
+        r[16] = @backingInt(coff.StorageClass.EXTERNAL);
     }
     mem.writeInt(u32, data[data.len - 4 ..][0..4], 4, .little); // an empty string table
     var names: std.ArrayList([]const u8) = .empty;
@@ -229,7 +238,7 @@ test "exports: a symbol with 255 aux records, the most its u8 count holds (K3)" 
     const r = data[symtab_off..][0..18];
     @memcpy(r[0..2], "fn");
     mem.writeInt(u16, r[12..14], 1, .little);
-    r[16] = @intFromEnum(coff.StorageClass.EXTERNAL);
+    r[16] = @backingInt(coff.StorageClass.EXTERNAL);
     r[17] = naux;
     mem.writeInt(u32, data[data.len - 4 ..][0..4], 4, .little); // an empty string table
     var names: std.ArrayList([]const u8) = .empty;

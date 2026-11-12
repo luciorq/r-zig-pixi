@@ -177,18 +177,16 @@ set -- "${_a[@]}"
 # Linker options zig cannot take, in every spelling (inside -Wl, as one
 # item or two, after -Xlinker, and -z on its own). -L<dir> and
 # --library-path=<dir> ("unsupported linker arg", RcppParallel) become the
-# driver's -L<dir>; --dependency-file (CMake's, which crashes zig) and
-# --allow-multiple-definition or -z muldefs (rejected; a real duplicate
+# driver's -L<dir>; --allow-multiple-definition or -z muldefs (rejected; a real duplicate
 # then fails loudly) go. rzig: linker_args.zig.
 _li() { # _li ITEM [NEXT]: what becomes of linker option ITEM: _act, _val, _n
   _act=keep _val= _n=1
   case "$1" in
     -L|--library-path) [ $# -ge 2 ] && [ -n "$2" ] && { _act=lib _val=$2 _n=2; } ;;
-    --dependency-file) _act=drop; [ $# -ge 2 ] && _n=2 ;;
     -z) [ $# -ge 2 ] && [ "$2" = muldefs ] && { _act=drop _n=2; } ;;
     -L?*) _act=lib _val=${1#-L} ;;
     --library-path=?*) _act=lib _val=${1#--library-path=} ;;
-    --dependency-file=*|--allow-multiple-definition|-allow-multiple-definition|-zmuldefs) _act=drop ;;
+    --allow-multiple-definition|-allow-multiple-definition|-zmuldefs) _act=drop ;;
   esac
 }
 _a=()

@@ -65,7 +65,7 @@ fetch = "bash scripts/fetch-r.sh"
 build = { cmd = "bash scripts/zig-build.sh", depends-on = ["fetch"] }
 # Upstream zig (feat-no-host-paths F4): R builds with this env's zig
 # (conda-forge's) and with upstream zig, the ziglang.org release, which
-# PyPI's ziglang is. fetch-zig downloads PyPI's ziglang 0.16.0 wheel for
+# PyPI's ziglang is. fetch-zig downloads PyPI's ziglang 0.17.1 wheel for
 # this platform once (sha256 pinned in the script; no Python, it is a
 # zip), unpacks it under build/zig-upstream/ and prints its zig's path.
 # The tasks here honour ZIG_BIN, so with it they build and test with
@@ -218,7 +218,7 @@ ci-rerun-failed = "gh run rerun --failed $(gh run list --workflow=build.yaml --l
 
 [dependencies]
 # --- toolchain ---
-zig = "0.16.*"
+zig = "0.17.*"
 make = ">=4.4"
 pkg-config = "*"
 # Fortran: flang-pixi's zig-built LLVM flang (23.1.1, `universe`) on every
@@ -231,22 +231,21 @@ pkg-config = "*"
 # its flang-rt ships a shared runtime with default visibility.
 # build.zig requires it: without $CONDA/bin/flang the build stops.
 # ~1.5 GiB closure (flang-zig + lld-zig + flang-rt-zig).
-# Pinned to flang-pixi's 2026-10-07 release, one build number per package
-# on every platform, built with zig 0.16.0: flang-zig 6, lld-zig 5,
-# flang-rt-zig 10. Its zig 0.17 builds will come at the next numbers
-# (7, 6, 11), so the pins keep us on the 0.16 builds until we move on
-# purpose. ==N, not >=N,<N+1: pixi 0.81 takes one comparison per
+# Pinned to flang-pixi's zig 0.17 release, one build number per package
+# on every platform (win-arm64 included): flang-zig 7, lld-zig 6,
+# flang-rt-zig 11 (its zig 0.16 builds were 6, 5 and 10; the zig 0.17
+# wave, feat-zig-017). ==N, not >=N,<N+1: pixi 0.81 takes one comparison per
 # build-number (a range is a parse error), and for an integer it is the
 # same. lld-zig is listed for its pin only: flang-zig accepts any lld-zig
 # 23.1.1 build.
-flang-zig = { version = "==23.1.1", build-number = "==6" }
-lld-zig = { version = "==23.1.1", build-number = "==5" }
-# flang-rt-zig 10: static-only (no .so/.dylib) and built with hidden
+flang-zig = { version = "==23.1.1", build-number = "==7" }
+lld-zig = { version = "==23.1.1", build-number = "==6" }
+# flang-rt-zig (since 10): static-only (no .so/.dylib) and built with hidden
 # visibility on every platform, so a Fortran package exports only its own
 # symbols instead of re-exporting the whole runtime (~830 on macOS, ~1,240
 # on linux) and -lflang_rt.runtime can only mean the archive. Also ships
 # omp_lib.mod (`use omp_lib`); it requires llvm-openmp >= 23 (below).
-flang-rt-zig = { version = "==23.1.1", build-number = "==10" }
+flang-rt-zig = { version = "==23.1.1", build-number = "==11" }
 # --- portable userland (fetch/extract tools; coreutils are per-target below) ---
 curl = "*"
 # --- core libraries R links against (slim profile) ---
@@ -444,7 +443,7 @@ R_BLAS = "openblas"
 #
 # The wheels (`pixi run -e wheel wheel`) wrap this variant's standalone
 # tree: r-zig is the tree. The runtime compiler for install.packages() is
-# the PyPI `ziglang` package (same zig version as this env's, 0.16.0),
+# the PyPI `ziglang` package (the same zig 0.17 as this env's: conda-forge has 0.17.0, PyPI 0.17.1),
 # which the r-zig-compilers wheel requires (feat-standalone-toolchain
 # B29).
 [feature.minimal]
@@ -455,7 +454,7 @@ R_VERSION = "4.6.1"
 R_BUILD_VARIANT = "minimal"
 
 [feature.minimal.dependencies]
-zig = "0.16.*"
+zig = "0.17.*"
 make = ">=4.4"
 pkg-config = "*"
 curl = "*"
@@ -475,9 +474,9 @@ gzip = "*"
 unzip = "*"
 zip = "*"
 patch = "*"
-flang-zig = { version = "==23.1.1", build-number = "==6" }  # pins: see [dependencies]
-lld-zig = { version = "==23.1.1", build-number = "==5" }
-flang-rt-zig = { version = "==23.1.1", build-number = "==10" }
+flang-zig = { version = "==23.1.1", build-number = "==7" }  # pins: see [dependencies]
+lld-zig = { version = "==23.1.1", build-number = "==6" }
+flang-rt-zig = { version = "==23.1.1", build-number = "==11" }
 
 [feature.minimal.target.linux-64.dependencies]
 uutils-coreutils = "*"

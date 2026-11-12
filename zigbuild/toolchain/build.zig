@@ -4,15 +4,19 @@
 //! <prefix>/lib/R/bin/toolchain/<dir>/ (Windows:
 //! <prefix>/Library/lib/R/bin/toolchain/<dir>/), each directory with
 //! SOURCES and LICENSES/ (point 3). Its own build root, as rzig's is:
-//!   zig build --build-file zigbuild/toolchain/build.zig --prefix <tree>
+//!   zig build --build-file zigbuild/toolchain/build.zig --prefix <tree> -Dprefix=<tree>
 //! needs no R source and runs no R configure. scripts/zig-toolchain.sh
 //! (pixi run toolchain) installs dist/toolchain/R-<ver>-zig with it, and
 //! package-standalone.sh's toolchain mode archives the groups from there
 //! (B17). `test` runs conda.zig's, wheel.zig's and pkgconf.zig's unit
 //! tests (pixi run toolchain-test). With -Dbase it writes the R tree's records instead
 //! (PHASE8 open points A a, F a; installBase, below):
-//!   zig build --build-file zigbuild/toolchain/build.zig --prefix <R tree> -Dbase
-//! which scripts/zig-build.sh runs after vendor-libs.sh.
+//!   zig build --build-file zigbuild/toolchain/build.zig --prefix <R tree> -Dprefix=<R tree> -Dbase
+//! which scripts/zig-build.sh runs after vendor-libs.sh. zig 0.17's
+//! configure step does not see --prefix, so -Dprefix repeats it: this
+//! build reads the tree and the env's records at configure time. Each
+//! directory's SOURCES is written at make time by sources_tool.zig (a
+//! built file's line needs its sha256).
 //!
 //! What it installs, today's third-party files (phase 3's table, zig/ from
 //! phase 5, flang/ from phase 6, Windows' usr/ and etc/ from phase 7):
@@ -86,6 +90,7 @@ const mem = std.mem;
 const conda = @import("conda.zig");
 const wheel = @import("wheel.zig");
 const pkgconf = @import("pkgconf.zig");
+const sources_tool = @import("sources_tool.zig");
 
 /// A file a directory copies from the env.
 const Copy = struct {
@@ -266,7 +271,7 @@ pub fn build(b: *std.Build) !void {
     const test_step = b.step("test", "Run the conda-meta and wheel readers', SOURCES writer's and pkgconf pins' unit tests");
     // pkgconf.zig's pin test reads the recipe (paths.recipe).
     const paths = b.addOptions();
-    paths.addOption([]const u8, "recipe", b.pathFromRoot("../../recipe/recipe.yaml"));
+    paths.addOption([]const u8, "recipe", b.fmt("{s}/../../recipe/recipe.yaml", .{try buildRoot(b, io)}));
     for ([_][]const u8{ "conda.zig", "wheel.zig", "pkgconf.zig" }) |root| {
         const mod = b.createModule(.{
             .root_source_file = b.path(root),
@@ -278,11 +283,22 @@ pub fn build(b: *std.Build) !void {
     const ziglang = b.option([]const u8, "ziglang", "PyPI's ziglang wheel, unpacked (scripts/fetch-zig.sh's directory): the compilers group's zig/");
     const pkgconf_dir = b.option([]const u8, "pkgconf", "pkgconf's source tarball, unpacked (the conda build's; else build.zig.zon's pkgconf): Windows' usr/bin/pkgconf.exe");
     const base = b.option(bool, "base", "Write the records of the R tree at --prefix (its files from the env) instead of the toolchain tree") orelse false;
+    // zig 0.17's configure step does not see --prefix (the maker installs
+    // there): -Dprefix names the same directory, which the toolchain tree's
+    // copies, records and prefix_is_env read now. scripts/zig-toolchain.sh
+    // and zig-build.sh pass both. Without it, only `test` runs.
+    const prefix_opt = b.option([]const u8, "prefix", "The same directory as --prefix (zig 0.17's configure step does not see --prefix): the toolchain tree, or with -Dbase the R tree");
 
+    // This configure step reads the env's conda-meta, the package cache and
+    // the tree at -Dprefix: nothing zig's configure cache can track.
+    b.graph.poisonCache();
     const env = b.graph.environ_map.get("CONDA_PREFIX") orelse
         return fail("CONDA_PREFIX is not set: run through pixi (pixi run toolchain)", .{});
     const os = b.graph.host.result.os.tag;
-    const prefix = try mem.replaceOwned(u8, arena, b.install_prefix, "\\", "/");
+    const prefix = try mem.replaceOwned(u8, arena, prefix_opt orelse {
+        b.getInstallStep().dependOn(&b.addFail("pass -Dprefix=<dir>, the same directory as --prefix (scripts/zig-toolchain.sh and zig-build.sh do)").step);
+        return;
+    }, "\\", "/");
     const prefix_is_env = samePhysicalDir(io, arena, prefix, env);
     if (base) return installBase(b, io, env, prefix, prefix_is_env, os);
     const tc = if (os == .windows) "Library/lib/R/bin/toolchain" else "lib/R/bin/toolchain";
@@ -291,9 +307,15 @@ pub fn build(b: *std.Build) !void {
     const records = try readRecords(b, io, env, try dirNeedles(b, dirs));
     var summary: std.ArrayList(u8) = .empty;
     // Windows' usr/bin/pkgconf.exe, built (installPkgconf): on both
-    // channels. Null while zig fetches the lazy dependency (the configure
-    // step then runs again).
+    // channels. error.LazyDependencyNeeded, returned from here, makes zig
+    // fetch build.zig.zon's pkgconf and run this configure step again.
     const built: ?BuiltDir = if (os == .windows) try installPkgconf(b, io, tc, pkgconf_dir) else null;
+    // SOURCES' writer, run when a directory's files are made
+    // (sources_tool.zig).
+    const tool = b.addExecutable(.{ .name = "sources_tool", .root_module = b.createModule(.{
+        .root_source_file = b.path("sources_tool.zig"),
+        .target = b.graph.host,
+    }) });
     for (dirs) |d| {
         const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/{s}", .{ tc, d.name }) };
         var copies: std.ArrayList(conda.Copy) = .empty;
@@ -326,7 +348,7 @@ pub fn build(b: *std.Build) !void {
                 t.package, t.name orelse "file", t.from, env, d.name, if (t.name == null) "every file there" else "it",
             });
         }
-        const own: []const SourcesStep.Built = if (built != null and mem.eql(u8, d.name, built.?.dir)) built.?.files else &.{};
+        const own: []const BuiltFile = if (built != null and mem.eql(u8, d.name, built.?.dir)) built.?.files else &.{};
         if (copies.items.len == 0 and own.len == 0) continue;
         for (records) |*r| {
             if (r.upstream != null) continue;
@@ -338,7 +360,7 @@ pub fn build(b: *std.Build) !void {
             }
         }
 
-        b.getInstallStep().dependOn(&SourcesStep.create(b, copies.items, own, dest).step);
+        try installSources(b, tool, copies.items, own, dest);
 
         try summary.print(arena, "{s}{s}/ (", .{ if (summary.items.len == 0) "" else ", ", d.name });
         var packages: std.ArrayList(*const conda.Record) = .empty;
@@ -394,7 +416,7 @@ fn copyOf(b: *std.Build, records: []const conda.Record, src: []const u8, from: [
             error.PrefixPlaceholder => fail("{s}: conda rewrote it at install ({s} has a prefix placeholder in it), so the env's file names the env and is not the package's", .{ from, name }),
         };
     };
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = src }, dest, to).step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.graph.cwdRelativePath(src), dest, to).step);
     return copy;
 }
 
@@ -403,7 +425,15 @@ fn copyOf(b: *std.Build, records: []const conda.Record, src: []const u8, from: [
 const BuiltDir = struct {
     /// The group directory.
     dir: []const u8,
-    files: []const SourcesStep.Built,
+    files: []const BuiltFile,
+};
+
+/// A file the toolchain build compiles, as SOURCES lists it.
+const BuiltFile = struct {
+    record: *const conda.Record,
+    from: []const u8,
+    to: []const u8,
+    file: std.Build.LazyPath,
 };
 
 /// Windows' usr/bin/pkgconf.exe and pkg-config.exe, one exe (pkgconf.zig),
@@ -414,12 +444,14 @@ const BuiltDir = struct {
 /// zig that built it in place of a conda build string, and this repository
 /// as its recipe. The source: `dir` (-Dpkgconf, the conda build's
 /// unpacked source), else build.zig.zon's lazy `pkgconf`, which zig
-/// fetches into zigbuild/toolchain/zig-pkg/; null until it has.
-fn installPkgconf(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !?BuiltDir {
+/// fetches into zigbuild/toolchain/zig-pkg/.
+fn installPkgconf(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !BuiltDir {
     const arena = b.allocator;
     const src = if (dir) |d| d else blk: {
-        const dep = b.lazyDependency("pkgconf", .{}) orelse return null;
-        break :blk dep.path("").getPath(dep.builder);
+        // Not yet fetched: zig fetches it and runs this configure step
+        // again (std.Build.dependencyLazy).
+        const dep = try b.dependencyLazy("pkgconf", .{});
+        break :blk dep.builder.root.root_dir.path orelse ".";
     };
     const abs = try realPath(b, io, src);
     const arch = b.graph.host.result.cpu.arch;
@@ -428,14 +460,12 @@ fn installPkgconf(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !
     const bin = exe.getEmittedBin();
     for ([_][]const u8{ "pkgconf.exe", "pkg-config.exe" }) |name|
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(bin, dest, b.fmt("bin/{s}", .{name})).step);
-    const crt = b.graph.zig_lib_directory.join(arena, &.{ "libc", "mingw", "COPYING" }) catch @panic("OOM");
-    for ([_][2][]const u8{
-        .{ b.fmt("{s}/COPYING", .{abs}), "COPYING" },
-        .{ crt, "mingw-w64-crt-COPYING" },
-    }) |l| {
-        if (!pathExists(io, l[0])) return fail("pkgconf: {s} is missing (LICENSES/pkgconf/{s})", .{ l[0], l[1] });
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = l[0] }, dest, b.fmt("LICENSES/pkgconf/{s}", .{l[1]})).step);
-    }
+    const copying = b.fmt("{s}/COPYING", .{abs});
+    if (!pathExists(io, copying)) return fail("pkgconf: {s} is missing (LICENSES/pkgconf/COPYING)", .{copying});
+    for ([_]struct { std.Build.LazyPath, []const u8 }{
+        .{ b.graph.cwdRelativePath(copying), "COPYING" },
+        .{ std.Build.LazyPath.zig_lib.path(b, "libc/mingw/COPYING"), "mingw-w64-crt-COPYING" },
+    }) |l| b.getInstallStep().dependOn(&b.addInstallFileWithDir(l[0], dest, b.fmt("LICENSES/pkgconf/{s}", .{l[1]})).step);
     const record = try arena.create(conda.Record);
     record.* = .{
         .name = "pkgconf",
@@ -450,65 +480,51 @@ fn installPkgconf(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !
             .commit = "zigbuild/toolchain/pkgconf.zig",
         },
     };
-    const files = try arena.alloc(SourcesStep.Built, 2);
+    const files = try arena.alloc(BuiltFile, 2);
     files[0] = .{ .record = record, .from = "pkgconf.exe", .to = "bin/pkgconf.exe", .file = bin };
     files[1] = .{ .record = record, .from = "pkgconf.exe", .to = "bin/pkg-config.exe", .file = bin };
     return .{ .dir = "usr", .files = files };
 }
 
-/// A group directory's SOURCES (conda.zig's writer), written when the
-/// directory's files are made: the copies' lines are known at configure
-/// time, a built file's sha256 only once it is built.
-const SourcesStep = struct {
-    step: std.Build.Step,
-    copies: []const conda.Copy,
-    built: []const Built,
-    /// The install path of SOURCES.
-    path: []const u8,
-
-    const Built = struct {
-        record: *const conda.Record,
-        from: []const u8,
-        to: []const u8,
-        file: std.Build.LazyPath,
-    };
-
-    fn create(b: *std.Build, copies: []const conda.Copy, built: []const Built, dest: std.Build.InstallDir) *SourcesStep {
-        const s = b.allocator.create(SourcesStep) catch @panic("OOM");
-        s.* = .{
-            .step = .init(.{ .id = .custom, .name = b.fmt("SOURCES of {s}", .{dest.custom}), .owner = b, .makeFn = make }),
-            .copies = copies,
-            .built = built,
-            .path = b.getInstallPath(dest, "SOURCES"),
-        };
-        for (built) |f| f.file.addStepDependencies(&s.step);
-        return s;
-    }
-
-    fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {
-        const s: *SourcesStep = @fieldParentPtr("step", step);
-        const b = step.owner;
-        const io = b.graph.io;
-        const arena = b.allocator;
-        var all: std.ArrayList(conda.Copy) = .empty;
-        try all.appendSlice(arena, s.copies);
-        for (s.built) |f| {
-            const p = f.file.getPath3(b, step);
-            const data = p.root_dir.handle.readFileAlloc(io, p.sub_path, arena, .limited(256 * 1024 * 1024)) catch |err|
-                return step.fail("cannot read {f} ({t})", .{ p, err });
-            var sha: [32]u8 = undefined;
-            std.crypto.hash.sha2.Sha256.hash(data, &sha, .{});
-            try all.append(arena, .{ .record = f.record, .from = f.from, .to = f.to, .sha256 = b.dupe(&std.fmt.bytesToHex(sha, .lower)) });
+/// A group directory's SOURCES: conda.zig's writer, run by sources_tool
+/// when the directory's files are made, from a spec written now (the
+/// copies' lines are known at configure time, a built file's sha256 only
+/// once it is built; zig 0.17 has no custom steps).
+fn installSources(b: *std.Build, tool: *std.Build.Step.Compile, copies: []const conda.Copy, built: []const BuiltFile, dest: std.Build.InstallDir) !void {
+    const arena = b.allocator;
+    var records: std.ArrayList(conda.Record) = .empty;
+    var ptrs: std.ArrayList(*const conda.Record) = .empty;
+    const index = struct {
+        fn of(a: mem.Allocator, rs: *std.ArrayList(conda.Record), ps: *std.ArrayList(*const conda.Record), r: *const conda.Record) !u32 {
+            if (mem.indexOfScalar(*const conda.Record, ps.items, r)) |i| return @intCast(i);
+            // only what SOURCES writes: no files, paths_data or cache path
+            try rs.append(a, .{ .name = r.name, .version = r.version, .build = r.build, .url = r.url, .sha256 = r.sha256, .license = r.license, .upstream = r.upstream });
+            try ps.append(a, r);
+            return @intCast(ps.items.len - 1);
         }
-        var out: std.Io.Writer.Allocating = .init(arena);
-        try conda.writeSources(arena, &out.writer, all.items);
-        const cwd = std.Io.Dir.cwd();
-        if (std.fs.path.dirname(s.path)) |d| cwd.createDirPath(io, d) catch |err|
-            return step.fail("cannot create {s} ({t})", .{ d, err });
-        cwd.writeFile(io, .{ .sub_path = s.path, .data = out.written() }) catch |err|
-            return step.fail("cannot write {s} ({t})", .{ s.path, err });
-    }
-};
+    }.of;
+    var spec_copies: std.ArrayList(sources_tool.Spec.Copy) = .empty;
+    for (copies) |c| try spec_copies.append(arena, .{
+        .record = try index(arena, &records, &ptrs, c.record),
+        .from = c.from,
+        .to = c.to,
+        .sha256 = c.sha256,
+        .changed = c.changed,
+    });
+    for (built, 0..) |f, i| try spec_copies.append(arena, .{
+        .record = try index(arena, &records, &ptrs, f.record),
+        .from = f.from,
+        .to = f.to,
+        .built = @intCast(i),
+    });
+    const spec: sources_tool.Spec = .{ .records = records.items, .copies = spec_copies.items };
+    const json = try std.json.Stringify.valueAlloc(arena, spec, .{});
+    const run = b.addRunArtifact(tool);
+    run.addFileArg(b.addWriteFiles().add("spec.json", json));
+    const out = run.addOutputFileArg("SOURCES");
+    for (built) |f| run.addFileArg(f.file);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(out, dest, "SOURCES").step);
+}
 
 /// A directory of the R tree whose files came from the env (PHASE8 open
 /// point F a): every file under `to` (relative to the tree's top), from
@@ -748,9 +764,9 @@ fn installZig(b: *std.Build, io: std.Io, dir: []const u8, tc: []const u8, os: st
 
     // zig keeps its mode, as usr/bin/make does; lib/ is one step for its
     // 19,541 files, not one each.
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = b.fmt("{s}/ziglang/{s}", .{ dir, exe }) }, dest, exe).step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.graph.cwdRelativePath(b.fmt("{s}/ziglang/{s}", .{ dir, exe })), dest, exe).step);
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{
-        .source_dir = .{ .cwd_relative = b.fmt("{s}/ziglang/lib", .{dir}) },
+        .source_dir = b.graph.cwdRelativePath(b.fmt("{s}/ziglang/lib", .{dir})),
         .install_dir = dest,
         .install_subdir = "lib",
     }).step);
@@ -773,7 +789,7 @@ fn installZig(b: *std.Build, io: std.Io, dir: []const u8, tc: []const u8, os: st
     }
     if (n == 0) return fail("ziglang: no licence files in {s}; {s}", .{ licenses, fetch_how });
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{
-        .source_dir = .{ .cwd_relative = licenses },
+        .source_dir = b.graph.cwdRelativePath(licenses),
         .install_dir = dest,
         .install_subdir = "LICENSES/ziglang",
     }).step);
@@ -951,7 +967,14 @@ fn ownLicenses(b: *std.Build, io: std.Io, r: *const conda.Record) ![]const u8 {
 }
 
 fn licensesDir(b: *std.Build, r: *const conda.Record) []const u8 {
-    return mem.replaceOwned(u8, b.allocator, b.pathFromRoot(b.fmt("licenses/{s}", .{r.name})), "\\", "/") catch @panic("OOM");
+    const root = buildRoot(b, b.graph.io) catch @panic("cannot resolve the build root");
+    return b.fmt("{s}/licenses/{s}", .{ root, r.name });
+}
+
+/// This build file's directory, absolute, with `/`: zig 0.17's configure
+/// step gets it relative to its own working directory (b.root).
+fn buildRoot(b: *std.Build, io: std.Io) ![]const u8 {
+    return realPath(b, io, b.root.root_dir.path orelse ".");
 }
 
 /// `sub` (LICENSES/<package> in a group directory, <package> in the R
@@ -986,7 +1009,7 @@ fn installLicenses(b: *std.Build, io: std.Io, r: *const conda.Record, dest: std.
         }
         const rel = try mem.replaceOwned(u8, arena, e.path, "\\", "/");
         if (own and (mem.eql(u8, rel, "VERSION") or mem.eql(u8, rel, "ORIGIN"))) continue;
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(.{ .cwd_relative = from }, dest, b.fmt("{s}/{s}", .{ sub, rel })).step);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.graph.cwdRelativePath(from), dest, b.fmt("{s}/{s}", .{ sub, rel })).step);
         n += 1;
     }
     if (n == 0) return fail("{s}: no licence files in {s}; {s}", .{ r.name, src, cache_how });

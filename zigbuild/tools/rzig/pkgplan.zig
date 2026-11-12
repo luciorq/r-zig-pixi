@@ -236,7 +236,7 @@ pub const Planner = struct {
         // files); R CMD SHLIB's the files R names, where a ready object
         // adds no language (.shlib_internal's argument loop)
         const srcs = if (shlib) |s| s.files else try p.listSources(src_dir);
-        var with = std.EnumSet(Lang).initEmpty();
+        var with = std.EnumSet(Lang).empty;
         for (srcs) |s| if (langOf(s)) |l| with.insert(l);
 
         // a variable set in MAKEFLAGS (`make LTO_OPT=-flto`, or MAKEFLAGS=
@@ -1055,9 +1055,10 @@ test "plan.zon round trip" {
     };
     var w: Io.Writer.Allocating = .init(a);
     try writeZon(&plan, &w.writer);
-    const text = try a.dupeZ(u8, w.written());
+    const text = try a.dupeSentinel(u8, w.written(), 0);
     @setEvalBranchQuota(20_000);
-    const back = try std.zon.parse.fromSliceAlloc(Plan, a, text, null, .{});
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const back = try std.zon.parse.fromSlice(Plan, .{ .gpa = a, .arena = a, .source = text, .diagnostics = &diag });
     try testing.expectEqualStrings("cli", back.name);
     try testing.expectEqualStrings("a.o", back.sources[0].obj);
     try testing.expectEqualStrings("-DX=\"q\"", back.cc[2]);

@@ -170,8 +170,8 @@ test platformName {
 }
 
 test archiveExt {
-    const linux: Platform = .{ .r = "4.6.1", .name = "linux-64", .windows = false, .zig = "0.16" };
-    const win: Platform = .{ .r = "4.6.1", .name = "win-64", .windows = true, .zig = "0.16" };
+    const linux: Platform = .{ .r = "4.6.1", .name = "linux-64", .windows = false, .zig = "0.17" };
+    const win: Platform = .{ .r = "4.6.1", .name = "win-64", .windows = true, .zig = "0.17" };
     // the compilers' rule is per group: no OS changes it (PHASE6 Cg2, Cg11)
     try testing.expectEqualStrings("tar.xz", archiveExt(.compilers, linux));
     try testing.expectEqualStrings("tar.xz", archiveExt(.compilers, win));
@@ -183,24 +183,24 @@ test "one text per group, the same on every channel" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const linux: Platform = .{ .r = "4.6.1", .name = "linux-64", .windows = false, .zig = "0.16" };
-    const mac: Platform = .{ .r = "4.6.1", .name = "osx-arm64", .windows = false, .zig = "0.16" };
-    const win: Platform = .{ .r = "4.6.1", .name = "win-64", .windows = true, .zig = "0.16" };
+    const linux: Platform = .{ .r = "4.6.1", .name = "linux-64", .windows = false, .zig = "0.17" };
+    const mac: Platform = .{ .r = "4.6.1", .name = "osx-arm64", .windows = false, .zig = "0.17" };
+    const win: Platform = .{ .r = "4.6.1", .name = "win-64", .windows = true, .zig = "0.17" };
     // other scripts grep these: verify-bundle.sh and hermetic-check.sh the
     // first lines' beginnings, verify-bundle.sh the compilers' standalone
     // line up to the archive it extracts, wheel-test.sh "flang and the
     // OpenMP files" and the pip line, parity-test.sh the first lines and
     // unix's standalone lines
     try testing.expectEqualStrings(
-        \\Compiling needs the r-zig compilers for R 4.6.1 on linux-64: zig 0.16, and flang for Fortran.
-        \\  standalone:  extract R-4.6.1-linux-64-compilers.tar.xz where you extracted R (zig 0.16, flang and the OpenMP files)
+        \\Compiling needs the r-zig compilers for R 4.6.1 on linux-64: zig 0.17, and flang for Fortran.
+        \\  standalone:  extract R-4.6.1-linux-64-compilers.tar.xz where you extracted R (zig 0.17, flang and the OpenMP files)
         \\  conda, pixi: pixi add r-zig-compilers (or conda install r-zig-compilers); r-zig-toolchain installs every group
         \\  pip:         pip install r-zig-compilers (zig only: PyPI has no Fortran compiler); r-zig-toolchain installs every group
         \\
     , try text(a, .compilers, linux));
     try testing.expectEqualStrings(
-        \\Compiling needs the r-zig compilers for R 4.6.1 on win-64: zig 0.16, and flang for Fortran.
-        \\  standalone:  extract R-4.6.1-win-64-compilers.tar.xz where you extracted R (zig 0.16, flang and the OpenMP files)
+        \\Compiling needs the r-zig compilers for R 4.6.1 on win-64: zig 0.17, and flang for Fortran.
+        \\  standalone:  extract R-4.6.1-win-64-compilers.tar.xz where you extracted R (zig 0.17, flang and the OpenMP files)
         \\  conda, pixi: pixi add r-zig-compilers (or conda install r-zig-compilers); r-zig-toolchain installs every group
         \\  pip:         no wheels for Windows
         \\

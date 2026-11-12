@@ -49,8 +49,10 @@
 #     (RZIG_KEEP_ROOT=1) holds the plan, the objects and the library and
 #     no zig build cache (N3); a second install of the cli tarball, which
 #     R unpacks into a new directory each time as install.packages does,
-#     adds no entry to zig's global cache: rzig build's compiles are keyed
-#     as make's are [tests-T1], and its time is printed against make's;
+#     adds as many entries to zig's global cache as make's second install
+#     does: rzig build's compiles are keyed as make's are [tests-T1] (none
+#     with zig 0.16; zig 0.17 keys a source by its absolute path), and its
+#     time is printed against make's;
 #     with ZIG_LOCAL_CACHE_DIR set, zig cc's objects are there, and the
 #     build root still goes [preflight-PF-8]; two tier-1 packages
 #     installed at once by install.packages(Ncpus = 2), from a cold rzig
@@ -492,24 +494,33 @@ if [ "$OS" = windows ]; then
 fi
 
 # --- the caches: nothing per install outlives it ----------------------------
-echo "== caches: no build runner for tier 1; a kept build root; a second install of a tarball adds nothing to zig's global cache; ZIG_LOCAL_CACHE_DIR; two installs at once"
+echo "== caches: no build runner for tier 1; a kept build root; a second install of a tarball keys zig's global cache as make's does; ZIG_LOCAL_CACHE_DIR; two installs at once"
 # From the tarball, as install.packages installs: R unpacks it into a new
-# R.INSTALL directory each time, so a compile keyed on the source's
-# absolute path would add one entry per source per install, which make's
-# `-c <file>` from src/ does not [tests-T1].
+# R.INSTALL directory each time. rzig build names each source relative to
+# src/, as make's `-c <file>` does [tests-T1], so the two paths key zig's
+# global cache alike: a second install adds as many entries through rzig
+# build as through make. With zig 0.16 that was none (its cache keyed a
+# source by its path relative to the working directory); zig 0.17 keys it
+# by its absolute path, whatever the command line says, so both paths
+# recompile into new entries (feat-zig-017).
 rm -rf "$WORK/work/lib-again"; mkdir -p "$WORK/work/lib-again"
 install_pkg "$WORK/work/lib-again" "$(tarball_of cli)" "again-1" > /dev/null || { tail -20 "$WORK/logs/again-1.log" >&2; fail "cli (its tarball) failed to install"; }
 g1=$(global_entries)
 t2=$(install_pkg "$WORK/work/lib-again" "$(tarball_of cli)" "again-2") || { tail -20 "$WORK/logs/again-2.log" >&2; fail "cli (its tarball, again) failed to install"; }
 g2=$(global_entries)
 grep -q "rzig build: tier 1" "$WORK/logs/again-2.log" || fail "the second install of cli did not go through rzig build"
-[ "$g1" = "$g2" ] || fail "a second install of the cli tarball added $((g2 - g1)) entries to zig's global cache ($ZIG_GLOBAL_CACHE_DIR/o: $g1, then $g2): rzig build's compiles must be keyed as make's, by the source's path relative to src/"
+rm -rf "$WORK/work/lib-again-make"; mkdir -p "$WORK/work/lib-again-make"
+R_ZIG_PKG_BUILDER=make install_pkg "$WORK/work/lib-again-make" "$(tarball_of cli)" "again-make-1" > /dev/null || { tail -20 "$WORK/logs/again-make-1.log" >&2; fail "cli (its tarball, make) failed to install"; }
+m1=$(global_entries)
+R_ZIG_PKG_BUILDER=make install_pkg "$WORK/work/lib-again-make" "$(tarball_of cli)" "again-make-2" > /dev/null || { tail -20 "$WORK/logs/again-make-2.log" >&2; fail "cli (its tarball, make, again) failed to install"; }
+m2=$(global_entries)
+[ $((g2 - g1)) = $((m2 - m1)) ] || fail "a second install of the cli tarball added $((g2 - g1)) entries to zig's global cache through rzig build and $((m2 - m1)) through make ($ZIG_GLOBAL_CACHE_DIR/o): rzig build's compiles must be keyed as make's, by the source's path relative to src/"
 no_runner "cli's tarball, twice" "$WORK/logs/again-2.log"
 # and why: each compile named its source relative to src/ (the count holds
 # only while R's temp dir has no build.zig above it, where zig cc would
 # cache in that directory's .zig-cache instead) [tests-T1, tests-T7]
 [ -z "$(abs_sources "$WORK/logs/again-2.log")" ] || { abs_sources "$WORK/logs/again-2.log" | head -3 >&2; fail "rzig build compiled a source by its absolute path (logs/again-2.log): compiles must name it relative to src/, as make does"; }
-echo "   cli's tarball twice: $g1 entries in zig's global cache before and after, every source named relative to src/; the second install ${t2}s (make ${cli_make}s)"
+echo "   cli's tarball twice: $((g2 - g1)) new entries in zig's global cache through rzig build, $((m2 - m1)) through make, every source named relative to src/; the second install ${t2}s (make ${cli_make}s)"
 # A kept build root holds what the install wrote, the plan, the objects
 # (obj/) and the library, and no zig build cache: tier 1 runs no zig
 # build (tier1.zig).

@@ -282,6 +282,12 @@ pub fn build(b: *std.Build) !void {
         return error.MissingCondaPrefix;
     };
 
+    // zig 0.17's configure step does not see --prefix, and reads nothing it
+    // can track: R's sources, the vendored config, the env. -Dprefix repeats
+    // --prefix (scripts/zig-build.sh passes both).
+    b.graph.poisonCache();
+    const prefix_opt = b.option([]const u8, "prefix", "The same directory as --prefix (zig 0.17's configure step does not see --prefix): R's install tree");
+    const root_abs = try buildRoot(b, io);
     const src_rel = "build/R-" ++ r_version;
     // b.pathFromRoot resolves using the OS-native separator (backslash on
     // Windows) — harmless for compile-flag/file-path use (zig cc/clang and
@@ -300,7 +306,7 @@ pub fn build(b: *std.Build) !void {
     // ctx.prefix (already forward-slash, since Windows' own --prefix
     // argument is passed that way); a no-op on unix, which has no
     // backslashes to replace.
-    const src_abs = std.mem.replaceOwned(u8, b.allocator, b.pathFromRoot(src_rel), "\\", "/") catch @panic("OOM");
+    const src_abs = std.mem.replaceOwned(u8, b.allocator, b.fmt("{s}/{s}", .{ root_abs, src_rel }), "\\", "/") catch @panic("OOM");
     std.Io.Dir.cwd().access(io, b.fmt("{s}/VERSION", .{src_abs}), .{}) catch {
         std.debug.print("error: R source tree not found at {s} — run `pixi run fetch` first\n", .{src_abs});
         return error.MissingRSource;
@@ -358,9 +364,9 @@ pub fn build(b: *std.Build) !void {
     // (macos_min, 13.0). A native macOS query makes zig stamp every
     // binary's LC_BUILD_VERSION minos with the *build host's* version, so
     // a tree built on macOS 26 claims to need 26 (and make-wheel.py derives
-    // the wheel tag from exactly that). 13.0 is zig 0.16's own supported
-    // floor (std.Target's default macOS range); ziglang, the wheel's
-    // compiler dependency, needs 12. The query names no OS tag, only
+    // the wheel tag from exactly that). 13.0 was zig 0.16's own supported
+    // floor; zig 0.17 runs on macOS 15 and later but still builds for 13.0
+    // (floors.zig). The query names no OS tag, only
     // os_version_min (the "<arch>-native.13.0" the shims pass): zig then
     // treats the OS as non-native, so it stamps 13.0 and records no rpath
     // per -L directory, while the ABI still counts as native, so headers
@@ -435,7 +441,10 @@ pub fn build(b: *std.Build) !void {
     // for OTHER letters forming a *valid* (but wrong) R escape (`\n`,
     // `\t`, `\r`, ...), could have been silently corrupting the path
     // instead of erroring. Normalize once here, matching src_abs exactly.
-    const install_prefix = std.mem.replaceOwned(u8, arena, b.install_prefix, "\\", "/") catch @panic("OOM");
+    const install_prefix = std.mem.replaceOwned(u8, arena, prefix_opt orelse {
+        std.debug.print("error: pass -Dprefix=<dir>, the same directory as --prefix (scripts/zig-build.sh does)\n", .{});
+        return error.MissingPrefix;
+    }, "\\", "/") catch @panic("OOM");
     const rhome = switch (os) {
         .windows => b.fmt("{s}/Library/lib/R", .{install_prefix}),
         else => b.fmt("{s}/lib/R", .{install_prefix}),
@@ -981,7 +990,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
 
     const geninc = b.addWriteFiles();
     {
-        const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/config.h", .{ctx.config_dir})), b.allocator, .limited(4 * 1024 * 1024));
+        const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/config.h", .{ctx.config_dir})), b.allocator, .limited(4 * 1024 * 1024));
         _ = geninc.add("config.h", try substitute(ctx, raw));
     }
     _ = geninc.addCopyFile(b.path(b.fmt("{s}/Rconfig.h", .{ctx.config_dir})), "Rconfig.h");
@@ -1874,7 +1883,7 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     // the user's menu 4 a).
     try mk.put("NM_FILTER", "| $(SED) -e '/[.]refptr[.]/d' -e '/[.]weak[.]/d'");
 
-    const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
+    const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
     var mkc = try gnuwin32O3ToO2(b, try substituteWith(ctx, raw, &mk));
     // Tcl/Tk headers and libraries where the standalone tree has them
     // (installEnvRuntime installs R_HOME/Tcl: include, bin, lib); inside a
@@ -1906,15 +1915,16 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
 /// Makeconf's COMPILED_BY on Windows: clang-<version> of the zig that
 /// builds R, in gnuwin32's `$(CCBASE)-<version>` form. zig cc is clang, and
 /// this is the version R reports at run time in R_COMPILED_BY ("clang
-/// 21.1.8": system.c, from the same compiler's __clang_*__ macros).
+/// 22.1.8" with zig 0.17: system.c, from the same compiler's __clang_*__
+/// macros).
 /// Packages' winlibs.R read R_COMPILED_BY to download the r-windows
 /// bundles built with clang against libc++, zig's C++ runtime (curl,
 /// magick and V8 load and pass: stress round 1). Their Makevars name
 /// `lib$(subst gcc,,$(COMPILED_BY))$(R_ARCH)` first, a directory no bundle
-/// has, then the bundle's lib, as with CRAN's gcc-<version>. Not zig-0.16.0:
-/// no package looks for zig, and the code is clang's. `zig cc --version`
-/// starts "clang version 21.1.8 (...)" with conda-forge's zig and
-/// upstream's.
+/// has, then the bundle's lib, as with CRAN's gcc-<version>. Not
+/// zig-<version>: no package looks for zig, and the code is clang's.
+/// `zig cc --version` starts "clang version 22.1.8 (...)" with zig 0.17,
+/// conda-forge's and upstream's.
 fn compiledBy(b: *std.Build) ![]const u8 {
     const out = b.run(&.{ b.graph.zig_exe, "cc", "--version" });
     const tag = "clang version ";
@@ -2324,7 +2334,7 @@ fn substFileTests(ctx: *Ctx, io: std.Io, rel: []const u8, srcdir_val: []const u8
 /// so upstream zig builds with its own lib dir. On Windows symlink
 /// mirrors cannot be made (no win-64 env has libc++.dll.a): stop instead.
 fn staticLibcxxLibDir(b: *std.Build, io: std.Io, os: Os) !?std.Build.LazyPath {
-    const lib_dir = b.graph.zig_lib_directory.path orelse ".";
+    const lib_dir = try zigLibDir(b, io);
     if (os == .windows) {
         if (try libcxx_mirror.sharedLibcxx(io, b.allocator, lib_dir, .windows)) |p| {
             std.debug.print("error: {s} would make zig link a shared libc++; remove the libcxx package from this env\n", .{p});
@@ -2332,7 +2342,7 @@ fn staticLibcxxLibDir(b: *std.Build, io: std.Io, os: Os) !?std.Build.LazyPath {
         }
         return null;
     }
-    const cache = try b.cache_root.handle.realPathFileAlloc(io, ".", b.allocator);
+    const cache = try localCacheDir(b, io);
     switch (try libcxx_mirror.prepare(io, b.allocator, lib_dir, b.fmt("{s}/r-zig", .{cache}))) {
         .none => return null,
         .failed => |m| {
@@ -2341,7 +2351,7 @@ fn staticLibcxxLibDir(b: *std.Build, io: std.Io, os: Os) !?std.Build.LazyPath {
         },
         .ready => |mirror| {
             std.debug.print("r-zig: static libc++ (zig lib dir {s} mirrored to {s})\n", .{ lib_dir, mirror });
-            return .{ .cwd_relative = mirror };
+            return b.graph.cwdRelativePath(mirror);
         },
     }
 }
@@ -2702,18 +2712,18 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
 /// anticipated in the spec).
 fn addSharedLib(ctx: *const Ctx, name: []const u8, mod: *std.Build.Module) *std.Build.Step.Compile {
     ctx.addSdkPaths(mod); // last: every caller has added its -L dirs by now
-    // Windows, for upstream zig (the ziglang.org release, PyPI's ziglang):
-    // a DLL without a .def file exports every global symbol (LLD's MinGW
+    // Windows: a DLL without a .def file exports every global symbol (LLD's MinGW
     // auto-export) except the C runtime's, which LLD knows by their GNU
     // object names (dllcrt2.o), not zig's (dllcrt2.obj). So the DLL's own
     // atexit (mingw's crtdll.c) is exported too, and an exe that calls
-    // atexit and links the DLL's import library fails with "duplicate
-    // symbol: atexit" against its own CRT object's (crtexe.c): Rterm.exe
+    // atexit and links the DLL's import library fails with "atexit was
+    // replaced" (zig 0.17; 0.16: "duplicate symbol: atexit") against its
+    // own CRT object's (crtexe.c): Rterm.exe
     // and Rscript.exe (rterm.c's atexit(restore_cp)) with Rgraphapp's.
     // -exclude-symbols in the object's .drectve section is the directive
-    // gcc and clang emit for a hidden symbol on MinGW. conda-forge's zig
-    // hides atexit by accident (feedstock patches mingw-crtexe-no-atexit,
-    // ucrtbase-export-atexit-alias), and there this is a no-op. Packages
+    // gcc and clang emit for a hidden symbol on MinGW. Both zigs need it
+    // since 0.17 (conda-forge's 0.16 hid atexit by accident, through its
+    // feedstock's patches; its 0.17.0 exports it too). Packages
     // are not affected: R links them with a .def file of their own.
     // (feat-no-host-paths PLAN.md, F4: the upstream report's draft.)
     if (ctx.os == .windows) {
@@ -2803,11 +2813,11 @@ fn filePathFlags(ctx: *const Ctx, io: std.Io) ![]const []const u8 {
         else => null,
     } else null;
     const dirs = [_]struct { ?[]const u8, []const u8 }{
-        .{ b.build_root.path, "" },
+        .{ try buildRoot(b, io), "" },
         .{ ctx.src_abs, "" },
         .{ ctx.conda, "conda-env/" },
-        .{ b.cache_root.path, "zig-cache/" },
-        .{ b.graph.zig_lib_directory.path, "zig-lib/" },
+        .{ try localCacheDir(b, io), "zig-cache/" },
+        .{ try zigLibDir(b, io), "zig-lib/" },
         .{ mirror, "zig-lib/" },
     };
     for (dirs) |d| {
@@ -2983,12 +2993,12 @@ fn fortranGroup(ctx: *const Ctx, dir: []const u8, files: []const []const u8, mod
 /// checked this, so GENERATED_FROM records the version they were captured
 /// from and every build compares it against r_version.
 fn checkConfigFreshness(b: *std.Build, io: std.Io, config_dir: []const u8) !void {
-    const path = b.pathFromRoot(b.fmt("{s}/GENERATED_FROM", .{config_dir}));
+    const path = rootPath(b, b.fmt("{s}/GENERATED_FROM", .{config_dir}));
     const raw = std.Io.Dir.cwd().readFileAlloc(io, path, b.allocator, .limited(256)) catch {
         // No dir at all is the normal state of a (platform, variant) pair
         // nobody has captured yet — e.g. minimal before its first
         // gen-config.yaml run on that platform — not a corrupted checkout.
-        std.Io.Dir.cwd().access(io, b.pathFromRoot(config_dir), .{}) catch {
+        std.Io.Dir.cwd().access(io, rootPath(b, config_dir), .{}) catch {
             std.debug.print("error: no vendored config for this platform/variant yet ({s}) — capture one with `pixi run -e <env> configure` + `pixi run -e <env> bash zigbuild/tools/gen-subst.sh` on that platform (or the gen-config workflow), see PLAN.md's \"Regenerating the vendored config\"\n", .{config_dir});
             return error.MissingVendoredConfig;
         };
@@ -3030,7 +3040,7 @@ fn checkConfigFreshness(b: *std.Build, io: std.Io, config_dir: []const u8) !void
 /// own Makeconf.win handling).
 fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
     const b = ctx.b;
-    const raw = try std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot(b.fmt("{s}/subst.txt", .{config_dir})), b.allocator, .limited(4 * 1024 * 1024));
+    const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/subst.txt", .{config_dir})), b.allocator, .limited(4 * 1024 * 1024));
     var lines = std.mem.splitScalar(u8, raw, '\n');
     while (lines.next()) |raw_line| {
         // Tolerate CRLF: a checkout with core.autocrlf=true (how GitHub's
@@ -3059,7 +3069,7 @@ fn loadSubstFile(ctx: *Ctx, io: std.Io, config_dir: []const u8) !void {
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_OBJ@", ctx.rhome);
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_PREFIX@", ctx.prefix);
         v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_TOOLCHAIN@", "$(R_HOME)/bin/toolchain");
-        v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_ROOT@", b.pathFromRoot("."));
+        v = try std.mem.replaceOwned(u8, b.allocator, v, "@ZR_ROOT@", rootPath(b, "."));
         // flang's runtime dir (see gen-subst.sh): resolved by findFlangRt at
         // build time so the LLVM major never gets baked into Makeconf.
         if (std.mem.indexOf(u8, v, "@ZR_FLANGRT_DIR@") != null) {
@@ -3397,7 +3407,7 @@ fn fontsConfWithoutEnv(ctx: *const Ctx, io: std.Io, raw: []const u8) ![]u8 {
 fn assertNoBuildPath(ctx: *const Ctx, name: []const u8, template: []const u8, text: []const u8) !void {
     const b = ctx.b;
     var needles = std.ArrayList([]const u8).empty;
-    for ([_][]const u8{ ctx.conda, ctx.prefix, ctx.src_abs, b.pathFromRoot("."), b.graph.environ_map.get("BUILD_PREFIX") orelse "" }) |p| {
+    for ([_][]const u8{ ctx.conda, ctx.prefix, ctx.src_abs, rootPath(b, "."), b.graph.environ_map.get("BUILD_PREFIX") orelse "" }) |p| {
         if (p.len == 0) continue;
         try needles.append(b.allocator, p);
         // Windows paths appear with either separator
@@ -4515,4 +4525,54 @@ fn listFiles(ctx: *const Ctx, io: std.Io, rel: []const u8, suffix: []const u8) !
     }
     std.mem.sort([]const u8, names.items, {}, strLessThan);
     return names.items;
+}
+
+/// The build root, absolute, with `/` (zig 0.17: b.root is a Cache.Path,
+/// and b.pathFromRoot is gone).
+fn buildRoot(b: *std.Build, io: std.Io) ![]const u8 {
+    const p = b.root.root_dir.path orelse ".";
+    const real = std.Io.Dir.cwd().realPathFileAlloc(io, p, b.allocator) catch |err| {
+        std.debug.print("error: cannot resolve the build root {s} ({t})\n", .{ p, err });
+        return error.BuildRoot;
+    };
+    return std.mem.replaceOwned(u8, b.allocator, real, "\\", "/");
+}
+
+/// `sub` under the build root (b.pathFromRoot before zig 0.17).
+fn rootPath(b: *std.Build, sub: []const u8) []const u8 {
+    const io = b.graph.io;
+    const r = buildRoot(b, io) catch @panic("build root");
+    return b.fmt("{s}/{s}", .{ r, sub });
+}
+
+/// The running zig's lib dir, absolute (zig 0.17's configure step has no
+/// b.graph.zig_lib_directory): `zig env`'s .lib_dir, which conda-forge's
+/// zig gives relative to the working directory.
+fn zigLibDir(b: *std.Build, io: std.Io) ![]const u8 {
+    const out = b.run(&.{ b.graph.zig_exe, "env" });
+    const key = ".lib_dir = \"";
+    const at = std.mem.indexOf(u8, out, key) orelse {
+        std.debug.print("error: `zig env` names no .lib_dir:\n{s}\n", .{out});
+        return error.ZigLibDir;
+    };
+    const rest = out[at + key.len ..];
+    const p = rest[0 .. std.mem.indexOfScalar(u8, rest, '"') orelse return error.ZigLibDir];
+    const real = std.Io.Dir.cwd().realPathFileAlloc(io, p, b.allocator) catch |err| {
+        std.debug.print("error: cannot resolve zig's lib dir {s} ({t})\n", .{ p, err });
+        return error.ZigLibDir;
+    };
+    return std.mem.replaceOwned(u8, b.allocator, real, "\\", "/");
+}
+
+/// zig's local cache, absolute: ZIG_LOCAL_CACHE_DIR, which scripts/env.sh
+/// always sets (zig 0.17's maker reads it too), else <build root>/.zig-cache.
+/// Created if missing (the libc++ mirror goes in it at configure time).
+fn localCacheDir(b: *std.Build, io: std.Io) ![]const u8 {
+    const p = b.graph.environ_map.get("ZIG_LOCAL_CACHE_DIR") orelse rootPath(b, ".zig-cache");
+    std.Io.Dir.cwd().createDirPath(io, p) catch {};
+    const real = std.Io.Dir.cwd().realPathFileAlloc(io, p, b.allocator) catch |err| {
+        std.debug.print("error: cannot resolve zig's local cache {s} ({t})\n", .{ p, err });
+        return error.LocalCache;
+    };
+    return std.mem.replaceOwned(u8, b.allocator, real, "\\", "/");
 }

@@ -38,4 +38,7 @@ if [ "${1:-}" != test ] && ! same_dir "$TOOLCHAIN_PREFIX" "${CONDA_PREFIX:-}"; t
   ziglang=("-Dziglang=$(dirname "$(dirname "$zig_path")")")
   echo "r-zig: the toolchain's zig/ from ${ziglang[0]#-Dziglang=}"
 fi
-"$ZIG" build --build-file "$ROOT/zigbuild/toolchain/build.zig" --prefix "$TOOLCHAIN_PREFIX" "${ziglang[@]}" "$@"
+# -Dprefix: the same directory as --prefix, which zig 0.17's configure step
+# does not see (the maker installs there); the build reads the env's
+# records for it and compares it with the env (prefix_is_env).
+"$ZIG" build --build-file "$ROOT/zigbuild/toolchain/build.zig" --prefix "$TOOLCHAIN_PREFIX" "-Dprefix=$TOOLCHAIN_PREFIX" "${ziglang[@]}" "$@"

@@ -87,11 +87,11 @@ LICENSE_CLASSIFIERS = {
     R_LICENSE: ["GNU General Public License v2 (GPLv2)", "GNU General Public License v3 (GPLv3)"],
     MAKE_LICENSE: ["GNU General Public License v3 or later (GPLv3+)"],
 }
-# The runtime compiler. Keep in step with pixi.toml's `zig = "0.16.*"`:
+# The runtime compiler. Keep in step with pixi.toml's `zig = "0.17.*"`:
 # zig is pinned by exact version across this project family (consolidation
-# PLAN.md, convention 2); `<0.16.1` still admits ziglang's `.postN`
+# PLAN.md, convention 2); `<0.17.2` still admits ziglang's `.postN`
 # repackagings of the same zig release.
-ZIGLANG_REQUIREMENT = "ziglang>=0.16.0,<0.16.1"
+ZIGLANG_REQUIREMENT = "ziglang>=0.17.1,<0.17.2"
 # Absolute build-prefix paths in here can't be relocated and are useless
 # to a wheel (libR.pc: embedding R through pkg-config).
 EXCLUDE_DIRS = ("lib/pkgconfig",)

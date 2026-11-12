@@ -49,7 +49,7 @@ jobs:
           # the newest pixi on every run, and its cache key hashes the pixi
           # binary, so each pixi release would also drop every cached env.
           # The other workflows pin the same version.
-          pixi-version: v0.81.0
+          pixi-version: v0.84.2
           # minimal also needs the python-only `wheel` env for its last steps
           environments: ${{ inputs.env == 'minimal' && 'minimal wheel' || inputs.env }}
           # No cache, as toolchain.yaml: the build's last step (-Dbase)
@@ -73,7 +73,7 @@ jobs:
           path: dist
       - name: Unpack the toolchain tree
         run: pixi run -e ${{ inputs.env }} unpack-toolchain
-      # Upstream zig (feat-no-host-paths F4): PyPI's ziglang 0.16.0, the
+      # Upstream zig (feat-no-host-paths F4): PyPI's ziglang 0.17.1, the
       # ziglang.org release, sha256-pinned (scripts/fetch-zig.sh). ZIG_BIN
       # makes every step below build, compile and test with it instead of
       # the env's zig: zig-build.sh and rzig's tests (scripts/env.sh), rzig

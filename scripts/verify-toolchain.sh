@@ -33,7 +33,8 @@
 #     it (B21; none of today's needs the base's runtime): linux, glibc's
 #     libraries, at most GLIBC 2.28 (conda-forge's baseline: these run
 #     only to compile; make needs 2.17), and rpaths relative to the file;
-#     macOS, /usr/lib and /System, minos at most MACOS_MIN, rpaths
+#     macOS, /usr/lib and /System, minos at most MACOS_MIN (zig/'s zig:
+#     ZIG_MACOS_MIN, zig 0.17's own floor), rpaths
 #     relative; Windows, every DLL a PE file imports beside it or the
 #     system's (usr/bin/'s tools find their DLLs beside them);
 #   - OpenMP (the compilers group, B22): openmp/include/omp.h; Windows
@@ -295,8 +296,11 @@ case "$OS" in
       [ "$f" != "$zig_exe" ] || zig_seen=1
       [ "$f" != "$flang_exe" ] || flang_seen=1
       rel="${f#"$TREE"/}"
-      if m="$(minos_over_floor "$f")"; then bad="$bad
-  $rel: minos $m > $MACOS_MIN"; fi
+      # zig/'s files: zig's own floor (env.sh's ZIG_MACOS_MIN)
+      floor="$MACOS_MIN"
+      case "$f" in "$TREE/$tc/zig/"*) floor="$ZIG_MACOS_MIN" ;; esac
+      if m="$(minos_over_floor "$f" "$floor")"; then bad="$bad
+  $rel: minos $m > $floor"; fi
       id="$(otool -D "$f" 2>/dev/null | tail -n +2)"
       for dep in $(needed_of "$f"); do
         [ "$dep" = "$id" ] && continue
@@ -308,7 +312,7 @@ case "$OS" in
   $rel: rpath $rp" ;; esac
       done
     done < <(candidates $'^\xcf\xfa\xed\xfe')
-    what="$n_bin Mach-O files: dependencies the system's, minos <= $MACOS_MIN, rpaths relative"
+    what="$n_bin Mach-O files: dependencies the system's, minos <= $MACOS_MIN (zig/: <= $ZIG_MACOS_MIN, zig's own floor), rpaths relative"
     ;;
   windows)
     while IFS= read -r f; do

@@ -198,7 +198,10 @@ build:
   # are gone, from the standalone tree and from r-zig-build-tools' run
   # deps. etc/Rcmd_environ gives PKG_CONFIG_PATH a default, R's env's
   # Library/lib/pkgconfig and Library/share/pkgconfig, which that
-  # package's activation used to set (feat-zig-pkgconf).
+  # package's activation used to set (feat-zig-pkgconf). Zig 0.17 on every
+  # platform (feat-zig-017): conda-forge's zig 0.17.0, flang-pixi's zig
+  # 0.17 builds (flang-zig 7, lld-zig 6, flang-rt-zig 11); r-zig-slim's
+  # run_constraints and r-zig-compilers' depends move to zig 0.17.*.
   number: 11
 
 outputs:
@@ -218,23 +221,22 @@ outputs:
       name: r-zig-build
     requirements:
       build:
-        - zig 0.16.*
+        - zig 0.17.*
         # Fortran, as pixi.toml: flang-pixi's zig-built flang-zig (LLVM
         # 23.1.1, `universe` channel — the conda-package task passes it) on
         # every platform; its runtime (flang-rt-zig) is static-only. No
         # gfortran anywhere (consolidation/PLAN.md Phase 2; linux-64 left
         # conda-forge's flang 2026-10-03). build.zig stops without
         # $BUILD_PREFIX/bin/flang (or $CONDA/bin/flang).
-        # Pinned as in pixi.toml to flang-pixi's zig 0.16.0 release
-        # (flang-zig 6, lld-zig 5, flang-rt-zig 10); its zig 0.17 builds
-        # come at the next build numbers. The build string's `_N` suffix
+        # Pinned as in pixi.toml to flang-pixi's zig 0.17 release
+        # (flang-zig 7, lld-zig 6, flang-rt-zig 11). The build string's `_N` suffix
         # pins it: a `[build_number="==N"]` bracket would be copied into
         # r-zig-compilers' depends (r-zig-toolchain only pins the other
         # three outputs, B28), which conda's default (libmamba) solver and
         # micromamba cannot parse. lld-zig only for its pin.
-        - flang-zig ==23.1.1 *_6
-        - lld-zig ==23.1.1 *_5
-        - flang-rt-zig ==23.1.1 *_10
+        - flang-zig ==23.1.1 *_7
+        - lld-zig ==23.1.1 *_6
+        - flang-rt-zig ==23.1.1 *_11
         - if: win
           then:
             - binutils_impl_win-64  # x86_64-w64-mingw32-nm/-dlltool for build.zig's import-stub steps
@@ -292,7 +294,7 @@ outputs:
         # Fortran runtime: linked into libR (statically for flang's
         # libflang_rt.runtime.a on every platform, see build.zig's
         # linkFortranRt), must be in host too; pinned as in build
-        - flang-rt-zig ==23.1.1 *_10
+        - flang-rt-zig ==23.1.1 *_11
         # The toolchain build (zigbuild/toolchain/build.zig, run by build.sh
         # into this prefix) copies its nm, dlltool, as, strip, windres and
         # objdump from $PREFIX/Library/bin into R_HOME/bin/toolchain/
@@ -458,10 +460,10 @@ outputs:
         # the zig that built R and rzig: rzig finds the env's zig first
         # (B34), and B32's check stops a compile with another
         # major.minor; conda-forge's main label has 0.17.0 since
-        # 2026-10-13. Constrains an installed zig, pulls none in; bumped
+        # 2026-10-13. Constrains an installed zig, pulls none in; moved
         # with r-zig-compilers' pins in the zig 0.17 wave (B18; PHASE4
-        # open point K a)
-        - zig 0.16.*
+        # open point K a; feat-zig-017)
+        - zig 0.17.*
     tests:
       # Mirrors scripts/smoke-test.sh's actual assertions (numerics: LAPACK
       # solve/qr, BLAS matmul, fft round-trip; pcre2 regex; zlib compression;
@@ -596,17 +598,17 @@ outputs:
         # lld-zig + flang-rt-zig), the accepted cost of one Fortran
         # toolchain everywhere (on osx-arm64, of correct complex LAPACK at
         # -O2; flang-pixi docs/11). Pinned as in build, so a user gets the
-        # zig 0.16 flang this was built and tested with, not a later 0.17
+        # zig 0.17 flang this was built and tested with, not a later
         # build. zig: the one that built R and rzig, B32's check fails on
         # another major.minor (r-zig-slim also constrains it, PHASE4 open
         # point K).
-        - zig 0.16.*
-        - flang-zig ==23.1.1 *_6
+        - zig 0.17.*
+        - flang-zig ==23.1.1 *_7
         # zig links every Fortran program and library since phase 6, so
         # nothing of ours runs lld-zig; flang-zig run-depends on it anyway,
         # and the pin stays (feat-standalone-toolchain PHASE6 open point Q)
-        - lld-zig ==23.1.1 *_5
-        - flang-rt-zig ==23.1.1 *_10
+        - lld-zig ==23.1.1 *_6
+        - flang-rt-zig ==23.1.1 *_11
         # omp.h and libomp: r-zig-slim already has them (B41's
         # exception); named here as B28 lists the group
         - llvm-openmp
@@ -630,7 +632,7 @@ outputs:
           recipe:
             - test-compilers.R
     about:
-      summary: The r-zig compilers for r-zig-slim (zig 0.16, LLVM flang from flang-pixi, OpenMP)
+      summary: The r-zig compilers for r-zig-slim (zig 0.17, LLVM flang from flang-pixi, OpenMP)
 
   - package:
       name: r-zig-build-tools

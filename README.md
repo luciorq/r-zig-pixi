@@ -38,7 +38,7 @@ r-zig-toolchain (r-zig-compilers and r-zig-build-tools):
 pixi add r-zig-toolchain
 ```
 
-- `r-zig-compilers` (zig 0.16, LLVM flang, OpenMP) alone installs
+- `r-zig-compilers` (zig 0.17, LLVM flang, OpenMP) alone installs
   packages that have no configure script and whose Makevars only sets
   variables. It also compiles such code at run time (`R CMD SHLIB`:
   Rcpp's `sourceCpp()`, inline, TMB, knitr's engines) with no make: R
@@ -189,7 +189,7 @@ The environment's zig is conda-forge's build. R builds just as well with
 upstream zig (the [ziglang.org](https://ziglang.org/download/) release,
 which the PyPI [`ziglang`](https://pypi.org/project/ziglang/) package
 is), and the project keeps both working; upstream zig is the reference.
-`pixi run fetch-zig` downloads PyPI's `ziglang` 0.16.0 wheel for this
+`pixi run fetch-zig` downloads PyPI's `ziglang` 0.17.1 wheel for this
 platform once (checksum-pinned; a wheel is a zip, so no Python is
 involved), unpacks it under `build/zig-upstream/` and prints its zig's
 path. The tasks that run zig, `build`, `check`, `rzig-test`, the
@@ -242,7 +242,7 @@ from source once. None of the four is on PyPI yet: install them from
 `dist/wheel`, ziglang first, so that pip needs no index for the rest:
 
 ```bash
-pip install 'ziglang>=0.16.0,<0.16.1'
+pip install 'ziglang>=0.17.1,<0.17.2'
 pip install --no-index --find-links dist/wheel r-zig-toolchain
 ```
 
@@ -274,7 +274,7 @@ beside it:
   them out.
 - **The compilers group**, one per platform:
   `R-<ver>-<platform>-compilers.tar.xz`, about 95 MB (linux-64). It
-  holds zig 0.16 (PyPI's `ziglang` build, which is the ziglang.org
+  holds zig 0.17 (PyPI's `ziglang` build, which is the ziglang.org
   release), flang 23.1.1 (flang-pixi's flang-zig and flang-rt-zig, the
   compiler R's own Fortran was built with: the driver, its runtime and
   the intrinsic modules) and OpenMP's headers (Windows also

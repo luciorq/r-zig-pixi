@@ -864,7 +864,7 @@ test "linker options zig cannot take, through the whole line" {
     const c = &f.ctx;
     // RcppParallel's bundled TBB through CMake, then its PKG_LIBS
     try expectArgs(
-        pre ++ &[_][]const u8{ "-Wl,-soname,libtbb.so.2", "-Wl,--undefined-version", "-Wl,--strip-debug", "-shared", "-Wl,--version-script=tbb.def", "-o", "libtbb.so.2", "a.o" },
+        pre ++ &[_][]const u8{ "-Wl,-soname,libtbb.so.2", "-Wl,--undefined-version", "-Wl,--strip-debug", "-shared", "-Xlinker", "--dependency-file=CMakeFiles/tbb.dir/link.d", "-Wl,--version-script=tbb.def", "-o", "libtbb.so.2", "a.o" },
         try argv(c, .c, &.{ "-shared", "-Xlinker", "--dependency-file=CMakeFiles/tbb.dir/link.d", "-Wl,--version-script=tbb.def", "-o", "libtbb.so.2", "a.o" }),
     );
     try expectArgs(
