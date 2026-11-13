@@ -199,11 +199,11 @@ build:
   # here. rzig runs tier 1 itself, with no zig build runner
   # (feat-tier1-engine, #36); R_HOME/bin/toolchain carries rzig's link
   # objects, dso_fini.o (linux) and cfguard.o (x86_64 Windows), built
-  # once with R (feat-r-home-link-objects, #37); r-zig-build's icu pin
-  # has a floor, `icu 78.*` (fix-icu-pin, #40); the unix launchers no
+  # once with R (feat-r-home-link-objects, #37); the unix launchers no
   # longer set FONTCONFIG_PATH, which conda's fontconfig never needed:
   # its default is the env's etc/fonts (feat-standalone-toolchain phase
-  # 8, #42).
+  # 8, #42). #38, #39 (verify-bundle.sh) and #40 (the icu floor, `icu
+  # 78.*`) merged in that window too but change no package.
   # 10 → 11 (2026-11-09; universe's newest is _10 on all five subdirs):
   # win-64's pkg-config is pkgconf 3.0.10, which the toolchain build
   # compiles from source with zig into R_HOME/bin/toolchain/usr/bin as

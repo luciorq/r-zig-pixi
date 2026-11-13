@@ -6528,7 +6528,8 @@ Tests (2026-10-21; `phase7m2/implementer2/RESULTS.md`):
   then. Done: phase 7 merged as #34 (2026-11-05), and the queue (#28 to
   #35) was published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check;
   the dispatch ran on #35's merge, 1e5c7bf, at 00:37 UTC, before #36
-  and #37 merged, so those two publish with `_10`, phase 9;
+  and #37 merged, so those two publish with `_10`, phase 9 (2026-11-13:
+  #38, #39 and #40 merged after it too and change no package);
   that run's windows-latest default leg failed, fixed by #38 and #39,
   while its five conda-package legs passed and published). The variable is a release switch (the user's
   option c, 2026-10-27): set for a bump's publish dispatch, deleted after
@@ -6593,7 +6594,8 @@ Done (2026-11-08, branch chore-phase9 from main e409bae, pixi.lock
 fbb64b7b..., unchanged):
 - Build number 9 to 10. universe's newest is `_9` on all five subdirs.
   `_9` was built from #35's merge (dispatch 41942729382, 00:37 UTC on
-  2026-11-05), before #36 and #37 merged, so they publish here (earlier
+  2026-11-05), before #36 and #37 merged, so they publish here (2026-11-13:
+  #38, #39 and #40 merged after it too and change no package) (earlier
   records said #28 to #37 went into `_9`; corrected). linux-64 `_9`
   against the local `_10`: r-zig-slim gains
   lib/R/bin/toolchain/dso_fini.o (#37), loses
@@ -6602,7 +6604,8 @@ fbb64b7b..., unchanged):
   (phase 8's G a; PHASE8-IMPLEMENTATION.md section 6 corrected: conda's
   fontconfig defaults to the env's etc/fonts, checked with fc-match on
   linux and macOS). Its depends are `_9`'s, `icu >=78.3,<79.0a0`
-  included. The other three packages change only their exact pins.
+  included. (2026-11-13: this diff was taken on linux-64 only; win-64's
+  r-zig-slim also gains lib/R/bin/toolchain/cfguard.o, #37.) The other three packages change only their exact pins.
 - feat-no-host-paths PLAN.md: an update note at the top, What remains 3
   done, phase T superseded by the layered model, the OpenMP note says
   where the headers are now (B22, B40; phase 3's C14).

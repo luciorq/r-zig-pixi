@@ -859,7 +859,8 @@ a); the record is PLAN.md's "Phase 7 record".
       with the new number; then delete the variable (a release switch,
       the user's option c of 2026-10-27). Done: published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check)
       from #35's merge (1e5c7bf): #36 and #37 merged after the dispatch
-      and publish with `_10` (phase 9)
+      and publish with `_10` (phase 9) (2026-11-13: #38, #39 and #40
+      merged after it too and change no package)
 
 ## After `_9`: follow-ups (from the final test, 2026-10-31)
 
