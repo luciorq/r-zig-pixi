@@ -402,14 +402,19 @@ if [ "$OS" = windows ]; then mconf="$RH/etc/x64/Makeconf"; else mconf="$RH/etc/M
 # Windows, R RHOME backslashes, which no make -n line starts with
 # (feat-shlib-rzig-build round 1, kappa)
 plrh="$("$R_EXE" RHOME | tr -d '\r' | tr '\\' /)"
-# which make, and whether it starts at all from this shell (windows-11-arm
-# run 43344258167: this make segfaulted here, while R's own make calls in
-# the contract worked)
-if [ "$OS" = windows ]; then
-  echo "   pkgload: make is $mk"
-  "$mk" --version 2>&1 | head -1 | sed 's/^/   pkgload: /' || echo "   pkgload: make --version failed ($?)"
-fi
-R_HOME="$plrh" R_INCLUDE_DIR="$plrh/include" R_SHARE_DIR="$plrh/share" "$mk" -s -f "$mconf" -f "$pl/print-var.mk" print-compilers | awk 'NF {print $1}' | sort -u > "$WORK/logs/shlib-pkgload-compilers"
+# make runs from R, as pkgload's does (system2, no shell): on
+# windows-11-arm this MSYS make segfaults, even for --version, when Git
+# bash's own MSYS runtime starts it directly (run 43437326154), while
+# every make that R started in the same job worked
+PL_MAKE="$(mpath "$mk")" PL_MCONF="$(mpath "$mconf")" PL_PV="$(mpath "$pl/print-var.mk")" PL_RH="$plrh" \
+  "$RSCRIPT" --vanilla -e '
+    e <- Sys.getenv(c("PL_MAKE", "PL_MCONF", "PL_PV", "PL_RH"))
+    Sys.setenv(R_HOME = e[["PL_RH"]], R_INCLUDE_DIR = file.path(e[["PL_RH"]], "include"),
+               R_SHARE_DIR = file.path(e[["PL_RH"]], "share"))
+    out <- system2(e[["PL_MAKE"]], c("-s", "-f", shQuote(e[["PL_MCONF"]]), "-f", shQuote(e[["PL_PV"]]),
+                   "print-compilers"), stdout = TRUE)
+    if (!is.null(attr(out, "status"))) stop("make print-compilers: exit ", attr(out, "status"))
+    writeLines(out)' | tr -d '\r' | awk 'NF {print $1}' | sort -u > "$WORK/logs/shlib-pkgload-compilers"
 [ -s "$WORK/logs/shlib-pkgload-compilers" ] || fail "pkgload: make print-compilers printed no compiler"
 # pkgload's two steps on a dry run's output: the lines kept, then those of
 # them with a `-c <source>`; prints both counts
