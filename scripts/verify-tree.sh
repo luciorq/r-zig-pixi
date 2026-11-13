@@ -661,6 +661,14 @@ case "$PLAT" in
     done < "$WORK/r-bins.txt"
     if [ -n "$bad" ]; then
       echo "error: R's own binaries use AVX-class instructions, beyond the x86-64 baseline (an object compiled for the build machine's CPU):$bad" >&2
+      # name the functions: the first 10 offending instructions per binary
+      while IFS= read -r f; do
+        "$objdump_cmd" -d --no-show-raw-insn "$f" | awk -v F="${f#$TREE/}" '
+          /^[0-9a-f]+ <.*>:$/ { fn = $2; sub(/:$/, "", fn); next }
+          !sub(/^[[:space:]]*[0-9a-f]+:[[:space:]]+/, "") { next }
+          { sub(/^[{][a-z0-9]+[}][[:space:]]+/, "") }
+          ((/^v[a-z]/ && !/^ver[rw][[:space:]]/) || /%[yz]mm/) && n++ < 10 { print "  " F " " fn ": " $0 }' >&2
+      done < "$WORK/r-bins.txt"
       exit 1
     fi
     n_conda=$(($(wc -l < "$WORK/r-bins-all.txt") - n_rb))

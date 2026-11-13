@@ -402,6 +402,13 @@ if [ "$OS" = windows ]; then mconf="$RH/etc/x64/Makeconf"; else mconf="$RH/etc/M
 # Windows, R RHOME backslashes, which no make -n line starts with
 # (feat-shlib-rzig-build round 1, kappa)
 plrh="$("$R_EXE" RHOME | tr -d '\r' | tr '\\' /)"
+# which make, and whether it starts at all from this shell (windows-11-arm
+# run 43344258167: this make segfaulted here, while R's own make calls in
+# the contract worked)
+if [ "$OS" = windows ]; then
+  echo "   pkgload: make is $mk"
+  "$mk" --version 2>&1 | head -1 | sed 's/^/   pkgload: /' || echo "   pkgload: make --version failed ($?)"
+fi
 R_HOME="$plrh" R_INCLUDE_DIR="$plrh/include" R_SHARE_DIR="$plrh/share" "$mk" -s -f "$mconf" -f "$pl/print-var.mk" print-compilers | awk 'NF {print $1}' | sort -u > "$WORK/logs/shlib-pkgload-compilers"
 [ -s "$WORK/logs/shlib-pkgload-compilers" ] || fail "pkgload: make print-compilers printed no compiler"
 # pkgload's two steps on a dry run's output: the lines kept, then those of
