@@ -2,7 +2,7 @@
 
 **Update (2026-11-08).** What remains 3, phase T's standalone split, is
 done: feat-standalone-toolchain (its PLAN.md, phases 0 to 9, PRs #15 to
-#42) replaced T's two-way split with the layered model, a base (R, rzig
+#43) replaced T's two-way split with the layered model, a base (R, rzig
 and R's runtime libraries) and toolchain groups (compilers, build-tools),
 with the same boundaries on the standalone, conda and PyPI channels.
 Phase T below and its OpenMP note are updated to that; the rest of this
@@ -69,7 +69,9 @@ not yet committed):
   the lock had kept 22.1.8 on unix by inertia), 23.1.2 on all five
   platforms; r-zig-slim's run dependency stays unbounded (the run export
   gives `>=23.1.2`). The standalone Windows tree ships omp.h and
-  libomp.lib (build.zig installOpenMP) and libomp.dll (vendor-libs.sh,
+  libomp.lib (build.zig installOpenMP; 2026-11-13: gone since
+  feat-standalone-toolchain phase 3, as noted below; the
+  compilers group carries them) and libomp.dll (vendor-libs.sh,
   where the tree has libomp.lib), so OpenMP packages, C and Fortran,
   build with the tree alone, while R itself stays without OpenMP on
   Windows, as upstream; verify-tree checks the OpenMP files,

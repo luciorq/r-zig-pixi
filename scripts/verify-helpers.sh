@@ -54,10 +54,11 @@ rzig_names() {
 
 # The object installed beside rzig in R_HOME/bin/toolchain on this OS,
 # which rzig adds to links (zigbuild/tools/rzig/build.zig's linkObject;
-# feat-r-home-link-objects): linux's dso_fini.o, Windows' cfguard.o
-# (win-64 is x86_64), none on macOS. The base's other file there.
+# feat-r-home-link-objects): linux's dso_fini.o, win-64's cfguard.o
+# (x86_64 code, cfguard.zig; none on win-arm64), none on macOS. The
+# base's other file there.
 link_object() {
-  case "$OS" in linux) echo dso_fini.o ;; windows) echo cfguard.o ;; esac
+  case "$PLAT" in linux-*) echo dso_fini.o ;; win-64) echo cfguard.o ;; esac
 }
 
 # A configure script in package directory $1 (unix configure, Windows
@@ -214,7 +215,7 @@ needed_of() {
   case "$OS" in
     linux) patchelf --print-needed "$1" 2>/dev/null || true ;;
     macos) otool -L "$1" 2>/dev/null | tail -n +2 | awk '{print $1}' || true ;;
-    windows) x86_64-w64-mingw32-objdump -p "$1" 2>/dev/null | awk '/DLL Name:/ {print $3}' || true ;;
+    windows) llvm-objdump -p "$1" 2>/dev/null | awk '/DLL Name:/ {print $3}' || true ;;
   esac
 }
 

@@ -140,7 +140,7 @@ fn ompHeaders(comptime include: []const u8) [4]Copy {
 }
 
 /// flang-zig's LLVM major, which names flang-rt-zig's directories
-/// (lib/clang/<major>/). It is the pin's (pixi.toml: flang-zig 23.1.1): a
+/// (lib/clang/<major>/). It is the pin's (pixi.toml: flang-zig 23.1.5): a
 /// new major moves the pin, this constant and SOURCES together. R's
 /// build.zig (findFlangRt) and rzig (flang_rt.modulesDir) scan
 /// lib/clang/* instead, because they must find whatever flang the env or
@@ -237,13 +237,22 @@ pub fn build(b: *std.Build) !void {
     const arena = b.allocator;
     const io = b.graph.io;
 
-    const test_step = b.step("test", "Run the conda-meta and wheel readers', SOURCES writer's and pkgconf pins' unit tests");
-    // pkgconf.zig's pin test reads the recipe (paths.recipe).
+    const test_step = b.step("test", "Run the conda-meta and wheel readers', SOURCES writer's and pkgconf's and cairo's pins' unit tests");
+    // pkgconf.zig's and cairo.zig's pin tests read the recipe and R's
+    // build.zig.zon (paths). cairo.zig is R's build's (zigbuild/), tested
+    // here with the other pins.
+    const root_abs = try buildRoot(b, io);
     const paths = b.addOptions();
-    paths.addOption([]const u8, "recipe", b.fmt("{s}/../../recipe/recipe.yaml", .{try buildRoot(b, io)}));
-    for ([_][]const u8{ "conda.zig", "wheel.zig", "pkgconf.zig" }) |root| {
+    paths.addOption([]const u8, "recipe", b.fmt("{s}/../../recipe/recipe.yaml", .{root_abs}));
+    paths.addOption([]const u8, "zon", b.fmt("{s}/../../build.zig.zon", .{root_abs}));
+    for ([_]std.Build.LazyPath{
+        b.path("conda.zig"),
+        b.path("wheel.zig"),
+        b.path("pkgconf.zig"),
+        b.graph.cwdRelativePath(b.fmt("{s}/../cairo.zig", .{root_abs})),
+    }) |root| {
         const mod = b.createModule(.{
-            .root_source_file = b.path(root),
+            .root_source_file = root,
             .target = b.graph.host,
         });
         mod.addOptions("paths", paths);

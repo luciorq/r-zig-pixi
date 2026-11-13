@@ -66,13 +66,15 @@ stopifnot(file.exists(file.path(tc, if (windows) c("gcc.exe", "rzig.exe") else c
           file.exists(file.path(R.home(), "share", "zig", "rpkg", "build_t2.zig")),
           !dir.exists(file.path(tc, "binutils")), !dir.exists(file.path(tc, "usr")))
 ## rzig's link object beside it (feat-r-home-link-objects): linux's
-## dso_fini.o, Windows' cfguard.o, none on macOS
-lo <- if (windows) "cfguard.o" else if (Sys.info()[["sysname"]] == "Linux") "dso_fini.o"
+## dso_fini.o, x86_64 Windows' cfguard.o (x86_64 code, cfguard.zig),
+## none on macOS or aarch64 Windows
+lo <- if (windows) { if (R.version$arch == "x86_64") "cfguard.o" } else if (Sys.info()[["sysname"]] == "Linux") "dso_fini.o"
 stopifnot(is.null(lo) || file.exists(file.path(tc, lo)))
 ## no writer of R_ZIG_TOOLCHAIN_HINT came back (B35) (PHASE4 Cc9)
 for (f in file.path(R.home("etc"), c("Renviron", "Renviron.site")))
     if (file.exists(f)) stopifnot(!any(startsWith(readLines(f, warn = FALSE), "R_ZIG_TOOLCHAIN_HINT=")))
-cat("base: rzig, its link object and rpkg, no group's directory, no R_ZIG_TOOLCHAIN_HINT written: OK\n")
+cat("base: rzig, ", if (is.null(lo)) "no link object on this platform" else paste("its link object", lo),
+    ", rpkg, no group's directory, no R_ZIG_TOOLCHAIN_HINT written: OK\n", sep = "")
 
 lib <- file.path(d, "lib")
 dir.create(lib)

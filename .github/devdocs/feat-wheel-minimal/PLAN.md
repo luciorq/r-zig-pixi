@@ -13,6 +13,12 @@ and those three OSes have minimal legs in build.yaml, but they have only
 been built in CI, not locally. Windows is out: gnuwin32 has no switches
 for any of this.
 
+(2026-11-12: this status is as of 2026-09-24. Now: R 4.6.2 and zig 0.17
+(PyPI's ziglang 0.17.1, scripts/fetch-zig.sh); build-r.yaml builds and
+tests the wheel on every `minimal` leg, linux-64 in the core tier and
+linux-aarch64, osx-64 and osx-arm64 in build-full (`full-ci` label or
+dispatch). minimal is still unix only, and the wheel is not published.)
+
 ## Goal
 
 A variant smaller than slim that can ship inside a Python wheel: one
@@ -97,10 +103,13 @@ entry_points, RECORD, R's COPYING).
 - **macOS deployment target 13.0** (minimal only, build.zig): a native
   macOS query stamps every binary with the *build host's* version, so a
   wheel from a macOS 15.x runner would claim 15.x. 13.0 is zig 0.16's
-  own supported floor; ziglang needs 12. This means a non-native OS query
+  own supported floor; ziglang needs 12. (2026-11-12: with zig 0.17,
+  which runs on macOS 15 and later, the target stays 13.0; build.zig's
+  macos_min.) This means a non-native OS query
   and zig's bundled Darwin headers. Checked against the source: the
   only SDK-only headers R includes are under `HAVE_AQUA`, and minimal
-  links no framework. **Not yet built on macOS.**
+  links no framework. **Not yet built on macOS.** (2026-11-12: built since
+  by CI's macOS minimal legs, build-full.)
 
 ## Measured (linux-64, 2026-09-24)
 
@@ -126,7 +135,9 @@ libdeflate libraries.
   verify-bundle.sh reports these libraries and doesn't fail on them.
 - **Other platforms**: configs vendored and CI legs added (2026-09-25).
   The first CI run on macOS is also the first real test of the 13.0
-  deployment target and of the macOS wheel tag.
+  deployment target and of the macOS wheel tag. (2026-11-12: those legs
+  are in build.yaml's build-full tier, which runs only with the
+  `full-ci` label or on dispatch; each builds and tests the wheel.)
 - **Third-party license texts** for the vendored libraries (OpenSSL,
   curl, krb5, ICU, ...) are not in the wheel yet. Needed before
   publishing to PyPI. The conda packages' `info/licenses` are the source.

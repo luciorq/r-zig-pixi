@@ -247,13 +247,10 @@ if (!is.null(conda) && !in_ws) {
     if (!dir.exists(channel)) stop("no conda channel at ", channel, ": run `pixi run -e pkg conda-package`, or use --conda=universe", call. = FALSE)
     channel <- normalizePath(channel, winslash = "/")
   }
-  # conda-forge before universe, as pixi.toml and README: universe's index
-  # names ../conda-forge as its base (channel_relations), so listed first
-  # it gives pixi, whose channel priority is strict, every conda-forge
-  # package from prefix.dev's mirror, which can lag (phase 4 on kappa:
-  # win-64's r-zig-slim, built locally as _9 before the 2026-10-19
-  # decision kept 8, needed a libcurl the mirror did not have yet)
-  channels <- unique(c(if (channel != "https://prefix.dev/universe") channel, "conda-forge", "https://prefix.dev/universe"))
+  # universe before conda-forge, as pixi.toml and README: under strict
+  # channel priority flang-rt-zig's llvm-openmp (zig_*) is only visible
+  # when universe comes first (2026-11-12, chore-release-11 PLAN.md)
+  channels <- unique(c(if (channel != "https://prefix.dev/universe") channel, "https://prefix.dev/universe", "conda-forge"))
   subdir <- switch(paste(os, arch), "linux x86_64" = "linux-64", "linux aarch64" = "linux-aarch64",
                    "macos x86_64" = "osx-64", "macos aarch64" = "osx-arm64", "windows x86_64" = "win-64",
                    stop("no conda subdir for ", os, " ", arch, call. = FALSE))
@@ -275,6 +272,15 @@ if (!is.null(conda) && !in_ws) {
   # set, and its children would use this R's files, not its own
   mine <- c("CMAKE_TOOLCHAIN_FILE", "R_ZIG_CMAKE_TOOLCHAIN_FILE", "R_ZIG_CA_BUNDLE")
   Sys.unsetenv(mine[startsWith(chartr("\\", "/", Sys.getenv(mine)), paste0(rhome, "/"))])
+  # nor any variable that names the caller's conda env (its activation's:
+  # CONDA_PREFIX, PKG_CONFIG_PATH, a package's own), PATH excepted, which
+  # pixi run puts the new env first on: a row's configure took the
+  # caller's libraries from them (K2, s2 on win-64)
+  cp <- chartr("\\", "/", Sys.getenv("CONDA_PREFIX"))
+  if (nzchar(cp)) {
+    e <- Sys.getenv()
+    Sys.unsetenv(setdiff(names(e)[grepl(cp, chartr("\\", "/", e), fixed = TRUE)], c("PATH", "Path")))
+  }
   Sys.setenv(STRESS_CHANNEL = channel)
   mf <- shQuote(file.path(ws, "pixi.toml"))
   elog <- file.path(out, "logs", "conda-env.log")

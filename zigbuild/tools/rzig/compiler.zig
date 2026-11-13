@@ -123,6 +123,17 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     // (-g, -g0 to -g3, -ggdb, -gdwarf-5, -gline-tables-only, ...) leaves
     // it to the caller. On a link line it changes nothing.
     if (g0) try out.append(a, "-g0");
+    // zig cc gives clang -c beside a caller's -S, and clang warns that -c
+    // is unused (zig 0.17.0 and 0.17.1, conda-forge's and upstream's):
+    // an error with -Werror, where gcc and clang compile. configure
+    // scripts probe that way: R's own asks `$CC -Werror -S` whether the
+    // compiler has visibility attributes, and got "no" on linux. Before
+    // the caller's arguments, so its own -Wunused-command-line-argument
+    // wins.
+    for (args) |x| if (mem.eql(u8, x, "-S")) {
+        try out.append(a, "-Wno-unused-command-line-argument");
+        break;
+    };
     try out.appendSlice(a, before);
     if (soname) |s| try out.append(a, s);
     // ld.lld stops at a version script that names a symbol the link does
@@ -360,6 +371,8 @@ const testing = std.testing;
 const testutil = @import("testutil.zig");
 const expectArgs = testutil.expectArgs;
 const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", linux_target };
+/// `pre` of a command with -S: zig's unused -c is no warning (argv)
+const pre_s: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Wno-unused-command-line-argument", "-target", linux_target };
 /// A linux link without a -g option: `pre` and -Wl,--strip-debug.
 const pre_link: Args = pre ++ &[_][]const u8{"-Wl,--strip-debug"};
 
@@ -491,8 +504,9 @@ test "R's environment: -I, -L after the caller's, -lomp on -fopenmp links (stand
     try expectArgs(pre_link ++ &[_][]const u8{ "-fopenmp-simd", "-o", "p", "a.o", l, inc, "-lomp" }, try argv(c, .c, &.{ "-fopenmp-simd", "-o", "p", "a.o" }));
     try expectArgs(pre_link ++ &[_][]const u8{ "-Xlinker", "-o", "-Xlinker", "x", "a.o", l, inc }, try argv(c, .c, &.{ "-Xlinker", "-o", "-Xlinker", "x", "a.o" }));
     // compile only (-c -S -E -M -MM): headers, no -L, no -lomp
-    for ([_][]const u8{ "-c", "-S", "-E", "-M", "-MM" }) |only| {
-        try expectArgs(pre ++ &[_][]const u8{ only, "-fopenmp", "a.c", inc }, try argv(c, .c, &.{ only, "-fopenmp", "a.c" }));
+    inline for ([_][]const u8{ "-c", "-S", "-E", "-M", "-MM" }) |only| {
+        const p = comptime if (mem.eql(u8, only, "-S")) pre_s else pre;
+        try expectArgs(p ++ &[_][]const u8{ only, "-fopenmp", "a.c", inc }, try argv(c, .c, &.{ only, "-fopenmp", "a.c" }));
     }
 }
 
@@ -786,8 +800,9 @@ test "linux links without a -g option or an object with debug info: --strip-debu
     const dbg = f.path("dbg.o");
     try expectArgs(pre ++ &[_][]const u8{ "-shared", "-o", "p.so", "a.o", dbg, "-lR" }, try argv(c, .c, &.{ "-shared", "-o", "p.so", "a.o", dbg, "-lR" }));
     // compiles: none
-    for ([_][]const u8{ "-c", "-S", "-E", "-M", "-MM" }) |only| {
-        try expectArgs(pre ++ &[_][]const u8{ only, "a.c" }, try argv(c, .c, &.{ only, "a.c" }));
+    inline for ([_][]const u8{ "-c", "-S", "-E", "-M", "-MM" }) |only| {
+        const p = comptime if (mem.eql(u8, only, "-S")) pre_s else pre;
+        try expectArgs(p ++ &[_][]const u8{ only, "a.c" }, try argv(c, .c, &.{ only, "a.c" }));
     }
     // a command that links nothing gets it too; zig ignores it there
     try expectArgs(pre_link ++ &[_][]const u8{"--version"}, try argv(c, .c, &.{"--version"}));

@@ -1,0 +1,17 @@
+.{
+    .name = .r_zig,
+    .version = "0.0.0",
+    .fingerprint = 0xe8d192d5c4624fd2,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        // Windows: cairo for winCairo.dll (zigbuild/cairo.zig, whose test
+        // checks this url); the conda build passes the recipe's copy as
+        // -Dcairo instead.
+        .cairo = .{
+            .url = "https://cairographics.org/releases/cairo-1.18.6.tar.xz",
+            .hash = "N-V-__8AAHq1oAMUfslkV4utQjlSz2MPXuQHj3r7vjQ7h12V",
+            .lazy = true,
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "zigbuild" },
+}

@@ -607,14 +607,22 @@ fi
 # there, rzig's link object included). conda-forge's binaries are built
 # for its own baseline, and some carry AVX2 code behind a run-time CPU
 # check (libdeflate, libcrypto), so they are not counted. objdump: on
-# Windows the env's x86_64-w64-mingw32-objdump; on macOS
+# Windows the env's llvm-objdump (llvm-tools, pixi.toml); on macOS
 # /usr/bin/objdump, which is llvm-objdump, from the Command Line Tools
 # the SDK needs anyway; on linux the env's, conda-forge's binutils
 # (pixi.toml). Without one the check fails, everywhere, saying so.
-# aarch64: the check does not apply.
-case "$(uname -m)" in
-  x86_64|amd64)
-    if [ "$OS" = windows ]; then objdump_cmd=x86_64-w64-mingw32-objdump; else objdump_cmd=objdump; fi
+# macOS: `objdump --macho -d`, which reads LC_DATA_IN_CODE and prints
+# the jump tables clang keeps inside __text as `.long` data; plain -d
+# decodes them as instructions (run 43437326154: one entry of
+# _bcEval_loop's table, bytes c5 d1 fe ff, read as vpaddd). ELF and PE
+# keep jump tables out of the code section.
+# aarch64: the check does not apply. By PLAT (env.sh), not uname: on
+# Windows on ARM the MSYS2 tools' uname says x86_64.
+case "$PLAT" in
+  linux-64|osx-64|win-64)
+    if [ "$OS" = windows ]; then objdump_cmd=llvm-objdump; else objdump_cmd=objdump; fi
+    objdump_d=(-d --no-show-raw-insn)
+    if [ "$OS" = macos ]; then objdump_d=(--macho -d --no-show-raw-insn); fi
     if ! command -v "$objdump_cmd" > /dev/null 2>&1; then
       echo "error: no $objdump_cmd on PATH for the baseline CPU check" >&2
       exit 1
@@ -642,7 +650,7 @@ case "$(uname -m)" in
     # or {evex} pseudo-prefix first). Counts: VEX/EVEX instructions, and
     # instructions naming a %ymm, a %zmm register.
     vex_counts() {
-      "$objdump_cmd" -d --no-show-raw-insn "$1" | awk '
+      "$objdump_cmd" "${objdump_d[@]}" "$1" | awk '
         !sub(/^[[:space:]]*[0-9a-f]+:[[:space:]]+/, "") { next }
         { sub(/^[{][a-z0-9]+[}][[:space:]]+/, "") }
         /^v[a-z]/ && !/^ver[rw][[:space:]]/ { v++ }
@@ -660,12 +668,21 @@ case "$(uname -m)" in
     done < "$WORK/r-bins.txt"
     if [ -n "$bad" ]; then
       echo "error: R's own binaries use AVX-class instructions, beyond the x86-64 baseline (an object compiled for the build machine's CPU):$bad" >&2
+      # name the functions: the first 10 offending instructions per binary
+      while IFS= read -r f; do
+        "$objdump_cmd" "${objdump_d[@]}" "$f" | awk -v F="${f#$TREE/}" '
+          /^[0-9a-f]+ <.*>:$/ { fn = $2; sub(/:$/, "", fn); next }
+          /^[^[:space:]]+:$/ { fn = "<" $1; sub(/:$/, ">", fn); next }
+          !sub(/^[[:space:]]*[0-9a-f]+:[[:space:]]+/, "") { next }
+          { sub(/^[{][a-z0-9]+[}][[:space:]]+/, "") }
+          ((/^v[a-z]/ && !/^ver[rw][[:space:]]/) || /%[yz]mm/) && n++ < 10 { print "  " F " " fn ": " $0 }' >&2
+      done < "$WORK/r-bins.txt"
       exit 1
     fi
     n_conda=$(($(wc -l < "$WORK/r-bins-all.txt") - n_rb))
-    echo "== baseline CPU verified: $n_rb binaries of R's own under R_HOME, $n_vex VEX/EVEX instructions (AVX, FMA, AVX-512), $n_ymm on %ymm, $n_zmm on %zmm ($objdump_cmd -d; $n_conda conda binaries there not counted)"
+    echo "== baseline CPU verified: $n_rb binaries of R's own under R_HOME, $n_vex VEX/EVEX instructions (AVX, FMA, AVX-512), $n_ymm on %ymm, $n_zmm on %zmm ($objdump_cmd ${objdump_d[*]}; $n_conda conda binaries there not counted)"
     ;;
-  *) echo "== baseline CPU: the VEX/EVEX check is x86_64's; on $(uname -m) it does not apply" ;;
+  *) echo "== baseline CPU: the VEX/EVEX check is x86_64's; on $PLAT it does not apply" ;;
 esac
 
 # Windows has no rpaths, glibc or Mach-O: the binary checks further down

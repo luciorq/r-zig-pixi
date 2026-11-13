@@ -203,7 +203,7 @@ Sys.setenv(TMPDIR = tmp, TEMP = tmp, TMP = tmp)
 owd <- setwd(p)
 ## the dry run: flang for each source (the env's, with the modules'
 ## path), then the link through the zig the check found, which on win-64
-## is conda-forge's x86_64-w64-mingw32-zig.exe (its zig is a .bat;
+## is conda-forge's <arch>-w64-mingw32-zig.exe (its zig is a .bat;
 ## find_zig.zig)
 Sys.setenv(RZIG_PRINT_ARGV = "1")
 r <- run_to(fc, c("-o", "p", "m.f90", "u.f90"))

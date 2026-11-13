@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The conda packages as a user consumes them: a fresh pixi workspace from
-# this checkout's dist/conda (then conda-forge and universe, as stress.R
+# this checkout's dist/conda (then universe and conda-forge, as stress.R
 # --conda orders them), one environment per group, and the recipe's tests
 # run through pixi's activation by bare Rscript (win-64:
 # Library/bin/Rscript.bat, which rattler-build's test phase cannot run).
@@ -31,7 +31,7 @@ unset PIXI_PROJECT_MANIFEST PIXI_PROJECT_ROOT PIXI_PROJECT_NAME PIXI_PROJECT_VER
 cat > "$T/pixi.toml" << EOF
 [workspace]
 name = "r-zig-consume"
-channels = ["$ch", "conda-forge", "https://prefix.dev/universe"]
+channels = ["$ch", "https://prefix.dev/universe", "conda-forge"]
 platforms = ["$PLAT"]
 
 [dependencies]

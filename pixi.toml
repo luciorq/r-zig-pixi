@@ -1,18 +1,24 @@
 [workspace]
 authors = ["luciorq <luciorqueiroz@gmail.com>"]
 # `universe` (prefix.dev, public) carries flang-pixi's zig-built Fortran
-# toolchain (flang-zig / flang-rt-zig / lld-zig, LLVM 23.1.1) for every
-# subdir: R's Fortran compiler on all of them (see [dependencies]).
-# Listed after conda-forge: its index names ../conda-forge as its base
-# (channel_relations), so listed first it would give pixi, whose channel
-# priority is strict, every conda-forge package from prefix.dev's mirror,
-# which can lag (feat-standalone-toolchain phase 4, kappa).
-channels = ["conda-forge", "https://prefix.dev/universe"]
+# toolchain (flang-zig / flang-rt-zig / lld-zig, LLVM 23.1.5) and its
+# libomp (llvm-openmp's zig_* builds) for every subdir: R's Fortran
+# compiler and OpenMP runtime on all of them (see [dependencies]).
+# Listed BEFORE conda-forge (2026-11-12): flang-rt-zig 23.1.5 requires
+# llvm-openmp's zig_* build, a package conda-forge also has; under pixi's
+# strict channel priority the first channel holding a name owns it, so
+# with conda-forge first flang-rt-zig (and the r-zig package, which
+# depends on it) cannot be installed. A direct requirement escapes that
+# filter, a package's own dependency does not. universe has no base or
+# override relation since 2026-11-12 (its base, ../conda-forge, outranked
+# it and hid llvm-openmp in every order; flang-pixi docs/10 2026-11-12).
+channels = ["https://prefix.dev/universe", "conda-forge"]
 name = "r-zig-pixi"
-platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64", "win-arm64"]
 version = "0.1.0"
 
-# Everything needed to build R comes from conda-forge through this manifest.
+# Everything needed to build R comes from conda-forge and `universe`
+# through this manifest.
 # No system compilers, no system shells, no system libraries.
 # C/C++ toolchain: zig (zig cc / zig c++ / zig ar / zig ranlib) on every platform.
 # Fortran: LLVM flang, flang-pixi's zig-built flang-zig + flang-rt-zig
@@ -27,7 +33,7 @@ version = "0.1.0"
 # runs (separate objdirs/prefixes), not just dependency toggles.
 
 [activation.env]
-R_VERSION = "4.6.1"
+R_VERSION = "4.6.2"
 
 # The R build pipeline. A feature of its own (not [tasks]) so the
 # no-default-feature `minimal` environment gets the very same tasks:
@@ -52,7 +58,7 @@ R_VERSION = "4.6.1"
 [feature.pipeline.activation.env]
 R_ZIG_EXTRA_ENV = "$CONDA_PREFIX"
 
-[feature.pipeline.target.win-64.activation.env]
+[feature.pipeline.target.win.activation.env]
 R_ZIG_EXTRA_ENV = "%CONDA_PREFIX%"
 
 [feature.pipeline.tasks]
@@ -186,7 +192,7 @@ hermetic = "bash scripts/hermetic-check.sh"
 # rzig, the compilers in R_HOME/bin/toolchain (zigbuild/tools/rzig/): its
 # unit tests here, and on linux the parity test against the bash shims in
 # toolchain/ for every OS's command lines. Needs no R build. With an
-# installed tree's prefix (`pixi run rzig-test dist/slim/R-4.6.1-zig`),
+# installed tree's prefix (`pixi run rzig-test dist/slim/R-4.6.2-zig`),
 # linux also runs smoke-test.sh against it: packages installed through
 # that tree's R CMD INSTALL, rzig build [tests-T12].
 rzig-test = "bash zigbuild/tools/rzig/test.sh"
@@ -199,12 +205,12 @@ clean = "bash scripts/clean.sh"
 configure = { cmd = "bash zigbuild/tools/configure-only.sh", depends-on = ["fetch"] }
 
 [tasks]
-# --- CI (build-r.yml on GitHub Actions; needs `gh auth login`) ---
-# The full tier on demand, on main: all 15 legs and conda-package on all
-# 5, which publishes as a push to main does, while the repository
-# variable CONDA_PUBLISH is `true` (a release switch: build.yaml's
-# publish step). A
-# push runs only the core tier's 6 legs
+# --- CI (build.yaml, workflow build-r, on GitHub Actions; needs `gh auth login`) ---
+# The full tier on demand, on main: all 16 legs and conda-package on all
+# 6 platforms, which publishes as a push to main does, while the
+# repository variable CONDA_PUBLISH is `true` (a release switch:
+# build.yaml's publish step). A
+# push runs only the core tier's 7 legs
 # (.github/devdocs/chore-ci-tiers/PLAN.md). For a branch:
 # `gh workflow run build.yaml --ref <branch>`; for a pull request, the
 # `full-ci` label.
@@ -221,7 +227,7 @@ ci-rerun-failed = "gh run rerun --failed $(gh run list --workflow=build.yaml --l
 zig = "0.17.*"
 make = ">=4.4"
 pkg-config = "*"
-# Fortran: flang-pixi's zig-built LLVM flang (23.1.1, `universe`) on every
+# Fortran: flang-pixi's zig-built LLVM flang (23.1.5, `universe`) on every
 # platform, one runtime model everywhere. Why flang-zig and no other
 # flang: on osx-arm64 gfortran silently miscompiles R's complex LAPACK
 # (zgesdd) at -O2; conda-forge has no flang for macOS or linux-aarch64,
@@ -231,21 +237,20 @@ pkg-config = "*"
 # its flang-rt ships a shared runtime with default visibility.
 # build.zig requires it: without $CONDA/bin/flang the build stops.
 # ~1.5 GiB closure (flang-zig + lld-zig + flang-rt-zig).
-# Pinned to flang-pixi's zig 0.17 release, one build number per package
-# on every platform (win-arm64 included): flang-zig 7, lld-zig 6,
-# flang-rt-zig 11 (its zig 0.16 builds were 6, 5 and 10; the zig 0.17
-# wave, feat-zig-017). ==N, not >=N,<N+1: pixi 0.81 takes one comparison per
-# build-number (a range is a parse error), and for an integer it is the
-# same. lld-zig is listed for its pin only: flang-zig accepts any lld-zig
-# 23.1.1 build.
-flang-zig = { version = "==23.1.1", build-number = "==7" }
-lld-zig = { version = "==23.1.1", build-number = "==6" }
-# flang-rt-zig (since 10): static-only (no .so/.dylib) and built with hidden
+# Pinned to flang-pixi's LLVM 23.1.5 release (zig 0.17), one build number
+# per package on every platform (win-arm64 included): flang-zig 0,
+# flang-rt-zig 1 (23.1.1's were 7 and 11; flang-rt-zig 1 depends on the
+# zig_* llvm-openmp itself). ==N, not >=N,<N+1: pixi 0.81
+# takes one comparison per build-number (a range is a parse error), and
+# for an integer it is the same. lld-zig is not listed: flang-zig pins
+# its own (`lld-zig ==23.1.5 *_0`).
+flang-zig = { version = "==23.1.5", build-number = "==0" }
+# flang-rt-zig (since 23.1.1 build 10, so 23.1.5 build 1): static-only (no .so/.dylib) and built with hidden
 # visibility on every platform, so a Fortran package exports only its own
 # symbols instead of re-exporting the whole runtime (~830 on macOS, ~1,240
 # on linux) and -lflang_rt.runtime can only mean the archive. Also ships
-# omp_lib.mod (`use omp_lib`); it requires llvm-openmp >= 23 (below).
-flang-rt-zig = { version = "==23.1.1", build-number = "==11" }
+# omp_lib.mod (`use omp_lib`); it requires llvm-openmp 23.1.5 (below).
+flang-rt-zig = { version = "==23.1.5", build-number = "==1" }
 # --- portable userland (fetch/extract tools; coreutils are per-target below) ---
 curl = "*"
 # --- core libraries R links against (slim profile) ---
@@ -259,27 +264,25 @@ icu = "*"
 tzdata = "*"
 libdeflate = "*"  # faster lazyload compression; was only transitive via libtiff
 # OpenMP: zig cc does -fopenmp codegen but ships no libomp or omp.h, so
-# conda-forge's LLVM libomp, on every platform: R (unix) and packages
-# link it, never libgomp (which libgcc still brings into the linux and
-# win-64 envs). 23: the LLVM major of flang-zig/flang-rt-zig, whose
-# omp_lib.mod `use omp_lib` compiles against, so every platform builds
-# and tests with one libomp release. Unpinned, the lock kept 22.1.8 on
-# unix by inertia while win-64 needed 23.1.1 (flang-rt-zig build 4).
-# recipe/recipe.yaml pins the same in host only: a newer libomp runs
-# code built against an older one, so r-zig-slim's run dependency has no
-# upper bound.
-llvm-openmp = "23.*"
+# LLVM's libomp, on every platform: R (unix) and packages link it, never
+# libgomp (which libgcc still brings into the linux and win envs). It is
+# flang-pixi's build of it (`universe`, the zig_* build string), the one
+# flang-rt-zig is built with and the same release as flang-zig, whose
+# omp_lib.mod `use omp_lib` compiles against: one libomp, built one way,
+# on all six platforms. conda-forge's has the same name and files;
+# its win-arm64 libomp.dll passes a parallel region its first six shared
+# variables only (the C fallback of __kmp_invoke_microtask, where zig's
+# build has the assembly one): data.table's sort crashed
+# (feat-win-arm64/PLAN.md). The build string selects ours (universe is
+# also the first channel, see [workspace]), and its `_1` the build
+# number, as flang-rt-zig's pin. recipe/recipe.yaml pins the same.
+llvm-openmp = { version = "==23.1.5", build = "zig_*_1" }
 # --- headless graphics: cairo + png only in slim ---
-cairo = "*"
+# cairo, pango and harfbuzz: unix only ([target.unix.dependencies]).
+# Windows builds its cairo (zigbuild/cairo.zig) against pixman
+# ([target.win.dependencies]): conda-forge has none of the three for
+# win-arm64, and R's Windows device has no pango.
 expat = "*"
-# pango/harfbuzz pinned to the lockfile's current generation: a fresh solve
-# (flang-zig-validation worktree, 2026-09-19) pulled pango 1.58 + the split
-# libharfbuzz 14.3, which break R 4.6.1's cairo device compile (hb.h
-# include churn). Independent of any toolchain choice; lift the pin only
-# together with a fix on the R side (or a newer R). harfbuzz is not a
-# direct dependency otherwise — listed only to hold its version.
-pango = "1.56.*"
-harfbuzz = "14.2.*"
 fontconfig = "*"
 freetype = "*"
 libpng = "*"
@@ -288,8 +291,9 @@ libpng = "*"
 # glib ships it (lib/glib-2.0/include). R links -lgobject-2.0 -lglib-2.0,
 # and the unversioned libraries those name are in glib-tools, which glib
 # brings; libglib has only the versioned ones. glib needs python, so
-# python is in R's build envs on unix. On win-64 harfbuzz's
-# libharfbuzz-devel needs glib anyway.
+# python is in R's build envs on unix. R's Windows build uses none of
+# glib, fontconfig, freetype and expat (its cairo has none of their
+# backends; zigbuild/cairo.zig); they stay in every env, as before.
 glib = "*"
 
 # conda-forge's linux cairo is built with X11 backends; its pkg-config
@@ -297,8 +301,18 @@ glib = "*"
 [target.linux.dependencies]
 xorg-xorgproto = "*"
 
-# Shell + GNU text tools for running autoconf configure (all from conda-forge)
+# cairo/pango/harfbuzz (see above), then shell + GNU text tools for the
+# scripts and configure runs (all from conda-forge)
 [target.unix.dependencies]
+cairo = "*"
+# pango/harfbuzz pinned to the lockfile's current generation: a fresh solve
+# (flang-zig-validation worktree, 2026-09-19) pulled pango 1.58 + the split
+# libharfbuzz 14.3, which break R 4.6.2's cairo device compile (hb.h
+# include churn). Independent of any toolchain choice; lift the pin only
+# together with a fix on the R side (or a newer R). harfbuzz is not a
+# direct dependency otherwise — listed only to hold its version.
+pango = "1.56.*"
+harfbuzz = "14.2.*"
 bash = "*"
 which = "*"
 sed = "*"
@@ -308,7 +322,7 @@ tar = "*"
 gzip = "*"
 unzip = "*"
 zip = "*"
-patch = "*"  # zig-build.sh applies zigbuild/patches/ (m2-patch on win-64)
+patch = "*"  # zig-build.sh applies zigbuild/patches/ (m2-patch on Windows)
 
 # Rust coreutils everywhere conda-forge ships them; GNU coreutils on linux-aarch64.
 [target.linux-64.dependencies]
@@ -323,17 +337,20 @@ binutils = "*"
 # conda-forge, not the host: in CI those checks fail without it.
 strace = "*"
 
-# win-64: flang-zig is the MinGW-ABI flang (see [dependencies]); it
-# replaced conda-forge's MinGW gfortran (gcc_impl_win-64), Phase 2,
-# platform 2. binutils_impl_win-64: the verification scripts' own
-# x86_64-w64-mingw32-objdump (verify-helpers.sh's needed_of, the import
+# Windows (win-64 and win-arm64): flang-zig is the MinGW-ABI flang (see
+# [dependencies]); it replaced conda-forge's MinGW gfortran
+# (gcc_impl_win-64), Phase 2, platform 2. llvm-tools: the verification
+# scripts' own llvm-objdump (verify-helpers.sh's needed_of, the import
 # closure of what ships; verify-tree.sh's baseline-CPU disassembly;
-# pkg-parity.sh's exports). Nothing R builds or ships runs it: build.zig's
-# import stubs and Makeconf.win's binutils are rzig's (binutils.zig;
-# feat-win-zig-binutils), and the toolchain tree copies none.
-[target.win-64.dependencies]
-binutils_impl_win-64 = "*"
-uutils-coreutils = "*"
+# pkg-parity.sh's exports), on both arches (conda-forge's MinGW binutils
+# are x86_64 only) and independent of rzig. Nothing R builds or ships
+# runs it: build.zig's import stubs and Makeconf.win's binutils are
+# rzig's (binutils.zig; feat-win-zig-binutils), and the toolchain tree
+# copies none. pixman: cairo's, which R's build compiles for winCairo.dll
+# (zigbuild/cairo.zig) with the env's libpng and zlib.
+[target.win.dependencies]
+llvm-tools = "*"
+pixman = "*"
 # gnuwin32 has no slim switches: Windows R unconditionally builds the
 # bitmap devices (jpeg/tiff) and the tcltk package, so slim-on-Windows
 # carries these (parity caveat, tracked in TODO.md)
@@ -363,7 +380,7 @@ m2-grep = "*"
 m2-gawk = "*"
 m2-unzip = "*"
 m2-zip = "*"
-m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no win-64 `patch`; also TC/usr/bin's patch
+m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no Windows `patch`; also TC/usr/bin's patch
 
 [target.osx-64.dependencies]
 uutils-coreutils = "*"
@@ -381,11 +398,18 @@ patchelf = "*"
 binutils = "*"  # binutils and strace: see linux-64
 strace = "*"
 
+# uutils-coreutils on win-64 only: its builds for win-arm64 (0.11, 0.12)
+# refuse m2-coreutils (a run constraint), which the build-tools group
+# copies; win-64 keeps the older build its lock has. win-arm64 has
+# m2-coreutils' tools alone.
+[target.win-64.dependencies]
+uutils-coreutils = "*"
+
 # --- optional capabilities (compile-time: only via the 'full' environment) ---
 
 [feature.tcltk.dependencies]
 # 8.6: the vendored config links -ltcl8.6 -ltk8.6, and the tree ships
-# lib/tcl8.6 (build.zig installEnvRuntime); see win-64 above.
+# lib/tcl8.6 (build.zig installEnvRuntime); see [target.win.dependencies].
 tk = "8.6.*"
 
 [feature.img-formats.dependencies]
@@ -453,7 +477,7 @@ R_BLAS = "openblas"
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
 
 [feature.minimal.activation.env]
-R_VERSION = "4.6.1"
+R_VERSION = "4.6.2"
 R_BUILD_VARIANT = "minimal"
 
 [feature.minimal.dependencies]
@@ -477,9 +501,8 @@ gzip = "*"
 unzip = "*"
 zip = "*"
 patch = "*"
-flang-zig = { version = "==23.1.1", build-number = "==7" }  # pins: see [dependencies]
-lld-zig = { version = "==23.1.1", build-number = "==6" }
-flang-rt-zig = { version = "==23.1.1", build-number = "==11" }
+flang-zig = { version = "==23.1.5", build-number = "==0" }  # pins: see [dependencies]
+flang-rt-zig = { version = "==23.1.5", build-number = "==1" }
 
 [feature.minimal.target.linux-64.dependencies]
 uutils-coreutils = "*"
@@ -520,7 +543,7 @@ minimal-check = "bash scripts/check-minimal.sh"
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
 
 [feature.wheel.activation.env]
-R_VERSION = "4.6.1"
+R_VERSION = "4.6.2"
 R_BUILD_VARIANT = "minimal"
 
 [feature.wheel.dependencies]
@@ -559,8 +582,9 @@ python = ">=3.9"
 # combined length blew past Windows' 260-char MAX_PATH once nested under
 # the self-hosted runner's own _work directory. Harmless on linux/macOS
 # (never hit the bug there; just a slightly simpler directory name).
-# -c: rattler-build does not read the workspace channels; `universe` is
-# where flang-zig/flang-rt-zig (osx-arm64 Fortran) come from.
+# -c: rattler-build does not read the workspace channels; `universe`
+# first, as in [workspace] (strict priority), for flang-zig, flang-rt-zig,
+# lld-zig and the zig_* llvm-openmp on every platform.
 # rm: every build starts from an empty dist/conda, as CI's does. Two
 # leftovers made a local rebuild silently test or ship old bits:
 # rattler-build restores the staging output (the R build) from
@@ -582,7 +606,7 @@ python = ">=3.9"
 # conda-consume.sh names the same directory. Emptied with dist/conda: the
 # next build may solve another zig of the same version, and zig's cache
 # cannot tell them apart (scripts/env.sh).
-conda-package = "rm -rf dist/conda build/conda-test-zig-cache && R_ZIG_TEST_ZIG_CACHE=$PIXI_PROJECT_ROOT/build/conda-test-zig-cache rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id --error-overlapping-files --error-unused-staging-files -c conda-forge -c https://prefix.dev/universe"
+conda-package = "rm -rf dist/conda build/conda-test-zig-cache && R_ZIG_TEST_ZIG_CACHE=$PIXI_PROJECT_ROOT/build/conda-test-zig-cache rattler-build build --recipe recipe/recipe.yaml --output-dir dist/conda --no-build-id --error-overlapping-files --error-unused-staging-files -c https://prefix.dev/universe -c conda-forge"
 # The packages conda-package made, as a user installs them: a fresh pixi
 # workspace from dist/conda, one environment per group, and the recipe's
 # tests through pixi's activation (scripts/conda-consume.sh). CI runs it
@@ -602,10 +626,10 @@ conda-channel-list = "bash scripts/prefix-list-packages.sh"
 # Usage: pixi run -e pkg conda-channel-delete -- --yes universe linux-64 <file.conda> [<file.conda> ...]
 conda-channel-delete = "bash scripts/prefix-delete-package.sh"
 
-# Interim publish path: upload from an already-authenticated dev machine
+# Manual publish path (fallback): upload from an already-authenticated dev machine
 # (`rattler-build auth login prefix.dev`). Not chained onto conda-package
 # via depends-on — publishing an already-built artifact shouldn't force a
-# full R rebuild. See PLAN.md for the CI/trusted-publishing end goal.
+# full R rebuild. CI's trusted publishing (build.yaml) is the normal path.
 # Scoped per-platform (rather than one task globbing dist/conda/*/*.conda)
 # so it can never pick up another platform's artifact or anything left in
 # rattler-build's own dist/conda/broken/ (its convention for a package
@@ -625,8 +649,11 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 [feature.pkg.target.win-64.tasks]
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/win-64/*.conda"
 
+[feature.pkg.target.win-arm64.tasks]
+conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/win-arm64/*.conda"
+
 # linux-aarch64 became a real platform when the repo went public
-# (GitHub-hosted ubuntu-24.04-arm runners): CI's conda-package-hosted
+# (GitHub-hosted ubuntu-24.04-arm runners): CI's conda-package
 # job builds and publishes through this task via OIDC trusted
 # publishing. Its vendored config lives at zigbuild/config/linux-arm64-*
 # ("arm64", not conda's "aarch64" — build.zig/gen-subst.sh's shared
@@ -644,6 +671,11 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 # full, full-openblas, openblas, minimal and pkg). One env needs no group.
 # Each name is a sysdeps entry in stress/packages.tsv. stress.R warns when a
 # row's sysdep is missing here.
+[feature.stress]
+# not win-arm64: conda-forge has no libgdal-core (and other of the
+# libraries below) for it (2026-11-10)
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+
 [feature.stress.dependencies]
 cmake = "*"             # nloptr, s2 (linux), RcppParallel, Rhdf5lib, arrow:source
 libgdal-core = "*"      # sf, terra, gdalraster (gdal-config, gdal.pc)
@@ -675,8 +707,10 @@ zstd = "*"              # qs2
 # nloptr has no configure.win: its Makevars.ucrt links -lnlopt. Not on unix,
 # where nloptr then builds its bundled NLopt with cmake.
 [feature.stress.target.win-64.dependencies]
-nlopt = "*"
+nlopt = "*"  # none for win-arm64 on conda-forge (2026-11-10)
+
 # RPostgres includes Rtools' boost headers (round 1's S1, decision 18).
+[feature.stress.target.win.dependencies]
 libboost-headers = "*"
 
 # RcppParallel:system-tbb. Not on win-64, where conda-forge's TBB is an
@@ -700,7 +734,7 @@ libheif = "<1.23.4"
 [feature.stress.tasks]
 stress = { cmd = "build/compile-tree/slim/R-$R_VERSION-zig/bin/Rscript stress/stress.R", depends-on = ["compile-tree"] }
 
-[feature.stress.target.win-64.tasks]
+[feature.stress.target.win.tasks]
 stress = { cmd = "build/compile-tree/slim/R-$R_VERSION-zig/Library/lib/R/bin/x64/Rscript.exe stress/stress.R", depends-on = ["compile-tree"] }
 
 # The R environments are one solve group, "r": pixi solves them together,

@@ -27,8 +27,8 @@
 # (scripts/make-wheel.py) points it at the PyPI `ziglang` package's own
 # binary — else the compilers group's zig, R_HOME/bin/toolchain/zig/zig,
 # else zig in the bin/ of the environment R is installed in (a conda env
-# used without activation; on win-64 conda-forge only installs it as
-# x86_64-w64-mingw32-zig), else zig on PATH, else `python3 -m ziglang`
+# used without activation; on Windows conda-forge only installs it as
+# <arch>-w64-mingw32-zig), else zig on PATH, else `python3 -m ziglang`
 # (the wheel with ziglang installed outside R's own site-packages dir).
 # The environment is four levels above this script in R_HOME/bin/toolchain
 # (on Windows <prefix>/Library), as for OpenMP below. rzig:
@@ -39,8 +39,8 @@ ZIG=()
 if [ -n "${ZIG_BIN:-}" ] && [ -x "$ZIG_BIN" ]; then
   ZIG=("$ZIG_BIN")
 else
-  for _c in "$_env/lib/R/bin/toolchain/zig/zig" "$_env/bin/zig" "$_env/bin/x86_64-w64-mingw32-zig" \
-    "$(command -v zig || command -v x86_64-w64-mingw32-zig)"; do
+  for _c in "$_env/lib/R/bin/toolchain/zig/zig" "$_env/bin/zig" "$_env/bin/x86_64-w64-mingw32-zig" "$_env/bin/aarch64-w64-mingw32-zig" \
+    "$(command -v zig || command -v x86_64-w64-mingw32-zig || command -v aarch64-w64-mingw32-zig)"; do
     if [ -f "$_c" ] && [ -x "$_c" ]; then ZIG=("$_c"); break; fi
   done
   [ ${#ZIG[@]} -gt 0 ] || ZIG=(python3 -m ziglang)
@@ -349,6 +349,9 @@ if [[ "$(uname -s 2>/dev/null)" == "Linux" && " $* " == *-version-script* ]]; th
 fi
 g0=(-g0)
 for a in "$@"; do case "$a" in -g*) g0=(); break;; esac; done
+# -S: zig gives clang -c beside it, and clang warns that -c is unused, an
+# error with -Werror (a configure probe). rzig: compiler.zig.
+for a in "$@"; do case "$a" in -S) g0+=(-Wno-unused-command-line-argument); break;; esac; done
 # Linux links without a -g option: --strip-debug. -g0 leaves the DWARF of
 # zig's own libc++, libc++abi and libunwind, which zig builds with debug
 # info anyway (4 to 6 MB in every C++ package). A -g on the link line

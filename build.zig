@@ -1,6 +1,6 @@
 //! Build R with `zig build` — no autoconf, no make (Milestone 5).
 //!
-//! The build graph replicates what R 4.6.1's configure+make pipeline does,
+//! The build graph replicates what R 4.6.2's configure+make pipeline does,
 //! on linux-64 and macOS so far (see .github/devdocs/feat-zig-build/,
 //! FINALIZATION.md for phase status — F1-F5 done, F6 Windows remains):
 //!   1. configure results are replayed from a vendored per-(platform,variant)
@@ -47,8 +47,9 @@ const floors = @import("zigbuild/tools/rzig/floors.zig");
 // The static-libc++ mirror against conda-forge zig's shared one, rzig's
 // for packages and R's own build's (staticLibcxxLibDir).
 const libcxx_mirror = @import("zigbuild/tools/rzig/libcxx_mirror.zig");
+const cairo = @import("zigbuild/cairo.zig");
 
-const r_version = "4.6.1";
+const r_version = "4.6.2";
 
 /// macOS deployment target of everything this build links, and of the
 /// packages compiled through rzig (which spells it "<arch>-native.13.0"):
@@ -127,12 +128,19 @@ const Ctx = struct {
     openmp: bool,
     devcairo: bool,
     flangrt_dir: []const u8, // conda clang resource dir holding libflang_rt.runtime.a (findFlangRt)
+    // config.h's CC_VER and FC_VER, which R_compiled_by() returns: what
+    // the compilers of this build say (versionLine), on every OS
+    cc_ver: []const u8,
+    fc_ver: []const u8,
     sdk: []const u8, // macOS: the installed SDK's root (xcrun); "" elsewhere
     // The zig lib dir of R's links, null for zig's own: a mirror of it
     // where conda-forge's zig would link a shared libc++
     // (staticLibcxxLibDir). Set on every unix link (addSharedLib, R.bin);
     // always null on Windows, whose links leave it alone.
     zig_lib_dir: ?std.Build.LazyPath,
+    // Windows: cairo's unpacked source (-Dcairo), else null for
+    // build.zig.zon's lazy `cairo` (zigbuild/cairo.zig; winCairo.dll).
+    cairo_dir: ?[]const u8,
     prefix_is_env: bool, // the install prefix is the env R is built in (the conda build): samePhysicalDir
     // Every C compile of R's own starts with these (addCGroup, the cairo
     // module): no directory of the build machine in __FILE__, the debug
@@ -314,6 +322,7 @@ pub fn build(b: *std.Build) !void {
 
     var variant = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal (unix only)") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
+    const cairo_dir = b.option([]const u8, "cairo", "cairo's source tarball, unpacked (the conda build's; else build.zig.zon's cairo): Windows' winCairo.dll");
 
     const native = b.resolveTargetQuery(.{});
     const os: Os = switch (native.result.os.tag) {
@@ -422,7 +431,15 @@ pub fn build(b: *std.Build) !void {
         .macos => ".dylib",
         .windows => ".dll",
     };
-    const config_dir = b.fmt("zigbuild/config/{s}-{s}", .{ platform, @tagName(variant) });
+    // Windows: one directory for both arches, zigbuild/config/win-full.
+    // gnuwin32's config.h is R's own fixed one, which picks R_CPU and
+    // R_PLATFORM by __aarch64__, and R's Windows build keeps R_ARCH /x64
+    // on aarch64 too (MkRules.rules: WIN = 64), so nothing in it is the
+    // arch's.
+    const config_dir = if (os == .windows)
+        b.fmt("zigbuild/config/win-{s}", .{@tagName(variant)})
+    else
+        b.fmt("zigbuild/config/{s}-{s}", .{ platform, @tagName(variant) });
 
     // R_HOME: <prefix>/lib/R on unix. On Windows this MUST NOT be "lib/R"
     // — NTFS case-folds it into a conda/pixi env's own "Lib" (Python's
@@ -495,6 +512,7 @@ pub fn build(b: *std.Build) !void {
         .config_dir = config_dir,
         .sdk = sdk,
         .zig_lib_dir = try staticLibcxxLibDir(b, io, os),
+        .cairo_dir = cairo_dir,
         .prefix_is_env = samePhysicalDir(io, arena, install_prefix, conda),
         // Windows keeps these defaults. Its compile graph never passes
         // `.openmp = true`, so R itself has no OpenMP there, and `openmp`
@@ -508,6 +526,8 @@ pub fn build(b: *std.Build) !void {
         .openmp = true,
         .devcairo = true,
         .flangrt_dir = try findFlangRt(b, io, conda, os),
+        .cc_ver = versionLine(b, &.{ b.graph.zig_exe, "cc", "--version" }),
+        .fc_ver = versionLine(b, &.{ flang_bin, "--version" }),
         .path_flags = &.{},
         .subst = std.StringHashMap([]const u8).init(arena),
         .mk_subst = std.StringHashMap([]const u8).init(arena),
@@ -589,7 +609,12 @@ pub fn build(b: *std.Build) !void {
     // Generated headers (what config.status + src/include/Makefile make)
     // ------------------------------------------------------------------
     const geninc = b.addWriteFiles();
-    _ = geninc.addCopyFile(b.path(b.fmt("{s}/config.h", .{config_dir})), "config.h");
+    {
+        // The vendored config.h, with the two lines that name the
+        // capture's compilers rewritten for this build's (setDefine).
+        const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/config.h", .{config_dir})), b.allocator, .limited(4 * 1024 * 1024));
+        _ = geninc.add("config.h", try setDefine(b, try setDefine(b, raw, "CC_VER", ctx.cc_ver), "FC_VER", ctx.fc_ver));
+    }
     _ = geninc.addCopyFile(b.path(b.fmt("{s}/Rconfig.h", .{config_dir})), "Rconfig.h");
     _ = geninc.add("Rversion.h", try genRversionH(&ctx, io));
     _ = geninc.add("Rmath.h", try substFile(&ctx, io, "src/include/Rmath.h0.in"));
@@ -660,13 +685,16 @@ pub fn build(b: *std.Build) !void {
     addCGroup(&ctx, libR_mod, "src/appl", &rspec.appl_c, .{ .openmp = true });
     addCGroup(&ctx, libR_mod, "src/nmath", &rspec.nmath_c, .{ .openmp = true });
     addCGroup(&ctx, libR_mod, "src/extra/tre", &rspec.tre_c, .{
+        .visibility = true,
         .openmp = true,
         .extra = &.{"-I%S/src/extra"},
     });
     addCGroup(&ctx, libR_mod, "src/extra/tzone", &rspec.tzone_c, .{
+        .visibility = true,
         .extra = &.{ "-I%S/src/extra/tzone", "-I%S/src/main" },
     });
     addCGroup(&ctx, libR_mod, "src/extra/xdr", &rspec.xdr_c, .{
+        .visibility = true,
         .openmp = true,
         .extra = &.{"-I%S/src/extra/xdr"},
     });
@@ -720,7 +748,7 @@ pub fn build(b: *std.Build) !void {
     const inetmod = newCMod(&ctx);
     inetmod.addIncludePath(ctx.geninc);
     inetmod.addIncludePath(ctx.path("src/include"));
-    addCGroup(&ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{ .openmp = true });
+    addCGroup(&ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{ .openmp = true, .visibility = true });
     ctx.linkSibling(inetmod, ctx.libR);
     inetmod.linkSystemLibrary("curl", .{ .use_pkg_config = .no });
     ctx.relRPaths(inetmod, .modules);
@@ -734,6 +762,7 @@ pub fn build(b: *std.Build) !void {
 
     {
         const m = newPkgMod(&ctx, "src/library/stats/src", &rspec.stats_c, .{
+            .visibility = true,
             .openmp = true,
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
@@ -750,6 +779,7 @@ pub fn build(b: *std.Build) !void {
     }
     {
         const m = newPkgMod(&ctx, "src/library/graphics/src", &rspec.graphics_c, .{
+            .visibility = true,
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
         try pkg_libs.append(arena, .{ .pkg = "graphics", .lib = addSharedLib(&ctx, "pkg_graphics", m) });
@@ -765,33 +795,37 @@ pub fn build(b: *std.Build) !void {
         try pkg_libs.append(arena, .{ .pkg = "grDevices", .lib = addSharedLib(&ctx, "pkg_grDevices", m) });
     }
     {
-        const m = newPkgMod(&ctx, "src/library/grid/src", &rspec.grid_c, .{});
+        const m = newPkgMod(&ctx, "src/library/grid/src", &rspec.grid_c, .{ .visibility = true });
         try pkg_libs.append(arena, .{ .pkg = "grid", .lib = addSharedLib(&ctx, "pkg_grid", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/methods/src", &rspec.methods_c, .{
+            .visibility = true,
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
         try pkg_libs.append(arena, .{ .pkg = "methods", .lib = addSharedLib(&ctx, "pkg_methods", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/parallel/src", &rspec.parallel_c, .{
+            .visibility = true,
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
         try pkg_libs.append(arena, .{ .pkg = "parallel", .lib = addSharedLib(&ctx, "pkg_parallel", m) });
     }
     {
-        const m = newPkgMod(&ctx, "src/library/splines/src", &rspec.splines_c, .{});
+        const m = newPkgMod(&ctx, "src/library/splines/src", &rspec.splines_c, .{ .visibility = true });
         try pkg_libs.append(arena, .{ .pkg = "splines", .lib = addSharedLib(&ctx, "pkg_splines", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/tools/src", &rspec.tools_c, .{
+            .visibility = true,
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
         try pkg_libs.append(arena, .{ .pkg = "tools", .lib = addSharedLib(&ctx, "pkg_tools", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/utils/src", &rspec.utils_c, .{
+            .visibility = true,
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
         try pkg_libs.append(arena, .{ .pkg = "utils", .lib = addSharedLib(&ctx, "pkg_utils", m) });
@@ -815,7 +849,7 @@ pub fn build(b: *std.Build) !void {
         try extra.append(arena, "-DHAVE_CONFIG_H");
         var it = std.mem.tokenizeScalar(u8, ctx.subst.get("TCLTK_CPPFLAGS").?, ' ');
         while (it.next()) |tok| try extra.append(arena, tok);
-        addCGroup(&ctx, m, "src/library/tcltk/src", &rspec.tcltk_c, .{ .extra = extra.items });
+        addCGroup(&ctx, m, "src/library/tcltk/src", &rspec.tcltk_c, .{ .visibility = true, .extra = extra.items });
         // linux: conda-forge's libtcl8.6.so and libtk8.6.so carry no
         // DT_SONAME, and for such a library lld records in DT_NEEDED the
         // path it was given, which zig makes the env's absolute one. So
@@ -977,8 +1011,8 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // config.h, PACKAGE_VERSION/RMATH_HAVE_WORKING_LOG1P in Rmath.h0.in.
     try ctx.subst.put("VERSION", r_version);
     try ctx.subst.put("PACKAGE_VERSION", r_version);
-    try ctx.subst.put("CC_VER", "zig cc (LLVM/clang, MinGW target)");
-    try ctx.subst.put("FC_VER", "flang (flang-pixi flang-zig, MinGW target)");
+    try ctx.subst.put("CC_VER", ctx.cc_ver);
+    try ctx.subst.put("FC_VER", ctx.fc_ver);
     try ctx.subst.put("RMATH_HAVE_WORKING_LOG1P", "# define HAVE_WORKING_LOG1P 1");
     // libgnuintl.h.in's 4 tokens — gnuwin32's own Makefile.win generates
     // libgnuintl.h from this .in via the exact same 4 sed substitutions
@@ -1636,24 +1670,29 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // documented "still deferred" note). Ground truth from gnuwin32's real
     // src/library/grDevices/src/cairo/Makefile.win: one source (cairoBM.c),
     // linked against grDevices.dll itself (-lgrDevices) plus cairo
-    // (CAIRO_LIBS/CAIRO_CPPFLAGS). CAIRO_LIBS now comes from this config
-    // dir's own vendored subst.txt (-lcairo -lfontconfig — hand-populated
-    // rather than captured from a config.status, since gnuwin32 has none;
-    // same values this used to hardcode directly here before Phase 4 of
-    // feat-cross-platform-standardization unified the mechanism with
-    // unix's applyLinkFlags/ctx.subst.get pattern).
+    // (CAIRO_LIBS/CAIRO_CPPFLAGS). cairo itself is r-zig's build
+    // (zigbuild/cairo.zig), linked in statically, as CRAN's Rtools links
+    // it: conda-forge has no cairo for win-arm64, and one cairo keeps both
+    // Windows arches alike. CAIRO_LIBS, from this config dir's vendored
+    // subst.txt (hand-populated: gnuwin32 has no config.status), names the
+    // env's libraries cairo needs (pixman, libpng, zlib); cairo.zig names
+    // the Windows ones.
     const win_cairo = blk: {
+        const built = try buildCairo(ctx, io);
         const m = newCMod(ctx);
         m.addIncludePath(ctx.geninc);
         m.addIncludePath(ctx.path("src/include"));
+        m.addIncludePath(built.generated);
+        m.addIncludePath(built.include);
         addCGroup(ctx, m, "src/library/grDevices/src/cairo", &.{"cairoBM.c"}, .{
             .extra = &.{
                 "-I%S/src/library/grDevices/src/cairo",
                 "-I%S/src/library/grDevices/src",
-                "-I%C/Library/include/cairo",
-                "-I%C/Library/include/freetype2",
+                cairo.user_define,
             },
         });
+        m.linkLibrary(built.lib);
+        for (cairo.system_libs) |l| m.linkSystemLibrary(l, .{});
         // cairoBM.c/cairoFns.c call R API + graphics-engine functions
         // (Rf_cons, R_GlobalEnv, GEcurrentDevice, ...) directly, not just
         // through grDevices.dll — gnuwin32's real Makefile.win link line
@@ -1935,6 +1974,34 @@ fn compiledBy(b: *std.Build) ![]const u8 {
     return b.fmt("clang-{s}", .{v[0 .. std.mem.indexOfAny(u8, v, " \r\n") orelse v.len]});
 }
 
+/// The first line of `<compiler> --version`, as R's configure reads CC_VER
+/// and FC_VER (R_compiled_by()'s two strings): "clang version 22.1.8 (...)"
+/// from zig 0.17's `zig cc`, "flang version 23.1.5" from flang. Read from
+/// the compilers of this build on every OS: the vendored config.h names
+/// the compilers of the day it was captured, and gnuwin32's names none.
+fn versionLine(b: *std.Build, argv: []const []const u8) []const u8 {
+    const out = b.run(argv);
+    return std.mem.trim(u8, out[0 .. std.mem.indexOfAny(u8, out, "\r\n") orelse out.len], " \t");
+}
+
+/// `text` (a config.h) with its `#define <name> ...` line defining `name`
+/// as the C string `value`. An error when it has no such line: a config.h
+/// without it would keep no compiler at all.
+fn setDefine(b: *std.Build, text: []const u8, name: []const u8, value: []const u8) ![]u8 {
+    const key = b.fmt("#define {s} ", .{name});
+    const at = std.mem.indexOf(u8, text, key) orelse {
+        std.debug.print("error: no '{s}' line in config.h\n", .{key});
+        return error.NoSuchDefine;
+    };
+    const end = std.mem.indexOfScalarPos(u8, text, at, '\n') orelse text.len;
+    var quoted = std.ArrayList(u8).empty;
+    for (value) |c| {
+        if (c == '"' or c == '\\') try quoted.append(b.allocator, '\\');
+        try quoted.append(b.allocator, c);
+    }
+    return std.mem.concat(b.allocator, u8, &.{ text[0..at], key, "\"", quoted.items, "\"", text[end..] });
+}
+
 /// `text` with the line starting `key` (then spaces or `=`) replaced by
 /// `line`; unchanged when there is none.
 fn replaceLine(b: *std.Build, text: []const u8, key: []const u8, line: []const u8) ![]u8 {
@@ -2015,6 +2082,33 @@ fn installCommonPayload(ctx: *Ctx) void {
         .install_subdir = "",
         .exclude_extensions = &.{ "Makefile.in", ".texi", "R.aux", "Rscript.aux" },
     }).step);
+}
+
+/// libcairo.a for winCairo.dll (zigbuild/cairo.zig), from -Dcairo's
+/// directory (the conda build's unpacked source), else build.zig.zon's lazy
+/// `cairo`, which zig fetches (and then runs this configure step again).
+/// pixman's, libpng's and zlib's headers are the env's.
+fn buildCairo(ctx: *Ctx, io: std.Io) !cairo.Built {
+    const b = ctx.b;
+    const src = if (ctx.cairo_dir) |d| d else blk: {
+        const dep = try b.dependencyLazy("cairo", .{});
+        break :blk dep.builder.root.root_dir.path orelse ".";
+    };
+    const real = std.Io.Dir.cwd().realPathFileAlloc(io, src, b.allocator) catch |err| {
+        std.debug.print("error: cairo: cannot resolve {s} ({t})\n", .{ src, err });
+        return error.CairoBuild;
+    };
+    const abs = std.mem.replaceOwned(u8, b.allocator, real, "\\", "/") catch @panic("OOM");
+    const built = try cairo.add(b, ctx.target, abs, &.{ ctx.condaDir("include/pixman-1"), ctx.condaDir("include") });
+    // cairo's licence texts and where it came from, in R_HOME (both
+    // channels: the conda package and the standalone tree ship the same
+    // R_HOME); winCairo.dll holds it, no file of the env
+    const dest = ctx.rhomeInstallDir("share/licenses/cairo");
+    for (cairo.license_files) |f|
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.graph.cwdRelativePath(b.fmt("{s}/{s}", .{ abs, f })), dest, f).step);
+    const record = b.addWriteFiles().add("SOURCE", cairo.record(b, ctx.target.result.cpu.arch));
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(record, dest, "SOURCE").step);
+    return built;
 }
 
 fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win_cairo: *std.Build.Step.Compile) !*std.Build.Step.WriteFile {
@@ -2827,6 +2921,12 @@ fn filePathFlags(ctx: *const Ctx, io: std.Io) ![]const []const u8 {
 
 const CGroupOpts = struct {
     openmp: bool = false,
+    // R's makefile for this directory compiles with $(C_VISIBILITY)
+    // (-fvisibility=hidden where configure found it: unix; subst.txt):
+    // src/extra's tre, tzone and xdr, the internet module and eight base
+    // packages, whose symbols then leave libR and the package libraries
+    // only where the source says attribute_visible.
+    visibility: bool = false,
     extra: []const []const u8 = &.{}, // %S → srcdir, %C → conda
 };
 
@@ -2836,6 +2936,9 @@ fn addCGroup(ctx: *const Ctx, mod: *std.Build.Module, dir: []const u8, files: []
     flags.appendSlice(b.allocator, ctx.path_flags) catch @panic("OOM");
     flags.appendSlice(b.allocator, &.{ "-std=gnu23", "-fno-sanitize=undefined", "-O2", "-fpic", "-DHAVE_CONFIG_H" }) catch @panic("OOM");
     if (opts.openmp and ctx.openmp) flags.append(b.allocator, "-fopenmp") catch @panic("OOM");
+    if (opts.visibility) if (ctx.subst.get("C_VISIBILITY")) |v| {
+        if (v.len > 0) flags.append(b.allocator, v) catch @panic("OOM");
+    };
     for (opts.extra) |f| {
         const f1 = std.mem.replaceOwned(u8, b.allocator, f, "%S", ctx.src_abs) catch @panic("OOM");
         const f2 = std.mem.replaceOwned(u8, b.allocator, f1, "%C", ctx.conda) catch @panic("OOM");
@@ -2860,7 +2963,7 @@ fn newPkgMod(ctx: *const Ctx, dir: []const u8, files: []const []const u8, opts: 
     var extra = std.ArrayList([]const u8).empty;
     extra.append(b.allocator, "-DNDEBUG") catch @panic("OOM");
     extra.appendSlice(b.allocator, opts.extra) catch @panic("OOM");
-    addCGroup(ctx, m, dir, files, .{ .openmp = opts.openmp, .extra = extra.items });
+    addCGroup(ctx, m, dir, files, .{ .openmp = opts.openmp, .visibility = opts.visibility, .extra = extra.items });
     return m;
 }
 

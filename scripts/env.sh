@@ -30,14 +30,17 @@ case "$(uname -s)" in
 esac
 
 # The platform, as conda names it (linux-64, linux-aarch64, osx-64,
-# osx-arm64, win-64), and the archive format: the archives' names say
-# both (feat-standalone-toolchain B17).
+# osx-arm64, win-64, win-arm64), and the archive format: the archives'
+# names say both (feat-standalone-toolchain B17). On Windows not uname:
+# the MSYS2 tools are x86_64 binaries, which Windows on ARM runs under
+# emulation, so their uname says x86_64 there; PROCESSOR_IDENTIFIER is
+# the machine's ("ARMv8 (64-bit) Family 8 ..." on ARM).
 case "$OS-$(uname -m)" in
   linux-x86_64) PLAT=linux-64 ;;
   linux-*) PLAT="linux-$(uname -m)" ;;
   macos-x86_64) PLAT=osx-64 ;;
   macos-*) PLAT="osx-$(uname -m)" ;;
-  windows-*) PLAT=win-64 ;;
+  windows-*) case "${PROCESSOR_IDENTIFIER:-}" in ARM*) PLAT=win-arm64 ;; *) PLAT=win-64 ;; esac ;;
   *) PLAT=unknown ;;
 esac
 if [ "$OS" = windows ]; then ARCHIVE_EXT=zip; else ARCHIVE_EXT=tar.gz; fi
@@ -121,6 +124,7 @@ COMPILE_TREE="$BUILD_DIR/compile-tree/$FLAVOR/$TOP"
 TOOLCHAIN="$ROOT/toolchain"
 TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
 CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
+CRAN_CDN_URL="https://cloud.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
 CHECKSUM_FILE="$ROOT/scripts/checksums/R-$R_VERSION.sha256"
 
 # macOS defaults to 256 open files; zig's linker opens every object of
@@ -151,7 +155,8 @@ fi
 # toolchain-test) build, compile and test with it. Not conda-package,
 # whose rattler-build gives the recipe a clean environment and so its
 # build env's zig, nor wheel-test, which compiles with the venv's
-# ziglang. On win-64 conda-forge's real binary is x86_64-w64-mingw32-zig:
+# ziglang. On Windows conda-forge's real binary is <arch>-w64-mingw32-zig
+# (x86_64 on win-64, aarch64 on win-arm64):
 # its `zig` is a .bat, which MSYS bash cannot run.
 # Empty with no zig at all (scripts that run none still work).
 #
@@ -170,7 +175,7 @@ if [ -n "${ZIG_BIN:-}" ]; then
     *) ZIG="$(command -v "$ZIG_BIN" || true)" ;;
   esac
 else
-  ZIG="$(command -v zig || command -v x86_64-w64-mingw32-zig || true)"
+  ZIG="$(command -v zig || command -v x86_64-w64-mingw32-zig || command -v aarch64-w64-mingw32-zig || true)"
 fi
 case "$ZIG" in
   ''|/*|[A-Za-z]:[/\\]*) ;;

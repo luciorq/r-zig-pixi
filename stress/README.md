@@ -14,7 +14,7 @@ package does not fail the run.
 |---|---|
 | `packages.tsv` | the data: one row per target, with its group, OSes, system libraries, env vars, timeout, expected result, smoke call and a note. The header explains each column. |
 | `stress.R` | the one entry script. Base R only. `--help` prints its options. |
-| `pixi.toml`, `[feature.stress]` | the `stress` environment: the system libraries the rows need (GDAL, GEOS, PROJ, cmake, ...), plus the default feature's zig and flang. |
+| `pixi.toml`, `[feature.stress]` | the `stress` environment: the system libraries the rows need (GDAL, GEOS, PROJ, cmake, ...), plus the default feature's zig and flang. Five platforms: not win-arm64, where conda-forge has no libgdal-core and some of the other libraries. |
 | `.github/workflows/stress.yaml` | the manual CI workflow. |
 
 The groups follow the brief:
@@ -46,7 +46,7 @@ lifetime rule (feat-tier1-engine).
 The tree: the compile tree, build/compile-tree/slim/R-<ver>-zig, with the
 stress env's libraries. The stress task makes it on every run (it depends
 on `compile-tree`) from the dev tree that `pixi run build` makes and the
-toolchain tree's openmp/ and usr/ (Windows: openmp/ and binutils/), so
+toolchain tree's openmp/ and usr/ (Windows: openmp/, usr/ and etc/), so
 both must exist first:
 
 ```sh
@@ -69,7 +69,11 @@ pixi run -e stress stress --conda=universe g3 # the packages published on prefix
 
 `--conda` makes the env in `<run dir>/conda` with pixi, then runs `stress.R`
 again with that env's R. The compile tree's R starts it, so `build` and
-`toolchain` must have run first here too.
+`toolchain` must have run first here too. The env's channels are
+`dist/conda` (plain `--conda`), then universe, then conda-forge: universe
+must come before conda-forge (the main README's install section says
+why). `--conda=universe` tests what universe has published, build 10
+(R 4.6.1) until build 11 is published.
 
 Useful options (`--help` lists them all):
 
@@ -170,7 +174,7 @@ nothing else on the machine:
   symlinks) per zig. Since build 7 it also keeps a copy of each archive
   linked under a name without an extension (V8 on macOS:
   `archive-<key>/v8_monolith.a`, 161 MB). linux's finalization object and
-  Windows' CFG stub are R's, in `R_HOME/bin/toolchain`, not in the cache
+  win-64's CFG stub are R's, in `R_HOME/bin/toolchain`, not in the cache
   (feat-r-home-link-objects). The runner lists the
   cache's entries when it starts, and at its end removes the ones the run
   added; report.md names them. It never removes an older
