@@ -39,7 +39,7 @@ source:
     target_directory: .
   - path: ../zigbuild
     target_directory: zigbuild
-  # win-64: pkgconf's source, which the toolchain build compiles into
+  # Windows: pkgconf's source, which the toolchain build compiles into
   # R_HOME/bin/toolchain/usr/bin as pkgconf.exe and pkg-config.exe
   # (zigbuild/toolchain/pkgconf.zig; recipe/build.sh passes the directory
   # as -Dpkgconf). The url and sha256 are pkgconf.zig's, as its test
@@ -242,8 +242,8 @@ outputs:
   # which Makeconf points at, and share/zig/rpkg), as the standalone base
   # archive does (B19). Each group package owns, or depends on,
   # third-party software only: r-zig-compilers depends on zig, flang and
-  # llvm-openmp; r-zig-build-tools on make (win-64: the MSYS2 tools), and
-  # on win-64 owns R_HOME/bin/toolchain/usr/ (pkgconf, built from source).
+  # llvm-openmp; r-zig-build-tools on make (Windows: the MSYS2 tools), and
+  # on Windows owns R_HOME/bin/toolchain/usr/ (pkgconf, built from source).
   # Windows' binutils are rzig's own names, r-zig-slim's
   # (feat-win-zig-binutils). r-zig-toolchain is the
   # metapackage of both groups. Without a group, an install that needs it
@@ -333,7 +333,7 @@ outputs:
         - liblzma-devel
         - pcre2
         - libcurl
-        # 78.* while conda-forge's zig 0.16 needs libxml2-16, which is built
+        # 78.* while conda-forge's zig (0.16, 0.17 too) needs libxml2-16, built
         # against icu 78 only: with icu 79 in this host (79.1, 2026-10-22)
         # r-zig-slim's run export becomes icu >=79.1,<80, and no test env
         # that holds r-zig-slim and zig (r-zig-toolchain's, for one) can
@@ -433,10 +433,10 @@ outputs:
     build:
       # everything but the groups' directories under R_HOME/bin/toolchain
       # (feat-standalone-toolchain B20, B28): rzig's names and its link
-      # object stay here (win-64: with the binutils, rzig's names too). Of
-      # these, the conda build makes only win-64's usr/ (pkgconf), which
+      # object stay here (Windows: with the binutils, rzig's names too). Of
+      # these, the conda build makes only Windows' usr/ (pkgconf), which
       # r-zig-build-tools owns; etc/ is the standalone tree's only on
-      # win-64 (PHASE7 Cr5); binutils/ is gone (feat-win-zig-binutils) and
+      # Windows (PHASE7 Cr5); binutils/ is gone (feat-win-zig-binutils) and
       # stays excluded so no old tree's copy can ride along
       files:
         exclude:
@@ -551,11 +551,9 @@ outputs:
                 # cmd.exe's OWN runtime parsing stage, not YAML rendering.
                 # bin/x64: the same hardcoded R_ARCH="x64" convention
                 # build.zig's buildWindows() has throughout (bin/x64,
-                # libs/x64, modules/x64, etc/x64) — see
-                # feat-cross-platform-standardization/PLAN.md's explicit
-                # win-arm64 non-goal. Fixing just this one literal without
-                # also fixing build.zig's dozen would be cosmetic, not real
-                # readiness; revisit together if win-arm64 is ever attempted.
+                # libs/x64, modules/x64, etc/x64), on win-arm64 too: R's
+                # Windows build keeps R_ARCH /x64 on aarch64 (MkRules.rules:
+                # WIN = 64; build.zig's config_dir comment).
                 - 'echo PATHDEBUG=%PATH%'
                 - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-win.R'
                 - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-preflight.R'
@@ -699,7 +697,7 @@ outputs:
       from: r-zig-build
       run_exports: false
     build:
-      # win-64: usr/bin's pkgconf.exe and pkg-config.exe, which the
+      # Windows: usr/bin's pkgconf.exe and pkg-config.exe, which the
       # toolchain build compiles from source (zigbuild/toolchain/pkgconf.zig), with
       # usr/SOURCES and usr/LICENSES/pkgconf/. R puts usr/bin first on
       # PATH, before the env's. unix: nothing (no branch matches: an empty
@@ -711,13 +709,13 @@ outputs:
     requirements:
       run:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
-        # B28 (a): unix make. On win-64, m2-make is the make R runs (it
+        # B28 (a): unix make. On Windows, m2-make is the make R runs (it
         # comes first on PATH), so no native make there (PHASE4 Cg7;
         # PHASE7 open point B a)
         - if: unix
           then:
             - make >=4.4
-        # win-64: the build-tools group's set on both channels (B11; PHASE7
+        # Windows: the build-tools group's set on both channels (B11; PHASE7
         # open points A-C): MSYS2's userland from conda-forge's m2 packages;
         # the standalone tree copies the same packages' files into
         # R_HOME/bin/toolchain/usr/bin. pkg-config is pkgconf, built by
@@ -794,7 +792,7 @@ outputs:
             - test-build-tools.R
     about:
       summary: The r-zig build tools for r-zig-slim (make; on Windows also sh, the MSYS2 tools and pkg-config)
-      # win-64 holds pkgconf (ISC), with the mingw-w64 CRT startup zig
+      # Windows holds pkgconf (ISC), with the mingw-w64 CRT startup zig
       # links into it (ZPL-2.1); unix holds no file
       license: ${{ "ISC AND ZPL-2.1" if win else "GPL-2.0-only OR GPL-3.0-only" }}
 
@@ -836,7 +834,7 @@ outputs:
 
 about:
   homepage: https://www.r-project.org
-  # R's own (PHASE4 open point E a), as the r-zig wheel says; win-64
+  # R's own (PHASE4 open point E a), as the r-zig wheel says; Windows'
   # r-zig-build-tools states its pkgconf's own
   license: GPL-2.0-only OR GPL-3.0-only
   summary: R built with the zig toolchain (headless slim profile)

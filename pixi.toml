@@ -17,7 +17,8 @@ name = "r-zig-pixi"
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64", "win-arm64"]
 version = "0.1.0"
 
-# Everything needed to build R comes from conda-forge through this manifest.
+# Everything needed to build R comes from conda-forge and `universe`
+# through this manifest.
 # No system compilers, no system shells, no system libraries.
 # C/C++ toolchain: zig (zig cc / zig c++ / zig ar / zig ranlib) on every platform.
 # Fortran: LLVM flang, flang-pixi's zig-built flang-zig + flang-rt-zig
@@ -204,12 +205,12 @@ clean = "bash scripts/clean.sh"
 configure = { cmd = "bash zigbuild/tools/configure-only.sh", depends-on = ["fetch"] }
 
 [tasks]
-# --- CI (build-r.yml on GitHub Actions; needs `gh auth login`) ---
-# The full tier on demand, on main: all 15 legs and conda-package on all
-# 5, which publishes as a push to main does, while the repository
-# variable CONDA_PUBLISH is `true` (a release switch: build.yaml's
-# publish step). A
-# push runs only the core tier's 6 legs
+# --- CI (build.yaml, workflow build-r, on GitHub Actions; needs `gh auth login`) ---
+# The full tier on demand, on main: all 16 legs and conda-package on all
+# 6 platforms, which publishes as a push to main does, while the
+# repository variable CONDA_PUBLISH is `true` (a release switch:
+# build.yaml's publish step). A
+# push runs only the core tier's 7 legs
 # (.github/devdocs/chore-ci-tiers/PLAN.md). For a branch:
 # `gh workflow run build.yaml --ref <branch>`; for a pull request, the
 # `full-ci` label.
@@ -244,7 +245,7 @@ pkg-config = "*"
 # for an integer it is the same. lld-zig is not listed: flang-zig pins
 # its own (`lld-zig ==23.1.5 *_0`).
 flang-zig = { version = "==23.1.5", build-number = "==0" }
-# flang-rt-zig (since 10): static-only (no .so/.dylib) and built with hidden
+# flang-rt-zig (since 23.1.1 build 10, so 23.1.5 build 1): static-only (no .so/.dylib) and built with hidden
 # visibility on every platform, so a Fortran package exports only its own
 # symbols instead of re-exporting the whole runtime (~830 on macOS, ~1,240
 # on linux) and -lflang_rt.runtime can only mean the archive. Also ships
@@ -272,9 +273,9 @@ libdeflate = "*"  # faster lazyload compression; was only transitive via libtiff
 # its win-arm64 libomp.dll passes a parallel region its first six shared
 # variables only (the C fallback of __kmp_invoke_microtask, where zig's
 # build has the assembly one): data.table's sort crashed
-# (feat-win-arm64/PLAN.md). The build string selects ours although
-# conda-forge is the first channel, and its `_1` the build number, as
-# flang-rt-zig's pin. recipe/recipe.yaml pins the same.
+# (feat-win-arm64/PLAN.md). The build string selects ours (universe is
+# also the first channel, see [workspace]), and its `_1` the build
+# number, as flang-rt-zig's pin. recipe/recipe.yaml pins the same.
 llvm-openmp = { version = "==23.1.5", build = "zig_*_1" }
 # --- headless graphics: cairo + png only in slim ---
 # cairo, pango and harfbuzz: unix only ([target.unix.dependencies]).
@@ -300,7 +301,8 @@ glib = "*"
 [target.linux.dependencies]
 xorg-xorgproto = "*"
 
-# Shell + GNU text tools for running autoconf configure (all from conda-forge)
+# cairo/pango/harfbuzz (see above), then shell + GNU text tools for the
+# scripts and configure runs (all from conda-forge)
 [target.unix.dependencies]
 cairo = "*"
 # pango/harfbuzz pinned to the lockfile's current generation: a fresh solve
@@ -320,7 +322,7 @@ tar = "*"
 gzip = "*"
 unzip = "*"
 zip = "*"
-patch = "*"  # zig-build.sh applies zigbuild/patches/ (m2-patch on win-64)
+patch = "*"  # zig-build.sh applies zigbuild/patches/ (m2-patch on Windows)
 
 # Rust coreutils everywhere conda-forge ships them; GNU coreutils on linux-aarch64.
 [target.linux-64.dependencies]
@@ -407,7 +409,7 @@ uutils-coreutils = "*"
 
 [feature.tcltk.dependencies]
 # 8.6: the vendored config links -ltcl8.6 -ltk8.6, and the tree ships
-# lib/tcl8.6 (build.zig installEnvRuntime); see win-64 above.
+# lib/tcl8.6 (build.zig installEnvRuntime); see [target.win.dependencies].
 tk = "8.6.*"
 
 [feature.img-formats.dependencies]
@@ -580,8 +582,9 @@ python = ">=3.9"
 # combined length blew past Windows' 260-char MAX_PATH once nested under
 # the self-hosted runner's own _work directory. Harmless on linux/macOS
 # (never hit the bug there; just a slightly simpler directory name).
-# -c: rattler-build does not read the workspace channels; `universe` is
-# where flang-zig/flang-rt-zig (osx-arm64 Fortran) come from.
+# -c: rattler-build does not read the workspace channels; `universe`
+# first, as in [workspace] (strict priority), for flang-zig, flang-rt-zig,
+# lld-zig and the zig_* llvm-openmp on every platform.
 # rm: every build starts from an empty dist/conda, as CI's does. Two
 # leftovers made a local rebuild silently test or ship old bits:
 # rattler-build restores the staging output (the R build) from
@@ -623,10 +626,10 @@ conda-channel-list = "bash scripts/prefix-list-packages.sh"
 # Usage: pixi run -e pkg conda-channel-delete -- --yes universe linux-64 <file.conda> [<file.conda> ...]
 conda-channel-delete = "bash scripts/prefix-delete-package.sh"
 
-# Interim publish path: upload from an already-authenticated dev machine
+# Manual publish path (fallback): upload from an already-authenticated dev machine
 # (`rattler-build auth login prefix.dev`). Not chained onto conda-package
 # via depends-on — publishing an already-built artifact shouldn't force a
-# full R rebuild. See PLAN.md for the CI/trusted-publishing end goal.
+# full R rebuild. CI's trusted publishing (build.yaml) is the normal path.
 # Scoped per-platform (rather than one task globbing dist/conda/*/*.conda)
 # so it can never pick up another platform's artifact or anything left in
 # rattler-build's own dist/conda/broken/ (its convention for a package
@@ -650,7 +653,7 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/win-arm64/*.conda"
 
 # linux-aarch64 became a real platform when the repo went public
-# (GitHub-hosted ubuntu-24.04-arm runners): CI's conda-package-hosted
+# (GitHub-hosted ubuntu-24.04-arm runners): CI's conda-package
 # job builds and publishes through this task via OIDC trusted
 # publishing. Its vendored config lives at zigbuild/config/linux-arm64-*
 # ("arm64", not conda's "aarch64" — build.zig/gen-subst.sh's shared
