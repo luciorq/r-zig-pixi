@@ -68,7 +68,7 @@ for n in r_zig r_zig_compilers r_zig_build_tools r_zig_toolchain; do
 done
 wheel="${wheels[0]}" cc_wheel="${wheels[1]}" bt_wheel="${wheels[2]}" tc_wheel="${wheels[3]}"
 
-T="$(mktemp -d)"
+T="$(mktemp -d "${TMPDIR:-/tmp}/wheel-test.XXXXXX")"
 trap 'rm -rf "$T"' EXIT
 echo "== installing $(basename "$wheel") alone into a fresh venv"
 python -m venv "$T/venv"
