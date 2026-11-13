@@ -264,6 +264,15 @@ here. See "State at the stop" below.
     CPU. omicron cannot reproduce a native-CPU leak (Rosetta reports no
     AVX). verify-tree.sh now prints the function and instruction of
     the first 10 hits per binary (tested on glibc's memcpy).
+    Resolved 2026-11-13 (run 43437326154 named it: `_bcEval_loop`,
+    `vpaddd %xmm7, %xmm5, %xmm7`): a false positive. The bytes c5 d1 fe
+    ff are one entry of a jump table that clang keeps inside __text on
+    Mach-O (LC_DATA_IN_CODE, 245 entries in libR.dylib); plain
+    `objdump -d` decodes it as code. Reproduced on omicron's osx-64
+    tree (same address, e063c). verify-tree.sh now runs `objdump --macho
+    -d` on macOS, which prints those tables as `.long` data: 0 VEX in
+    22 binaries there; conda-forge's libdeflate still shows 893, so the
+    check still detects real AVX code.
 18. **windows-11-arm: make segfaults in pkg-parity** (run 43344258167):
     `scripts/pkg-parity.sh: line 405: Segmentation fault ... "$mk" -s -f
     "$mconf" -f "$pl/print-var.mk" print-compilers`, after the contract
@@ -271,6 +280,14 @@ here. See "State at the stop" below.
     is started from Git bash directly. Unconfirmed suspect: two MSYS
     runtimes in one process tree under ARM emulation. pkg-parity.sh now
     logs which make it runs and `make --version` on Windows.
+    Resolved 2026-11-13 (run 43437326154): the make is the toolchain's
+    own (R_HOME/bin/toolchain/usr/bin/make), and even `make --version`
+    segfaults when Git bash starts it, while every make R started in the
+    same job worked (tier-1 INSTALL through make for cli, digest,
+    quadprog, Rcpp; nine R CMD SHLIB shapes). pkg-parity's pkgload step
+    now runs make from R (system2), as pkgload does; the probe is gone.
+    Left open, recorded: an MSYS make started directly by Git bash on
+    windows-11-arm crashes; R, the supported caller, is not affected.
 
 ## Tests
 
