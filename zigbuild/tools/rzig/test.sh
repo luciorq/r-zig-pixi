@@ -5,7 +5,7 @@
 # build: `pixi run rzig-test`. The repo's build.zig runs the same unit
 # tests as `zig build rzig-test`.
 #
-# With an installed tree's prefix, `pixi run rzig-test dist/slim/R-4.6.1-zig`,
+# With an installed tree's prefix, `pixi run rzig-test dist/slim/R-4.6.2-zig`,
 # also smoke-test.sh against it, on linux: real compiles through rzig,
 # then R packages (C, C++, OpenMP, Fortran with flang) installed through
 # that tree's R CMD INSTALL, which builds them with rzig build, and loaded

@@ -1,6 +1,6 @@
 //! Build R with `zig build` — no autoconf, no make (Milestone 5).
 //!
-//! The build graph replicates what R 4.6.1's configure+make pipeline does,
+//! The build graph replicates what R 4.6.2's configure+make pipeline does,
 //! on linux-64 and macOS so far (see .github/devdocs/feat-zig-build/,
 //! FINALIZATION.md for phase status — F1-F5 done, F6 Windows remains):
 //!   1. configure results are replayed from a vendored per-(platform,variant)
@@ -49,7 +49,7 @@ const floors = @import("zigbuild/tools/rzig/floors.zig");
 const libcxx_mirror = @import("zigbuild/tools/rzig/libcxx_mirror.zig");
 const cairo = @import("zigbuild/cairo.zig");
 
-const r_version = "4.6.1";
+const r_version = "4.6.2";
 
 /// macOS deployment target of everything this build links, and of the
 /// packages compiled through rzig (which spells it "<arch>-native.13.0"):
@@ -128,6 +128,10 @@ const Ctx = struct {
     openmp: bool,
     devcairo: bool,
     flangrt_dir: []const u8, // conda clang resource dir holding libflang_rt.runtime.a (findFlangRt)
+    // config.h's CC_VER and FC_VER, which R_compiled_by() returns: what
+    // the compilers of this build say (versionLine), on every OS
+    cc_ver: []const u8,
+    fc_ver: []const u8,
     sdk: []const u8, // macOS: the installed SDK's root (xcrun); "" elsewhere
     // The zig lib dir of R's links, null for zig's own: a mirror of it
     // where conda-forge's zig would link a shared libc++
@@ -522,6 +526,8 @@ pub fn build(b: *std.Build) !void {
         .openmp = true,
         .devcairo = true,
         .flangrt_dir = try findFlangRt(b, io, conda, os),
+        .cc_ver = versionLine(b, &.{ b.graph.zig_exe, "cc", "--version" }),
+        .fc_ver = versionLine(b, &.{ flang_bin, "--version" }),
         .path_flags = &.{},
         .subst = std.StringHashMap([]const u8).init(arena),
         .mk_subst = std.StringHashMap([]const u8).init(arena),
@@ -603,7 +609,12 @@ pub fn build(b: *std.Build) !void {
     // Generated headers (what config.status + src/include/Makefile make)
     // ------------------------------------------------------------------
     const geninc = b.addWriteFiles();
-    _ = geninc.addCopyFile(b.path(b.fmt("{s}/config.h", .{config_dir})), "config.h");
+    {
+        // The vendored config.h, with the two lines that name the
+        // capture's compilers rewritten for this build's (setDefine).
+        const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/config.h", .{config_dir})), b.allocator, .limited(4 * 1024 * 1024));
+        _ = geninc.add("config.h", try setDefine(b, try setDefine(b, raw, "CC_VER", ctx.cc_ver), "FC_VER", ctx.fc_ver));
+    }
     _ = geninc.addCopyFile(b.path(b.fmt("{s}/Rconfig.h", .{config_dir})), "Rconfig.h");
     _ = geninc.add("Rversion.h", try genRversionH(&ctx, io));
     _ = geninc.add("Rmath.h", try substFile(&ctx, io, "src/include/Rmath.h0.in"));
@@ -674,13 +685,16 @@ pub fn build(b: *std.Build) !void {
     addCGroup(&ctx, libR_mod, "src/appl", &rspec.appl_c, .{ .openmp = true });
     addCGroup(&ctx, libR_mod, "src/nmath", &rspec.nmath_c, .{ .openmp = true });
     addCGroup(&ctx, libR_mod, "src/extra/tre", &rspec.tre_c, .{
+        .visibility = true,
         .openmp = true,
         .extra = &.{"-I%S/src/extra"},
     });
     addCGroup(&ctx, libR_mod, "src/extra/tzone", &rspec.tzone_c, .{
+        .visibility = true,
         .extra = &.{ "-I%S/src/extra/tzone", "-I%S/src/main" },
     });
     addCGroup(&ctx, libR_mod, "src/extra/xdr", &rspec.xdr_c, .{
+        .visibility = true,
         .openmp = true,
         .extra = &.{"-I%S/src/extra/xdr"},
     });
@@ -734,7 +748,7 @@ pub fn build(b: *std.Build) !void {
     const inetmod = newCMod(&ctx);
     inetmod.addIncludePath(ctx.geninc);
     inetmod.addIncludePath(ctx.path("src/include"));
-    addCGroup(&ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{ .openmp = true });
+    addCGroup(&ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{ .openmp = true, .visibility = true });
     ctx.linkSibling(inetmod, ctx.libR);
     inetmod.linkSystemLibrary("curl", .{ .use_pkg_config = .no });
     ctx.relRPaths(inetmod, .modules);
@@ -748,6 +762,7 @@ pub fn build(b: *std.Build) !void {
 
     {
         const m = newPkgMod(&ctx, "src/library/stats/src", &rspec.stats_c, .{
+            .visibility = true,
             .openmp = true,
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
@@ -764,6 +779,7 @@ pub fn build(b: *std.Build) !void {
     }
     {
         const m = newPkgMod(&ctx, "src/library/graphics/src", &rspec.graphics_c, .{
+            .visibility = true,
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
         try pkg_libs.append(arena, .{ .pkg = "graphics", .lib = addSharedLib(&ctx, "pkg_graphics", m) });
@@ -779,33 +795,37 @@ pub fn build(b: *std.Build) !void {
         try pkg_libs.append(arena, .{ .pkg = "grDevices", .lib = addSharedLib(&ctx, "pkg_grDevices", m) });
     }
     {
-        const m = newPkgMod(&ctx, "src/library/grid/src", &rspec.grid_c, .{});
+        const m = newPkgMod(&ctx, "src/library/grid/src", &rspec.grid_c, .{ .visibility = true });
         try pkg_libs.append(arena, .{ .pkg = "grid", .lib = addSharedLib(&ctx, "pkg_grid", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/methods/src", &rspec.methods_c, .{
+            .visibility = true,
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
         try pkg_libs.append(arena, .{ .pkg = "methods", .lib = addSharedLib(&ctx, "pkg_methods", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/parallel/src", &rspec.parallel_c, .{
+            .visibility = true,
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
         try pkg_libs.append(arena, .{ .pkg = "parallel", .lib = addSharedLib(&ctx, "pkg_parallel", m) });
     }
     {
-        const m = newPkgMod(&ctx, "src/library/splines/src", &rspec.splines_c, .{});
+        const m = newPkgMod(&ctx, "src/library/splines/src", &rspec.splines_c, .{ .visibility = true });
         try pkg_libs.append(arena, .{ .pkg = "splines", .lib = addSharedLib(&ctx, "pkg_splines", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/tools/src", &rspec.tools_c, .{
+            .visibility = true,
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
         try pkg_libs.append(arena, .{ .pkg = "tools", .lib = addSharedLib(&ctx, "pkg_tools", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/utils/src", &rspec.utils_c, .{
+            .visibility = true,
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
         try pkg_libs.append(arena, .{ .pkg = "utils", .lib = addSharedLib(&ctx, "pkg_utils", m) });
@@ -829,7 +849,7 @@ pub fn build(b: *std.Build) !void {
         try extra.append(arena, "-DHAVE_CONFIG_H");
         var it = std.mem.tokenizeScalar(u8, ctx.subst.get("TCLTK_CPPFLAGS").?, ' ');
         while (it.next()) |tok| try extra.append(arena, tok);
-        addCGroup(&ctx, m, "src/library/tcltk/src", &rspec.tcltk_c, .{ .extra = extra.items });
+        addCGroup(&ctx, m, "src/library/tcltk/src", &rspec.tcltk_c, .{ .visibility = true, .extra = extra.items });
         // linux: conda-forge's libtcl8.6.so and libtk8.6.so carry no
         // DT_SONAME, and for such a library lld records in DT_NEEDED the
         // path it was given, which zig makes the env's absolute one. So
@@ -991,8 +1011,8 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // config.h, PACKAGE_VERSION/RMATH_HAVE_WORKING_LOG1P in Rmath.h0.in.
     try ctx.subst.put("VERSION", r_version);
     try ctx.subst.put("PACKAGE_VERSION", r_version);
-    try ctx.subst.put("CC_VER", "zig cc (LLVM/clang, MinGW target)");
-    try ctx.subst.put("FC_VER", "flang (flang-pixi flang-zig, MinGW target)");
+    try ctx.subst.put("CC_VER", ctx.cc_ver);
+    try ctx.subst.put("FC_VER", ctx.fc_ver);
     try ctx.subst.put("RMATH_HAVE_WORKING_LOG1P", "# define HAVE_WORKING_LOG1P 1");
     // libgnuintl.h.in's 4 tokens — gnuwin32's own Makefile.win generates
     // libgnuintl.h from this .in via the exact same 4 sed substitutions
@@ -1954,6 +1974,34 @@ fn compiledBy(b: *std.Build) ![]const u8 {
     return b.fmt("clang-{s}", .{v[0 .. std.mem.indexOfAny(u8, v, " \r\n") orelse v.len]});
 }
 
+/// The first line of `<compiler> --version`, as R's configure reads CC_VER
+/// and FC_VER (R_compiled_by()'s two strings): "clang version 22.1.8 (...)"
+/// from zig 0.17's `zig cc`, "flang version 23.1.5" from flang. Read from
+/// the compilers of this build on every OS: the vendored config.h names
+/// the compilers of the day it was captured, and gnuwin32's names none.
+fn versionLine(b: *std.Build, argv: []const []const u8) []const u8 {
+    const out = b.run(argv);
+    return std.mem.trim(u8, out[0 .. std.mem.indexOfAny(u8, out, "\r\n") orelse out.len], " \t");
+}
+
+/// `text` (a config.h) with its `#define <name> ...` line defining `name`
+/// as the C string `value`. An error when it has no such line: a config.h
+/// without it would keep no compiler at all.
+fn setDefine(b: *std.Build, text: []const u8, name: []const u8, value: []const u8) ![]u8 {
+    const key = b.fmt("#define {s} ", .{name});
+    const at = std.mem.indexOf(u8, text, key) orelse {
+        std.debug.print("error: no '{s}' line in config.h\n", .{key});
+        return error.NoSuchDefine;
+    };
+    const end = std.mem.indexOfScalarPos(u8, text, at, '\n') orelse text.len;
+    var quoted = std.ArrayList(u8).empty;
+    for (value) |c| {
+        if (c == '"' or c == '\\') try quoted.append(b.allocator, '\\');
+        try quoted.append(b.allocator, c);
+    }
+    return std.mem.concat(b.allocator, u8, &.{ text[0..at], key, "\"", quoted.items, "\"", text[end..] });
+}
+
 /// `text` with the line starting `key` (then spaces or `=`) replaced by
 /// `line`; unchanged when there is none.
 fn replaceLine(b: *std.Build, text: []const u8, key: []const u8, line: []const u8) ![]u8 {
@@ -2873,6 +2921,12 @@ fn filePathFlags(ctx: *const Ctx, io: std.Io) ![]const []const u8 {
 
 const CGroupOpts = struct {
     openmp: bool = false,
+    // R's makefile for this directory compiles with $(C_VISIBILITY)
+    // (-fvisibility=hidden where configure found it: unix; subst.txt):
+    // src/extra's tre, tzone and xdr, the internet module and eight base
+    // packages, whose symbols then leave libR and the package libraries
+    // only where the source says attribute_visible.
+    visibility: bool = false,
     extra: []const []const u8 = &.{}, // %S → srcdir, %C → conda
 };
 
@@ -2882,6 +2936,9 @@ fn addCGroup(ctx: *const Ctx, mod: *std.Build.Module, dir: []const u8, files: []
     flags.appendSlice(b.allocator, ctx.path_flags) catch @panic("OOM");
     flags.appendSlice(b.allocator, &.{ "-std=gnu23", "-fno-sanitize=undefined", "-O2", "-fpic", "-DHAVE_CONFIG_H" }) catch @panic("OOM");
     if (opts.openmp and ctx.openmp) flags.append(b.allocator, "-fopenmp") catch @panic("OOM");
+    if (opts.visibility) if (ctx.subst.get("C_VISIBILITY")) |v| {
+        if (v.len > 0) flags.append(b.allocator, v) catch @panic("OOM");
+    };
     for (opts.extra) |f| {
         const f1 = std.mem.replaceOwned(u8, b.allocator, f, "%S", ctx.src_abs) catch @panic("OOM");
         const f2 = std.mem.replaceOwned(u8, b.allocator, f1, "%C", ctx.conda) catch @panic("OOM");
@@ -2906,7 +2963,7 @@ fn newPkgMod(ctx: *const Ctx, dir: []const u8, files: []const []const u8, opts: 
     var extra = std.ArrayList([]const u8).empty;
     extra.append(b.allocator, "-DNDEBUG") catch @panic("OOM");
     extra.appendSlice(b.allocator, opts.extra) catch @panic("OOM");
-    addCGroup(ctx, m, dir, files, .{ .openmp = opts.openmp, .extra = extra.items });
+    addCGroup(ctx, m, dir, files, .{ .openmp = opts.openmp, .visibility = opts.visibility, .extra = extra.items });
     return m;
 }
 

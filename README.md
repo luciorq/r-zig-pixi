@@ -10,23 +10,26 @@ toolchain plus a separate build system.
 
 ### Install R from the built conda packages
 
-The packages target `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64`
-and `win-64`, and are published to the `universe` channel on prefix.dev.
-`win-arm64` (Windows on ARM) builds in CI behind the `win-arm64` label
-and is not published yet.
+The packages target `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64`,
+`win-64` and `win-arm64` (Windows on ARM), and are published to the
+`universe` channel on prefix.dev.
 The channel is public: adding it is all it takes, with no login.
-Publishing is paused until the next build-number bump: until then
-universe has build 8's two packages, `r-zig-slim` and `r-zig-toolchain`
-(which brings the compilers and build tools), and not yet
-`r-zig-compilers` or `r-zig-build-tools`.
+A release is published by hand, not on every merge: universe has
+build 10 (R 4.6.1; five platforms, no `win-arm64`) until build 11
+(R 4.6.2, all six platforms) is published.
 
 ```bash
 pixi init my-r-project
 cd my-r-project
-pixi workspace channel add https://prefix.dev/universe
+pixi workspace channel add --prepend https://prefix.dev/universe
 pixi add r-zig-slim
 pixi run Rscript -e 'R.version.string'
 ```
+
+`--prepend` matters: universe must come before conda-forge. Both channels
+have `llvm-openmp`; r-zig needs universe's zig-built one, and with pixi's
+default (strict) channel priority the first channel that has a package
+name is the only one it takes that package from.
 
 `r-zig-slim` is R alone: it runs R and installs packages that need no
 compiling (R-only source packages and binary packages). On Windows it has
@@ -223,7 +226,7 @@ pixi run -e minimal build              # the installed tree, libraries vendored
 pixi run -e minimal verify-tree        # its static checks
 pixi run -e minimal package-toolchain  # the toolchain tree and its two group archives
 pixi run -e minimal verify-package     # archive the tree, check the archives relocated
-pixi run -e wheel wheel                # -> dist/wheel/{r_zig,r_zig_compilers,r_zig_build_tools,r_zig_toolchain}-4.6.1-*.whl
+pixi run -e wheel wheel                # -> dist/wheel/{r_zig,r_zig_compilers,r_zig_build_tools,r_zig_toolchain}-4.6.2-*.whl
 pixi run -e wheel wheel-test           # pip-install them into fresh venvs, a group at a time, and use them
 ```
 
@@ -271,7 +274,7 @@ beside it:
 
 - **The base**, one per flavor and platform:
   `R-<ver>-<flavor>-<platform>.tar.gz`, for example
-  `R-4.6.1-slim-linux-64.tar.gz`. R alone, with its libraries: it runs R
+  `R-4.6.2-slim-linux-64.tar.gz`. R alone, with its libraries: it runs R
   and installs packages that need no compiling. Its
   `R_HOME/bin/toolchain` holds only rzig, the compiler front R's
   Makeconf names, and the object rzig adds to links (linux
@@ -281,7 +284,7 @@ beside it:
 - **The compilers group**, one per platform:
   `R-<ver>-<platform>-compilers.tar.xz`, about 95 MB (linux-64). It
   holds zig 0.17 (PyPI's `ziglang` build, which is the ziglang.org
-  release), flang 23.1.1 (flang-pixi's flang-zig and flang-rt-zig, the
+  release), flang 23.1.5 (flang-pixi's flang-zig and flang-rt-zig, the
   compiler R's own Fortran was built with: the driver, its runtime and
   the intrinsic modules) and OpenMP's headers (Windows also
   `libomp.lib`), which the `minimal` flavor, built without OpenMP, leaves
@@ -313,22 +316,22 @@ is) and `LICENSES/`. Extract the ones you need into one directory; no
 file is in two of them:
 
 ```bash
-sha256sum -c R-4.6.1-slim-linux-64.tar.gz.sha256
-tar -xzf R-4.6.1-slim-linux-64.tar.gz           # R-4.6.1-zig/
-tar -xJf R-4.6.1-linux-64-compilers.tar.xz      # + R-4.6.1-zig/lib/R/bin/toolchain/zig/, flang/ and openmp/
-tar -xzf R-4.6.1-linux-64-build-tools.tar.gz    # + R-4.6.1-zig/lib/R/bin/toolchain/usr/bin/make
-R-4.6.1-zig/bin/Rscript -e 'R.version.string'
-# Windows: R-4.6.1-win-64-build-tools.zip + R-4.6.1-zig\Library\lib\R\bin\toolchain\usr\bin\ (sh, make, ...) and etc\
+sha256sum -c R-4.6.2-slim-linux-64.tar.gz.sha256
+tar -xzf R-4.6.2-slim-linux-64.tar.gz           # R-4.6.2-zig/
+tar -xJf R-4.6.2-linux-64-compilers.tar.xz      # + R-4.6.2-zig/lib/R/bin/toolchain/zig/, flang/ and openmp/
+tar -xzf R-4.6.2-linux-64-build-tools.tar.gz    # + R-4.6.2-zig/lib/R/bin/toolchain/usr/bin/make
+R-4.6.2-zig/bin/Rscript -e 'R.version.string'
+# Windows: R-4.6.2-win-64-build-tools.zip + R-4.6.2-zig\Library\lib\R\bin\toolchain\usr\bin\ (sh, make, ...) and etc\
 ```
 
 On macOS, `tar -xf` extracts all three, the `.tar.xz` too. On Windows,
 `tar -xf` extracts the `.zip` files the same way, and R is
-`R-4.6.1-zig\Library\lib\R\bin\x64\Rscript.exe`. Once the base is
+`R-4.6.2-zig\Library\lib\R\bin\x64\Rscript.exe`. Once the base is
 extracted, R's own reader extracts the compilers `.tar.xz`; run it where
 you extracted R:
 
 ```bat
-R-4.6.1-zig\Library\lib\R\bin\x64\Rscript.exe -e "untar('R-4.6.1-win-64-compilers.tar.xz', exdir = '.', tar = 'internal')"
+R-4.6.2-zig\Library\lib\R\bin\x64\Rscript.exe -e "untar('R-4.6.2-win-64-compilers.tar.xz', exdir = '.', tar = 'internal')"
 ```
 
 System32's `tar -xf` extracts it too where `tar --version` lists liblzma

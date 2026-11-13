@@ -140,7 +140,7 @@ fn ompHeaders(comptime include: []const u8) [4]Copy {
 }
 
 /// flang-zig's LLVM major, which names flang-rt-zig's directories
-/// (lib/clang/<major>/). It is the pin's (pixi.toml: flang-zig 23.1.1): a
+/// (lib/clang/<major>/). It is the pin's (pixi.toml: flang-zig 23.1.5): a
 /// new major moves the pin, this constant and SOURCES together. R's
 /// build.zig (findFlangRt) and rzig (flang_rt.modulesDir) scan
 /// lib/clang/* instead, because they must find whatever flang the env or

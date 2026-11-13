@@ -1,5 +1,5 @@
 //! Source inventory for building R with zig build — the "what" extracted
-//! from R 4.6.1's generated Makefiles (see devdocs feat-zig-build).
+//! from R 4.6.2's generated Makefiles (see devdocs feat-zig-build).
 //! Every list mirrors the resolved SOURCES/OBJECTS variables of the
 //! milestone-1 autoconf build (captured in make-vars.txt); keep them in
 //! that order so object-link order matches the make build.

@@ -26,10 +26,10 @@
 #   scripts/prefix-delete-package.sh [--yes] <channel> <subdir> <package_file_name> [<package_file_name> ...]
 #
 # Example (dry run, lists what would happen, deletes nothing):
-#   scripts/prefix-delete-package.sh universe linux-64 r-zig-slim-4.6.1-hb0f4dca_0.conda
+#   scripts/prefix-delete-package.sh universe linux-64 r-zig-slim-4.6.2-hb0f4dca_0.conda
 #
 # Example (real deletion):
-#   PREFIX_API_KEY=pfx_... scripts/prefix-delete-package.sh --yes universe linux-64 r-zig-slim-4.6.1-hb0f4dca_0.conda
+#   PREFIX_API_KEY=pfx_... scripts/prefix-delete-package.sh --yes universe linux-64 r-zig-slim-4.6.2-hb0f4dca_0.conda
 set -euo pipefail
 
 DRY_RUN=true

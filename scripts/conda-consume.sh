@@ -31,7 +31,7 @@ unset PIXI_PROJECT_MANIFEST PIXI_PROJECT_ROOT PIXI_PROJECT_NAME PIXI_PROJECT_VER
 cat > "$T/pixi.toml" << EOF
 [workspace]
 name = "r-zig-consume"
-channels = ["$ch", "conda-forge", "https://prefix.dev/universe"]
+channels = ["$ch", "https://prefix.dev/universe", "conda-forge"]
 platforms = ["$PLAT"]
 
 [dependencies]
