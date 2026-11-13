@@ -3,8 +3,10 @@
 R, built as a conda package with the [Zig](https://ziglang.org) toolchain
 (`zig cc`/`zig c++` in place of a system compiler) and driven end-to-end
 through [pixi](https://pixi.sh). One dependency graph — pixi resolves
-everything from conda-forge, Zig included — instead of a system compiler
-toolchain plus a separate build system.
+everything from conda-forge, Zig included, and prefix.dev's `universe`
+channel (LLVM flang and libomp, [flang-pixi](https://github.com/luciorq/flang-pixi)'s
+zig-built LLVM 23.1.5) — instead of a system compiler toolchain plus a
+separate build system.
 
 ## Use cases
 
@@ -16,7 +18,11 @@ The packages target `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64`,
 The channel is public: adding it is all it takes, with no login.
 A release is published by hand, not on every merge: universe has
 build 10 (R 4.6.1; five platforms, no `win-arm64`) until build 11
-(R 4.6.2, all six platforms) is published.
+(R 4.6.2, all six platforms) is published. `win-arm64` is new in build
+11: R and both groups go through the same CI steps as `win-64`, on
+GitHub's `windows-11-arm` runner, where the build tools (MSYS2's x64
+binaries) run under x64 emulation; one check there is still open (see
+CI).
 
 ```bash
 pixi init my-r-project
@@ -26,10 +32,17 @@ pixi add r-zig-slim
 pixi run Rscript -e 'R.version.string'
 ```
 
-`--prepend` matters: universe must come before conda-forge. Both channels
-have `llvm-openmp`; r-zig needs universe's zig-built one, and with pixi's
-default (strict) channel priority the first channel that has a package
-name is the only one it takes that package from.
+`--prepend` matters: universe must come before conda-forge. r-zig-slim
+and r-zig-compilers depend on `llvm-openmp`'s `zig_*` build,
+flang-pixi's libomp (LLVM 23.1.5), which only universe has; conda-forge
+has an `llvm-openmp` too. With pixi's default (strict) channel priority
+the first channel that has a package name is the only one it takes that
+package from, so with conda-forge first the solve finds no `zig_*` build
+and fails. With conda or mamba, list universe first the same way
+(`-c https://prefix.dev/universe -c conda-forge`). r-zig uses this
+libomp on every platform: it is the one R is built and tested with, and
+conda-forge's win-arm64 `libomp.dll` breaks parallel regions with more
+than six shared variables (data.table crashed).
 
 `r-zig-slim` is R alone: it runs R and installs packages that need no
 compiling (R-only source packages and binary packages). On Windows it has
@@ -43,7 +56,7 @@ r-zig-toolchain (r-zig-compilers and r-zig-build-tools):
 pixi add r-zig-toolchain
 ```
 
-- `r-zig-compilers` (zig 0.17, LLVM flang, OpenMP) alone installs
+- `r-zig-compilers` (zig 0.17, LLVM flang 23.1.5, OpenMP) alone installs
   packages that have no configure script and whose Makevars only sets
   variables. It also compiles such code at run time (`R CMD SHLIB`:
   Rcpp's `sourceCpp()`, inline, TMB, knitr's engines) with no make: R
@@ -140,10 +153,13 @@ both on every `conda-package` leg, before the publish.
 pixi run -e pkg conda-publish
 ```
 
-Uploads the just-built packages for the current platform via
-`rattler-build upload`. Each platform has its own task
-(`[feature.pkg.target.<platform>.tasks]` in `pixi.toml`), so this is
-typically run once per machine/OS as part of a release.
+Uploads the just-built packages for the current platform
+(`dist/conda/<platform>/*.conda`) to the `universe` channel via
+`rattler-build upload prefix --skip-existing`. Each platform has its own
+task (`[feature.pkg.target.<platform>.tasks]` in `pixi.toml`), so it
+never uploads another platform's packages. It is CI's publish step (see
+CI), not run by hand for `universe`; for a channel of your own, change
+`--channel` in that task or run `rattler-build upload` yourself.
 
 ### Run R from source without packaging
 
@@ -160,7 +176,7 @@ pixi run contract      # CRAN packages compiled with the tree and the groups (Rc
 
 `build` installs `dist/<flavor>/R-<ver>-zig/`, the base that ships: R
 and its libraries, with only rzig, the compiler front Makeconf names, and
-its link object (linux `dso_fini.o`, Windows `cfguard.o`) in
+its link object (linux `dso_fini.o`, win-64 `cfguard.o`) in
 `R_HOME/bin/toolchain`. `toolchain` copies the toolchain groups' files
 from the environment into `dist/toolchain/R-<ver>-zig/`, and upstream
 zig from PyPI's `ziglang` wheel into its `zig/`, each directory with its
@@ -278,7 +294,7 @@ beside it:
   and installs packages that need no compiling. Its
   `R_HOME/bin/toolchain` holds only rzig, the compiler front R's
   Makeconf names, and the object rzig adds to links (linux
-  `dso_fini.o`, Windows `cfguard.o`). Windows slim has full's content
+  `dso_fini.o`, win-64 `cfguard.o`). Windows slim has full's content
   (Tcl/Tk, JPEG, TIFF, NLS): R's Windows build has no switches to leave
   them out.
 - **The compilers group**, one per platform:
@@ -357,25 +373,27 @@ distributions than the build machine, without a separate build variant.
 Everything runs on GitHub-hosted runners: `toolchain` (the toolchain
 groups, once per platform), `build` (ubuntu-latest,
 ubuntu-24.04-arm, macos-latest, macos-15-intel × slim/full, plus the
-linux openblas variants, minimal on all four, and windows-latest's one
-variant; the same steps in the same order on every OS, on the installed
-tree, which is the tree the standalone base archive packs), and
-`conda-package` for all
-five subdirs (linux-64, linux-aarch64, osx-arm64, osx-64, win-64), which
-publishes to the `universe` channel on prefix.dev via OIDC trusted
-publishing on every push to `main` while the repository variable
-`CONDA_PUBLISH` is `true`. That variable is a release switch: it is set
-only for a build-number bump's publish and deleted after it, so other
-merges upload nothing (build 9 was published on 2026-11-05).
+linux openblas variants, minimal on all four, and the one variant of
+windows-latest and windows-11-arm; the same steps in the same order on
+every OS, on the installed tree, which is the tree the standalone base
+archive packs), and `conda-package` for all six subdirs (linux-64,
+linux-aarch64, osx-arm64, osx-64, win-64, win-arm64), which publishes to
+the `universe` channel on prefix.dev via OIDC trusted publishing on
+every push to `main` while the repository variable `CONDA_PUBLISH` is
+`true`. That variable is a release switch: it is set only for a
+build-number bump's publish and deleted after it, so other merges upload
+nothing (build 10 was published on 2026-11-09).
 There is no self-hosted fleet — the former gamma/omicron/kappa runners
 were decommissioned in September 2026 and fully removed on 2026-09-24.
-Docs-only changes (`*.md`, `.github/devdocs/`) skip the workflow.
+Docs-only changes (`*.md`, `.github/devdocs/`, `LICENSE`) skip the
+workflow.
 
 The full matrix above runs only on request: on a pull request labelled
 `full-ci` and on a manual dispatch (`pixi run ci-trigger` for main, `gh
 workflow run build.yaml --ref <branch>` for a branch). Every other pull
 request push and every push to `main` runs the core tier: `default` on
-all five platforms and `minimal` on linux-64 (6 legs). `conda-package`
+all six platforms and `minimal` on linux-64 (7 legs; the full tier has
+16). `conda-package`
 also runs on every push to `main`, which publishes (with
 `CONDA_PUBLISH`), and on a pull
 request that changes `recipe/`, `pixi.toml`, `pixi.lock`, `build.zig`,
@@ -383,14 +401,14 @@ request that changes `recipe/`, `pixi.toml`, `pixi.lock`, `build.zig`,
 `.github/devdocs/chore-ci-tiers/PLAN.md`.
 
 The build legs of both tiers wait for the `toolchain` job
-(`.github/workflows/toolchain.yaml`), five legs, one per platform. Each
+(`.github/workflows/toolchain.yaml`), six legs, one per platform. Each
 runs the toolchain build's unit tests (`toolchain-test`), makes the
 toolchain tree and its two group archives (`package-toolchain`), checks
 the tree (`verify-toolchain`) and uploads the archives as the artifact
 `toolchain-<OS>-<arch>` (for example `toolchain-Linux-X64`). Every build
 leg downloads its platform's archives first and unpacks them
 (`unpack-toolchain`), so `contract` compiles in the compile tree. The
-packaging legs (`default` on all five platforms, `minimal`) run
+packaging legs (`default` on all six platforms, `minimal`) run
 `verify-package`: the base archive, then the three scenarios with the
 downloaded group archives (the base alone, with the compilers group,
 with the build-tools group). They upload the base archive as
@@ -399,6 +417,12 @@ The base archives are kept for 7 days, the group archives for 30, as
 long as GitHub lets a run's failed legs be re-run (they download them
 again); nothing publishes the archives yet. A platform whose `toolchain` leg fails fails only its own
 build legs.
+
+Open in build 11's CI (run 43344258167, 2026-11-12; everything else
+passed): macos-15-intel's `default` and `minimal` legs (one VEX
+instruction in `libR.dylib`) and windows-11-arm's `pkg-parity` step (a
+make segfault) are under investigation. windows-11-arm's `contract`
+(data.table with OpenMP) passes.
 
 `upstream-zig` runs the same `build` steps (`.github/workflows/build-r.yaml`,
 shared by both workflows) on `default` for ubuntu-latest, macos-latest
@@ -433,6 +457,9 @@ gh variable delete CONDA_PUBLISH             # after universe and a fresh env ch
 ## More detail
 
 Build internals, platform-specific fixes, and the CI/publish pipeline are
-tracked in `.github/devdocs/` (`PLAN.md`/`TODO.md` at the repo root point
-at the current feature's docs).
+tracked in `.github/devdocs/`, one directory per branch. The current
+release's plan is `.github/devdocs/chore-release-11/PLAN.md`;
+`PLAN.md`/`TODO.md` at the repo root are symlinks to
+`.github/devdocs/feat-zig-build/`'s (milestone 5, 2026-07, the original
+build design that code comments cite), not the current work.
 

@@ -4,6 +4,19 @@ Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
 #46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
 published.
 
+Status (2026-11-12, night): pushed up to 8424d56. CI run 43344258167
+passed everything except macos-15-intel default and minimal (finding
+17) and windows-11-arm default at pkg-parity (finding 18).
+windows-11-arm's contract passes. Not yet committed in this tree: the
+probe step's removal from build-r.yaml, the diagnostics in
+scripts/verify-tree.sh and scripts/pkg-parity.sh, and findings 13-18
+(T/rel11/handover/diag-avx-make.sh commits and pushes them), and the
+docs review's edits (README, stress/README, pixi.toml and recipe
+comments, the finding-12 records, zigbuild/toolchain/build.zig.zon,
+scripts/conda-consume.sh's comment), which diag-avx-make.sh does not
+commit. Open: the three items below, findings 17 and 18, the stress
+run, the release.
+
 ## Decisions (user, 2026-11-12)
 
 - One release at the end of the whole backlog. No publish, no
@@ -58,17 +71,19 @@ flang-pixi docs/19 §6.
 - llvm-openmp is flang-pixi's build (`universe`, build string `zig_*`,
   build 1) on all six platforms, in pixi.toml and in the recipe's host,
   and r-zig-slim's and r-zig-compilers' run dependency is
-  `llvm-openmp >=23.1.5 zig_*`. The build string selects it although
-  conda-forge is the first channel (checked with pixi 0.84.2 for all six
-  platforms). It has conda-forge's file names (omp.h, libomp.so /
-  .dylib / .dll, libomp.lib, libomp.dll.a) and no dependency but the C
-  library.
+  `llvm-openmp >=23.1.5 zig_*`. With conda-forge as the first channel
+  the build string selects it only as pixi.toml's direct requirement;
+  as a dependency strict priority filters it, so universe is now the
+  first channel everywhere (findings 7, 13, 14). It has conda-forge's
+  file names (omp.h, libomp.so / .dylib / .dll, libomp.lib,
+  libomp.dll.a) and no dependency but the C library.
 - Why: conda-forge's win-arm64 libomp.dll passes a parallel region only
   its first six shared variables (feat-win-arm64/PLAN.md); data.table's
   sort crashed on windows-11-arm. One libomp built one way on every
   platform, not a win-arm64 exception.
 - The lock changed in these packages only: flang-zig, lld-zig,
-  flang-rt-zig and llvm-openmp, six platforms each.
+  flang-rt-zig and llvm-openmp, six platforms each. Later its
+  `channels:` blocks were reordered, universe first (finding 15).
 - flang-pixi pruned build 0 of flang-rt-zig and llvm-openmp the day it
   published build 1 (2026-11-12): a lock that names a pruned build gives
   a 404 on a machine without it in its cache. `pixi lock` kept the
@@ -113,8 +128,9 @@ flang-pixi docs/19 §6.
 - windows-11-arm is a leg of build.yaml as the other five platforms:
   toolchain, the default build leg in the core tier, conda-package and
   the publish. win-arm64.yaml and its label are gone.
-- build-r.yaml keeps its temporary probe step until the first green
-  contract run on windows-11-arm.
+- build-r.yaml's temporary win-arm64 probe step is removed: the
+  contract passed on windows-11-arm (run 43344258167). The removal is in
+  this tree, not yet committed (diag-avx-make.sh).
 
 ### Small follow-ups
 
@@ -165,9 +181,10 @@ here. See "State at the stop" below.
    2026-11-12: universe listed first everywhere (pixi.toml, the
    conda-package task, scripts/conda-consume.sh, stress.R, README
    `--prepend`), and universe's prefix.dev base relation to conda-forge
-   removed by the user (a base channel outranks the channel). `pixi lock` keeps an already locked build
-   that the spec still allows, even after the channel deleted it: name
-   the build number in the spec.
+   removed by the user (a base channel outranks the channel). Details:
+   findings 13 and 14. `pixi lock` keeps an already locked build that
+   the spec still allows, even after the channel deleted it: name the
+   build number in the spec.
 8. flang-zig 23.1.5 depends on `lld-zig ==23.1.5 *_0` itself.
 9. The bash shims in toolchain/ (zig-cc, zig-cxx, zig-ar, zig-ranlib,
    834 lines) are used only by the configure capture
@@ -189,12 +206,71 @@ here. See "State at the stop" below.
     for standalone archives and PyPI (B12). Not needed: flang-pixi's
     upstream-zig switch, `zig build fetch`, v3 package flags,
     R_ZIG_TOOLCHAIN_ENV, ARM64 Control Flow Guard (until a package hits
-    it). Stale records it listed are not all corrected yet:
+    it). Stale records it listed (line numbers as of 2026-11-12) are
+    not all corrected yet:
     feat-standalone-toolchain/PLAN.md:5-7, :6787, :6872, :6899-6904,
     :6944-6947, :6961; TODO.md:149-161, :1091-1096, :1241-1254;
     feat-win-zig-binutils/PLAN.md:265-280; feat-wheel-minimal/PLAN.md
     :3-14, :103, :127-135; consolidation/PLAN.md:16-18, :65-68, :190;
     zigbuild/toolchain/build.zig.zon:5 (minimum_zig_version 0.16.0).
+    (2026-11-12, night: all corrected, with dated notes; build.zig.zon
+    now says 0.17.0. Uncommitted.)
+
+13. **Channel order (2026-11-12, after the interim records).** Finding 7
+    held only for direct requirements. flang-rt-zig 23.1.5 `_1` requires
+    `llvm-openmp ==23.1.5 zig_*`, and the r-zig recipe's run requirements
+    carry the same: as a package's dependency, strict channel priority
+    filters it, and with conda-forge first flang-rt-zig is
+    uninstallable (flang-pixi test.yml run 43337035109:
+    `llvm-openmp 23.1.5 is excluded because due to strict channel
+    priority ... 'https://prefix.dev/universe/'`). universe also had a
+    prefix.dev base relation to conda-forge; prefix.dev ranks a base
+    channel ABOVE the channel (`base -> current -> overrides`), which hid
+    universe's llvm-openmp in every order. The user removed it (Base and
+    Overrides empty); flang-pixi test.yml run 43339367038 then passed on
+    all six with `llvm-openmp zig_*_1` installed from universe. Live
+    solves of `flang-rt-zig ==23.1.5` alone (+ conda-forge fftw):
+    universe first, strict → ours on all six; conda-forge first, strict →
+    unsolvable; either order, disabled → ours. Records: flang-pixi
+    docs/10 2026-11-12, docs/18 §5.4.
+14. **Universe first everywhere.** pixi.toml `channels`, the
+    conda-package task (`-c https://prefix.dev/universe -c conda-forge`),
+    scripts/conda-consume.sh, stress/stress.R, README (`pixi workspace
+    channel add --prepend`). No workflow or recipe sets channels. The
+    old reason for conda-forge first (the base relation pulled
+    conda-forge from prefix.dev's lagging mirror) is gone with the
+    relation.
+15. **The lock keeps its tested solution.** Changing the channel order
+    makes `pixi lock` re-solve everything (~1400 conda-forge entries,
+    python 3.14 → 3.15 among them; parked, untested, at
+    T/rel11/pixi.lock.full-resolve). Instead the tested lock's eight
+    `channels:` blocks were swapped (16 lines; sha 59a4052f23ca);
+    `pixi lock --check` accepts it. Valid because no universe package
+    name (llvm-openmp, flang-zig, lld-zig, flang-rt-zig, r-zig-*, blast,
+    blast-scripts, polyglot, tradetracker, marimo-r) is locked from
+    conda-forge.
+16. **The recipe kept R 4.6.1's sha256** (4da6e61d...); conda-package
+    failed on all six (run 43341267916). Fixed: c297040f... (checked
+    against CRAN's tarball). No other stale 4.6.1 reference outside
+    historical records.
+17. **macos-15-intel: one VEX instruction in libR.dylib** (run
+    43344258167, default and minimal; `full` skips verify-tree):
+    `lib/R/lib/libR.dylib: 1 VEX/EVEX instructions, 0 on %ymm, 0 on
+    %zmm`. Ruled out on gamma with llvm-objdump: flang-rt-zig osx-64's
+    `libflang_rt.runtime.a` (23.1.5 `_1` and 23.1.1 `_11`: 0 each), and
+    libR's 15 Fortran files (src/appl, src/main) compiled with flang
+    23.1.5 and 23.1.1 for x86_64-apple-macos13.0 with CI's flags (0
+    each). Left: C objects or zig runtime code built for the runner's
+    CPU. omicron cannot reproduce a native-CPU leak (Rosetta reports no
+    AVX). verify-tree.sh now prints the function and instruction of
+    the first 10 hits per binary (tested on glibc's memcpy).
+18. **windows-11-arm: make segfaults in pkg-parity** (run 43344258167):
+    `scripts/pkg-parity.sh: line 405: Segmentation fault ... "$mk" -s -f
+    "$mconf" -f "$pl/print-var.mk" print-compilers`, after the contract
+    passed (R's own make calls worked there). The difference: here make
+    is started from Git bash directly. Unconfirmed suspect: two MSYS
+    runtimes in one process tree under ARM emulation. pkg-parity.sh now
+    logs which make it runs and `make --version` on Windows.
 
 ## Tests
 
@@ -210,7 +286,9 @@ linux-64 (gamma), default env (slim), conda-forge's zig 0.17.0,
   flang 23.1.5; smoke, verify-tree, toolchain, verify-toolchain and
   contract exit 0. pkg-parity, check, hermetic, package,
   package-toolchain and verify-package were still running when this was
-  written: read rel11/linux64-chain2.log.
+  written: read rel11/linux64-chain2.log. (2026-11-12, night: the log
+  has `=== OK` for pkg-parity, check, hermetic, package and
+  package-toolchain; it ends inside verify-package, with no result.)
 - Not yet run with the final lock (libomp build 1) on gamma: the env
   there still has build 0's files (the same code). Run
   `pixi install --frozen` and the chain again.
@@ -218,18 +296,38 @@ linux-64 (gamma), default env (slim), conda-forge's zig 0.17.0,
   run.
 - macOS (omicron) and Windows (kappa): chains started on the baseline,
   results not read. See below.
-- win-arm64: CI only; not run. The pull request has not been pushed.
+- win-arm64: CI only. (2026-11-12, night: pushed; see the CI section
+  below.)
+
+### CI on the pull request (2026-11-12, night)
+
+- Run 43341267916 (7b0e73c, the interim push): toolchain ✅ on all six,
+  windows-11-arm included; conda-package ❌ all six (finding 16); the
+  build jobs were cancelled by the next push.
+- Run 43344258167 (8424d56, the sha256 fix): toolchain ✅ six;
+  conda-package ✅ six; ubuntu-latest default/minimal/full/openblas ✅;
+  ubuntu-24.04-arm default/minimal/full/openblas ✅; macos-latest
+  default/minimal/full ✅; windows-latest default ✅; macos-15-intel
+  full ✅ (verify-tree skipped there); macos-15-intel default and
+  minimal ❌ (finding 17); windows-11-arm default ❌ at pkg-parity
+  (finding 18). **windows-11-arm's contract passed**: data.table on 2
+  threads, `grouped aggregation: OK`, minqa + OpenMP, quadprog, pak, ps
+  and the no-make cases — the libomp fix works. Not reached on
+  windows-11-arm: regression suite, hermetic, archives, wheel.
+- Next push: T/rel11/handover/diag-avx-make.sh (findings 17, 18
+  diagnostics only).
 
 ## State at the stop (2026-11-12, evening)
 
 All paths below are under
 /data/gamma/luciorq/workspaces/temp/r-zig-pixi/ (T).
 
-- T/wt/feat-win-arm64: this tree, branch feat-win-arm64 at 28eaf9e,
-  everything above uncommitted. Lock sha256 a423ecfb...
+- T/wt/feat-win-arm64: this tree, branch feat-win-arm64 (superseded
+  2026-11-12 night: interim commits pushed as 42cba99..7b0e73c, the
+  sha256 fix 8424d56; lock sha256 59a4052f23ca, finding 15).
 - T/rel11/handover/interim-commands.sh with commit-1..5.txt: the commits
   and the push for this tree as it is (retargets #48 to main first).
-  Not run. Pushing starts CI on all six platforms, windows-11-arm
+  Not run at the stop (2026-11-12, night: run; pushed). Pushing starts CI on all six platforms, windows-11-arm
   included, which is the only test of Windows on ARM.
 - T/rel11/baseline: a copy of this tree's sources as the agents got
   them (plus the build-1 pins). An agent's own changes are
@@ -252,7 +350,9 @@ All paths below are under
   script `C:\Users\admin\rz-rel11-chain.bat`. Delete all three when
   done.
 - Since the snapshot this tree gained only records, README lines, the
-  recipe's build-number note and the build-1 pins.
+  recipe's build-number note and the build-1 pins. (2026-11-12, night:
+  then the channel order, the recipe's sha256 fix and the CI
+  diagnostics, findings 13-18.)
 
 ## To resume
 
@@ -263,11 +363,13 @@ All paths below are under
 3. On gamma: `pixi install --frozen`, then the chain for default, full,
    minimal (with the wheel), openblas, and `pixi run -e pkg
    conda-package` + `conda-consume`.
-4. Hand the commits to the user (the interim script, extended); the
-   push runs CI. When windows-11-arm's contract passes, remove the
-   temporary probe step from build-r.yaml.
+4. DONE: interim commits pushed; windows-11-arm's contract passed
+   (run 43344258167) and the temporary probe step is removed from
+   build-r.yaml (in this tree, uncommitted). NEXT: push T/rel11/handover/diag-avx-make.sh, read
+   the named AVX function (finding 17) and the make diagnostics
+   (finding 18), fix both.
 5. Correct the stale records of finding 12; README sections for the new
-   packages.
+   packages. (2026-11-12, night: done in this tree, uncommitted.)
 6. Last: the stress run on the branch (all runners, tree and conda),
    read its table row by row (N6, K1, the arrow and RcppSimdJson rows
    for evex512); then the publish preflight and the one release of

@@ -2,6 +2,8 @@
 
 Branch feat-win-zig-binutils, stacked on feat-zig-017 (which carries
 feat-zig-pkgconf): zig 0.17 only. Status: implemented and tested on linux-64 and kappa (2026-11-09); not run on CI or on an ARM machine.
+(2026-11-12: merged into main as #47. CI has since run it on every
+platform, windows-11-arm included, on #48 (run 43344258167).)
 
 ## Why
 
@@ -67,6 +69,9 @@ Elsewhere:
   verification scripts' own `x86_64-w64-mingw32-objdump` (import closures,
   baseline-CPU disassembly, pkg-parity's exports). Nothing R builds or
   ships runs it.
+  (2026-11-12: replaced by conda-forge's llvm-tools (llvm-objdump) for
+  both Windows arches in feat-win-arm64; pixi.toml has no
+  binutils_impl_win-64.)
 
 ## Decisions taken (with the alternatives)
 
@@ -263,6 +268,16 @@ GNU nm ends on SIGPIPE. Then feat-win-arm64's whole kappa chain,
 pkg-parity included (see that branch's PLAN.md).
 
 ## Remaining for Windows on ARM
+
+(2026-11-12: feat-win-arm64 (#48) settled most of this; its PLAN.md has
+the details. One Windows config, zigbuild/config/win-full, serves both
+arches (config.h picks R_CPU by `__aarch64__`). cairo is r-zig's own
+build (zigbuild/cairo.zig) on both Windows arches; pango and harfbuzz
+are not used. The verification scripts use conda-forge's llvm-objdump
+on Windows. The runner is windows-11-arm, a leg of build.yaml. Still
+open: ARM64 Control Flow Guard (rzig has the stub for x86_64 only), and
+building ARM R on an x64 machine, which nothing needs: CI builds
+natively.)
 
 - A `win-aarch64-full` vendored config (config.h, Rconfig.h,
   Makeconf.win, from a configure run on an ARM machine), and build.zig's

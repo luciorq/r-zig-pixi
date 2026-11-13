@@ -7,6 +7,15 @@ here can run on x86_64 Windows: R's build runs the R it builds (the
 bootstrap). CI's `windows-11-arm` runner, behind the `win-arm64` label
 (.github/workflows/win-arm64.yaml), is where it is tested.
 
+Status (2026-11-12): the work continues in chore-release-11 (same
+branch, pull request #48; .github/devdocs/chore-release-11/PLAN.md).
+windows-11-arm is a leg of build.yaml; win-arm64.yaml and its label are
+gone. With flang-pixi's zig-built libomp (llvm-openmp 23.1.5 `zig_*`)
+the contract passes on windows-11-arm, data.table included (run
+43344258167), and the probe step is removed from build-r.yaml. The same
+run's windows-11-arm leg failed later, at pkg-parity (make segfault;
+chore-release-11 finding 18).
+
 ## Decisions (user, 2026-11-10: "Accept the revised recommendations")
 
 1. Host: A, GitHub's hosted `windows-11-arm` runner behind a label, as
@@ -127,7 +136,8 @@ found (2026-11-11):
   grouped sum, its OpenMP, evalCpp or a package load: the run does not
   say which). build-r.yaml has a TEMPORARY probe step for windows-11-arm
   after a failure: each contract step in its own R process, and an OpenMP
-  library from R CMD SHLIB. It goes once the contract passes. Its first
+  library from R CMD SHLIB. It goes once the contract passes
+  (2026-11-12: removed, the contract passed in run 43344258167). Its first
   run: every package loads and evalCpp gives 4 (a run-time C++ compile
   and load works), then data.table's `dt[, sum(x), by = g]` with
   setDTthreads(1) segfaults; set -e ended the probe there. The probe now
@@ -178,7 +188,8 @@ alpha, PDF, PS, SVG) runs correctly on kappa (x64).
 - Done 2026-11-12 (chore-release-11): windows-11-arm is a leg of
   build.yaml's toolchain, build (core tier) and conda-package jobs, with
   the publish; win-arm64.yaml and the `win-arm64` label are gone. The
-  temporary probe in build-r.yaml goes when the contract passes there.
+  temporary probe in build-r.yaml goes when the contract passes there
+  (2026-11-12: it passed in run 43344258167; the probe is removed).
 - Stress on win-arm64 (no GDAL and others on conda-forge).
 - ARM64 Control Flow Guard: rzig has a stub for x86_64 only; whether an
   ARM64 package built with CFG links is open.

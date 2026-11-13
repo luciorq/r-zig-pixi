@@ -146,6 +146,10 @@ D5 (a), D8-D11 (a), D13 (a), E3 (a), E4 (a).
 
 ## Outside this plan (continue as planned)
 
+(2026-11-12: all of these are done, and the boxes below are kept as they
+were: the re-lock merged as #16, #14 and #15 merged, the stress suite
+merged as #21, and feat-tier1-engine as #36.)
+
 - [ ] The re-lock (chore-relock-flang-rt-10) merged as its own PR (R1 =
       a), before #14's bump publishes, so that build 5 carries the exact
       flang pins
@@ -191,7 +195,8 @@ D5 (a), D8-D11 (a), D13 (a), E3 (a), E4 (a).
       `-Dprefix` beside --prefix; fetch-zig.sh pins ziglang 0.17.1, which
       has all five wheels and win_arm64. Record:
       .github/devdocs/feat-zig-017/PLAN.md. The re-lock awaits the
-      user's approval
+      user's approval (2026-11-12: approved 2026-11-10; #46 merged into
+      main on 2026-11-12)
 
 ## Phase 2 — rzig knows the groups
 
@@ -580,7 +585,9 @@ phase4/ beside these files.
       read through universe's `channel_relations`, lacked): a solve-only
       probe on gamma at 17:54 UTC with kappa's packages solved in both
       channel orders once the mirror had it; pixi.toml's and stress.R's
-      comments give the reason for conda-forge first
+      comments give the reason for conda-forge first (2026-11-12:
+      superseded: universe is listed first everywhere and has no base
+      relation any more; see chore-release-11/PLAN.md, findings 13 and 14)
 - [x] Tested: conda-package on linux-64, omicron (osx-arm64), kappa;
       wheel-test on linux-64 and omicron (2026-10-14, both rounds)
 - [ ] Tested by CI (the PR's run): the core tier with the five
@@ -1093,7 +1100,8 @@ Needs (answered): B14 (a), with B37 (a).
       `R_SESSION_TMPDIR` too, as SHLIB mode's (feat-shlib-rzig-build's
       open point M c), if a killed install's `src/.rzig` is seen
 - [ ] macOS `zig cc --version` writes an empty `a.o` in the working
-      directory (conda-forge's zig and upstream 0.16.0): rzig's driver
+      directory (conda-forge's zig and upstream 0.16.0; not re-checked
+      with 0.17, 2026-11-12: compiler.zig still adds `-c`): rzig's driver
       adds `-c` to a version query (compiler.zig; feat-shlib-rzig-build's
       "Host fixes, round 1"). Drop it when a zig writes none; no upstream
       report (L)
@@ -1175,7 +1183,9 @@ are the old ones (PLAN.md, "Old decisions and their status"). Phase 1's
 open boxes are still open: omicron and kappa have not run
 conda-package, and on #15 CI's osx-64 and win-64 conda-package jobs and
 the seven macOS and Windows build legs failed at `pixi install` (a 404
-on deleted flang builds, confirmed in the job logs).
+on deleted flang builds, confirmed in the job logs). (2026-11-12: closed
+by later builds: CI has since built and published the packages up to
+`_10` on all five subdirs; universe holds `_10`.)
 
 ## Phase 0 — measurements (no code changes)
 

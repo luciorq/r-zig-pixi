@@ -1,5 +1,11 @@
 # feat-standalone-toolchain — R as a base plus toolchain groups, on three channels
 
+**Status (2026-11-12): the three "next" items below are done. pkgconf
+from source (#45), the zig 0.17 port (#46) and Windows' binutils from
+zig and rzig (#47) merged into main on 2026-11-12; Windows on ARM is
+branch feat-win-arm64 (#48, the build 11 release, not yet published;
+record .github/devdocs/chore-release-11/PLAN.md).**
+
 **Status (2026-11-09): phases 0 to 9 merged (#15 to #43) and published
 as `_10` on 2026-11-09; the record is under "Phase 9" below.** The status blocks that follow are as of their dates.
 Next (the user's order, 2026-10-22): pkgconf from source (TODO.md; in
@@ -4684,7 +4690,11 @@ What changed against section 7's procedure:
   mirrors libdeflate; universe's repodata lists only blast, flang-rt-zig,
   flang-zig, lld-zig, r-zig-slim and r-zig-toolchain, and the base
   relation is what matters. Users who list universe first can meet the
-  same lag after any publish ("Risks").
+  same lag after any publish ("Risks"). (2026-11-12: superseded. universe
+  has had no base relation on prefix.dev since 2026-11-12, and universe
+  is listed before conda-forge everywhere: flang-rt-zig's `llvm-openmp
+  zig_*` dependency is uninstallable with conda-forge first under strict
+  priority; see chore-release-11/PLAN.md, findings 13 and 14.)
 
 Not run, by G (a): micromamba on kappa and omicron, conda on omicron.
 
@@ -6743,7 +6753,12 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   syncs (win-64's libcurl 8.23.0 on 2026-10-14: on conda.anaconda.org at
   15:14 UTC, not on the mirror at 16:50, there at 17:54; "Phase 4
   record: the upgrade from `_8`"). README, pixi.toml,
-  conda-consume.sh and stress.R list conda-forge first.
+  conda-consume.sh and stress.R list conda-forge first. (2026-11-12:
+  no longer a risk, and the order is reversed: the base relation is
+  removed, and README, pixi.toml, the conda-package task,
+  conda-consume.sh and stress.R list universe first, which flang-rt-zig's
+  `llvm-openmp zig_*` dependency needs under strict priority;
+  see chore-release-11/PLAN.md, findings 13 and 14.)
 - **Size.** zig is 343-380 MB and 19,546 files per platform, flang
   144-210 MB raw; now confined to the toolchain tree and the compilers
   archive (about 131-149 MB with gzip). Measured with zig and before
@@ -6786,6 +6801,10 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   dialog is unobserved.
 - **Packages that use `$(BINPREF)` for a binutils tool** in Makevars.win
   break once the binutils leave TC's top (B24). Not surveyed.
+  (2026-11-12: moot since #47: nm, objdump, strip, dlltool, windres and
+  as are rzig names beside gcc.exe in `R_HOME/bin/toolchain`, so
+  `$(BINPREF)<tool>` names a file again; verify-tree checks each
+  `$(BINPREF)` name in Makeconf.win; feat-win-zig-binutils/PLAN.md.)
   `$(BINPREF)gcc-ar` and `gcc-ranlib` keep working (rzig, B43), and so
   do `$(BINPREF)ar` and `ranlib` (rzig's ar.exe and ranlib.exe, for
   CMake; phase 3's step 3 review).
@@ -6870,6 +6889,8 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   kappa: yes, in their two-word forms, and `--as` is ignored; the
   `--opt=value` forms are not; phase 3's step 6 record.)
 - Do CRAN packages' Makevars.win use `$(BINPREF)` for a binutils tool?
+  (2026-11-12: no longer needs an answer: since #47 every binutils name
+  `$(BINPREF)` can form is an rzig file beside gcc.exe.)
 - Does flang-rt-zig 10's win-64 archive still need no `-lc++` (phase 6
   checks it)? (2026-10-16: statically yes, 131 external names and none
   from the C++ runtime (PHASE6 ST §4); phase 6 drops `-lc++`, and on
@@ -6901,7 +6922,10 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   already covered by zig cc and rzig, and whether a gcc-nm from
   conda-forge is really needed (B43-2). Round 1 (2026-10-08) answered
   pkg-config, objdump and gcc-nm (B43's note); B39's list still needs a
-  run with only its tools on PATH (B39's note).
+  run with only its tools on PATH (B39's note). (2026-11-12: objdump
+  and nm are rzig's own since #47, and pkg-config is pkgconf built from
+  source since #45, in the build-tools group's `usr/bin/`; B39's run is
+  still open.)
 - **The C++ ABI boundary** (stress round 1's A1 and A2; the user's
   answer to its decision 12, 2026-10-08: recorded now, designed after
   the standalone work). Packages built by zig use its static libc++. On
@@ -6945,6 +6969,9 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   ranlib go through rzig now; dlltool, windres, strip, nm and as follow
   as rzig can serve them (phase 3's check, then each zig release).
   LLVM's tools in `binutils/` stay the other way out of GPL-3 binaries.
+  (2026-11-12: done in #47: dlltool, windres, strip, nm, objdump and as
+  are rzig names; there is no `binutils/` directory any more;
+  feat-win-zig-binutils/PLAN.md.)
 - **A really slim Windows slim** (B42, the user's note of 2026-10-08):
   Windows slim has full's content for now; make it really slim later.
   It relates to C1 (Windows minimal) and the full-only add-on check.
@@ -6959,14 +6986,16 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
   Windows minimal drops ICU, cairo, Tcl/Tk and OpenMP and keeps
   png/jpeg/tiff and NLS; a wheel without compile support comes first.
 - **The zig 0.17 wave** (B18 = a). build.zig's atexit workaround stays
-  in the port, since no upstream report is filed (A2').
+  in the port, since no upstream report is filed (A2'). (2026-11-12:
+  done in #46, 0.17 only; the atexit exclusion stays in build.zig;
+  feat-zig-017/PLAN.md.)
 - **zig's global cache.** Measure the first C++ compile with upstream
   zig in phase 5; then put pre-seeding the cache to the user as a menu.
   Measured (2026-10-15, "Phase 5 record: the measurements"): the first
   C++ compile with an empty cache is a libc++ build into zig's cache, as
   slow and as loud with conda-forge's zig as with upstream's. The same
   menu decides where rzig's zig keeps its cache: a standalone R's zig
-  and a conda R's (both 0.16.0) share zig's default cache today, which
+  and a conda R's (both 0.16.0; 0.17 since #46, 2026-11-12) share zig's default cache today, which
   env.sh's comment says can mix objects (PHASE5 open point N a: not
   seen to break a package, no rzig change). The first Fortran compile
   with TC/flang and an empty cache (phase 6, 2026-10-16, linux-64): 8-9
