@@ -249,6 +249,9 @@ if [[ "$(uname -s 2>/dev/null)" == "Linux" && " $* " == *-version-script* ]]; th
 fi
 g0=(-g0)
 for a in "$@"; do case "$a" in -g*) g0=(); break;; esac; done
+# -S: zig gives clang -c beside it, and clang warns that -c is unused, an
+# error with -Werror (a configure probe). rzig: compiler.zig.
+for a in "$@"; do case "$a" in -S) g0+=(-Wno-unused-command-line-argument); break;; esac; done
 # Linux links without a -g option: --strip-debug, for zig's own libc++
 # DWARF (see zig-cc).
 if [[ "$(uname -s 2>/dev/null)" == "Linux" && ${#g0[@]} -gt 0 ]]; then
