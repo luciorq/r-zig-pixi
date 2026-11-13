@@ -151,6 +151,14 @@ found (2026-11-11):
   stack, returning to +0xcc, cdb's frame. The 7th and later arguments are
   garbage. data.table's sort regions have more than six; the probe's had
   one. win-64 is not affected (x86_64 uses the MASM file).
+- Fix (2026-11-12, chore-release-11): libomp is flang-pixi's build on
+  every platform, llvm-openmp 23.1.5 with a `zig_*` build string from
+  `universe`, which has the assembly `__kmp_invoke_microtask` on
+  win-arm64 (flang-pixi tests a region with many shared variables,
+  omp_many_args.f90). One libomp built one way on all six platforms, not
+  a win-arm64 exception. pixi.toml, the recipe and the lock name it;
+  r-zig-slim's run dependency requires a `zig_*` build, so a user's env
+  cannot take conda-forge's.
 - upstream zig on windows-latest (not ARM): `zig fetch` of cairo from
   cairographics.org failed once with TlsInitializationFailed; on kappa the
   same zig 0.17.1 failed once, then fetched it seven times from both hosts
@@ -167,8 +175,10 @@ alpha, PDF, PS, SVG) runs correctly on kappa (x64).
 
 ## Not done
 
-- Publishing win-arm64: build.yaml's conda-package matrix gains it once
-  win-arm64.yaml's legs pass.
+- Done 2026-11-12 (chore-release-11): windows-11-arm is a leg of
+  build.yaml's toolchain, build (core tier) and conda-package jobs, with
+  the publish; win-arm64.yaml and the `win-arm64` label are gone. The
+  temporary probe in build-r.yaml goes when the contract passes there.
 - Stress on win-arm64 (no GDAL and others on conda-forge).
 - ARM64 Control Flow Guard: rzig has a stub for x86_64 only; whether an
   ARM64 package built with CFG links is open.

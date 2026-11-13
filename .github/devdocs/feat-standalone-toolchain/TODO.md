@@ -861,31 +861,43 @@ None blocks phase 8. Each is its own small PR unless it says otherwise.
 - [ ] The icu pin's lift: when conda-forge's libxml2-16 is built against
       icu 79, drop both bounds of r-zig-build's `icu 78.*`, with a
       build-number bump (fix-icu-pin/PLAN.md, "Lifting it")
-- [ ] evex512 (X1, F2): `-mcpu=baseline+evex512` in rzig's x86_64
+- [x] evex512 (X1, F2): `-mcpu=baseline+evex512` in rzig's x86_64
       target flags. It fixes arrow and arrow:source on the x86_64
-      runners, and RcppSimdJson, which `_9` ships with
+      runners, and RcppSimdJson, which `_9` ships with. Not needed since
+      the zig 0.17 port: zig 0.17 (LLVM 22) has no evex512 feature
+      (`-mcpu=baseline+evex512`: "unknown CPU feature"), and a function
+      with `__attribute__((target("avx512f")))` that uses 512-bit
+      intrinsics compiles at `-mcpu=baseline` for the linux, Windows
+      and macOS x86_64 targets (gamma, 2026-11-12; chore-release-11).
+      The stress rows confirm it on the runners
 - [ ] K1: packages.tsv's RPostgres sysdeps `libpq
       libboost-headers@windows lz4-c@windows` (tested on kappa); the
       Windows conda stress row's `RPostgres (!) install-failed sysdep`
       (`boost/noncopyable.hpp`) goes with it
-- [ ] K2: stress.R `--conda` unsets every variable that names the
+- [x] K2: stress.R `--conda` unsets every variable that names the
       tree's CONDA_PREFIX, PATH excepted (tested on win-64 only); s2's
       configure line then stops naming the tree's stress env
-- [ ] COFF bigobj objects: def.zig still rejects them (BadObject). K3
-      and K4 were fixed in feat-tier1-engine (#36)
+      (chore-release-11)
+- [x] COFF bigobj objects: def.zig still rejects them (BadObject). K3
+      and K4 were fixed in feat-tier1-engine (#36). def.zig reads them
+      since feat-win-zig-binutils (#47; its test "exports: a bigobj
+      object")
 - [ ] N6: correct stress.R:337-338's comment, or set ZIG_LOCAL_CACHE_DIR
       to the run directory (a `.zig-cache` appears in the checkout root)
 - [ ] N7: check that a user's runtime zig cache does not mix
-      conda-forge's and upstream zig 0.16.0 objects (the cache key has
-      only the version)
+      conda-forge's and upstream zig objects of one version (0.17.0 and
+      0.17.1 today, so the keys differ; the case returns when both have
+      the same version: the cache key has only the version)
 - [ ] N8: never delete a universe `_8` file before the next number is
       out (a rebuilt `_8` differs from universe's); a rule for every
       release, recorded here
-- [ ] N9: test-preflight.R:75 (no link object on macOS), wheel-test.sh:71
-      (`mktemp -d "${TMPDIR:-/tmp}/wheel-test.XXXXXX"`),
-      package-standalone.sh's tar (not reproducible), and
-      chore-lock-and-ci-refresh PLAN.md:305-306, :313-318, :322-327
-      (stale wording)
+- [ ] N9: test-preflight.R:75 (no link object on macOS) and
+      wheel-test.sh:71 (`mktemp -d "${TMPDIR:-/tmp}/wheel-test.XXXXXX"`):
+      done (chore-release-11). Left: package-standalone.sh's tar (not
+      reproducible; more shell there is the wrong direction, so it waits
+      for the standalone release, which the user put after the conda
+      one, 2026-11-12), and chore-lock-and-ci-refresh PLAN.md:305-306,
+      :313-318, :322-327 (stale wording)
 
 Next: phase 8, then phase 9, pkgconf from source, the zig 0.17 port,
 Windows on ARM (the user's order, 2026-10-22).
@@ -924,7 +936,9 @@ Record: pkgconf/PKGCONF.md (branch feat-zig-pkgconf, build 11).
       confirms it
 - [x] verify-tree.sh's conda exception, if conda's TC gains usr/ (kappa's
       F1 of 2026-10-20): it does (usr/, pkgconf)
-- [ ] CI on the PR (`full-ci`, `upstream-zig`), then the `_11` publish
+- [x] CI on the PR (`full-ci`, `upstream-zig`): #45, 31 checks green,
+      merged 2026-11-12. No `_11` publish of its own: one release for
+      the whole backlog (the user, 2026-11-12; chore-release-11)
 
 ## Phase 8 — the base's runtime files
 
@@ -985,7 +999,8 @@ Needs (answered): B14 (a), with B37 (a).
 
 ## Later / future checks
 
-- [ ] build.zig fills CC_VER/FC_VER from the zig and flang that build R,
+- [x] (chore-release-11: versionLine and setDefine in build.zig)
+      build.zig fills CC_VER/FC_VER from the zig and flang that build R,
       on every OS, as it fills Windows' COMPILED_BY (compiledBy): the
       vendored strings in zigbuild/config drift with every rebuild of
       conda-forge's zig or of the libclang-cpp21.1 it loads, and phase
