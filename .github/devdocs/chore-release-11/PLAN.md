@@ -4,7 +4,15 @@ Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
 #46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
 published.
 
-Status (2026-11-12, night): pushed up to 8424d56. CI run 43344258167
+Status (2026-11-13): pushed up to 51588ad (findings 17 and 18 fixed;
+CI run 43487408414 green but for windows-11-arm's hermetic step,
+finding 20). The three items are done and merged in the integration
+tree T/wt/rel11-int (branch rel11-int), with the fixes the host chains
+found (findings 19-21); they reach this branch as one patch per commit
+(T/rel11/int/patches, "State" below). Open: the decisions listed under
+"To resume", the stress run, the release.
+
+Status (2026-11-12, night; superseded): pushed up to 8424d56. CI run 43344258167
 passed everything except macos-15-intel default and minimal (finding
 17) and windows-11-arm default at pkg-parity (finding 18).
 windows-11-arm's contract passes. Not yet committed in this tree: the
@@ -149,8 +157,8 @@ flang-pixi docs/19 §6.
   toolchain, the default build leg in the core tier, conda-package and
   the publish. win-arm64.yaml and its label are gone.
 - build-r.yaml's temporary win-arm64 probe step is removed: the
-  contract passed on windows-11-arm (run 43344258167). The removal is in
-  this tree, not yet committed (diag-avx-make.sh).
+  contract passed on windows-11-arm (run 43344258167); committed as
+  6d52bbd.
 
 ### Small follow-ups
 
@@ -158,17 +166,23 @@ flang-pixi docs/19 §6.
   mktemp (N9).
 - evex512: not needed with zig 0.17 (feat-standalone-toolchain/TODO.md).
 
-### Items in progress (not in this tree yet)
+### The three items (done 2026-11-13)
 
-Three items were started on 2026-11-12, each in its own copy of this
-tree (a git worktree at 28eaf9e plus the uncommitted baseline), and were
-stopped unfinished when the session ended. Nothing of them is merged
-here. See "State at the stop" below.
+Each was implemented in its own worktree from 7697c75, reviewed by a
+second agent and fixed, then merged into T/wt/rel11-int. Their records:
 
-- `R CMD config` through rzig (no make, no sh).
-- The extras group (cmake) and an `r-zig-extras` conda package.
-- The recommended packages, built by a Zig step, in their own conda
-  package.
+- `R CMD config` through rzig, no make and no sh, on every OS:
+  .github/devdocs/feat-config-rzig/PLAN.md.
+- The extras group, `R_HOME/bin/toolchain/cmake/` from Kitware's cmake
+  4.4.4 release archives (the user, 2026-11-13: not PyPI's wheel, whose
+  linux cmake needs libstdc++ and libgcc_s), and the conda package
+  `r-zig-extras` (conda-forge's cmake): .github/devdocs/feat-extras-group/PLAN.md.
+- R's 15 recommended packages, built by zigbuild/recommended/build.zig,
+  as the opt-in conda package `r-zig-recommended` and a standalone
+  archive: .github/devdocs/feat-recommended-packages/PLAN.md.
+
+Also in the integration tree: setup-pixi v0.11.3 in every workflow (as
+flang-pixi), README sections for the three items, and findings 19-21.
 
 ## Findings (2026-11-12)
 
@@ -339,8 +353,103 @@ here. See "State at the stop" below.
     debug map: Makeconf's OBJCFLAGS has -g, as on linux. rzig-test passes
     with both zigs; rzig cross-builds for aarch64-macos and x86_64-macos.
     Tested on linux by cross-links; omicron run pending.
+20. **windows-11-arm: CRAN has no aarch64 Windows binaries** (run
+    43487408414, hermetic): hermetic-check.sh installs CRAN's
+    win.binary jsonlite, an x86_64 DLL: "LoadLibrary failure: %1 is not
+    a valid Win32 application". R-admin: "At present binary packages
+    are not distributed for aarch64 Windows". The step is skipped when
+    `R.version$arch` is aarch64 on Windows. stress.R `--conda` had no
+    subdir for windows aarch64 (now win-arm64), and stress.yaml's runner
+    list names windows-11-arm.
+21. **`R CMD config` on a Windows host** (kappa, 2026-11-13): rzig-test
+    failed one config test, and config-parity.sh 6 of 310 cases. rzig
+    wrote CURDIR with backslashes when its target was unix but its host
+    Windows (a backslash is an escape in sh's words); it now writes
+    forward slashes on any Windows host, as GNU make does. R's script
+    runs under MSYS's sh and make, which see paths from the environment
+    in MSYS's spelling (`/tmp/...`, SHELL=/usr/bin/bash), while rzig
+    prints the native ones R gives it (`C:\...`): a deliberate
+    difference, recorded in feat-config-rzig PLAN.md; config-parity.sh
+    maps the scratch directory's spellings to one token on Windows and
+    leaves the two `$$SHELL` cases out there. kappa: 309 cases equal.
+22. **`.Platform$pkgType` on Windows is "source"** (kappa, 2026-11-13,
+    decided 2026-11-14): R's Makefile.win compiles platform.c with
+    `-DPLATFORM_PKGTYPE='"win.binary"'`; build.zig does not, so this R
+    reports "source" (getOption("pkgType") "source") where CRAN's
+    reports "win.binary" ("both"). install.packages() then builds from
+    source on Windows, as on linux and macOS; CRAN's Windows binaries
+    still install with `type = "win.binary"` and load on win-64
+    (hermetic's jsonlite). `R_PLATFORM_PKGTYPE` (R 4.6) overrides it.
+    **Decision (user, 2026-11-14): keep "source"** on every OS, so
+    every package is built with our toolchain. Later, as an experiment
+    only: make binaries the Windows default (win-64 only, because CRAN
+    has none for aarch64). The route is `-DPLATFORM_PKGTYPE='"win.binary"'`
+    for platform.c in build.zig, or `R_PLATFORM_PKGTYPE=win.binary` in
+    etc/Renviron.site. To test it: install CRAN's win.binary packages
+    that have DLLs (jsonlite, data.table, Rcpp users) next to packages
+    built from source, then load them in one session. Check the
+    Rcpp/C++ ABI, OpenMP (CRAN's builds use the Rtools libgomp, not our
+    libomp), and `R_compiled_by()` mismatch warnings.
+23. **Windows recommended packages: `libintl.h` not found; Windows
+    follows the unix variants** (kappa, 2026-11-14). `pixi run
+    recommended` failed for Matrix, nlme, cluster, foreign and rpart
+    ("fatal error: 'libintl.h' file not found"; boot, survival and mgcv
+    followed). The cause: build.zig always built Windows as full
+    (ENABLE_NLS in Rconfig.h), while R_HOME/include had no libintl.h.
+    R's own Windows build installs one (src/extra/intl/Makefile.win:8-10).
+    The unix slim and minimal configs have NLS off. **Decision (user,
+    2026-11-14): Windows follows the unix variants** ("good opportunity
+    to match configs across variants and remove OS specific
+    workarounds"). One variant table holds for every OS; slim, full and
+    minimal exist on Windows; Windows full installs R's libintl.h.
+    The user's choices, same day:
+    - Bitmap formats that are off: a patch to R's winbitmap.c with
+      `#else` stubs, so jpeg()/tiff() (and png() on minimal) fail
+      cleanly (devWindows.c and cairoBM.c call the save functions
+      without guards; upstream never turns the formats off).
+    - OpenMP inside R itself: on Windows as on unix (slim and full on,
+      minimal off). Upstream leaves it off on Windows only because
+      MinGW's libgomp was "too slow to be usable"
+      (gnuwin32/fixed/h/config.h:609-613, main/Makefile.win:58); R's
+      own code uses it only for `omp simd` loops in array.c.
+    - Release 11 ships the slimmer Windows r-zig-slim (no tcltk,
+      jpeg(), tiff() or translations, as on unix).
+    - CI: Windows full and minimal on both Windows runners in the
+      label-gated full tier; Windows full also runs verify-tree and
+      hermetic.
+    - Also: one shared Makeconf.win template; three vendored win-*
+      config dirs, checked against the table by build.zig; conda's
+      gettext dropped on Windows; only libintl.h added to R_HOME/include;
+      R_MEMORY_PROFILING left as upstream has it; `-Dblas=openblas` on
+      Windows and splitting pixi.toml's [dependencies] left for later.
 
 ## Tests
+
+### The integration tree (2026-11-13)
+
+T/wt/rel11-int, lock 59a4052f23ca (unchanged), conda-forge's zig 0.17.0,
+default env (slim). The chain (T/rel11/int/chain.sh; chain-win.bat):
+toolchain-test, rzig-test, recommended-test, build, smoke, verify-tree,
+toolchain, verify-toolchain, contract (config-parity.sh first),
+pkg-parity, check, hermetic, package, package-toolchain, verify-package,
+recommended, verify-recommended, package-recommended, then `-e pkg`
+conda-package and conda-consume.
+
+- linux-64 (gamma): every step exit 0 (T/rel11/int/linux64.log). The
+  macOS strip change (finding 19) landed during the run; it does not
+  change linux links.
+- osx-arm64 (omicron): first run every step to recommended exit 0;
+  verify-recommended failed (finding 19). Rerun with the fix
+  (2026-11-13/14): every step exit 0, through conda-package and
+  conda-consume (`=== OK -e pkg conda-consume 16:51:01`).
+- osx-64 (omicron, Rosetta): every step exit 0, through conda-package
+  and conda-consume (`=== OK -e pkg conda-consume 16:42:35`). verify-tree passes there now
+  (finding 17).
+- win-64 (kappa): rzig-test and then contract failed (finding 21); after
+  the fix KAPPA_RESULT.
+- win-arm64: CI only.
+
+### Earlier runs (2026-11-12)
 
 linux-64 (gamma), default env (slim), conda-forge's zig 0.17.0,
 2026-11-12:
@@ -384,8 +493,55 @@ linux-64 (gamma), default env (slim), conda-forge's zig 0.17.0,
   windows-11-arm: regression suite, hermetic, archives, wheel.
 - Next push: T/rel11/handover/diag-avx-make.sh (findings 17, 18
   diagnostics only).
+- Run 43437326154 (7697c75): the same two failures, now named (findings
+  17 and 18).
+- Run 43487408414 (51588ad, the fixes of findings 17 and 18): every job
+  green, macos-15-intel default and minimal included, but
+  windows-11-arm default, which passes pkg-parity and the regression
+  suite and fails at hermetic (finding 20). upstream-zig run
+  43487408234: every job green.
 
-## State at the stop (2026-11-12, evening)
+## State (2026-11-13)
+
+All paths below are under
+/data/gamma/luciorq/workspaces/temp/r-zig-pixi/ (T).
+
+- feat-win-arm64 (origin 51588ad) = T/wt/feat-win-arm64, clean.
+- T/wt/rel11-int (branch rel11-int at 48d3650 + the 51588ad changes,
+  uncommitted): everything below. T/rel11/int/STATE.md has the commit
+  plan; T/rel11/int/make-patches.sh writes T/rel11/int/patches/1..8.patch,
+  one per commit, which apply in order to 51588ad and give this tree
+  byte for byte (checked in T/wt/patch-check).
+- T/wt/rel11b-config, rel11b-recommended, rel11b-extras: the items'
+  worktrees (from 7697c75; their scratch T/rel11/scratchb-*,
+  scratchc-extras). Kept until the patches are committed.
+- Hosts: omicron `~/.pixi/rz-rel11b/{arm64,x64}` (logs `arm64.log`,
+  `arm64b.log`, `x64.log`); kappa `C:\Users\admin\rz-rel11b`, log
+  `C:\Users\admin\rz-rel11b.log`, script `rz-rel11b-chain.bat`, task
+  `schtasks /tn rz-rel11b`. Delete all after the release.
+
+## To resume
+
+1. The user commits the patches on feat-win-arm64 and pushes; read the
+   CI run row by row (windows-11-arm hermetic, every leg's
+   conda-package with the two new outputs, the extras archive on all
+   six toolchain legs, the recommended packages in conda-package).
+2. Decided 2026-11-14: finding 22 stays "source" (a later experiment
+   is noted there); the `zig fetch` cache defect is not reported
+   upstream, and feat-zig-017/ZIG-FETCH-CACHE.md tracks it per zig
+   update. Still open: the extras group's Help/ pages and PATH order
+   (feat-extras-group PLAN.md); the recommended packages in
+   build-r.yaml's per-OS chain (feat-recommended-packages PLAN.md). The
+   tree has the recommended options (no Help/, the tree's cmake first,
+   recommended in conda-package only).
+3. The stress run on the branch (all runners incl. windows-11-arm, tree
+   and conda), read its table row by row (N6, K1, the arrow and
+   RcppSimdJson rows for evex512, the CMake rows s2, Rhdf5lib,
+   RcppParallel, arrow:source with the extras' cmake).
+4. The publish preflight, then the one release of build 11 for six
+   subdirs.
+
+## State at the stop (2026-11-12, evening; superseded by "State" above)
 
 All paths below are under
 /data/gamma/luciorq/workspaces/temp/r-zig-pixi/ (T).
@@ -422,7 +578,7 @@ All paths below are under
   then the channel order, the recipe's sha256 fix and the CI
   diagnostics, findings 13-18.)
 
-## To resume
+## To resume (2026-11-12; superseded)
 
 1. Read the three STATE.md files; finish or drop each item; merge each
    diff into this tree (recipe.yaml and pixi.toml are touched by more
@@ -443,7 +599,7 @@ All paths below are under
    for evex512); then the publish preflight and the one release of
    build 11 for six subdirs.
 
-## The three items, as their agents left them (2026-11-12, 19:47)
+## The three items, as their agents left them (2026-11-12, 19:47; superseded: done 2026-11-13)
 
 Each agent was stopped early. Their state files have the design, the
 remaining steps and the resume commands; none of their work is reviewed.

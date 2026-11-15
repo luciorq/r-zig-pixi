@@ -121,7 +121,10 @@ There is no `-Dcmake` and no fetch script; `scripts/zig-toolchain.sh` is
 as before the extras group.
 
 zig 0.17 notes (rel11/scratchc-extras/zig-fetch.log,
-lazy-unpack-probe.log):
+lazy-unpack-probe.log). The `zig fetch` defect has its own record, with a
+repro and the checks for each zig update:
+feat-zig-017/ZIG-FETCH-CACHE.md (not reported upstream: the user,
+2026-11-14).
 
 - The hashes are what `zig fetch <url>` prints, and a build's own fetch
   computes the same. But `zig fetch` run outside a build caches a broken
