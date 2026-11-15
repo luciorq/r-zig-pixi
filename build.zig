@@ -2633,7 +2633,11 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     usr/bin is without the group; each channel has one of the two, so
 ///     one MSYS runtime. A
 ///     missing directory is harmless: a tree without the group keeps the
-///     tools already on PATH (Rtools). B25's line names R_HOME inside the
+///     tools already on PATH (Rtools). Between the two, the extras
+///     group's cmake/bin (feat-extras-group): a package's configure or
+///     makefile runs plain `cmake`; absent in a conda env, whose own
+///     cmake (r-zig-extras' dependency, Library/bin) is on PATH already.
+///     R_CUSTOM_TOOLS_PATH replaces this entry too. B25's line names R_HOME inside the
 ///     default, which would stay unexpanded, hence R_ZIG_TOOLS_PATH.
 ///   - CMAKE_GENERATOR: CMake builds of a package's bundled library
 ///     (RcppParallel's TBB, Rhdf5lib's HDF5 through biocmake) pass no -G,
@@ -2677,8 +2681,8 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
     for ([_][]const u8{
         "## r-zig: the build tools first on PATH (feat-standalone-toolchain B25): R's",
         "## installer line, with the build-tools group's usr/bin in Rtools' place,",
-        "## then a conda env's MSYS dir (Library/usr/bin; PHASE7 F2 b).",
-        "R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/../../usr/bin",
+        "## then the extras group's cmake, then a conda env's MSYS dir (Library/usr/bin; PHASE7 F2 b).",
+        "R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin",
         "PATH=\"${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/\"",
         "## r-zig: CMake for packages that build a bundled library with it.",
         "CMAKE_GENERATOR=\"${CMAKE_GENERATOR-MSYS Makefiles}\"",
@@ -3940,10 +3944,14 @@ fn ldpaths(ctx: *const Ctx) []const u8 {
 ///     and CMAKE_PREFIX_PATH's. A prefix below one of them (a conda env in
 ///     /opt/homebrew/Caskroom) is kept, and so is a program found on PATH.
 ///     The variable without SYSTEM stays the project's.
-///   - The environment's libraries: CMake finds them through the prefix
-///     of the cmake it runs (UnixPaths.cmake; the env's cmake), PATH's
-///     <env>/bin and CMAKE_PREFIX_PATH, none of them one of these four;
-///     the conda build's R_HOME is <env>/lib/R.
+///   - The environment's libraries: CMake finds them through PATH's
+///     <env>/bin (find_* search <prefix>/lib and <prefix>/include for it),
+///     CMAKE_PREFIX_PATH and, when the env's cmake runs, that cmake's own
+///     prefix (UnixPaths.cmake), none of them one of these four; the conda
+///     build's R_HOME is <env>/lib/R. A tree with the extras group runs its
+///     own cmake (R_HOME/bin/toolchain/cmake/bin comes first on PATH under
+///     R CMD, feat-extras-group), whose prefix is that directory: there
+///     PATH's <env>/bin and CMAKE_PREFIX_PATH are the only ways to the env.
 ///   - Not linux: CMake's Linux platform adds no package manager's prefix
 ///     (UnixPaths.cmake: /usr/local, /usr, /, its own and the install
 ///     prefix, /usr/X11R6, /usr/pkg, /opt); Linuxbrew is searched only
@@ -4047,10 +4055,12 @@ fn finalRenviron(ctx: *const Ctx, io: std.Io, raw: []const u8) ![]u8 {
     // exports PATH (patch 0008), so package builds and system("make") see
     // it. A missing directory is harmless: a tree without the group, or a
     // conda env, keeps the make already on PATH. Each nested R prepends it
-    // again, also harmless.
+    // again, also harmless. After it the extras group's cmake/bin
+    // (feat-extras-group), by the same rule: a package's configure or
+    // makefile runs plain `cmake`; a conda env has its own cmake on PATH.
     try out.appendSlice(b.allocator,
-        \\## r-zig: the build-tools group's usr/bin first on PATH (feat-standalone-toolchain B25).
-        \\PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}
+        \\## r-zig: the build-tools group's usr/bin, then the extras group's cmake/bin, first on PATH (feat-standalone-toolchain B25).
+        \\PATH=${R_HOME}/bin/toolchain/usr/bin:${R_HOME}/bin/toolchain/cmake/bin:${PATH}
         \\
     );
     return out.items;

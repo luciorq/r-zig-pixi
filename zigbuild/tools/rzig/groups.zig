@@ -1,12 +1,15 @@
 //! The toolchain's groups and the text that names a missing one
-//! (feat-standalone-toolchain B35, B38). Two groups: compilers (zig,
-//! flang, the OpenMP files) and build-tools (make; on Windows also sh and
-//! the other tools R's makefiles run). rzig prints a group's
+//! (feat-standalone-toolchain B35, B38). Three groups: compilers (zig,
+//! flang, the OpenMP files), build-tools (make; on Windows also sh and
+//! the other tools R's makefiles run) and extras (cmake, for packages that
+//! build a bundled library with it; feat-extras-group). rzig prints a group's
 //! text when a compile finds no zig, when zig-fc finds no flang, when
 //! `rzig build` finds no zig (pkgbuild.zig), and from its check mode
 //! (check.zig), which the install preflight (patch 0009,
 //! `--rzig-check=package`) calls (B26 a) and shows. R CMD config needs no
-//! group since it is rzig's own (config.zig, patch 0010).
+//! group since it is rzig's own (config.zig, patch 0010). The extras'
+//! text is a note of the install preflight, never a stop: whether a
+//! package's build runs cmake is not known before it runs (check.zig).
 //!
 //! One text per group, the same on every channel. It is built from R's
 //! version (build.zig passes it, a build option) and the platform rzig is
@@ -29,7 +32,10 @@
 //!   binutils are rzig's own names since feat-win-zig-binutils (B24's
 //!   copies gone). compilers holds zig (from phase 5, PyPI's ziglang
 //!   wheel, B4), flang (from phase 6, flang-pixi's flang-zig and
-//!   flang-rt-zig, B9) and the OpenMP files (C19).
+//!   flang-rt-zig, B9) and the OpenMP files (C19). extras holds cmake
+//!   (Kitware's release archive), R-<ver>-<plat>-extras.tar.gz (.zip on
+//!   Windows); conda's r-zig-extras depends on conda-forge's cmake; on
+//!   PyPI cmake itself is the group (no r-zig wheel of it yet).
 //!
 //! rzig does not read R_ZIG_TOOLCHAIN_HINT. Nothing writes it since phase
 //! 4, which ships rzig with R on every channel (B19, B35). The preflight
@@ -44,12 +50,14 @@ const floors = @import("floors.zig");
 pub const Group = enum {
     compilers,
     build_tools,
+    extras,
 
     /// The group's name in archives and packages (B38).
     pub fn name(g: Group) []const u8 {
         return switch (g) {
             .compilers => "compilers",
             .build_tools => "build-tools",
+            .extras => "extras",
         };
     }
 };
@@ -99,13 +107,13 @@ pub fn platformName(comptime arch: std.Target.Cpu.Arch, comptime os: std.Target.
 /// The extension of the group's archive (B17). The compilers group's is
 /// tar.xz on every platform since phase 6 (B13: with zig and flang its
 /// .tar.gz was over 150 MB; PHASE6 open point L), a rule per group, never
-/// per OS; build-tools keeps tar.gz, zip on Windows. env.sh's group_ext,
+/// per OS; build-tools and extras keep tar.gz, zip on Windows. env.sh's group_ext,
 /// which names the archives the scripts make and read, follows this one
 /// (B35), and verify-bundle.sh checks that they agree.
 pub fn archiveExt(g: Group, p: Platform) []const u8 {
     return switch (g) {
         .compilers => "tar.xz",
-        .build_tools => if (p.windows) "zip" else "tar.gz",
+        .build_tools, .extras => if (p.windows) "zip" else "tar.gz",
     };
 }
 
@@ -123,6 +131,8 @@ pub fn text(a: mem.Allocator, g: Group, p: Platform) ![]const u8 {
     const pip = if (p.windows) "  pip:         no wheels for Windows\n" else switch (g) {
         .compilers => "  pip:         pip install r-zig-compilers (zig only: PyPI has no Fortran compiler)" ++ all ++ "\n",
         .build_tools => "  pip:         pip install r-zig-build-tools" ++ all ++ "\n",
+        // PyPI's cmake is the group there; the pip r-zig-toolchain has none
+        .extras => "  pip:         pip install cmake\n",
     };
     // the group's archive (B17), which the standalone line names
     const archive = try std.fmt.allocPrint(a, "R-{s}-{s}-{s}.{s}", .{ p.r, p.name, g.name(), archiveExt(g, p) });
@@ -135,6 +145,8 @@ pub fn text(a: mem.Allocator, g: Group, p: Platform) ![]const u8 {
         else
             try std.fmt.allocPrint(a, "Building packages needs the r-zig build tools for R {s} on {s}: make.\n" ++
                 "  standalone:  extract {s} where you extracted R, or put GNU make on PATH\n", .{ p.r, p.name, archive }),
+        .extras => try std.fmt.allocPrint(a, "Packages that build a bundled library with CMake need the r-zig extras for R {s} on {s}: cmake.\n" ++
+            "  standalone:  extract {s} where you extracted R, or put cmake on PATH\n", .{ p.r, p.name, archive }),
     };
     return mem.concat(a, u8, &.{ head, conda, pip });
 }
@@ -168,6 +180,7 @@ test platformName {
     try testing.expect(this.r.len > 0);
     try testing.expectEqualStrings(std.fmt.comptimePrint("{d}.{d}", .{ builtin.zig_version.major, builtin.zig_version.minor }), this.zig);
     try testing.expectEqualStrings("build-tools", Group.build_tools.name());
+    try testing.expectEqualStrings("extras", Group.extras.name());
 }
 
 test archiveExt {
@@ -178,6 +191,8 @@ test archiveExt {
     try testing.expectEqualStrings("tar.xz", archiveExt(.compilers, win));
     try testing.expectEqualStrings("tar.gz", archiveExt(.build_tools, linux));
     try testing.expectEqualStrings("zip", archiveExt(.build_tools, win));
+    try testing.expectEqualStrings("tar.gz", archiveExt(.extras, linux));
+    try testing.expectEqualStrings("zip", archiveExt(.extras, win));
 }
 
 test "one text per group, the same on every channel" {
@@ -227,6 +242,20 @@ test "one text per group, the same on every channel" {
         \\  pip:         no wheels for Windows
         \\
     , try text(a, .build_tools, win));
+    try testing.expectEqualStrings(
+        \\Packages that build a bundled library with CMake need the r-zig extras for R 4.6.2 on linux-64: cmake.
+        \\  standalone:  extract R-4.6.2-linux-64-extras.tar.gz where you extracted R, or put cmake on PATH
+        \\  conda, pixi: pixi add r-zig-extras (or conda install r-zig-extras); r-zig-toolchain installs every group
+        \\  pip:         pip install cmake
+        \\
+    , try text(a, .extras, linux));
+    try testing.expectEqualStrings(
+        \\Packages that build a bundled library with CMake need the r-zig extras for R 4.6.2 on win-64: cmake.
+        \\  standalone:  extract R-4.6.2-win-64-extras.zip where you extracted R, or put cmake on PATH
+        \\  conda, pixi: pixi add r-zig-extras (or conda install r-zig-extras); r-zig-toolchain installs every group
+        \\  pip:         no wheels for Windows
+        \\
+    , try text(a, .extras, win));
 }
 
 test report {

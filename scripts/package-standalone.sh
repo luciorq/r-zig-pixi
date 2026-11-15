@@ -13,8 +13,9 @@
 #     dist/R-<ver>-<platform>-<group>.<ext>, with the group's directories
 #     under R_HOME/bin/toolchain (env.sh's group_dirs). <ext> is env.sh's
 #     group_ext: .tar.xz for the compilers on every platform (PHASE6 open
-#     point L), .tar.gz (Windows: .zip) for build-tools. No flavor in the
-#     name: one toolchain serves every flavor of the platform.
+#     point L), .tar.gz (Windows: .zip) for build-tools and extras. No
+#     flavor in the name: one toolchain serves every flavor of the
+#     platform.
 #   recommended (pixi run package-recommended): R's recommended packages
 #     in $RECOMMENDED_PREFIX (zig-recommended.sh), which
 #     verify-recommended.sh checks, as

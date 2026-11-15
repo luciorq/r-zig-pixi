@@ -212,7 +212,8 @@ vendored_files() {
 needed_of() {
   case "$OS" in
     linux) patchelf --print-needed "$1" 2>/dev/null || true ;;
-    macos) otool -L "$1" 2>/dev/null | tail -n +2 | awk '{print $1}' || true ;;
+    # every header line ends in ':', a universal file's one per slice
+    macos) otool -L "$1" 2>/dev/null | awk '!/:$/ {print $1}' || true ;;
     windows) llvm-objdump -p "$1" 2>/dev/null | awk '/DLL Name:/ {print $3}' || true ;;
   esac
 }

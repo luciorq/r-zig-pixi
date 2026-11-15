@@ -16,6 +16,6 @@ __pycache__/
 *.egg-info/
 .venv/
 
-# zig fetches build.zig.zon dependencies here (zigbuild/toolchain: pkgconf;
-# the root: cairo)
+# zig fetches build.zig.zon dependencies here (zigbuild/toolchain: pkgconf,
+# Kitware's cmake archives; the root: cairo)
 zig-pkg/

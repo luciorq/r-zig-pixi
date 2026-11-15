@@ -8,7 +8,9 @@
 # toolchain mode archives its groups (B17). The compilers group's zig/ is
 # upstream zig, PyPI's ziglang wheel as fetch-zig.sh pins and unpacks it
 # (B4, phase 5), whose directory this passes to the build as
-# -Dziglang=<dir>; the other directories come from the env.
+# -Dziglang=<dir>; the extras group's cmake/ is Kitware's release archive,
+# which the build fetches itself (zigbuild/toolchain/build.zig.zon,
+# feat-extras-group); the other directories come from the env.
 #
 # Arguments go to zig build: `test` runs the build's unit tests (pixi run
 # toolchain-test) and installs nothing.
@@ -40,5 +42,12 @@ if [ "${1:-}" != test ] && ! same_dir "$TOOLCHAIN_PREFIX" "${CONDA_PREFIX:-}"; t
 fi
 # -Dprefix: the same directory as --prefix, which zig 0.17's configure step
 # does not see (the maker installs there); the build reads the env's
-# records for it and compares it with the env (prefix_is_env).
-"$ZIG" build --build-file "$ROOT/zigbuild/toolchain/build.zig" --prefix "$TOOLCHAIN_PREFIX" "-Dprefix=$TOOLCHAIN_PREFIX" "${ziglang[@]}" "$@"
+# records for it and compares it with the env (prefix_is_env). Not for
+# the unit tests: without it the configure step stops before the tree's
+# copies, so `test` fetches no archive (cmake, Windows' pkgconf) and
+# runs offline.
+prefix=()
+if [ "${1:-}" != test ]; then
+  prefix=("-Dprefix=$TOOLCHAIN_PREFIX")
+fi
+"$ZIG" build --build-file "$ROOT/zigbuild/toolchain/build.zig" --prefix "$TOOLCHAIN_PREFIX" "${prefix[@]}" "${ziglang[@]}" "$@"

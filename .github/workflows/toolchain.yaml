@@ -15,7 +15,10 @@ name: toolchain
 # (scripts/zig-toolchain.sh runs fetch-zig; on the upstream legs the
 # "Upstream zig (ZIG_BIN)" step has already filled the same directory),
 # and from phase 6 its flang/, copied from the env's flang-zig and
-# flang-rt-zig (B9 a).
+# flang-rt-zig (B9 a); the extras group's cmake/, Kitware's cmake
+# release archive, which the toolchain build fetches itself
+# (zigbuild/toolchain/build.zig.zon, feat-extras-group; network, as for
+# Windows' pkgconf).
 # It needs no R source, so this job builds no R. No concurrency group
 # here, as build-r.yaml: the callers keep their own.
 on:
@@ -68,11 +71,11 @@ jobs:
       - name: Toolchain build tests
         run: pixi run toolchain-test
       # package-toolchain depends on toolchain: it installs the toolchain
-      # tree, then archives its two groups (B17),
+      # tree, then archives its three groups (B17),
       # dist/R-<ver>-<platform>-compilers.tar.xz (every platform, phase 6,
-      # B13) and -build-tools.tar.gz (Windows .zip), each with its .sha256
+      # B13), -build-tools.tar.gz and -extras.tar.gz (Windows .zip), each with its .sha256
       # and the top directory R-<ver>-zig/ (B36).
-      - name: Build + archive the toolchain tree (compilers, build-tools)
+      - name: Build + archive the toolchain tree (compilers, build-tools, extras)
         run: pixi run package-toolchain
       # After the archives, not before: package-toolchain installs the
       # tree again, so only this order checks the tree that was archived
@@ -80,7 +83,7 @@ jobs:
       # paths, the copies' closures and floors (verify-toolchain.sh).
       - name: Verify the toolchain tree (records, copies, closures)
         run: pixi run verify-toolchain
-      # The two group archives and their .sha256, under the name
+      # The three group archives and their .sha256, under the name
       # build-r.yaml and stress.yaml download on the same platform. They
       # are CI's, not a release (B12), but the legs of the same run
       # download them, and GitHub lets failed jobs be re-run for 30 days
@@ -96,5 +99,6 @@ jobs:
           path: |
             dist/R-*-compilers.*
             dist/R-*-build-tools.*
+            dist/R-*-extras.*
           retention-days: 30
           if-no-files-found: error

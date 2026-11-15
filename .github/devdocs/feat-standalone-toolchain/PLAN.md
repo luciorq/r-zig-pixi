@@ -174,7 +174,7 @@ directories has its own `LICENSES/` and `SOURCES`, as point 3 requires
 | compilers | `TC/openmp/` | `include/{omp.h,ompx.h,omp-tools.h,ompt.h}` | `include/{omp.h,ompx.h}`, `lib/libomp.lib` |
 | build-tools (the brief's "minimal build tools") | `TC/usr/` | `usr/bin/make` (B23 a) | `usr/bin/`: B39's list (sh, make, coreutils, sed, grep, gawk, which, findutils, patch: feat-win-link-fixes item 4), every file of the nine `m2-*` packages' usr/bin with the nine MSYS DLLs they import (B11's phase 7 outcome: m2's make and coreutils too), and pkg-config 0.29.2 (B43), conda-forge's native build with its glib closure; no `pkgconf` name until it is built from source (TODO.md). `TC/etc/fstab` makes TC the MSYS root (phase 7) |
 | build-tools | `TC/binutils/` | none | copies of conda-forge's MinGW binutils, as .exe: `nm, dlltool, as, strip, windres` and `objdump` (B24, B43); ar and ranlib are rzig's (B43), and each other tool moves to rzig once rzig can serve it (B24) |
-| extras | later | added when the stress suite shows a need; the first, from round 1 (2026-10-08): cmake on every OS | the same |
+| extras | `TC/cmake/` | `bin/cmake` and `share/cmake-4.4/{Modules,Templates}` from Kitware's cmake 4.4.4 release archive (macOS: the universal one), `SOURCES` with each file's sha256, `LICENSES/cmake/` (feat-extras-group, 2026-11-13; conda: r-zig-extras depends on conda-forge's cmake) | `bin/cmake.exe`, `share/cmake-4.4/{Modules,Templates}` |
 
 Fortran's OpenMP module (`omp_lib.mod`) comes from flang-rt-zig, in
 flang's resource directory, not from llvm-openmp (conda-meta of the

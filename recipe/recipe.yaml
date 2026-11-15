@@ -238,13 +238,15 @@ build:
   # hide their internal symbols as macOS's and CRAN's do (1257 exported
   # symbols, 2541 before); R_compiled_by() names this build's compilers;
   # R CMD config is rzig's, with no make and no sh, so it answers without
-  # the build tools (feat-config-rzig); win-arm64 is built, tested and published as the other five
-  # (chore-release-11).
+  # the build tools (feat-config-rzig); the extras group (cmake) and R's
+  # recommended packages are packages of their own; win-arm64 is built,
+  # tested and published as the other five (chore-release-11).
   number: 11
 
 outputs:
-  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), four
-  # packages (feat-standalone-toolchain B28 a). The base, r-zig-slim, owns
+  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), six
+  # packages (feat-standalone-toolchain B28 a; r-zig-extras and
+  # r-zig-recommended since build 11). The base, r-zig-slim, owns
   # R and its compiler front rzig (R_HOME/bin/toolchain's compiler names,
   # which Makeconf points at, and share/zig/rpkg), as the standalone base
   # archive does (B19). Each group package owns, or depends on,
@@ -253,9 +255,9 @@ outputs:
   # on Windows owns R_HOME/bin/toolchain/usr/ (pkgconf, built from source).
   # Windows' binutils are rzig's own names, r-zig-slim's
   # (feat-win-zig-binutils). r-zig-toolchain is the
-  # metapackage of both groups. Without a group, an install that needs it
-  # stops with rzig's text naming that package (the preflight, patch
-  # 0009).
+  # metapackage of the groups (with r-zig-extras, cmake). Without a
+  # group, an install that needs it stops with rzig's text naming that
+  # package (the preflight, patch 0009); a missing cmake is only a note.
   - staging:
       name: r-zig-build
     requirements:
@@ -444,12 +446,13 @@ outputs:
       # these, the conda build makes only Windows' usr/ (pkgconf), which
       # r-zig-build-tools owns; etc/ is the standalone tree's only on
       # Windows (PHASE7 Cr5); binutils/ is gone (feat-win-zig-binutils) and
-      # stays excluded so no old tree's copy can ride along. R's
+      # stays excluded so no old tree's copy can ride along; cmake/ is the
+      # extras' (feat-extras-group), which the conda build never makes. R's
       # recommended packages are r-zig-recommended's.
       files:
         exclude:
-          - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
-          - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
+          - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
+          - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
           - lib/R/library/${{ recommended }}/**
           - Library/lib/R/library/${{ recommended }}/**
     requirements:
@@ -621,8 +624,8 @@ outputs:
                 then:
                   - Library/lib/R/bin/toolchain/cfguard.o
             not_exists:
-              - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
-              - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
+              - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
+              - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
               - lib/R/library/${{ recommended }}/**
               - Library/lib/R/library/${{ recommended }}/**
     # Windows builds R with full's content, under the name slim on every
@@ -639,9 +642,9 @@ outputs:
         content (tcltk, jpeg, tiff, NLS): R's Windows build has no switches
         to leave them out.
 
-        To compile packages, add r-zig-toolchain (r-zig-compilers and
-        r-zig-build-tools). r-zig-compilers alone installs packages that
-        have no configure script and no make rules.
+        To compile packages, add r-zig-toolchain (r-zig-compilers,
+        r-zig-build-tools and r-zig-extras). r-zig-compilers alone installs
+        packages that have no configure script and no make rules.
 
   # The groups (feat-standalone-toolchain B28 a, B38). Each pins exactly
   # the R build whose Makeconf and rzig it serves, and comes without the
@@ -808,10 +811,47 @@ outputs:
       # links into it (ZPL-2.1); unix holds no file
       license: ${{ "ISC AND ZPL-2.1" if win else "GPL-2.0-only OR GPL-3.0-only" }}
 
+  # The extras group (feat-extras-group): cmake, for packages that build
+  # a bundled library with it (nloptr, s2, RcppParallel's TBB...).
+  # conda-forge's cmake, not bundled, as r-zig-compilers depends on zig;
+  # the standalone tree's cmake/ is Kitware's release archive. An empty
+  # package.
+  - package:
+      name: r-zig-extras
+    inherit:
+      from: r-zig-build
+      run_exports: false
+    build:
+      files: []
+    requirements:
+      run:
+        - ${{ pin_subpackage("r-zig-slim", exact=True) }}
+        - cmake
+    tests:
+      - package_contents:
+          files:
+            not_exists:
+              - lib/R/**
+              - Library/lib/R/**
+      - script:
+          content:
+            - if: win
+              then:
+                - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-extras.R'
+              else:
+                - $PREFIX/bin/Rscript test-extras.R
+        files:
+          recipe:
+            - test-extras.R
+    about:
+      summary: The r-zig extras for r-zig-slim (cmake, from conda-forge)
+
   - package:
       name: r-zig-toolchain
-    # the metapackage of both groups (B28 a): `pixi add r-zig-toolchain`
-    # installs everything a package build needs, as it did up to build 8
+    # the metapackage of the groups (B28 a): `pixi add r-zig-toolchain`
+    # installs everything a package build needs, as it did up to build 8;
+    # with r-zig-extras since feat-extras-group (cmake: a 26 MB download
+    # beside the compilers' 1.9 GB)
     inherit:
       from: r-zig-build
       run_exports: false
@@ -822,6 +862,7 @@ outputs:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
         - ${{ pin_subpackage("r-zig-compilers", exact=True) }}
         - ${{ pin_subpackage("r-zig-build-tools", exact=True) }}
+        - ${{ pin_subpackage("r-zig-extras", exact=True) }}
     tests:
       - package_contents:
           files:
@@ -842,7 +883,7 @@ outputs:
           recipe:
             - test-toolchain.R
     about:
-      summary: "The r-zig toolchain for r-zig-slim: r-zig-compilers and r-zig-build-tools"
+      summary: "The r-zig toolchain for r-zig-slim: r-zig-compilers, r-zig-build-tools and r-zig-extras"
 
   # R's 15 recommended packages (MASS, lattice, Matrix, ..., mgcv), from
   # the tarballs R's source carries, installed by build.sh's last step

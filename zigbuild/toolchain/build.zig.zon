@@ -9,6 +9,39 @@
             .hash = "N-V-__8AAEIvLQAcTV0V_--qfqG14rkuXW1VEz95S5KD8YYn",
             .lazy = true,
         },
+        // The extras group's cmake/ (feat-extras-group): Kitware's release
+        // archives (cmake.zig pins them with Kitware's sha256; the test
+        // step checks these URLs are its). Each .hash is what a build's own
+        // fetch computes: a `zig fetch <url>` run outside a build caches
+        // the tree under its top directory (zig 0.17). A broken cached copy
+        // of any entry here fails every build of this build.zig.zon, asked
+        // for or not (zig unpacks every cached lazy dependency): delete
+        // p/<hash>.tar.gz from zig's global cache.
+        .cmake_linux_x86_64 = .{
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz",
+            .hash = "N-V-__8AABi0WAs7k2I5pQzTK1Z_y5a872JVILowbBEZfEX0",
+            .lazy = true,
+        },
+        .cmake_linux_aarch64 = .{
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-aarch64.tar.gz",
+            .hash = "N-V-__8AADO3OQcfVug-MBmDJ_Q0Btalp5RRalgl7R2t_ynt",
+            .lazy = true,
+        },
+        .cmake_macos_universal = .{
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-macos-universal.tar.gz",
+            .hash = "N-V-__8AAH0BEA8BCi9JHUuC6QO8ATGs3Y8o46FaeUw9HE2x",
+            .lazy = true,
+        },
+        .cmake_windows_x86_64 = .{
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-windows-x86_64.zip",
+            .hash = "N-V-__8AAPS-igjjOs-BYmUS_loqhrI4qxD_hLltv9SiSnq4",
+            .lazy = true,
+        },
+        .cmake_windows_arm64 = .{
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-windows-arm64.zip",
+            .hash = "N-V-__8AAPzOcAiU1hn_hDNT1OkWsnGa_95roWR5wN4BFbm0",
+            .lazy = true,
+        },
     },
     .paths = .{""},
 }

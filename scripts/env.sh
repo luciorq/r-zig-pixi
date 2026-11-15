@@ -84,15 +84,17 @@ R_HOME_DIR="$PREFIX/$RH"
 # under R_HOME/bin/toolchain each one holds (B20, B23, B24): compilers,
 # zig/ (upstream zig, B4), flang/ (flang-zig, B9) and openmp/; build-tools,
 # usr/ and Windows' etc/ (MSYS's mount table, phase 7); Windows'
-# binutils are rzig's own names since feat-win-zig-binutils, the base's.
-# Only those that exist count: a group's
+# binutils are rzig's own names since feat-win-zig-binutils, the base's;
+# extras, cmake/ (Kitware's cmake release archive: bin/cmake and
+# share/cmake-<v>/, feat-extras-group). Only those that exist count: a group's
 # archive holds its directories that the toolchain tree has
 # (package-standalone.sh).
-TOOLCHAIN_GROUPS="compilers build-tools"
+TOOLCHAIN_GROUPS="compilers build-tools extras"
 group_dirs() {
   case "$1" in
     compilers) echo "zig flang openmp" ;;
     build-tools) echo "usr etc" ;;
+    extras) echo "cmake" ;;
     *) echo "error: no toolchain group named '$1'" >&2; return 1 ;;
   esac
 }
@@ -227,13 +229,20 @@ MACOS_MIN=13.0
 # for MACOS_MIN; only compiling needs macOS 15 (feat-zig-017).
 ZIG_MACOS_MIN=15.0
 # A Mach-O file's minos (LC_BUILD_VERSION; LC_VERSION_MIN_MACOSX on old
-# files), empty when it has neither.
+# files), empty when it has neither. A universal file has one per slice
+# (otool -l lists every slice); this prints the highest, so no slice
+# escapes the floor checks.
 macho_minos() {
   otool -l "$1" 2>/dev/null | awk '
+    function gt(a, b,   x, y, i) { split(a, x, "."); split(b, y, ".")
+      for (i = 1; i <= 3; i++) if (x[i] + 0 != y[i] + 0) return x[i] + 0 > y[i] + 0
+      return 0 }
     /cmd LC_BUILD_VERSION/      { b = 1; next }
     /cmd LC_VERSION_MIN_MACOSX/ { v = 1; next }
-    b && $1 == "minos"   { print $2; exit }
-    v && $1 == "version" { print $2; exit }'
+    (b && $1 == "minos") || (v && $1 == "version") {
+      if (m == "" || gt($2, m)) m = $2
+      b = 0; v = 0 }
+    END { if (m != "") print m }'
 }
 # True when version $1 is above $2 (MAJOR.MINOR[.PATCH]), without sort -V.
 version_gt() {

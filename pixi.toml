@@ -138,15 +138,16 @@ verify-tree = "bash scripts/verify-tree.sh"
 # shared libraries). It is the base (B19): the toolchain groups are
 # package-toolchain's archives, below.
 package = { cmd = "bash scripts/package-standalone.sh", depends-on = ["install"] }
-# The archives' own checks, in three scenarios (PHASE3 section 8): the
-# base archive extracted elsewhere, then the compilers archive and then
-# the build-tools archive beside it; R and packages compiled with them run
+# The archives' own checks, in four scenarios (PHASE3 section 8,
+# feat-extras-group): the base archive extracted elsewhere, then the
+# compilers, the build-tools and the extras archive beside it, one after
+# the other; R and packages compiled with them run
 # with nothing from the build env (unix: env -i, TLS with the shipped CA
 # bundle; Windows: rzig's dry runs, the binutils Makeconf names (rzig's), OpenMP C
 # and Fortran packages loaded with PATH = bin\x64 + System32), and the
 # install preflight (patch 0009) stops a compiled package with the text
 # of the group it misses, before configure (B26). It needs
-# the group archives dist/R-<ver>-<platform>-{compilers,build-tools}.<ext>
+# the group archives dist/R-<ver>-<platform>-{compilers,build-tools,extras}.<ext>
 # with their sha256 (package-toolchain, or in CI the toolchain job's) and
 # does not rebuild them, so CI tests the downloaded ones (B31).
 verify-package = { cmd = "bash scripts/verify-bundle.sh", depends-on = ["package"] }
@@ -163,16 +164,17 @@ verify-package = { cmd = "bash scripts/verify-bundle.sh", depends-on = ["package
 # from the wheel.
 toolchain = "bash scripts/zig-toolchain.sh"
 # That build's unit tests: the conda-meta and wheel readers and the
-# SOURCES writer (fetches nothing).
-# Its configure step runs first, as for `toolchain`, so it also needs the
-# env's conda-meta and the package cache (in CI: setup-pixi's cache: false).
+# SOURCES writer (fetches nothing, so it runs offline). zig-toolchain.sh
+# passes it no -Dprefix: its configure step stops before the tree's copies
+# and reads neither the env's conda-meta nor the package cache, nor asks
+# for build.zig.zon's archives (cmake, Windows' pkgconf).
 toolchain-test = "bash scripts/zig-toolchain.sh test"
 # Static checks of the toolchain tree: its layout, SOURCES and LICENSES,
 # each copy's sha256, build paths, the copies' closures and floors.
 verify-toolchain = "bash scripts/verify-toolchain.sh"
 # The group archives (B17), dist/R-<ver>-<platform>-compilers.tar.xz
-# (every platform, phase 6, B13) and -build-tools.tar.gz (Windows .zip),
-# plus their sha256: the toolchain tree's group directories, under the
+# (every platform, phase 6, B13), -build-tools.tar.gz and -extras.tar.gz
+# (Windows .zip), plus their sha256: the toolchain tree's group directories, under the
 # base archive's top directory R-<ver>-zig/ (B36). Only archives.
 package-toolchain = { cmd = "bash scripts/package-standalone.sh toolchain", depends-on = ["toolchain"] }
 # The toolchain tree again, from the group archives in dist/ (CI: the

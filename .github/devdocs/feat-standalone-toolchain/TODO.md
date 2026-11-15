@@ -1111,8 +1111,11 @@ Needs (answered): B14 (a), with B37 (a).
       LibraryOptions, appended to each C/C++ source's flags, when a zig
       package needs its own include paths or defines (tier 2 does not
       read src/Makevars; fix-zig-pkg-build-review's PLAN.md, code-4)
-- [ ] Optional extras group, only when the stress suite shows a need
-      (the suite starts now, D15 a)
+- [x] Optional extras group: cmake on every OS (stress round 1's
+      decision 16, 2026-10-08), built 2026-11-13 (feat-extras-group
+      PLAN.md: TC/cmake/ from Kitware's release archives (first PyPI's
+      wheel; switched the same day), r-zig-extras on conda,
+      in r-zig-toolchain; macOS and Windows runs still to do there)
 - [ ] After the stress suite: reassess B39's list and B43's pkg-config
       and objdump, and whether a gcc-nm from conda-forge is really
       needed (B43-2) (what is really needed, what zig cc/rzig

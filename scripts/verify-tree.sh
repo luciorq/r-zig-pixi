@@ -76,8 +76,9 @@
 #     env's other packages are conda-forge's.
 # verify-bundle.sh (pixi task verify-package, after package) keeps what
 # only a moved, environment-free copy can show, with this tree's archive
-# and the two group archives extracted into one directory, a scenario
-# after each (the base alone, with the compilers, with the build tools):
+# and the three group archives extracted into one directory, a scenario
+# after each (the base alone, with the compilers, with the build tools,
+# with the extras):
 # R runs from the new place under env -i, TLS trust with the shipped CA
 # bundle, the CPU its C compiler compiles for (the arch's baseline, every
 # OS), and packages compiled with the relocated tree build and load
@@ -317,7 +318,7 @@ if [ "$OS" = windows ]; then
     bad="$bad
   ${mk#$TREE/} names a tool through LLVMPREF: $l"
   done < "$WORK/llvmpref.txt"
-  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/../../usr/bin' \
+  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin' \
     'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"' \
     'R_ZIG_RC=${R_HOME}/bin/toolchain/windres.exe' \
     'R_ZIG_NM=${R_HOME}/bin/toolchain/nm.exe' \
@@ -328,7 +329,7 @@ if [ "$OS" = windows ]; then
   $rh/etc/Rcmd_environ lacks: $l"
   done
 else
-  for l in 'PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}' "MAKE=\${MAKE-'make'}"; do
+  for l in 'PATH=${R_HOME}/bin/toolchain/usr/bin:${R_HOME}/bin/toolchain/cmake/bin:${PATH}' "MAKE=\${MAKE-'make'}"; do
     has_line "$TREE/$rh/etc/Renviron" "$l" || bad="$bad
   $rh/etc/Renviron lacks: $l"
   done
@@ -338,9 +339,9 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 if [ "$OS" = windows ]; then
-  echo "== build tools verified: Makeconf's AR, RANLIB and binutils are rzig's names in \$(BINPREF), each a file there, PKG_CONFIG = pkg-config; etc/Rcmd_environ puts bin/toolchain/usr/bin first on PATH and gives PKG_CONFIG_PATH R's env's .pc directories as its default"
+  echo "== build tools verified: Makeconf's AR, RANLIB and binutils are rzig's names in \$(BINPREF), each a file there, PKG_CONFIG = pkg-config; etc/Rcmd_environ puts bin/toolchain/usr/bin and cmake/bin first on PATH and gives PKG_CONFIG_PATH R's env's .pc directories as its default"
 else
-  echo "== build tools verified: etc/Renviron puts bin/toolchain/usr/bin first on PATH, MAKE=\${MAKE-'make'}"
+  echo "== build tools verified: etc/Renviron puts bin/toolchain/usr/bin and cmake/bin first on PATH, MAKE=\${MAKE-'make'}"
 fi
 
 # No path of the build machine in any file of R's own (feat-no-host-paths

@@ -6,7 +6,7 @@
 # the build-tools group's directories (unix usr/; Windows usr/ and etc/,
 # phase 7). contract, pkg-parity and stress compile packages
 # with it (their pixi tasks depend on compile-tree) [phase3-P3-5], as a
-# user who extracted the base and both group archives into one directory
+# user who extracted the base and the group archives into one directory
 # does. On Windows they then run the group's usr/bin first, under R CMD
 # and in their R sessions, and the env's Library/usr/bin after it (PHASE7
 # risk 8).

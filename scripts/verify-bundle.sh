@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The standalone archives as a user gets them, from a fresh directory and
 # with the pixi/conda env off PATH: the flavor's base archive and the
-# platform's two group archives (feat-standalone-toolchain B17, B36),
+# platform's three group archives (feat-standalone-toolchain B17, B36),
 # extracted one after the other into one directory, with a scenario run
 # after each extraction (PLAN.md's Verification; PHASE3 section 8, C2).
 # The same adversarial check done by hand on omicron and kappa for every
@@ -121,6 +121,11 @@
 #      aside): a package with a configure script stops in the preflight
 #      with the compilers' text, and with R_ZIG_NO_PREFLIGHT=1 gets past
 #      it, runs its configure and fails in the compile (C26).
+#   4. + extras (feat-extras-group): before it, a package whose configure
+#      builds a static library with CMake and whose SystemRequirements
+#      name cmake gets the preflight's note and stops in its configure;
+#      after it, rzig's check under R CMD finds TC/cmake/bin/cmake, and
+#      that package installs and loads.
 # Two passes (feat-standalone-toolchain phase 5; PHASE5 open points F, G,
 # S): `verify-bundle.sh [toolchain|build]`. The toolchain pass, the
 # default, is what a user of the archives gets: no ZIG_BIN and no zig
@@ -589,11 +594,12 @@ RCODE
   # alone, where the directory does not exist yet (harmless: the host's make,
   # if any, comes next). unix: etc/Renviron's line, which R reads at start
   # and bin/Rcmd sources (patch 0008), so PATH starts with
-  # <R_HOME>/bin/toolchain/usr/bin in R and under R CMD. Windows: under R
+  # <R_HOME>/bin/toolchain/usr/bin and the extras group's cmake/bin
+  # (feat-extras-group) in R and under R CMD. Windows: under R
   # CMD, Rcmd_environ's line, whose default R's reader expands only as a
   # whole ${...} term (hence R_ZIG_TOOLS_PATH): the entries after bin\x64,
   # which R CMD puts first, are the expanded paths, with no ${ left, the
-  # group's usr/bin, then R_HOME/../../usr/bin (a conda env's MSYS dir;
+  # group's usr/bin, the extras' cmake/bin, then R_HOME/../../usr/bin (a conda env's MSYS dir;
   # here none: PHASE7 F2 b), or R_CUSTOM_TOOLS_PATH's value when that is
   # set (R's installer line).
   if [ "$OS" = windows ]; then
@@ -602,7 +608,7 @@ p <- strsplit(Sys.getenv("PATH"), ";", fixed = TRUE)[[1L]]
 slash <- function(x) tolower(chartr("\\", "/", x))
 i <- match(TRUE, endsWith(slash(p), "/bin/x64"))
 custom <- Sys.getenv("R_CUSTOM_TOOLS_PATH")
-want <- if (nzchar(custom)) custom else paste0(R.home(), c("/bin/toolchain/usr/bin", "/../../usr/bin"))
+want <- if (nzchar(custom)) custom else paste0(R.home(), c("/bin/toolchain/usr/bin", "/bin/toolchain/cmake/bin", "/../../usr/bin"))
 got <- if (is.na(i)) "" else p[i + seq_along(want)]
 if (anyNA(got) || any(grepl("${", got, fixed = TRUE)) || any(slash(got) != slash(want)))
     stop("the PATH entries after bin/x64 are '", paste(got, collapse = ";"), "', not '",
@@ -620,7 +626,8 @@ p <- strsplit(Sys.getenv("PATH"), ";", fixed = TRUE)[[1L]]
 slash <- function(x) tolower(chartr("\\", "/", x))
 custom <- Sys.getenv("R_CUSTOM_TOOLS_PATH")
 want <- if (nzchar(custom)) custom else
-    c(file.path(R.home(), "bin", "toolchain", "usr", "bin"), file.path(dirname(dirname(R.home())), "usr", "bin"))
+    c(file.path(R.home(), "bin", "toolchain", "usr", "bin"), file.path(R.home(), "bin", "toolchain", "cmake", "bin"),
+      file.path(dirname(dirname(R.home())), "usr", "bin"))
 got <- p[seq_along(want)]
 if (anyNA(got) || any(slash(got) != slash(want)))
     stop("the session's first PATH entries are '", paste(got, collapse = ";"), "', not '",
@@ -633,14 +640,14 @@ RCODE
       [ "$custom" = unset ] || custom_env=(R_CUSTOM_TOOLS_PATH="$custom")
       (cd "$VERIFY_DIR" && env -i "${base_env[@]}" "${custom_env[@]}" PATH="$R_BINDIR:$sys32" \
         "$R_EXE" CMD Rscript.exe --vanilla path.R) ||
-        { echo "error: under R CMD, the PATH entries after bin\\x64 are not ${custom_env[*]:-R_HOME/bin/toolchain/usr/bin and R_HOME/../../usr/bin, expanded} (etc/Rcmd_environ, B25)" >&2; exit 1; }
+        { echo "error: under R CMD, the PATH entries after bin\\x64 are not ${custom_env[*]:-R_HOME/bin/toolchain/usr/bin, R_HOME/bin/toolchain/cmake/bin and R_HOME/../../usr/bin, expanded} (etc/Rcmd_environ, B25)" >&2; exit 1; }
       (cd "$VERIFY_DIR" && env -i "${base_env[@]}" "${custom_env[@]}" PATH="$R_BINDIR:$sys32" \
         "$RSCRIPT" --vanilla session-path.R) ||
-        { echo "error: in an R session, the first PATH entries are not ${custom_env[*]:-R_HOME/bin/toolchain/usr/bin and R_HOME's grandparent's usr/bin} (base's Rprofile, patch 0014)" >&2; exit 1; }
+        { echo "error: in an R session, the first PATH entries are not ${custom_env[*]:-R_HOME/bin/toolchain/usr/bin, R_HOME/bin/toolchain/cmake/bin and R_HOME's grandparent's usr/bin} (base's Rprofile, patch 0014)" >&2; exit 1; }
     done
-    echo "== R CMD's PATH: bin\\x64, then R_HOME/bin/toolchain/usr/bin and R_HOME/../../usr/bin (or R_CUSTOM_TOOLS_PATH; empty is unset); an R session's starts with the same two, the second without .."
+    echo "== R CMD's PATH: bin\\x64, then R_HOME/bin/toolchain/usr/bin, R_HOME/bin/toolchain/cmake/bin and R_HOME/../../usr/bin (or R_CUSTOM_TOOLS_PATH; empty is unset); an R session's starts with the same three, the last without .."
   else
-    tools_dir="$(cd "$RHD" && pwd -P)/bin/toolchain/usr/bin"
+    tools_dir="$(cd "$RHD" && pwd -P)/bin/toolchain/usr/bin:$(cd "$RHD" && pwd -P)/bin/toolchain/cmake/bin"
     in_r="$(env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" --vanilla --no-echo -e 'cat(Sys.getenv("PATH"))')"
     in_cmd="$(env -i "${base_env[@]}" PATH=/usr/bin:/bin "$R_BIN" CMD sh -c 'echo "$PATH"')"
     for p in "R:$in_r" "R CMD:$in_cmd"; do
@@ -649,7 +656,7 @@ RCODE
         *) echo "error: PATH in ${p%%:*} is ${p#*:}, which does not start with $tools_dir (etc/Renviron, B25)" >&2; exit 1 ;;
       esac
     done
-    echo "== PATH in R and under R CMD starts with R_HOME/bin/toolchain/usr/bin"
+    echo "== PATH in R and under R CMD starts with R_HOME/bin/toolchain/usr/bin, then R_HOME/bin/toolchain/cmake/bin"
   fi
 
   # rzig's check mode with no group (B26, B35), the texts the install
@@ -2918,14 +2925,99 @@ else
   echo "== the install preflight with no zig (TC/zig/zig$exe moved aside): a package stops before its configure with the compilers' text; with R_ZIG_NO_PREFLIGHT=1 its configure runs and the compile fails with no zig"
 fi
 
+# --- Scenario 4: base + compilers + build-tools + extras --------------------
+# The extras group (feat-extras-group): cmake, for packages that build a
+# bundled library with it. cmkpkg's configure (configure.win the same
+# script) builds a static library with CMake as nloptr's does (`cmake`
+# from PATH, CC from R CMD config, AR and RANLIB from it too, so no
+# host ar is reached; the generator CMake's default on unix, Unix
+# Makefiles with the group's make, and Rcmd_environ's MSYS Makefiles on
+# Windows; macOS' CMAKE_TOOLCHAIN_FILE from etc/Renviron), and
+# src/Makevars links it. Its DESCRIPTION names cmake in SystemRequirements.
+# Before the extras: the install preflight notes the missing cmake and
+# goes on (the user's decision 3.1 a), and the configure stops with its
+# own line (unix: skipped with a note when the host has a cmake in
+# /usr/bin or /bin, which PATH holds). After: R's PATH has TC/cmake/bin
+# (etc/Renviron; Windows Rcmd_environ and the session's Rprofile), rzig's
+# check finds it there, and cmkpkg installs and loads.
+cmk="$VERIFY_DIR/cmk"
+mkdir -p "$cmk/pk/cmkpkg/R" "$cmk/pk/cmkpkg/src/cmklib" "$cmk/lib"
+printf 'Package: cmkpkg\nVersion: 0.1\nTitle: Verify Bundle\nDescription: A bundled library built with CMake.\nLicense: MIT\nAuthor: r-zig\nMaintainer: r-zig <r-zig@example.org>\nSystemRequirements: CMake (>= 3.10)\n' > "$cmk/pk/cmkpkg/DESCRIPTION"
+printf 'useDynLib(cmkpkg)\nexport(f)\n' > "$cmk/pk/cmkpkg/NAMESPACE"
+printf 'f <- function() .Call("cmkpkg_f", PACKAGE = "cmkpkg")\n' > "$cmk/pk/cmkpkg/R/f.R"
+printf '#include <Rinternals.h>\nint cmk_val(void);\nSEXP cmkpkg_f(void) { return ScalarInteger(cmk_val()); }\n' > "$cmk/pk/cmkpkg/src/f.c"
+printf 'int cmk_val(void) { return 44; }\n' > "$cmk/pk/cmkpkg/src/cmklib/val.c"
+printf '%s\n' 'cmake_minimum_required(VERSION 3.10)' 'project(cmkval C)' 'add_library(cmkval STATIC val.c)' > "$cmk/pk/cmkpkg/src/cmklib/CMakeLists.txt"
+printf 'PKG_LIBS = cmkbuild/libcmkval.a\n' > "$cmk/pk/cmkpkg/src/Makevars.in"
+for f in configure configure.win; do
+  cat > "$cmk/pk/cmkpkg/$f" <<'CONFIGURE'
+#!/bin/sh
+case `uname -s` in MINGW*|MSYS*|CYGWIN*) x=.exe ;; *) x= ;; esac
+command -v cmake > /dev/null 2>&1 || { echo "cmkpkg: no cmake on PATH"; exit 1; }
+echo "cmkpkg: cmake at `command -v cmake`"
+CC=`"${R_HOME}/bin/R$x" CMD config CC | tr -d '\r'`
+AR=`"${R_HOME}/bin/R$x" CMD config AR | tr -d '\r'`
+RANLIB=`"${R_HOME}/bin/R$x" CMD config RANLIB | tr -d '\r'`
+export CC
+cd src && rm -rf cmkbuild &&
+  cmake -S cmklib -B cmkbuild -DCMAKE_BUILD_TYPE=Release "-DCMAKE_AR=$AR" "-DCMAKE_RANLIB=$RANLIB" &&
+  cmake --build cmkbuild || { echo "cmkpkg: the CMake build failed"; exit 1; }
+cp Makevars.in Makevars
+CONFIGURE
+  chmod +x "$cmk/pk/cmkpkg/$f"
+done
+cmk_note="zig-cc: cmkpkg: note: its SystemRequirements name cmake, and no cmake on PATH: its build stops where it runs cmake"
+if [ "$OS" = windows ]; then cmk_r="$R_EXE"; cmk_path="$bt_path"; else cmk_r="$R_BIN"; cmk_path=/usr/bin:/bin; fi
+cmk_install() {
+  (cd "$cmk" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$cmk_path" "$cmk_r" CMD INSTALL -l lib pk/cmkpkg) > "$cmk/$1.log" 2>&1
+}
+if [ "$OS" != windows ] && { [ -x /usr/bin/cmake ] || [ -x /bin/cmake ]; }; then
+  echo "   note: cmkpkg without the extras not checked: this host has a cmake on PATH (/usr/bin, /bin)"
+else
+  rc=0; cmk_install without || rc=$?
+  if [ "$rc" = 0 ] || [ -e "$cmk/lib/cmkpkg" ] || ! starts_line "$cmk/without.log" "$cmk_note" ||
+     ! starts_line "$cmk/without.log" "Packages that build a bundled library with CMake need the r-zig extras for R $R_VERSION on $PLAT: cmake." ||
+     ! starts_line "$cmk/without.log" "cmkpkg: no cmake on PATH" || starts_line "$cmk/without.log" "$preflight_stop"; then
+    cat "$cmk/without.log" >&2
+    echo "error: without the extras, cmkpkg's install did not note the missing cmake in the preflight, go on, and stop in its configure (exit $rc)" >&2
+    exit 1
+  fi
+  echo "== without the extras: cmkpkg's preflight notes the missing cmake with the extras' text and goes on; its configure stops with no cmake on PATH"
+fi
+
+extract "${archives[3]}" "$lists/extras"
+echo "== scenario 4: base + compilers + build-tools + extras"
+cmake_exe="$TC/cmake/bin/cmake$exe"
+[ -x "$cmake_exe" ] || { echo "error: ${cmake_exe#"$VERIFY_DIR"/} is missing from the extras archive" >&2; exit 1; }
+# rzig's check, with the PATH R gives it: under R CMD (etc/Renviron on
+# unix, Rcmd_environ on Windows)
+cmk_cc="$cc"; [ "$OS" != windows ] || cmk_cc="$(w "$cc")"
+r="$(cd "$cmk" && env -i "${base_env[@]}" PATH="$cmk_path" "$cmk_r" CMD "$cmk_cc" --rzig-check=extras 2>&1 | tr -d '\r')" ||
+  { echo "$r" >&2; echo "error: rzig's --rzig-check=extras under R CMD did not find the extras' cmake" >&2; exit 1; }
+got="${r#zig-cc: extras ok: cmake at }"
+if [ "$OS" = windows ]; then
+  same=""; [ "$(cygpath -m -l "$got" | tr '[:upper:]' '[:lower:]')" != "$(cygpath -m -l "$cmake_exe" | tr '[:upper:]' '[:lower:]')" ] || same=1
+else
+  same=""; [ "$(cd "$(dirname "$got")" && pwd -P)/$(basename "$got")" != "$(cd "$(dirname "$cmake_exe")" && pwd -P)/$(basename "$cmake_exe")" ] || same=1
+fi
+[ -n "$same" ] || { echo "error: under R CMD, rzig's check found '$r', not ${cmake_exe#"$VERIFY_DIR"/}" >&2; exit 1; }
+cmk_install with ||
+  { cat "$cmk/with.log" >&2; echo "error: with the extras, cmkpkg (a static library built by CMake in its configure) did not install" >&2; exit 1; }
+if starts_line "$cmk/with.log" "zig-cc: cmkpkg: note:" || ! grep -q "^cmkpkg: cmake at .*/bin/toolchain/cmake/bin/cmake" "$cmk/with.log"; then
+  cat "$cmk/with.log" >&2; echo "error: with the extras, cmkpkg's configure did not run the group's cmake, or the preflight still noted it missing" >&2; exit 1
+fi
+(cd "$cmk" && env -i "${base_env[@]}" PATH="$cmk_path" "$RSCRIPT" --vanilla -e 'stopifnot(getExportedValue(loadNamespace("cmkpkg", lib.loc = "lib"), "f")() == 44L)') ||
+  { echo "error: cmkpkg, built with the extras' cmake, does not load" >&2; exit 1; }
+echo "== extras verified: under R CMD rzig's check finds TC/cmake/bin/cmake; cmkpkg's configure builds its static library with it, and the package installs and loads"
+
 # The build pass (feat-standalone-toolchain phase 5, PHASE5 open point F):
 # the same archives with the build's zig, ZIG_BIN=$ZIG, so that
 # conda-forge's zig keeps its package coverage on the default legs. This
 # pass's directory goes first, so the two never take TMPDIR's space at
 # once, and the build pass's result is the script's: the log's last
 # "verified" line is the last pass that ran (Cc4).
-scenarios="the base alone, + compilers, + build-tools"
-[ "$pass" = toolchain ] || scenarios="+ compilers, + build-tools (the base alone in the toolchain pass)"
+scenarios="the base alone, + compilers, + build-tools, + extras"
+[ "$pass" = toolchain ] || scenarios="+ compilers, + build-tools, + extras (the base alone in the toolchain pass)"
 echo "== standalone archives verified ($OS/$FLAVOR, the $pass pass: zig from $pass_what, $SECONDS s): $scenarios"
 if [ -n "$build_pass" ]; then
   rm -rf "$VERIFY_DIR"; trap - EXIT

@@ -397,6 +397,16 @@ info <- list(
   msys_from_tree = msys_tree,
   zig = if (nzchar(zig)) tryCatch(system2(zig, "version", stdout = TRUE, stderr = FALSE)[1], error = function(e) "") else "",
   cc = tryCatch(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "--no-user-files", "CC"), stdout = TRUE)[1], error = function(e) ""),
+  # the cmake a package's configure runs under R CMD: a tree's extras group
+  # (R_HOME/bin/toolchain/cmake/bin, which R puts before this PATH's
+  # entries, feat-extras-group) when it has one, else the env's
+  # ("none" when there is none: command -v exits 1, system2 then returns
+  # character(0) with a warning, not an error)
+  cmake = local({
+    x <- tryCatch(suppressWarnings(system2(file.path(R.home("bin"), "R"), c("CMD", "sh", "-c", shQuote("command -v cmake")),
+                                           stdout = TRUE)), error = function(e) character())
+    if (length(x) && !is.na(x[1]) && nzchar(x[1])) x[1] else "none"
+  }),
   builder = builder,
   sysdeps_missing = paste(sysdeps_missing, collapse = " "), tsv = tsv, out = out, rzig_cache = rzig_cache,
   rzig_cache_removed = "", args = paste(argv, collapse = " "), minutes = 0, finished = FALSE, error = "")
@@ -419,7 +429,7 @@ write_report <- function(final = FALSE) {
           sprintf("%s. %s, commit %s. %s min, jobs %d, PATH %s.", info$date, info$r,
                   if (nzchar(commit)) sub("^([0-9a-f]{12})[0-9a-f]+", "\\1", commit) else "unknown",
                   info$minutes, jobs, info$path),
-          sprintf("zig %s; CC `%s`; libraries env `%s`%s.", info$zig, info$cc, sysroot,
+          sprintf("zig %s; CC `%s`; cmake `%s`; libraries env `%s`%s.", info$zig, info$cc, info$cmake, sysroot,
                   if (dist == "conda") sprintf(" (%s from %s)", info$r_zig, info$channel) else ""),
           sprintf("Builder %s (R_ZIG_PKG_BUILDER).", builder),
           if (length(sysdeps_missing)) sprintf("Sysdeps missing from the env: %s.", info$sysdeps_missing),

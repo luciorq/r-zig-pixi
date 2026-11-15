@@ -36,7 +36,7 @@
 //! zig is found by find_zig.zig: ZIG_BIN, the compilers group's zig/ in
 //! rzig's own directory, the environment's bin, PATH, python3 -m ziglang.
 //! None: rzig names the compilers group and how to install it (groups.zig)
-//! and exits 127. `<name> --rzig-check[=fortran|build-tools|package]`
+//! and exits 127. `<name> --rzig-check[=fortran|build-tools|extras|package]`
 //! checks a group's tools instead of compiling (check.zig): the install
 //! preflight calls `=package` (patch 0009).
 //!
@@ -184,7 +184,7 @@ const Subcommand = enum {
 const usage =
     \\usage: zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib|gcc|g++|gcc-ar|gcc-ranlib|ar|ranlib [args...]
     \\       nm|objdump|strip|dlltool|windres|as [args...]   (Windows' binutils)
-    \\       <one of those names> --rzig-check[=fortran|build-tools|package]
+    \\       <one of those names> --rzig-check[=fortran|build-tools|extras|package]
     \\       rzig <one of those names> [args...]
     \\       rzig build --pkg <dir> --out <dir> [options]   (rzig build --help)
     \\       rzig build --shlib --output <lib> [options] -- <file>...
@@ -262,7 +262,7 @@ pub fn main(init: std.process.Init) !u8 {
     const caller = args[1..];
     if (caller.len == 1) {
         const kind = check.parse(caller[0], t == .fc) catch {
-            std.debug.print("{s}: {s} checks the compilers (no value), fortran, build-tools or package, not '{s}'\n", .{ ctx.name, check.flag, caller[0] });
+            std.debug.print("{s}: {s} checks the compilers (no value), fortran, build-tools, extras or package, not '{s}'\n", .{ ctx.name, check.flag, caller[0] });
             return 2;
         };
         if (kind) |k| {

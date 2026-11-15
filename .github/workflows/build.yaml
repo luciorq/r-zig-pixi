@@ -63,13 +63,13 @@ concurrency:
 # All compilers, shells, and libraries come from conda-forge via pixi.
 jobs:
   # The toolchain groups, once per platform (feat-standalone-toolchain
-  # B30, B31): toolchain.yaml builds the toolchain tree, archives its two
-  # groups (compilers, build-tools), checks the tree and uploads the
+  # B30, B31): toolchain.yaml builds the toolchain tree, archives its three
+  # groups (compilers, build-tools, extras), checks the tree and uploads the
   # archives as toolchain-<runner.os>-<runner.arch>. Every leg of build
   # and build-full on that platform downloads them: contract compiles in
   # the compile tree (the installed tree plus the groups), and the
   # packaging legs test the base archive with them (verify-package's
-  # three scenarios). One leg per platform the build legs run on,
+  # four scenarios). One leg per platform the build legs run on,
   # conda-package's six runners; build's condition, which every event
   # that runs a leg of build or build-full meets.
   toolchain:

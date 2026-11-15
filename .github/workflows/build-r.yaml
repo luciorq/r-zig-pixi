@@ -141,15 +141,16 @@ jobs:
       # are packaged in CI for now — full/openblas relocation is exercised
       # manually, not automated yet (B31 a). minimal's tree is the wheel's
       # input, so it can't be skipped. verify-package checks the archives
-      # themselves, the base and this platform's two group archives as
+      # themselves, the base and this platform's three group archives as
       # downloaded above (it does not rebuild them), extracted elsewhere
-      # one after the other, in three scenarios: the base alone, then with
-      # the compilers group, then with the build-tools group. R and
+      # one after the other, in four scenarios: the base alone, then with
+      # the compilers group, then with the build-tools group, then with
+      # the extras group (cmake, feat-extras-group). R and
       # packages compiled with them run with nothing from the build env
       # (unix: env -i, TLS with the shipped CA bundle; Windows: what must
       # load from the tree alone runs with only bin\x64 and System32 on
       # PATH) (scripts/verify-bundle.sh, PHASE3 section 8).
-      - name: Package + verify the standalone archives (base, compilers, build-tools)
+      - name: Package + verify the standalone archives (base, compilers, build-tools, extras)
         if: inputs.env == 'default' || inputs.env == 'minimal'
         run: pixi run -e ${{ inputs.env }} verify-package
       # The base archive verify-package checked and its .sha256, kept a
@@ -164,6 +165,7 @@ jobs:
             dist/R-*
             !dist/R-*-compilers.*
             !dist/R-*-build-tools.*
+            !dist/R-*-extras.*
           retention-days: 7
           if-no-files-found: error
       # The r-zig wheel: the minimal tree verify-package just packaged,
