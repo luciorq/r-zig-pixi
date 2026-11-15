@@ -38,6 +38,26 @@ run, the release.
   a Windows wheel), the C++ ABI boundary and a binary package
   repository.
 - The conda base keeps its name, r-zig-slim.
+- BLAS (2026-11-13): no change for build 11. conda-forge's packages
+  are preferred over distro- or OS-specific ones; until a route is
+  chosen, r-zig only needs to stay compatible with conda-forge's.
+
+### A later BLAS route (recorded 2026-11-13, not planned)
+
+conda-forge selects the BLAS of an environment by a package build:
+`pixi add "libblas=*=*openblas"` (or mkl, blis, accelerate...) swaps
+the implementation without a rebuild, but only for programs linked
+against `libblas`/`liblapack` (the `blas`/`lapack` names). R's
+default build uses its internal Rblas/Rlapack and is not affected.
+The openblas variant links libopenblas by name (build.zig
+`linkBlas`/`linkLapack`), so it cannot be switched. Switching it is
+about ten lines in build.zig (link `blas` and `lapack`) and a pixi
+feature with `libblas`/`liblapack` in place of `openblas`.
+Implementations libblas 3.11 has per subdir: linux-64 openblas, mkl,
+blis, netlib; linux-aarch64 openblas, blis, netlib, nvpl; osx-64 and
+osx-arm64 openblas, accelerate, newaccelerate, blis, netlib; win-64
+mkl, openblas, blis, netlib; win-arm64 openblas, netlib. Most are
+built with gfortran and bring libgfortran into the environment.
 
 Reviewed and found not needed: flang-pixi's "upstream-zig switch"
 (building flang-pixi's own packages with the ziglang.org tarball).
@@ -288,6 +308,37 @@ here. See "State at the stop" below.
     now runs make from R (system2), as pkgload does; the probe is gone.
     Left open, recorded: an MSYS make started directly by Git bash on
     windows-11-arm crashes; R, the supported caller, is not affected.
+19. **macOS: zig's compiler_rt debug map names build paths** (omicron,
+    osx-arm64, 2026-11-13): verify-recommended.sh failed on
+    `Matrix/libs/Matrix.so: .../build/rzig-cache/r-zig/zig-lib-<n>/lib/zig`.
+    The bytes are STABS entries of a debug map in the string table: SO
+    `<zig lib dir>`, SO `compiler_rt`, OSO `<zig cache>/o/<hash>/
+    libcompiler_rt.a(compiler_rt_zcu.o)`. zig builds compiler_rt with
+    debug info and its MachO linker writes a debug map for any library
+    that pulls a member in; Matrix was the one recommended package to do
+    so. libc++ and libc++abi are built the same way: every C++ library
+    (Rcpp and the rest) gets a debug map into zig's cache too (review: a
+    -g0 C++ dylib had 18 OSO entries, libc++abi.a(cxa_exception.o),
+    libc++.a(string.o), ...). Reproduced on gamma (zig 0.17.0 and
+    upstream 0.17.1, aarch64 and x86_64, `-dynamiclib -undefined dynamic_lookup` of a -g0 object with
+    a _Float16 conversion and `__builtin_available`): 1 OSO path, ~3700
+    STABS. -Wl,-S, -s and -Wl,--strip-debug do the same there: no STABS,
+    no path, a compiler_rt built without debug info (dylib 343 to 260
+    KB); the package's local symbols, exports trie, binds, load commands
+    and dylibs unchanged (compiler_rt's ___anon_* locals go with its debug
+    build); arm64's ad hoc signature rewritten (page hashes check).
+    -Wl,-x drops the local symbols and keeps the debug map. Fixed: rzig
+    applies linux's rule on macOS links (strip.zig, compiler.zig): no -g
+    option and no input *.o with debug info (a 64-bit Mach-O object with
+    __debug_info in __DWARF) gives -Wl,--strip-debug. The bash shims
+    zig-cc and zig-cxx do the same, for parity-test.sh (it emulates
+    macOS with a uname that answers Darwin); as on linux they do not read
+    objects. A malformed segment command (section headers past its
+    cmdsize) counts as no debug info. The C++ case is fixed the same way
+    (0 STABS, 0 paths; exports stay). Objective-C sources keep their
+    debug map: Makeconf's OBJCFLAGS has -g, as on linux. rzig-test passes
+    with both zigs; rzig cross-builds for aarch64-macos and x86_64-macos.
+    Tested on linux by cross-links; omicron run pending.
 
 ## Tests
 
@@ -456,8 +507,16 @@ change of its own, and the build-1 pins are NOT applied there: run
 - Questions for the user: is the host's libstdc++ on linux acceptable;
   may R print a note when a package's SystemRequirements names cmake
   and the group is missing.
+- Superseded 2026-11-13: built on branch rel11b-extras; the standalone
+  tree's cmake/ now comes from Kitware's release archives, not PyPI's
+  wheel (the user's decision; Kitware's linux cmake needs glibc only).
+  Record: feat-extras-group/PLAN.md.
 
 ### The recommended packages — two Zig files written, never compiled
+
+Superseded 2026-11-13: done in wt/rel11b-recommended, recorded in
+.github/devdocs/feat-recommended-packages/PLAN.md. The state below is
+the 2026-11-12 stop.
 
 State: T/rel11/scratch-recommended/STATE.md. Tree
 T/wt/rel11-recommended has two new files and nothing else; the build-1
