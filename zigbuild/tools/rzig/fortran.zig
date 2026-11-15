@@ -712,13 +712,14 @@ test "macOS: the shared link has the target, the SDK and the runtime; -dynamicli
     c.xcrun = f.path("xcrun");
     const t: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0", "-F/SDK/System/Library/Frameworks" };
     // macOS SHLIB_FCLDFLAGS; the caller's -lm is kept and the runtime's
-    // second one dropped (darwin.dedupLibs), the SDK's -L last
+    // second one dropped (darwin.dedupLibs), the SDK's -L last; no -g, no
+    // object with debug info: --strip-debug (strip.zig)
     try expectZig(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-L/r/lib", "-o", "p.so", "a.o", "-lflangish", "-lm", a, "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-Wl,--strip-debug", "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-L/r/lib", "-o", "p.so", "a.o", "-lflangish", "-lm", a, "-L/SDK/usr/lib" },
         try command(c, &.{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-L/r/lib", "-o", "p.so", "a.o", "-lflangish", "-lm" }),
     );
     try expectZig(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "p.so", "a.o", a, "-lm", "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-Wl,--strip-debug", "-dynamiclib", "-o", "p.so", "a.o", a, "-lm", "-L/SDK/usr/lib" },
         try command(c, &.{ "-dynamiclib", "-o", "p.so", "a.o" }),
     );
 }

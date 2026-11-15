@@ -7,11 +7,12 @@
 //!
 //! zig cc reads `@file` itself, with both zigs, so the compilers pass it
 //! on untouched. rzig reads it only where it reads the objects: `rzig def`
-//! (def.zig), linux's debug-info test (strip.zig) and RZIG_TRACE's line
-//! (main.zig), so a traced link shows its objects as make's does. The
-//! words as zig cc splits them: std.process.Args.IteratorGeneral with
-//! comments and single quotes, zig's own reader. `"` quotes, `\` is
-//! literal unless before a quote, `#` at a word's start comments out the
+//! (def.zig), the debug-info test of linux and macOS links (strip.zig)
+//! and RZIG_TRACE's line (main.zig), so a traced link shows its objects
+//! as make's does. The words as zig cc splits them:
+//! std.process.Args.IteratorGeneral with comments and single quotes,
+//! zig's own reader. `"` quotes, `\` is literal unless before a quote,
+//! `#` at a word's start comments out the
 //! line; tier1.zig writes no name it would not give back. One level: a
 //! word inside the file that starts with `@` stays a word. A file that
 //! cannot be read stays `@file`, as zig cc then takes it (an input named

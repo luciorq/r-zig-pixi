@@ -50,7 +50,7 @@
 #     for an archive ar cannot seed, an archive input passed as an .a
 #     copy in rzig's cache (archives.zig), no -Wl,--strip-debug on a
 #     link whose input objects have debug info (strip.zig reads them; a
-#     shim cannot reasonably parse ELF), and the toolchain's openmp/
+#     shim cannot reasonably parse ELF or Mach-O), and the toolchain's openmp/
 #     (feat-standalone-toolchain B40: rzig counts it when the base has the
 #     libomp runtime; the shims never knew it).
 # check NAME COMMAND... adds a case that passes when COMMAND does: the
@@ -333,8 +333,8 @@ run_case "a package's own -march/-mcpu after -mcpu=baseline" linux zig-cxx -marc
 run_case "-mtune= dropped (zig would take it as the CPU)" linux zig-cc -mtune=native -O2 -mtune=haswell -march=x86-64 -c a.c
 
 # --- debug info, __DATE__ (compiler.zig): every case has -Wno-error=date-time ----
-# (every linux link without a -g option has -Wl,--strip-debug; in rzig, not
-# one with an input object that has debug info)
+# (every linux and macOS link without a -g option has -Wl,--strip-debug; in
+# rzig, not one with an input object that has debug info)
 run_case "-g given: no -g0" linux zig-cc -g -O2 -c a.c -o a.o
 run_case "-ggdb3, -gdwarf-4: no -g0" linux zig-cxx -O2 -ggdb3 -gdwarf-4 -c a.cpp -o a.o
 run_case "-g on a shared link: no -g0, no --strip-debug" linux zig-cxx -g -shared -o pkg.so a.o
@@ -342,7 +342,7 @@ run_case "-gline-tables-only on an executable link: no --strip-debug" linux zig-
 # strip.zig's objects (testdata/): one compiled with -g, one with -g0
 cp "$here/testdata/f-g.o" "$W/cwd/dbg.o"; cp "$here/testdata/f-g0.o" "$W/cwd/nodbg.o"; cp "$here/testdata/f-g.o" "$W/cwd/libdbg.a"
 CASE_DELIBERATE='/^-Wl,--strip-debug$/d'
-CASE_WHY="rzig reads the link's input objects (strip.zig): one with debug info keeps it; the shims do not parse ELF"
+CASE_WHY="rzig reads the link's input objects (strip.zig): one with debug info keeps it; the shims do not parse ELF or Mach-O"
 run_case "an input object with debug info: no --strip-debug (load_all())" linux zig-cxx -shared -o pkg.so nodbg.o dbg.o -lR
 run_case "objects without debug info, an archive with some: --strip-debug" linux zig-cc -shared -o pkg.so nodbg.o libdbg.a
 run_case "a caller's -Werror=date-time after ours" linux zig-cc -Werror=date-time -O2 -c a.c -o a.o

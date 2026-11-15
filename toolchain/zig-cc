@@ -352,13 +352,14 @@ for a in "$@"; do case "$a" in -g*) g0=(); break;; esac; done
 # -S: zig gives clang -c beside it, and clang warns that -c is unused, an
 # error with -Werror (a configure probe). rzig: compiler.zig.
 for a in "$@"; do case "$a" in -S) g0+=(-Wno-unused-command-line-argument); break;; esac; done
-# Linux links without a -g option: --strip-debug. -g0 leaves the DWARF of
-# zig's own libc++, libc++abi and libunwind, which zig builds with debug
-# info anyway (4 to 6 MB in every C++ package). A -g on the link line
+# Linux and macOS links without a -g option: --strip-debug. -g0 leaves
+# the DWARF of zig's own libc++, libc++abi and libunwind, which zig builds
+# with debug info anyway (4 to 6 MB in every C++ package), and on macOS
+# the debug map of zig's compiler_rt (build paths). A -g on the link line
 # keeps it. rzig also keeps it when an input object has debug info
-# (strip.zig); this shim does not read ELF (a deliberate difference in
-# parity-test.sh). rzig: compiler.zig.
-if [[ "$(uname -s 2>/dev/null)" == "Linux" && ${#g0[@]} -gt 0 ]]; then
+# (strip.zig); this shim does not read ELF or Mach-O (a deliberate
+# difference in parity-test.sh). rzig: compiler.zig.
+if [[ "$(uname -s 2>/dev/null)" =~ ^(Linux|Darwin)$ && ${#g0[@]} -gt 0 ]]; then
   _link=true
   for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) _link=false; break;; esac; done
   $_link && extra+=(-Wl,--strip-debug)

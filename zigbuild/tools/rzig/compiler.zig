@@ -81,7 +81,7 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     // x86_64 code: an rzig for another architecture adds none
     const cfg = if (ctx.os == .windows and builtin.cpu.arch == .x86_64 and cfguard.wanted(args)) try linkObject(ctx, cfguard.file, cfguard.consequence) else null;
     const g0 = !cmdline.debugOption(args);
-    const strip_debug = ctx.os == .linux and strip.wanted(ctx, args);
+    const strip_debug = (ctx.os == .linux or ctx.os == .macos) and strip.wanted(ctx, args);
     args = try envFlags(ctx, args);
     // after envFlags: an -l, -lomp included, resolves in its directories
     var implib: Args = &.{};
@@ -146,12 +146,13 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     if (undefined_version) try out.append(a, "-Wl,--undefined-version");
     // -g0 leaves the DWARF of zig's own libc++, libc++abi and libunwind,
     // which zig builds with debug info whatever the caller asks: 4 to 6 MB
-    // in every linux C++ package (stress round 2, Z10's residual). So
-    // linux links strip all debug info when nothing asks for it: no -g
-    // option (-g0's test) and no input object with debug info (one
-    // compiled with -g whose link line has none, as devtools::load_all()
-    // builds); strip.zig. It changes nothing on a command that does not
-    // link (--version, -print-*, a header's -o).
+    // in every linux C++ package (stress round 2, Z10's residual); on
+    // macOS, the debug map of zig's compiler_rt, which names build paths
+    // (rel11: Matrix.so). So linux and macOS links strip all debug info
+    // when nothing asks for it: no -g option (-g0's test) and no input
+    // object with debug info (one compiled with -g whose link line has
+    // none, as devtools::load_all() builds); strip.zig. It changes nothing
+    // on a command that does not link (--version, -print-*, a header's -o).
     if (strip_debug) try out.append(a, "-Wl,--strip-debug");
     if (fini) |o| try out.append(a, o);
     // zig's MinGW runtime lacks __guard_dispatch_icall_dummy (stress
@@ -684,7 +685,7 @@ test "every OS: -lgfortran and -lquadmath link flang's runtime, once; no gfortra
     const mac: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0" };
     const targets = [_]struct { os: Ctx.Os, target: Args, strip: Args = &.{}, implib: Args = &.{}, ws2: Args = &.{} }{
         .{ .os = .linux, .target = &.{ "-target", linux_target }, .strip = &.{"-Wl,--strip-debug"} },
-        .{ .os = .macos, .target = mac },
+        .{ .os = .macos, .target = mac, .strip = &.{"-Wl,--strip-debug"} },
         .{ .os = .windows, .target = &.{}, .implib = &.{ "-Xlinker", "--out-implib=p.so.rzig.lib" }, .ws2 = &.{"-lws2_32"} },
     };
     for (targets) |t| {
@@ -708,7 +709,7 @@ test "every OS: -lgfortran and -lquadmath link flang's runtime, once; no gfortra
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 
-test "macOS: target, SONAME, -l de-duplicated with the environment's, SDK -L last on links only" {
+test "macOS: target, SONAME, -l de-duplicated with the environment's, SDK -L last on links only, --strip-debug" {
     if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for xcrun
     var f: testutil.Fixture = undefined;
     try f.init(.macos);
@@ -724,7 +725,7 @@ test "macOS: target, SONAME, -l de-duplicated with the environment's, SDK -L las
     const rp = f.fmt("-Wl,-rpath,{s}", .{f.path("env/lib")});
     const t: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0", "-F/SDK/System/Library/Frameworks" };
     try expectArgs(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-Wl,-soname,libx.so", "-shared", "-fopenmp", "-o", "libx.so", "-L/r", "-lR", "-lomp", l, rp, inc, "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-Wl,-soname,libx.so", "-Wl,--strip-debug", "-shared", "-fopenmp", "-o", "libx.so", "-L/r", "-lR", "-lomp", l, rp, inc, "-L/SDK/usr/lib" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "libx.so", "-L/r", "-lR", "-lomp", "-lR", "-lflang_rt.runtime", "-lomp" }),
     );
     // data.table: -lomp added once, then no second from the caller's; compiles get no SDK -L
@@ -733,7 +734,7 @@ test "macOS: target, SONAME, -l de-duplicated with the environment's, SDK -L las
         try argv(c, .cxx, &.{ "-Xclang", "-fopenmp", "-c", "a.cpp" }),
     );
     try expectArgs(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", l, rp, inc, "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-Wl,--strip-debug", "-dynamiclib", "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", l, rp, inc, "-L/SDK/usr/lib" },
         try argv(c, .c, &.{ "-dynamiclib", "-o", "p.so", "a.o", "-L/env/lib", "-lomp", "-fopenmp", "-lomp" }),
     );
     // a version query: -c, so zig writes no a.o, and no link flags
@@ -744,7 +745,7 @@ test "macOS: target, SONAME, -l de-duplicated with the environment's, SDK -L las
     // a standalone tree: its -L before the SDK's, so its libz wins
     c.self_exe = try tree(&f, "tree", false, false);
     try expectArgs(
-        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "z.so", "z.o", "-lz", f.fmt("-L{s}", .{f.path("tree/lib")}), "-L/SDK/usr/lib" },
+        &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" } ++ t ++ &[_][]const u8{ "-Wl,--strip-debug", "-dynamiclib", "-o", "z.so", "z.o", "-lz", f.fmt("-L{s}", .{f.path("tree/lib")}), "-L/SDK/usr/lib" },
         try argv(c, .c, &.{ "-dynamiclib", "-o", "z.so", "z.o", "-lz", "-lz" }),
     );
 }
@@ -806,13 +807,44 @@ test "linux links without a -g option or an object with debug info: --strip-debu
     }
     // a command that links nothing gets it too; zig ignores it there
     try expectArgs(pre_link ++ &[_][]const u8{"--version"}, try argv(c, .c, &.{"--version"}));
-    // macOS and Windows: none
-    for ([_]Ctx.Os{ .macos, .windows }) |os| {
-        c.os = os;
-        for ([_]Args{ &.{ "-shared", "-o", "p.so", "a.o" }, &.{ "-o", "prog", "a.o" } }) |args| {
-            for (try argv(c, .cxx, args)) |x| try testing.expect(!mem.eql(u8, x, "-Wl,--strip-debug"));
-        }
+    // Windows: none (macOS: the next test)
+    c.os = .windows;
+    for ([_]Args{ &.{ "-shared", "-o", "p.so", "a.o" }, &.{ "-o", "prog", "a.o" } }) |args| {
+        for (try argv(c, .cxx, args)) |x| try testing.expect(!mem.eql(u8, x, "-Wl,--strip-debug"));
     }
+}
+
+test "macOS links without a -g option or an object with debug info: --strip-debug, as on linux" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.macos);
+    defer f.deinit();
+    const c = &f.ctx;
+    // no SDK (the fixture's xcrun runs nothing): macOS's target alone
+    const head: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time" };
+    const t: Args = &.{ "-target", (if (builtin.cpu.arch == .aarch64) "aarch64" else "x86_64") ++ "-native.13.0" };
+    const strip_g0 = head ++ &[_][]const u8{"-g0"} ++ t ++ &[_][]const u8{"-Wl,--strip-debug"};
+    // R CMD SHLIB's link (SHLIB_LDFLAGS), an executable, C and C++
+    const shlib: Args = &.{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-o", "pkg.so", "a.o", "-L/r/lib", "-lR" };
+    try expectArgs(strip_g0 ++ shlib, try argv(c, .c, shlib));
+    try expectArgs(strip_g0 ++ &[_][]const u8{ "-o", "conftest", "conftest.c" }, try argv(c, .c, &.{ "-o", "conftest", "conftest.c" }));
+    try testing.expectEqualStrings("-Wl,--strip-debug", (try argv(c, .cxx, &.{ "-shared", "-o", "p.so", "a.o" }))[strip_g0.len - 1]);
+    // after the SONAME
+    try expectArgs(head ++ &[_][]const u8{"-g0"} ++ t ++ &[_][]const u8{ "-Wl,-soname,libx.so", "-Wl,--strip-debug", "-shared", "-o", "libx.so", "a.o" }, try argv(c, .c, &.{ "-shared", "-o", "libx.so", "a.o" }));
+    // any -g option on the link line keeps the debug map, -g0 included
+    for ([_][]const u8{ "-g", "-g0", "-g3", "-gdwarf-4", "-gline-tables-only" }) |g| {
+        try expectArgs(head ++ t ++ &[_][]const u8{ "-dynamiclib", g, "-o", "p.so", "a.o" }, try argv(c, .c, &.{ "-dynamiclib", g, "-o", "p.so", "a.o" }));
+    }
+    // an input object with debug info keeps it (a Mach-O object's
+    // __debug_info); strip.zig
+    try f.write("dbg.o", @embedFile("testdata/f-g-macos.o"), .default_file);
+    try f.write("nodbg.o", @embedFile("testdata/f-g0-macos.o"), .default_file);
+    const dbg = f.path("dbg.o");
+    const nodbg = f.path("nodbg.o");
+    try expectArgs(head ++ &[_][]const u8{"-g0"} ++ t ++ &[_][]const u8{ "-dynamiclib", "-o", "p.so", nodbg, dbg, "-lR" }, try argv(c, .c, &.{ "-dynamiclib", "-o", "p.so", nodbg, dbg, "-lR" }));
+    try expectArgs(strip_g0 ++ &[_][]const u8{ "-dynamiclib", "-o", "p.so", nodbg, "-lR" }, try argv(c, .c, &.{ "-dynamiclib", "-o", "p.so", nodbg, "-lR" }));
+    // compiles and a version query (-c added): none
+    try expectArgs(head ++ &[_][]const u8{"-g0"} ++ t ++ &[_][]const u8{ "-c", "a.c" }, try argv(c, .c, &.{ "-c", "a.c" }));
+    try expectArgs(head ++ &[_][]const u8{"-g0"} ++ t ++ &[_][]const u8{ "--version", "-c" }, try argv(c, .c, &.{"--version"}));
 }
 
 test "linux links with a version script: --undefined-version, before the caller's arguments" {
