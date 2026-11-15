@@ -40,8 +40,10 @@ fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/config-parity.XXXXXX")"
 work_sh="$work"   # as MSYS's sh spells it (Windows: /tmp/...)
 trap 'rm -rf "$work"' EXIT
-# Windows: one spelling (C:/...) for rzig and for MSYS's sh and make
-if command -v cygpath > /dev/null 2>&1; then work="$(cygpath -m "$work")"; fi
+# Windows: one spelling (C:/...) for rzig and for MSYS's sh and make, in
+# the long form: GitHub's runners have TEMP=C:\Users\RUNNER~1\..., and
+# make's CURDIR (the process's directory) comes back in the long form
+if command -v cygpath > /dev/null 2>&1; then work="$(cygpath -m -l "$work")"; fi
 export HOME="$work/home"
 mkdir -p "$HOME/.R"
 unset R_MAKEVARS_USER R_MAKEVARS_SITE MAKEFLAGS

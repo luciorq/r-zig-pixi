@@ -148,7 +148,11 @@ Silent differences (exit 0 on both sides, different output):
   (`-I"$(R_INCLUDE_DIR)"`), which sends the line through sh. Also from
   that run: R's MSYS spelled the scratch directory `/c/Users/...` (it has
   no /tmp mount) where the script's MSYS said `/tmp/...`;
-  config-parity.sh maps that spelling too.
+  config-parity.sh maps that spelling too. And GitHub's runners have
+  `TEMP=C:\Users\RUNNER~1\...` (an 8.3 short name) while make's CURDIR
+  comes back in the long form: config-parity.sh takes the scratch
+  directory's long form (`cygpath -m -l`; kappa, 2026-11-15, with an 8.3
+  TMPDIR).
 
 Exit 2 where make answers (decision 4 A: a refusal, never a wrong
 answer). The full list:

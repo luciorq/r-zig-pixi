@@ -457,6 +457,16 @@ flang-pixi), README sections for the three items, and findings 19-21.
     artifact upload ("Failed to CreateArtifact: Unable to make request:
     ENOTFOUND") after every test passed: a network fault. Every other
     leg passed, conda-package on all six platforms included.
+    Rerun on 70c240c (runs 43736855864, 43736855916): 2 of 309 left on
+    every Windows leg, both make's `$(CURDIR)`/`$$CURDIR`. GitHub's
+    runners have `TEMP=C:\Users\RUNNER~1\...` (an 8.3 short name); the
+    scratch directory kept that spelling, while make's CURDIR (the
+    process's directory) comes back in the long form (`runneradmin`), so
+    the mapping missed it. kappa's user name `admin` has no short form.
+    Reproduced on kappa with an 8.3 TMPDIR; config-parity.sh now takes
+    the long form (`cygpath -m -l`). Build, smoke (OpenMP regions OK on
+    all six Windows variants) and conda-package on all six platforms
+    passed.
 
 ## Tests
 
