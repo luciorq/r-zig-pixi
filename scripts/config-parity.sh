@@ -56,13 +56,18 @@ skipped=""
 # (C:\... from R, C:/... for CURDIR). The values are the same directory, so
 # each output has the scratch directory's spellings replaced by
 # <work> (and a backslash after it by a slash) before the comparison.
+# R's MSYS has its own root (R_HOME/bin/toolchain) and no /tmp mount, so
+# its sh may spell the directory /c/... where this script's MSYS says
+# /tmp/... (GitHub's runners: the Temp directory).
 norm_paths() {
   [ "$OS" = windows ] || return 0
-  local f
+  local f wm
+  wm="$(cygpath -m "$work")"
   for f in "$@"; do
-    WU="$work_sh" WU2="$(cygpath -u "$work")" WM="$(cygpath -m "$work")" WW="$(cygpath -w "$work")" awk '
+    WU="$work_sh" WU2="$(cygpath -u "$work")" WM="$wm" WW="$(cygpath -w "$work")" \
+    WD="/$(printf '%s' "${wm%%:*}" | tr 'A-Z' 'a-z')${wm#?:}" awk '
       function rep(s, f,   o, i) { o = ""; while (f != "" && (i = index(s, f)) > 0) { o = o substr(s, 1, i - 1) "<work>"; s = substr(s, i + length(f)) } return o s }
-      { $0 = rep($0, ENVIRON["WW"]); $0 = rep($0, ENVIRON["WM"]); $0 = rep($0, ENVIRON["WU"]); $0 = rep($0, ENVIRON["WU2"]); gsub(/<work>\\/, "<work>/"); print }' "$f" > "$f.n" && mv "$f.n" "$f"
+      { $0 = rep($0, ENVIRON["WW"]); $0 = rep($0, ENVIRON["WM"]); $0 = rep($0, ENVIRON["WU"]); $0 = rep($0, ENVIRON["WU2"]); $0 = rep($0, ENVIRON["WD"]); gsub(/<work>\\/, "<work>/"); print }' "$f" > "$f.n" && mv "$f.n" "$f"
   done
 }
 # compare <label> <args...>: R CMD config <args> against R's script

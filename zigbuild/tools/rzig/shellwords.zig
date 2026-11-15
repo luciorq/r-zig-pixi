@@ -12,6 +12,13 @@
 //! start as a comment. An unquoted glob character is refused too: sh
 //! would match it against the caller's directory. Command substitution,
 //! special parameters and the other metacharacters are refused.
+//!
+//! `.msys_make` (R CMD config on a Windows host): MSYS's make runs a
+//! recipe line with no unquoted shell metacharacter itself, without sh,
+//! and keeps a backslash that does not precede `\`, `'`, whitespace or a
+//! metacharacter (GNU make's HAVE_DOS_PATHS): `echo C:\jdk\x64` prints
+//! `C:\jdk\x64` there, and `C:jdkx64` through sh. Checked on kappa with
+//! R's toolchain make (GNU Make 4.4.1, MSYS), 2026-11-15.
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
@@ -27,7 +34,34 @@ pub const Result = struct {
 pub const Options = struct {
     /// Read as sh does; null: quoting only (split).
     shell: ?*const std.process.Environ.Map = null,
+    /// The line is a recipe line of MSYS's make (see above).
+    msys_make: bool = false,
 };
+
+/// GNU make's unix `sh_chars`: one of them, unquoted and unescaped, makes
+/// make run the line through sh.
+const sh_chars = "#;\"*?[]&|<>(){}$`^~!";
+
+/// Whether make runs `text` through sh (GNU make's
+/// construct_command_argv_internal, unix rules): an unescaped `sh_chars`
+/// character outside single quotes. A double quote is one of them.
+fn makeRunsShell(text: []const u8) bool {
+    var in_single = false;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const c = text[i];
+        if (in_single) {
+            if (c == '\'') in_single = false;
+        } else if (mem.findScalar(u8, sh_chars, c) != null) {
+            return true;
+        } else if (c == '\\' and i + 1 < text.len) {
+            i += 1;
+        } else if (c == '\'') {
+            in_single = true;
+        }
+    }
+    return false;
+}
 
 /// `text`'s words, or error.Unsupported with `reason` set.
 pub fn split(a: Allocator, text: []const u8, reason: *[]const u8) Error![]const []const u8 {
@@ -36,6 +70,8 @@ pub fn split(a: Allocator, text: []const u8, reason: *[]const u8) Error![]const 
 
 /// `split`, or with `opts.shell` the words sh hands `echo` (see above).
 pub fn splitWith(a: Allocator, text: []const u8, opts: Options, reason: *[]const u8) Error![]const []const u8 {
+    // MSYS make without sh: a backslash before an ordinary character stays
+    const dos_backslash = opts.msys_make and !makeRunsShell(text);
     var out: std.ArrayList([]const u8) = .empty;
     var word: std.ArrayList(u8) = .empty;
     var in_word = false;
@@ -89,7 +125,10 @@ pub fn splitWith(a: Allocator, text: []const u8, opts: Options, reason: *[]const
                     continue;
                 }
                 in_word = true;
-                try word.append(a, text[i + 1]);
+                const n = text[i + 1];
+                if (dos_backslash and mem.findScalar(u8, "\\' \t\r", n) == null and mem.findScalar(u8, sh_chars, n) == null)
+                    try word.append(a, '\\');
+                try word.append(a, n);
                 i += 1;
             },
             '$' => {
@@ -247,6 +286,36 @@ test "splitWith: sh's words for echo" {
     for ([_][]const u8{ "`uname`", "$(uname)", "a;b", "a|b", "$1", "${X:-y}", "~root/x", "\"$(x)\"", "*", "-I[a]", "x?", "$GLOB" }) |bad| {
         try testing.expectError(error.Unsupported, splitWith(arena.allocator(), bad, .{ .shell = &env }, &reason));
     }
+}
+
+test "splitWith: MSYS make's backslashes (Windows host)" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var env: std.process.Environ.Map = .init(a);
+    try env.put("HOME", "/c/Users/u");
+    const T = struct { line: []const u8, words: []const []const u8 };
+    // the outputs of `echo <line>` under R's toolchain make on kappa
+    for ([_]T{
+        .{ .line = "C:\\host\\windows\\jdk\\17\\x64", .words = &.{"C:\\host\\windows\\jdk\\17\\x64"} },
+        .{ .line = "a\\\\b", .words = &.{"a\\b"} },
+        .{ .line = "a\\ b", .words = &.{"a b"} },
+        .{ .line = "a\\'b", .words = &.{"a'b"} },
+        .{ .line = "a\\*b a\\#b a\\~b a\\!b a\\{b", .words = &.{ "a*b", "a#b", "a~b", "a!b", "a{b" } },
+        .{ .line = "a\\=b a\\%b \\a x \\y", .words = &.{ "a\\=b", "a\\%b", "\\a", "x", "\\y" } },
+        .{ .line = "a\\\\\\b", .words = &.{"a\\\\b"} },
+        .{ .line = "'a\\\\b'", .words = &.{"a\\\\b"} },
+        // through sh: a metacharacter in the line ($), or a double quote
+        .{ .line = "C:\\x $HOME", .words = &.{ "C:x", "/c/Users/u" } },
+        .{ .line = "\"C:\\q x\" C:\\y", .words = &.{ "C:\\q x", "C:y" } },
+    }) |t| {
+        var reason: []const u8 = "";
+        const got = try splitWith(a, t.line, .{ .shell = &env, .msys_make = true }, &reason);
+        try testutil.expectArgs(t.words, got);
+    }
+    // without .msys_make: sh's rules
+    var reason: []const u8 = "";
+    try testutil.expectArgs(&.{"C:hostx64"}, try splitWith(a, "C:\\host\\x64", .{ .shell = &env }, &reason));
 }
 
 test quote {

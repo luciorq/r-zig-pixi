@@ -135,6 +135,20 @@ Silent differences (exit 0 on both sides, different output):
   script and nothing under rzig (no SHELL in R's environment).
   config-parity.sh maps the scratch directory's spellings to one token
   on Windows and leaves the two `$$SHELL` cases out there.
+- Windows backslashes (CI, 2026-11-15, run 43718810854): GitHub's
+  Windows runners set `JAVA_HOME=C:\hostedtoolcache\...`. R's script
+  printed it with its backslashes, rzig without (9 of 309 cases with the
+  next item). MSYS's make (GNU Make 4.4.1, built with HAVE_DOS_PATHS)
+  runs a recipe line with no unquoted shell metacharacter itself, without
+  sh, and keeps a backslash unless a `\`, `'`, whitespace or a
+  metacharacter follows it; a line that does go through sh follows sh's
+  rule (kappa, 2026-11-15, `echo` of 34 values). rzig reads the echo
+  line so on a Windows host (shellwords.zig, `.msys_make`). Package
+  compile lines are left as they are: R's always hold a `"`
+  (`-I"$(R_INCLUDE_DIR)"`), which sends the line through sh. Also from
+  that run: R's MSYS spelled the scratch directory `/c/Users/...` (it has
+  no /tmp mount) where the script's MSYS said `/tmp/...`;
+  config-parity.sh maps that spelling too.
 
 Exit 2 where make answers (decision 4 A: a refusal, never a wrong
 answer). The full list:

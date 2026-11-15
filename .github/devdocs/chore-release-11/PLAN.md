@@ -437,12 +437,26 @@ flang-pixi), README sections for the three items, and findings 19-21.
       gettext dropped on Windows; only libintl.h added to R_HOME/include;
       R_MEMORY_PROFILING left as upstream has it; `-Dblas=openblas` on
       Windows and splitting pixi.toml's [dependencies] left for later.
-    Implemented 2026-11-14. linux-64 tested. kappa round 1: all three
-    variants built and passed smoke, verify-tree, hermetic and
-    contract; verify-recommended failed on a temp-directory name, fixed
-    in the script, round 2 open. CI's Windows legs open. The
-    record, with the full variant table and the tests:
+    Implemented 2026-11-14. linux-64: slim, full and minimal give the
+    same trees as before. kappa (final run 2026-11-15): all three
+    variants pass build, smoke, verify-tree, hermetic and contract;
+    recommended and verify-recommended pass for slim and full. CI: see
+    finding 24. The record, with the full variant table and the tests:
     .github/devdocs/feat-win-variants/PLAN.md.
+
+24. **CI on #48 (run 43718810854, 2026-11-15): the contract on every
+    Windows leg** (default, full and minimal, windows-latest and
+    windows-11-arm; upstream-zig's windows-latest too): config-parity.sh
+    found 9 of 309 cases different. Every step before it passed (build,
+    smoke, verify-tree). Two causes, neither seen on kappa: GitHub's
+    runners set `JAVA_HOME` to a path with backslashes, which MSYS's make
+    prints as it is and rzig printed as sh would; and R's MSYS spelled the
+    scratch directory `/c/Users/...`. Fixed in rzig's shellwords.zig (MSYS
+    make's backslash rule, R CMD config only) and config-parity.sh
+    (feat-config-rzig PLAN.md). macos-15-intel minimal failed only in its
+    artifact upload ("Failed to CreateArtifact: Unable to make request:
+    ENOTFOUND") after every test passed: a network fault. Every other
+    leg passed, conda-package on all six platforms included.
 
 ## Tests
 

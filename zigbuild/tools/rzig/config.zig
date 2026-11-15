@@ -358,7 +358,7 @@ fn echoed(ctx: *Ctx, e: *makefile.Evaluator, line: []const u8) !?[]const u8 {
         try env.put(n, v);
     }
     var reason: []const u8 = "";
-    const words = shellwords.splitWith(a, line, .{ .shell = &env }, &reason) catch |err| switch (err) {
+    const words = shellwords.splitWith(a, line, .{ .shell = &env, .msys_make = builtin.os.tag == .windows }, &reason) catch |err| switch (err) {
         error.Unsupported => {
             e.reason = reason;
             return null;
