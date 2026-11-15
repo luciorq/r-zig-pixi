@@ -24,6 +24,8 @@
 //!   rzig build ...    one package's library with zig build alone
 //!                     (pkgbuild.zig; install.R's hook, patch 0013)
 //!   rzig def ...      a package DLL's .def from its objects (def.zig)
+//!   rzig config ...   R CMD config without make or sh (config.zig;
+//!                     R CMD's dispatch, patch 0010)
 //!
 //! gcc-ar and gcc-ranlib are the names Makeconf.win's LTO lines use
 //! (feat-standalone-toolchain B43); Windows has those copies from phase 3.
@@ -36,8 +38,7 @@
 //! None: rzig names the compilers group and how to install it (groups.zig)
 //! and exits 127. `<name> --rzig-check[=fortran|build-tools|package]`
 //! checks a group's tools instead of compiling (check.zig): the install
-//! preflight calls `=package` (patch 0009), R CMD config `=build-tools`
-//! (patch 0010).
+//! preflight calls `=package` (patch 0009).
 //!
 //! build.zig installs it under those names into R_HOME/bin/toolchain, the
 //! directory Makeconf names (Windows: gcc.exe and g++.exe, Makeconf.win's
@@ -173,6 +174,7 @@ const Subcommand = enum {
     build,
     def,
     t1,
+    config,
 
     fn fromName(name: []const u8) ?Subcommand {
         return std.meta.stringToEnum(Subcommand, name);
@@ -187,6 +189,7 @@ const usage =
     \\       rzig build --pkg <dir> --out <dir> [options]   (rzig build --help)
     \\       rzig build --shlib --output <lib> [options] -- <file>...
     \\       rzig def -o <file>.def <object>|@<file>...
+    \\       rzig config [options] [VAR]   (R CMD config)
     \\       rzig t1 --plan <plan.zon> --root <dir> --out <lib> [--object <o>]... [--c|--cxx <source>]... [-j N]
     \\
 ;
@@ -226,6 +229,7 @@ pub fn main(init: std.process.Init) !u8 {
                 .build => pkgbuild.run(&ctx, args[2..]),
                 .def => def.run(&ctx, args[2..]),
                 .t1 => @import("tier1.zig").run(&ctx, args[2..]),
+                .config => @import("config.zig").run(&ctx, args[2..]),
             };
         }
         tool = Tool.fromName(toolName(args[1]));
@@ -677,6 +681,7 @@ test {
     _ = @import("pkgplan.zig");
     _ = pkgbuild;
     _ = @import("tier1.zig");
+    _ = @import("config.zig");
     _ = stdio;
     _ = def;
     _ = check;

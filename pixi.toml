@@ -103,6 +103,8 @@ smoke = "bash scripts/zig-smoke.sh"
 # the compile tree (compile-tree below): the installed tree and the
 # toolchain tree's openmp/ and build tools; then, on the base with no make
 # on PATH, Rcpp, cpp11's R CMD SHLIB call and pak (feat-shlib-rzig-build).
+# First, config-parity.sh: R CMD config (rzig) against R's own script with
+# make, on the compile tree (feat-config-rzig).
 contract = { cmd = "bash scripts/zig-contract.sh", depends-on = ["compile-tree"] }
 # pkg-parity: R CMD INSTALL through `rzig build` (install.R's hook, no
 # make) against the make path, on the compile tree: cli, digest,

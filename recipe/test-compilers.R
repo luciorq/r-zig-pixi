@@ -181,7 +181,7 @@ stopifnot(.Fortran("fw", 42L, r = 0L)$r == 42L)
 cat("compilers: R CMD SHLIB of a Fortran file, no make: OK\n")
 ## a configure script's $FC probe (feat-standalone-toolchain phase 6, open
 ## point P), with the env's flang and its flang.cfg: Makeconf's FC is
-## zig-fc (R CMD config needs make, which this env has not), and zig-fc
+## zig-fc (read from Makeconf here; R CMD config FC answers too, below), and zig-fc
 ## compiles each Fortran source with flang, the intrinsic modules' path
 ## added, then links through zig (decisions D, E). A fixed-form conftest
 ## and a program using a derived-type module are each linked and run, in
@@ -257,11 +257,11 @@ stopifnot(r$status != 0L,
           !file.exists(file.path(p, c("x.o", paste0("x", ext)))))
 cat("compilers: R CMD SHLIB of a Makevars rule stops, naming r-zig-build-tools: OK\n")
 
-## R CMD config evaluates Makeconf through make: patch 0010 stops first
-## with rzig's text (Windows: rcmdfn.c runs the check before config.sh's
-## sh, PHASE7 open point J a)
+## R CMD config without make: rzig reads Makeconf (patch 0010,
+## feat-config-rzig; Windows: rcmdfn.c runs rzig.exe, no sh)
 r <- run_to(file.path(R.home("bin"), "R"), c("CMD", "config", "CC")); cat(r$out, sep = "\n")
-stopifnot(r$status == 127L,
-          any(startsWith(r$out, "Building packages needs the r-zig build tools for R ")),
-          !any(grepl("is not recognized", r$out, fixed = TRUE)))
-cat("compilers: R CMD config names the build tools: OK\n")
+stopifnot(r$status == 0L, length(r$out) == 1L,
+          grepl("/bin/toolchain/(zig-cc|gcc[.]exe)( |$)", r$out))
+r <- run_to(file.path(R.home("bin"), "R"), c("CMD", "config", "FC")); cat(r$out, sep = "\n")
+stopifnot(r$status == 0L, length(r$out) == 1L, grepl("/bin/toolchain/zig-fc$", r$out))
+cat("compilers: R CMD config answers without make: OK\n")

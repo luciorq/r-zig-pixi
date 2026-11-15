@@ -1545,40 +1545,20 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     for ([_][]const u8{ "R.exe", "Rscript.exe" }) |n| {
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_rfe.getEmittedBin(), ctx.rhomeInstallDir("bin"), n).step);
     }
-    // bin/config.sh (RHome/bin directly — NOT bin/x64/, unlike Rterm.exe/
-    // R.exe/Rcmd.exe themselves; rcmdfn.c's own fallback case builds this
-    // path as plain "%s/bin/config.sh" with only RHome, no BINDIR
-    // component — found via a real "No such file or directory" once it
-    // was first installed into bin_dir/x64 by mistake, confirmed against
-    // BINDIR's absence in rcmdfn.c's own snprintf call for this one case).
-    // `Rcmd config`/`R CMD config` runs `sh "$RHome/bin/config.sh"` — R
-    // packages' configure scripts routinely call this directly (`R CMD
-    // config CC`, etc.) to discover compiler settings; found via a real
-    // `install.packages("pak")` failure. Confirmed byte-identical to
-    // src/scripts/config (the same file installStaticTree's scripts_s
-    // already copies verbatim into unix's bin/config, no @VAR@
-    // substitution) against a real gnuwin32 build's own bin/config.sh —
-    // just copied under the .sh name Windows' `sh "path.sh"` invocation
-    // convention expects.
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.path("src/scripts/config"), ctx.rhomeInstallDir("bin"), "config.sh").step);
+    // No bin/config.sh: rcmdfn.c runs R_HOME/bin/toolchain/rzig.exe for
+    // `R CMD config` (patch 0010, feat-config-rzig PLAN.md), with no sh
+    // and no make. Packages' configure scripts and CMake call it
+    // (`R CMD config CC`); pak's install was the first to need it.
     // etc/Rcmd_environ: rcmdfn.c's own `process_Renviron(RHome/etc/
     // Rcmd_environ)` call (right before dispatching to a subcommand) —
     // sets R_OSTYPE=windows among other defaults (R_SHARE_DIR/R_GZIPCMD/
-    // etc). Without it, config.sh's own `if test "${R_OSTYPE}" =
-    // "windows"` check (which sets MAKE=make) silently fails, leaving
-    // MAKE empty — found via a real "eval: -s: invalid option" error
-    // (config.sh's `query="${MAKE} -s ..."` becomes just " -s ..." with
-    // MAKE unset, and `eval`ing that treats "-s" as its own first,
-    // invalid argument) that reproduced identically even when Rcmd.exe
-    // was launched from inside a real Rscript.exe session (ruling out
-    // "R's own startup sets this" as an alternative explanation — it
-    // doesn't). A real, static gnuwin32 file (src/gnuwin32/fixed/etc/
-    // Rcmd_environ) already exists for exactly this — same "vendor
-    // gnuwin32's own ready-made file" pattern as config.h/Rconsole.
-    // RHome/etc/ directly, no bin/x64 arch subdir (matches config.sh's
-    // own path convention, confirmed via rcmdfn.c's literal
-    // string-concat: RHome + "/etc/Rcmd_environ"). r-zig's lines follow
-    // R's (rcmdEnviron).
+    // etc), which R CMD's commands read (R CMD config, rzig's config.zig,
+    // takes Windows' variables and help text by it). A real, static
+    // gnuwin32 file (src/gnuwin32/fixed/etc/Rcmd_environ) already exists
+    // for exactly this — same "vendor gnuwin32's own ready-made file"
+    // pattern as config.h/Rconsole. RHome/etc/ directly, no bin/x64 arch
+    // subdir (rcmdfn.c's literal string-concat: RHome +
+    // "/etc/Rcmd_environ"). r-zig's lines follow R's (rcmdEnviron).
     const rcmd_env_wf = b.addWriteFiles();
     const rcmd_env = rcmd_env_wf.add("Rcmd_environ", try rcmdEnviron(ctx, io));
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rcmd_env, ctx.rhomeInstallDir("etc"), "Rcmd_environ").step);
@@ -2726,12 +2706,12 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 /// (feat-standalone-toolchain B19, B30). The base carries them on every
 /// channel: the base archive, r-zig-slim and the r-zig wheel (B19). The
 /// groups' packages hold only subdirectories (B28, B29). The compile
-/// preflight (patch 0009, install.R) and R CMD config (patch 0010) run
-/// its check mode by the name of CC, zig-cc on unix and gcc.exe on
-/// Windows (B26 a).
+/// preflight (patch 0009, install.R) runs its check mode by the name of
+/// CC, zig-cc on unix and gcc.exe on Windows (B26 a). R CMD runs rzig
+/// itself for `R CMD config` (patch 0010, feat-config-rzig).
 ///   unix:    zig-cc, zig-cxx (CC/CXX/OBJC/OBJCXX), zig-fc (FC), zig-ar,
 ///            zig-ranlib, and rzig itself (`rzig build`, `rzig def`:
-///            feat-zig-pkg-build)
+///            feat-zig-pkg-build; `rzig config`)
 ///   Windows: gcc.exe, g++.exe (Makeconf.win's $(BINPREF)gcc.exe and
 ///            g++.exe: CMake takes R CMD config CC only when it names an
 ///            existing file, stress round 1's RcppParallel and Rhdf5lib),

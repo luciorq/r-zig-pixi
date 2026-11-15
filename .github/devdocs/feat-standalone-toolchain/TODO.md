@@ -812,7 +812,8 @@ a); the record is PLAN.md's "Phase 7 record".
       `R-<ver>-win-64-build-tools.zip` alone (open point K a)
 - [x] `R CMD config` without the build tools fails with one clear message
       (patch 0010's rcmdfn.c hunk, open point J a: 127 and rzig's text,
-      no "is not recognized")
+      no "is not recognized"). Superseded 2026-11-13 by feat-config-rzig:
+      R CMD config is rzig's and answers without the build tools
 - [x] Re-scope from feat-zig-pkg-build's stress table: B39's list stays
       (open point G a). The suite's Windows rows (runs 38317654371,
       38467907779, 38569895172): nm and sed in 25 rows, basename in 27,
@@ -1025,15 +1026,13 @@ Needs (answered): B14 (a), with B37 (a).
       group is for"). R CMD SHLIB is done by feat-shlib-rzig-build
       (its PLAN.md; it publishes with phase 7's bump): run-time
       compiles, pkgbuild's has_compiler probe and so pak need no make
-      where the code needs none. Left:
-      `R CMD config` through rzig (unix src/scripts/config; Windows with
-      phase 7's rcmdfn.c). That would serve rstan on macOS, which runs
-      `R CMD config CXX17` after each `stan_model()` compile, and
-      pkgbuild's Windows `has_rtools()`, which warns "Rtools is
-      required" on base + compilers (feat-shlib-rzig-build's open point
-      H), and would also free the `R CMD config` run before a configure
-      script for tier 0 and 2 packages on unix (feat-zig-pkg-build fact
-      3). The shared
+      where the code needs none. `R CMD config` through rzig is done by
+      feat-config-rzig (its PLAN.md, 2026-11-13): R CMD runs `rzig
+      config` on every OS (patch 0010), no make and no sh, for rstan's
+      `R CMD config CXX17` after each `stan_model()` compile, pkgbuild's
+      Windows `has_rtools()` (feat-shlib-rzig-build's open point H) and
+      the `R CMD config` run before a configure script (feat-zig-pkg-build
+      fact 3); omicron and kappa runs are listed there. The shared
       tier-1 build runner is done by feat-shared-build-runner's PR (its
       PLAN.md) [stress-S1, records-REC-4, phase3-P3-8]: stress dispatch
       38467907779 (`shared_cache = false`, main ea7e6ee) measured the
@@ -1086,7 +1085,9 @@ Needs (answered): B14 (a), with B37 (a).
       `cc_path` is empty; `has_rtools()` answered TRUE there only from
       stale registry entries for Rtools 4.4 and 4.5, while
       `has_compiler()` and `check_build_tools()` were TRUE through rzig
-      build. Clears with `R CMD config` through rzig (the item above).
+      build. Clears with `R CMD config` through rzig (the item above,
+      feat-config-rzig, 2026-11-13: to be confirmed on kappa with base +
+      compilers, `pkgbuild::has_rtools(debug = TRUE)`).
       Phase 7 (kappa, 2026-10-20): without the build tools R CMD config
       now exits 127 with rzig's text (no "is not recognized"); with the
       build-tools group `R CMD config CC` answers gcc.exe,

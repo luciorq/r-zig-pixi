@@ -231,7 +231,8 @@ build:
   # with more than six shared variables); linux's libR and base packages
   # hide their internal symbols as macOS's and CRAN's do (1257 exported
   # symbols, 2541 before); R_compiled_by() names this build's compilers;
-  # win-arm64 is built, tested and published as the other five
+  # R CMD config is rzig's, with no make and no sh, so it answers without
+  # the build tools (feat-config-rzig); win-arm64 is built, tested and published as the other five
   # (chore-release-11).
   number: 11
 

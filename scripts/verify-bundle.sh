@@ -653,7 +653,7 @@ RCODE
   fi
 
   # rzig's check mode with no group (B26, B35), the texts the install
-  # preflight and R CMD config show: exit 127 for the compilers (no
+  # preflight shows: exit 127 for the compilers (no
   # ZIG_BIN, no zig/ in the toolchain, none in the tree's bin or on PATH)
   # and for the build tools (no make on PATH: unix the tree's bin, Windows
   # bin\x64 and System32), as a compile that finds no zig, after a line
@@ -791,8 +791,8 @@ RCODE
   # hermetic-check.sh's tier 0/1 on the extracted base (R_INSTALL_PREFIX
   # makes it env.sh's prefix): R-only packages one at a time and with
   # Ncpus = 2, a binary package, the install preflight stopping a compiled
-  # package with rzig's compilers text, unix R CMD config CC with the
-  # build tools' text, Windows tcltk from R_HOME/Tcl, no temp leftovers,
+  # package with rzig's compilers text, R CMD config CC answered with no
+  # make and no sh (rzig, patch 0010), Windows tcltk from R_HOME/Tcl, no temp leftovers,
   # linux under strace. It works on a copy of the base as extracted, rzig
   # included (B26).
   R_INSTALL_PREFIX="$BUNDLE_DIR" bash "$(dirname "$0")/hermetic-check.sh"
@@ -1101,10 +1101,7 @@ fi
 # (TC/flang's driver moved aside, open point N) and their text; an
 # R-only package with a configure script (pfG,
 # configure_marker) stops at the build tools' with "a configure script R
-# runs", its configure not run. The preflight's own ERROR line tells its
-# stop from the one install.R's R CMD config (patch 0010) would make
-# later, before the configure (that call needs make too), which the
-# marker alone could not.
+# runs", its configure not run, which the marker shows.
 # None but pfC installs. (Scenario 3 runs the preflight with no zig.)
 if [ -n "$pass_zig" ]; then
   pf="$VERIFY_DIR/preflight"
@@ -2876,9 +2873,8 @@ fi
 # the preflight with the compilers' text, its configure not run; with
 # R_ZIG_NO_PREFLIGHT=1 it gets past the preflight, its configure runs and
 # leaves its marker, and the compile then fails with rzig's no-zig line.
-# Here, not with the base alone: the install runs R CMD config before
-# configure (for CC and the other variables), and R CMD config needs the
-# build tools (patch 0010; on Windows make and sh). PATH: unix
+# Here, with both groups: a configure script runs through the build
+# tools' sh (R CMD config itself needs neither, patch 0010). PATH: unix
 # /usr/bin:/bin, the group's make first (etc/Renviron); Windows as for the
 # builds above. A zig of the host's own (scenario 1) would let the compile
 # through: then this is skipped with a note. The compilers group brings

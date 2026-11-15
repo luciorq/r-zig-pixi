@@ -1,0 +1,54 @@
+R CMD config: answered by rzig, without make or sh
+
+src/scripts/config evaluates etc/Makeconf and the site's and user's
+Makevars through make (on Windows also through sh: rcmdfn.c starts
+bin/config.sh with `sh`), so the query pkgbuild, pak and configure
+scripts run first needed the build-tools group, although `rzig build`
+compiles most packages without it. rzig's config mode
+(zigbuild/tools/rzig/config.zig) reads the same files in the same order
+with its make evaluator and prints what the script printed, with the
+same options, messages and exit codes. A Makevars construct only make can
+evaluate (`$(shell)` in `:=`, `define`, `!=`) ends it with exit 2 and the
+file and line. R CMD dispatches to it on every OS: bin/Rcmd's case on
+unix (R_HOME/bin/toolchain/rzig config ...), rcmdfn.c on Windows
+(R_HOME/bin/toolchain/rzig.exe config ...). bin/config and bin/config.sh
+are no longer installed. This replaces the earlier patch that only put
+rzig's build-tools check in front of the script.
+feat-config-rzig PLAN.md.
+
+--- a/src/scripts/Rcmd.in
++++ b/src/scripts/Rcmd.in
+@@ -52,6 +52,12 @@
+     cmd="${R_HOME}/bin/Rdconv"
+     extra="-t txt"
+     ;;
++## r-zig: rzig answers R CMD config from Makeconf and the Makevars files,
++## without make (feat-config-rzig PLAN.md); bin/config is not installed
++  config)
++    cmd="${R_HOME}/bin/toolchain/rzig"
++    extra="config"
++    ;;
+ ## removed in 2.15.0
+   Rd2dvi)
+     echo "R CMD Rd2dvi is defunct: use Rd2pdf instead"
+--- a/src/gnuwin32/front-ends/rcmdfn.c
++++ b/src/gnuwin32/front-ends/rcmdfn.c
+@@ -529,9 +529,15 @@
+     } else {
+ 	/* not one of those handled internally */
+ 	p = argv[cmdarg];
+-	if (!strcmp(p, "config"))
+-	    snprintf(cmd, CMD_LEN, "\"sh \"%s/bin/config.sh\"", RHome);
+-	else if (!strcmp(p, "open"))
++	if (!strcmp(p, "config")) {
++	    /* r-zig: rzig answers R CMD config from Makeconf and the Makevars
++	       files, without make or sh (feat-config-rzig PLAN.md); there
++	       is no bin/config.sh. PROCESS_CMD closes the outer quote only
++	       when arguments follow, so close it here when none do. */
++	    snprintf(cmd, CMD_LEN,
++		     "\"\"%s/bin/toolchain/rzig.exe\" config", RHome);
++	    if (cmdarg + 1 >= argc) strcat(cmd, "\"");
++	} else if (!strcmp(p, "open"))
+ 	    snprintf(cmd, CMD_LEN, "\"\"%s/%s/open.exe\"", RHome, BINDIR);
+ 	else {
+ 	    /* RHOME/BINDIR is first in the path, so looks there first */

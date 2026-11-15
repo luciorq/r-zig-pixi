@@ -5,8 +5,8 @@
 //! text when a compile finds no zig, when zig-fc finds no flang, when
 //! `rzig build` finds no zig (pkgbuild.zig), and from its check mode
 //! (check.zig), which the install preflight (patch 0009,
-//! `--rzig-check=package`) and R CMD config (patch 0010,
-//! `--rzig-check=build-tools`) call (B26 a) and show.
+//! `--rzig-check=package`) calls (B26 a) and shows. R CMD config needs no
+//! group since it is rzig's own (config.zig, patch 0010).
 //!
 //! One text per group, the same on every channel. It is built from R's
 //! version (build.zig passes it, a build option) and the platform rzig is

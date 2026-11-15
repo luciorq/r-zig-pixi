@@ -41,9 +41,10 @@ tree_files() {
 # beside CC), and the binutils Makeconf, Rcmd_environ and CMake run
 # (nm.exe, objdump.exe, strip.exe, dlltool.exe, windres.exe, as.exe:
 # binutils.zig, feat-win-zig-binutils); no extensionless zig-cc or zig-cxx, since the compile
-# preflight and R CMD config run gcc.exe's check mode (B26 a). rzig /
-# rzig.exe: the name install.R's hook runs `rzig build` and `rzig def`
-# by (patch 0013; feat-zig-pkg-build PLAN.md).
+# preflight runs gcc.exe's check mode (B26 a). rzig / rzig.exe: the name
+# install.R's hook runs `rzig build` and `rzig def` by (patch 0013;
+# feat-zig-pkg-build PLAN.md) and R CMD runs `rzig config` by (patch
+# 0010, feat-config-rzig).
 rzig_names() {
   if [ "$OS" = windows ]; then
     echo "gcc.exe g++.exe zig-fc.exe zig-ar.exe zig-ranlib.exe gcc-ar.exe gcc-ranlib.exe ar.exe ranlib.exe nm.exe objdump.exe strip.exe dlltool.exe windres.exe as.exe rzig.exe"
@@ -65,10 +66,7 @@ link_object() {
 # configure.win) that leaves the file configure-ran there with a shell
 # builtin, so that it starts no program: scenario 3 (verify-bundle.sh)
 # tells from it whether the install preflight (patch 0009) stopped a
-# package before its configure ran (B26, C26). That is the one place
-# where R CMD config passes, so configure could run: without the build
-# tools R CMD config (patch 0010) fails first, wherever the preflight
-# sits.
+# package before its configure ran (B26, C26).
 configure_marker() {
   local f
   for f in configure configure.win; do

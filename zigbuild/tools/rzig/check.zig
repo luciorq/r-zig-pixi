@@ -1,8 +1,7 @@
 //! rzig's check mode (feat-standalone-toolchain B26 a, B32 a): whether a
 //! toolchain group's tools are there, before anything is compiled. The
 //! install preflight (patch 0009: `--rzig-check=package`, one call per
-//! package) and R CMD config (patch 0010: `--rzig-check=build-tools`)
-//! call it by CC's name, so the text that names a missing group comes
+//! package) calls it by CC's name, so the text that names a missing group comes
 //! from one place on every channel: rzig. Any of rzig's names takes it,
 //! as its only argument (zig-cc, or gcc.exe on Windows):
 //!
@@ -12,7 +11,7 @@
 //!                             `command -v` finds it: on unix the first
 //!                             word of $MAKE (etc/Renviron sets it), else
 //!                             make; on Windows make, whatever MAKE says
-//!                             (install.R and R CMD config run make there),
+//!                             (install.R runs make there),
 //!                             and sh, which runs configure.win (the
 //!                             binutils Makeconf.win names are rzig's own
 //!                             names beside it, binutils.zig)
@@ -203,7 +202,7 @@ const Found = union(enum) { ok: []const u8, missing: []const u8 };
 
 /// The build tools: what was found (one line), or what is missing.
 fn buildToolsFound(ctx: *Ctx) !Found {
-    // R on Windows runs make whatever MAKE says (install.R, R CMD config)
+    // R on Windows runs make whatever MAKE says (install.R)
     const make_var = if (ctx.os == .windows) null else ctx.getenv("MAKE");
     var words = mem.tokenizeScalar(u8, make_var orelse "make", ' ');
     const word = words.next() orelse "make";
@@ -217,7 +216,7 @@ fn buildToolsFound(ctx: *Ctx) !Found {
         return .{ .missing = if (isPath(word)) what else try notOnPath(ctx, what, word) };
     };
     const line = try ctx.fmt("build-tools ok: make at {s}", .{try display(ctx, make)});
-    // R runs configure.win and config.sh through sh (install.R, rcmdfn.c)
+    // R runs configure.win through sh (install.R)
     if (ctx.os != .windows) return .{ .ok = line };
     const sh = (try find_zig.onPath(ctx, "sh")) orelse return .{ .missing = try notOnPath(ctx, "no sh on PATH", "sh") };
     return .{ .ok = try ctx.fmt("{s}; sh at {s}", .{ line, try display(ctx, sh) }) };

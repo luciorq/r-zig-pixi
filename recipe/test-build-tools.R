@@ -103,9 +103,9 @@ if (windows) {
     cat("build tools: with the same PATH, under R CMD the check finds this env's make and sh: OK\n")
 }
 
-## R CMD config passes patch 0010's check, and make reads Makeconf: CC is
-## rzig's name, with -std=gnu23 after it on unix and $(M_ARCH) on Windows
-## (PHASE4 Cc1)
+## R CMD config (rzig's, patch 0010; no make involved) reads Makeconf: CC
+## is rzig's name, with -std=gnu23 after it on unix and $(M_ARCH) on
+## Windows (PHASE4 Cc1)
 r <- run_to(file.path(R.home("bin"), if (windows) "Rcmd.exe" else "R"), c(if (!windows) "CMD", "config", "CC"))
 cat(r$out, sep = "\n")
 cfg_cc <- strsplit(trimws(paste(r$out, collapse = " ")), " +")[[1]][1]

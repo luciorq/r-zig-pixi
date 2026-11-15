@@ -64,7 +64,9 @@ pixi add r-zig-toolchain
   their compiler check passes too.
 - `r-zig-build-tools` (make; on Windows also sh, the MSYS2 tools and
   pkg-config) is for configure scripts, Makevars
-  rules, Objective-C and `R CMD config` (rstan on macOS calls it).
+  rules and Objective-C. `R CMD config` needs neither group: rzig
+  answers it from Makeconf, with no make (rstan calls it after each
+  `stan_model()` compile).
   Installing pkgbuild, pak, devtools or the packages cpp11's
   `cpp_source()` requires from source needs it once: processx has
   Makevars rules, and ps and pak have configure scripts.
@@ -262,7 +264,7 @@ installs packages that have no configure script and whose Makevars only
 sets variables, and compiles such code at run time (`R CMD SHLIB`:
 Rcpp's `sourceCpp()`, inline, TMB) with no make. r-zig-build-tools
 brings GNU make, for the rest: configure scripts, Makevars rules,
-Objective-C, `R CMD config`, and installing pkgbuild, pak or devtools
+Objective-C, and installing pkgbuild, pak or devtools
 from source once. None of the four is on PyPI yet: install them from
 `dist/wheel`, ziglang first, so that pip needs no index for the rest:
 
