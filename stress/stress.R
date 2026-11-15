@@ -253,6 +253,7 @@ if (!is.null(conda) && !in_ws) {
   channels <- unique(c(if (channel != "https://prefix.dev/universe") channel, "https://prefix.dev/universe", "conda-forge"))
   subdir <- switch(paste(os, arch), "linux x86_64" = "linux-64", "linux aarch64" = "linux-aarch64",
                    "macos x86_64" = "osx-64", "macos aarch64" = "osx-arm64", "windows x86_64" = "win-64",
+                   "windows aarch64" = "win-arm64",
                    stop("no conda subdir for ", os, " ", arch, call. = FALSE))
   # the installed rows' sysdeps only, as a user installs what they need: a
   # conflict in one row's libraries then does not block the other rows

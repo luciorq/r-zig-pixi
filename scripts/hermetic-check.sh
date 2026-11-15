@@ -32,7 +32,10 @@
 # no /bin/sh to allow. The environment keeps only what Windows itself
 # needs (SYSTEMROOT, WINDIR) and PATH is R's bin\x64 plus System32. The
 # binary package comes from CRAN (win.binary), since --build needs an
-# external zip there. No execve trace: the empty PATH is the check, as on
+# external zip there; CRAN has no aarch64 Windows binaries (R-admin, "At
+# present binary packages are not distributed for aarch64 Windows"), so
+# win-arm64 skips that step (its x86_64 DLL does not load: "%1 is not a
+# valid Win32 application", run 43487408414). No execve trace: the empty PATH is the check, as on
 # macOS.
 #
 # The installed tree, not the archive (F1.6, F1.7): it is the tree that
@@ -129,6 +132,8 @@ if (!windows) {
     install.packages(bin, repos = NULL, lib = lib)            # binary package
     stopifnot(hermeticA::hi() == "hi")
     remove.packages("hermeticA", lib = lib)
+} else if (R.version$arch == "aarch64") {
+    cat("CRAN: no aarch64 Windows binaries, binary step skipped\n")
 } else if (online) {
     ## binary package: CRAN's Windows build (it has a DLL; loads with our R.dll)
     install.packages("jsonlite", repos = repo, lib = lib, type = "win.binary")
