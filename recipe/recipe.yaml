@@ -240,7 +240,10 @@ build:
   # R CMD config is rzig's, with no make and no sh, so it answers without
   # the build tools (feat-config-rzig); the extras group (cmake) and R's
   # recommended packages are packages of their own; win-arm64 is built,
-  # tested and published as the other five (chore-release-11).
+  # tested and published as the other five (chore-release-11). Windows'
+  # r-zig-slim is the slim variant, as on unix (no Tcl/Tk, JPEG, TIFF or
+  # NLS), and its R.dll uses OpenMP and links libomp, as unix's libR does
+  # (chore-release-11 finding 23, 2026-11-14).
   number: 11
 
 outputs:
@@ -380,7 +383,11 @@ outputs:
         - fontconfig
         - freetype
         - libpng
-        - glib
+        # glib on unix only, as pixi.toml: R's Windows build uses none of
+        # it, and on Windows glib's python brings tk.
+        - if: unix
+          then:
+            - glib
         # pango/cairo only pull in libharfbuzz (the runtime .so) as their own
         # transitive run dependency, not the headers — the vendored
         # CAIRO_CPPFLAGS build.zig applies unconditionally references
@@ -416,18 +423,10 @@ outputs:
         - if: osx
           then:
             - libiconv
-        # gnuwin32 has no capability off-switches (unlike unix's
-        # --without-jpeglib etc.), so Windows R unconditionally links the
-        # jpeg/tiff bitmap devices, the tcltk package, and NLS — these are
-        # genuinely linked-at-runtime deps here, not just build inputs.
-        # tk 8.6, as pixi.toml: tcltk.dll links tcl86t/tk86t; an unpinned
-        # solve picks tk 9.0 (tcl90.dll), and the link fails.
-        - if: win
-          then:
-            - libjpeg-turbo
-            - libtiff
-            - tk 8.6.*
-            - gettext
+        # No libjpeg-turbo, libtiff, tk or gettext, on Windows too
+        # (2026-11-14): r-zig-slim is the slim variant on every OS
+        # (build.zig's variant table, zigbuild/config/win-slim). R's
+        # Windows NLS is its own intl, and only full has it.
     build:
       # A staging output is not a package: rattler-build sets no PKG_NAME
       # or PKG_VERSION for it, so pass what build.sh and zig-build.sh read.
@@ -488,8 +487,11 @@ outputs:
         - fontconfig
         - freetype
         - libpng
-        - glib
-        # E2, on every OS (staging host)
+        # unix only, as the staging host
+        - if: unix
+          then:
+            - glib
+        # E2, on every OS (staging host): R.dll links it in every variant
         - zstd
         - if: linux
           then:
@@ -504,12 +506,6 @@ outputs:
             # at load time. The group packages get it through their exact
             # pins.
             - __osx >=13.0
-        - if: win
-          then:
-            - libjpeg-turbo
-            - libtiff
-            - tk 8.6.*
-            - gettext
       run_constraints:
         # the zig that built R and rzig: rzig finds the env's zig first
         # (B34), and B32's check stops a compile with another
@@ -524,10 +520,9 @@ outputs:
       # the slim capability profile) rather than a stripped-down subset — a
       # conda package is a distribution artifact, and this is the one check
       # that runs in a truly isolated env (no dev pixi env masking a gap).
-      # Windows keeps smoke-test.sh's own relaxed set: gnuwin32 has no slim/
-      # full off-switches, so tcltk/jpeg/tiff/NLS are TRUE despite this being
-      # r-zig-slim — asserting them FALSE here would be a false expectation,
-      # not a real regression check.
+      # Windows asserts the same slim profile (2026-11-14), and test-win.R
+      # also checks it by what R does: png draws, jpeg() and tiff() fail
+      # cleanly, library(tcltk) gives the stub's message.
       - script:
           content:
             - if: win
@@ -628,19 +623,15 @@ outputs:
               - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
               - lib/R/library/${{ recommended }}/**
               - Library/lib/R/library/${{ recommended }}/**
-    # Windows builds R with full's content, under the name slim on every
-    # channel (feat-standalone-toolchain B42 a); a Windows slim that is
-    # really slim is a later aim.
     about:
-      summary: R built with the zig toolchain, with its compiler front rzig (headless slim profile; Windows slim has full's content)
+      summary: R built with the zig toolchain, with its compiler front rzig (headless slim profile)
       # Windows: R's and, linked into winCairo.dll, cairo's (r-zig's
       # build, zigbuild/cairo.zig; its texts in R_HOME/share/licenses/cairo)
       license: ${{ "(GPL-2.0-only OR GPL-3.0-only) AND (LGPL-2.1-only OR MPL-1.1)" if win else "GPL-2.0-only OR GPL-3.0-only" }}
       description: |
         R built from source with the zig toolchain, in the headless slim
-        profile: no X11, Tcl/Tk, JPEG, TIFF or NLS. Windows slim has full's
-        content (tcltk, jpeg, tiff, NLS): R's Windows build has no switches
-        to leave them out.
+        profile on every OS: cairo and PNG graphics, ICU, libcurl and
+        OpenMP; no X11, Tcl/Tk, JPEG, TIFF or NLS.
 
         To compile packages, add r-zig-toolchain (r-zig-compilers,
         r-zig-build-tools and r-zig-extras). r-zig-compilers alone installs

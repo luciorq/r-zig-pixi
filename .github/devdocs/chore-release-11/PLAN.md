@@ -44,7 +44,8 @@ run, the release.
 - After the release, one pull request each: native Windows build tools
   (no MSYS2), one base with add-ons (tcltk first, a really slim Windows,
   a Windows wheel), the C++ ABI boundary and a binary package
-  repository.
+  repository. (2026-11-14: the really slim Windows moved into release
+  11, finding 23.)
 - The conda base keeps its name, r-zig-slim.
 - BLAS (2026-11-13): no change for build 11. conda-forge's packages
   are preferred over distro- or OS-specific ones; until a route is
@@ -159,6 +160,19 @@ flang-pixi docs/19 §6.
 - build-r.yaml's temporary win-arm64 probe step is removed: the
   contract passed on windows-11-arm (run 43344258167); committed as
   6d52bbd.
+
+### Windows follows the unix variants (finding 23, 2026-11-14)
+
+- One variant table in build.zig for every OS. slim, full and minimal
+  exist on Windows with unix's features; build.zig checks each vendored
+  config against the table.
+- Windows r-zig-slim is slim: no tcltk, jpeg(), tiff() or NLS. Windows
+  full installs R's libintl.h.
+- OpenMP inside R on Windows slim and full, as on unix (upstream leaves
+  it off). A patch to winbitmap.c lets a variant drop a bitmap format.
+- pixi.toml and the lock: Windows-only removals; minimal on win-64 and
+  win-arm64. CI's full tier: Windows full and minimal (20 legs).
+- Record: .github/devdocs/feat-win-variants/PLAN.md.
 
 ### Small follow-ups
 
@@ -410,8 +424,9 @@ flang-pixi), README sections for the three items, and findings 19-21.
     - OpenMP inside R itself: on Windows as on unix (slim and full on,
       minimal off). Upstream leaves it off on Windows only because
       MinGW's libgomp was "too slow to be usable"
-      (gnuwin32/fixed/h/config.h:609-613, main/Makefile.win:58); R's
-      own code uses it only for `omp simd` loops in array.c.
+      (gnuwin32/fixed/h/config.h:609-613, main/Makefile.win:58). R's
+      own code has parallel regions in colSums() (array.c) and dist()
+      (stats); smoke-test.sh and test-win.R run both.
     - Release 11 ships the slimmer Windows r-zig-slim (no tcltk,
       jpeg(), tiff() or translations, as on unix).
     - CI: Windows full and minimal on both Windows runners in the
@@ -422,6 +437,12 @@ flang-pixi), README sections for the three items, and findings 19-21.
       gettext dropped on Windows; only libintl.h added to R_HOME/include;
       R_MEMORY_PROFILING left as upstream has it; `-Dblas=openblas` on
       Windows and splitting pixi.toml's [dependencies] left for later.
+    Implemented 2026-11-14. linux-64 tested. kappa round 1: all three
+    variants built and passed smoke, verify-tree, hermetic and
+    contract; verify-recommended failed on a temp-directory name, fixed
+    in the script, round 2 open. CI's Windows legs open. The
+    record, with the full variant table and the tests:
+    .github/devdocs/feat-win-variants/PLAN.md.
 
 ## Tests
 
@@ -445,8 +466,13 @@ conda-package and conda-consume.
 - osx-64 (omicron, Rosetta): every step exit 0, through conda-package
   and conda-consume (`=== OK -e pkg conda-consume 16:42:35`). verify-tree passes there now
   (finding 17).
-- win-64 (kappa): rzig-test and then contract failed (finding 21); after
-  the fix KAPPA_RESULT.
+- win-64 (kappa): rzig-test and then contract failed (finding 21);
+  after the fix every step passed through verify-package. recommended
+  then failed (finding 23). After finding 23 (2026-11-14/15): slim, full
+  and minimal each pass build, smoke, verify-tree, hermetic and
+  contract; recommended and verify-recommended pass for slim and full
+  (feat-win-variants/PLAN.md, "Tests"). conda-package and
+  conda-consume on Windows: CI.
 - win-arm64: CI only.
 
 ### Earlier runs (2026-11-12)
@@ -509,9 +535,20 @@ All paths below are under
 - feat-win-arm64 (origin 51588ad) = T/wt/feat-win-arm64, clean.
 - T/wt/rel11-int (branch rel11-int at 48d3650 + the 51588ad changes,
   uncommitted): everything below. T/rel11/int/STATE.md has the commit
-  plan; T/rel11/int/make-patches.sh writes T/rel11/int/patches/1..8.patch,
-  one per commit, which apply in order to 51588ad and give this tree
-  byte for byte (checked in T/wt/patch-check).
+  plan; T/rel11/int/make-patches.sh wrote T/rel11/int/patches/1..8.patch
+  (2026-11-13), one per commit, which apply in order to 51588ad and
+  gave the tree of 2026-11-13 byte for byte (checked in
+  T/wt/patch-check).
+- 2026-11-15: patches 1..8 do not hold the later work.
+  T/rel11/int/make-patches-9-11.sh writes three more, split at the
+  copy of the tree taken before finding 23 (T/rel11/var/base):
+  9 = the verify-bundle.sh fix, 10 = the record edits of 2026-11-13/14,
+  11 = finding 23. It then applies 1..11 to a copy of 51588ad and checks
+  every tracked or untracked path against the tree. Do not rerun
+  make-patches.sh: it copies the current tree into state 5 and would
+  put the later edits into patch 5. Rerun make-patches-9-11.sh after
+  any later edit to the tree. The commit messages and commands:
+  T/rel11/handover/commit-p*.txt and apply-patches.sh.
 - T/wt/rel11b-config, rel11b-recommended, rel11b-extras: the items'
   worktrees (from 7697c75; their scratch T/rel11/scratchb-*,
   scratchc-extras). Kept until the patches are committed.
@@ -522,10 +559,15 @@ All paths below are under
 
 ## To resume
 
-1. The user commits the patches on feat-win-arm64 and pushes; read the
+1. Run T/rel11/int/make-patches-9-11.sh; it must end with "ok". The
+   user commits patches 1..11 on feat-win-arm64
+   (T/rel11/handover/apply-patches.sh), adds the `full-ci` label and
+   pushes; read the
    CI run row by row (windows-11-arm hermetic, every leg's
    conda-package with the two new outputs, the extras archive on all
-   six toolchain legs, the recommended packages in conda-package).
+   six toolchain legs, the recommended packages in conda-package, the
+   four new Windows full/minimal legs and test-win.R in Windows
+   conda-package).
 2. Decided 2026-11-14: finding 22 stays "source" (a later experiment
    is noted there); the `zig fetch` cache defect is not reported
    upstream, and feat-zig-017/ZIG-FETCH-CACHE.md tracks it per zig

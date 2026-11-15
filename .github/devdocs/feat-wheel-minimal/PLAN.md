@@ -13,6 +13,10 @@ and those three OSes have minimal legs in build.yaml, but they have only
 been built in CI, not locally. Windows is out: gnuwin32 has no switches
 for any of this.
 
+(2026-11-14: Windows has a minimal variant now (win-minimal, from one
+variant table: .github/devdocs/feat-win-variants/PLAN.md). There is no
+Windows wheel yet.)
+
 (2026-11-12: this status is as of 2026-09-24. Now: R 4.6.2 and zig 0.17
 (PyPI's ziglang 0.17.1, scripts/fetch-zig.sh); build-r.yaml builds and
 tests the wheel on every `minimal` leg, linux-64 in the core tier and

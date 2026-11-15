@@ -15,7 +15,9 @@
 #     compile tree, the tree's own place or $HOME, R's compressed files
 #     read uncompressed as verify-tree.sh reads them, except the saved
 #     namespace information (uncompress-r-objects.R's *.rdx.namespace),
-#     which holds the install directory and which R never loads;
+#     which holds the install directory and which R never loads, and
+#     the Rd file names in R CMD INSTALL's temp directory (Windows:
+#     %TEMP% is inside USERPROFILE);
 #   - recipe/test-recommended.R passes with the base's R and the tree's
 #     library first in R_LIBS.
 #
@@ -145,18 +147,26 @@ ser="$WORK/serialized"
 "$rscript" --vanilla "$(r_path "$ROOT/scripts/uncompress-r-objects.R")" "$(r_path "$LIB")" "$(r_path "$ser")" ||
   { echo "error: the base's R could not read the packages' lazy-load databases and .rds files" >&2; exit 1; }
 named="$( { grep -rlaE "${icase[@]}" -e "$re" "$LIB" || true; grep -rlaE "${icase[@]}" -e "$re" "$ser" 2> /dev/null || true; } )"
-offenders=""; n_ns=0
+# R CMD INSTALL unpacks each tarball in R's session temp directory
+# (<temp>/Rtmp<x>/R.INSTALL<hex>/<pkg>) and the help files keep the Rd
+# files' names there (help/paths.rds, the Rd objects' Rdfile). On unix
+# that is /tmp, which no pattern names; on Windows %TEMP% is inside
+# USERPROFILE. A name in that temp directory is not a build path.
+install_tmp='[/\\]+Rtmp[A-Za-z0-9]+[/\\]+R\.INSTALL[0-9A-Fa-f]+[/\\]'
+offenders=""; n_ns=0; n_tmp=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   case "$f" in *.rdx.namespace) n_ns=$((n_ns + 1)); continue ;; esac
+  hits="$(grep -aoE "${icase[@]}" -e "($re)[^[:space:][:cntrl:]\"'<>]*" "$f" | grep -vE "${icase[@]}" -e "^($re)[^[:space:]]*$install_tmp" || true)"
+  if [ -z "$hits" ]; then n_tmp=$((n_tmp + 1)); continue; fi
   offenders="$offenders
-  ${f#"$WORK"/}: $(grep -aoE "${icase[@]}" -e "($re)[^[:space:][:cntrl:]\"'<>]*" "$f" | sed -n 1p | cut -c1-200)"
+  ${f#"$WORK"/}: $(printf '%s\n' "$hits" | sed -n 1p | cut -c1-200)"
 done <<< "$named"
 if [ -n "$offenders" ]; then
   echo "error: files that name a build path:$offenders" >&2
   exit 1
 fi
-echo "== no build path: $(find "$LIB" -type f | wc -l | tr -d ' ') files, $(find "$ser" -type f | wc -l | tr -d ' ') uncompressed R objects ($n_ns packages' saved namespace information names their install directory; R never loads it)"
+echo "== no build path: $(find "$LIB" -type f | wc -l | tr -d ' ') files, $(find "$ser" -type f | wc -l | tr -d ' ') uncompressed R objects ($n_ns packages' saved namespace information names their install directory; R never loads it; $n_tmp files name only R CMD INSTALL's temp directory)"
 
 # The packages at work, with the base's R.
 (cd "$WORK" && R_LIBS="$(r_path "$LIB")" R_LIBS_USER=NULL R_LIBS_SITE=NULL R_ENVIRON_USER="$(r_path "$WORK/none")" R_PROFILE_USER="$(r_path "$WORK/none")" \

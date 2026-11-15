@@ -45,9 +45,9 @@ conda-forge's win-arm64 `libomp.dll` breaks parallel regions with more
 than six shared variables (data.table crashed).
 
 `r-zig-slim` is R alone: it runs R and installs packages that need no
-compiling (R-only source packages and binary packages). On Windows it has
-full's content (Tcl/Tk, JPEG, TIFF, NLS): R's Windows build has no
-switches to leave them out. It carries rzig, the compiler front R's
+compiling (R-only source packages and binary packages). It is the slim
+variant on every OS: no Tcl/Tk, JPEG, TIFF or translations (Windows too
+since build 11; see Variants). It carries rzig, the compiler front R's
 Makeconf names; the compilers, the build tools and cmake are three
 groups, each a package that pins the exact `r-zig-slim` build. To
 compile packages, add r-zig-toolchain (r-zig-compilers,
@@ -239,16 +239,38 @@ pixi run verify-recommended    # static checks of the tree, then the packages' t
 pixi run package-recommended   # their archive (see Standalone archives)
 ```
 
-Three variants are available as pixi environments: `default` (slim —
-headless, no X11/tcltk/NLS), `full` (adds tcltk, readline, NLS, jpeg
-and tiff devices), and `minimal` (smaller than slim: also no cairo/png,
-ICU, OpenMP or libdeflate; linux/macOS only). On Windows, R's cairo
+### Variants
+
+Three variants are available as pixi environments, on every OS:
+`default` (slim), `full` and `minimal`. One table in build.zig
+(`variantFeatures`) defines them, and the build stops when a vendored
+config disagrees with it:
+
+| Feature | slim (`default`) | full | minimal |
+|---|---|---|---|
+| cairo devices, `png()` | yes | yes | no |
+| `jpeg()`, `tiff()` | no | yes | no |
+| tcltk | no | yes | no |
+| translations (NLS) | no | yes | no |
+| ICU, libdeflate | yes | yes | no |
+| OpenMP for packages | yes | yes | no |
+| OpenMP inside R | yes | yes | no |
+| readline | no | unix only | no |
+
+readline is unix only: Windows R has its own console line editing.
+Memory profiling (`Rprofmem()`) is on in every Windows variant and off
+on unix, as in CRAN's R.
+OpenMP inside R on Windows differs from CRAN's R, which leaves it off
+there; r-zig links LLVM's libomp on every OS. On Windows, `jpeg()`,
+`tiff()` (and `png()` on minimal) give R's usual "no support" warning
+in a variant without that format. The record is
+`.github/devdocs/feat-win-variants/PLAN.md`. On Windows, R's cairo
 devices (`svg()`, `cairo_pdf()`, `cairo_ps()`, `type = "cairo"`) use a
 cairo that R's build compiles from source and links into winCairo.dll,
 the same on x86_64 and ARM; its licence texts are in
-`R_HOME/share/licenses/cairo`. `minimal` is the variant
-the Python wheel wraps. minimal has no OpenMP: a Fortran `use omp_lib`
-compiles but does not link.
+`R_HOME/share/licenses/cairo`. `minimal` is the variant the Python
+wheel wraps (unix only; no Windows wheel yet). minimal has no OpenMP: a
+Fortran `use omp_lib` compiles but does not link.
 
 ### Build with upstream zig
 
@@ -340,9 +362,9 @@ beside it:
   Its
   `R_HOME/bin/toolchain` holds only rzig, the compiler front R's
   Makeconf names, and the object rzig adds to links (linux
-  `dso_fini.o`, win-64 `cfguard.o`). Windows slim has full's content
-  (Tcl/Tk, JPEG, TIFF, NLS): R's Windows build has no switches to leave
-  them out.
+  `dso_fini.o`, win-64 `cfguard.o`). Each flavor has the same features
+  on every OS, except where the Variants table says otherwise
+  (readline, memory profiling).
 - **The compilers group**, one per platform:
   `R-<ver>-<platform>-compilers.tar.xz`, about 95 MB (linux-64). It
   holds zig 0.17 (PyPI's `ziglang` build, which is the ziglang.org
@@ -440,9 +462,9 @@ distributions than the build machine, without a separate build variant.
 
 Everything runs on GitHub-hosted runners: `toolchain` (the toolchain
 groups, once per platform), `build` (ubuntu-latest,
-ubuntu-24.04-arm, macos-latest, macos-15-intel × slim/full, plus the
-linux openblas variants, minimal on all four, and the one variant of
-windows-latest and windows-11-arm; the same steps in the same order on
+ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest,
+windows-11-arm × slim/full/minimal, plus the linux openblas variants;
+the same steps in the same order on
 every OS, on the installed tree, which is the tree the standalone base
 archive packs), and `conda-package` for all six subdirs (linux-64,
 linux-aarch64, osx-arm64, osx-64, win-64, win-arm64; the only job that
@@ -462,7 +484,7 @@ The full matrix above runs only on request: on a pull request labelled
 workflow run build.yaml --ref <branch>` for a branch). Every other pull
 request push and every push to `main` runs the core tier: `default` on
 all six platforms and `minimal` on linux-64 (7 legs; the full tier has
-16). `conda-package`
+20). `conda-package`
 also runs on every push to `main`, which publishes (with
 `CONDA_PUBLISH`), and on a pull
 request that changes `recipe/`, `pixi.toml`, `pixi.lock`, `build.zig`,

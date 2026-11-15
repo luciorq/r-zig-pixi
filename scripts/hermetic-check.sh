@@ -17,8 +17,8 @@
 #     feat-config-rzig), exit 0 and the path of R's own CC,
 #   - installs R6 from CRAN when it is reachable (download, TLS, R's
 #     internal untar),
-#   - Windows: loads tcltk, whose Tcl/Tk must then come from the tree's
-#     own R_HOME/Tcl,
+#   - Windows, where the variant has tcltk (full): loads tcltk, whose
+#     Tcl/Tk must then come from the tree's own R_HOME/Tcl,
 #   - requires R to have removed its session temp directories.
 # On linux, where strace can trace, every program started must be
 # /bin/sh, one of R's own launchers or rzig (the preflight's check mode,
@@ -180,7 +180,8 @@ if (online) {
     remove.packages("R6", lib = lib)
     cat("CRAN: R6 installed from source and removed\n")
 } else cat("CRAN: offline, skipped\n")
-if (windows) {
+if (windows && capabilities("tcltk")) {
+    ## (full only: slim and minimal have the stub, and no R_HOME/Tcl)
     ## tcltk as the shipped tree loads it: MY_TCLTK is unset here, so
     ## .onLoad takes the Tcl/Tk DLLs from R_HOME/Tcl/bin, and Tcl finds its
     ## scripts beside them; with nothing on PATH but bin\x64 and System32,

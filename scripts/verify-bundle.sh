@@ -519,9 +519,9 @@ if [ "$pass" = toolchain ]; then
   # tcltk (unix full): Tcl starts with the script library the tree ships,
   # not the build env's that the vendored libtcl names, and `clock`, which
   # needs the msgcat module, works. Under env -i there is no DISPLAY, so Tk
-  # stays down (a warning) and only Tcl is tested. (Windows: verify-tree.sh
-  # checks R_HOME/Tcl's files, hermetic-check.sh loads tcltk from it with an
-  # empty environment, and check's tcltk examples use it.)
+  # stays down (a warning) and only Tcl is tested. (Windows full:
+  # verify-tree.sh checks R_HOME/Tcl's files, hermetic-check.sh loads tcltk
+  # from it with an empty environment, and check's tcltk examples use it.)
   CHECK_TCLTK=""
   if [ "$OS" != windows ]; then
     CHECK_TCLTK="
@@ -2442,9 +2442,9 @@ RCODE
     echo "== CMake's archiver beside CC: ar.exe and ranlib.exe are rzig, and make a static library with PATH = System32"
   fi
 
-  # OpenMP for packages, with the groups: R itself has no OpenMP on
-  # Windows (upstream's choice), but etc/x64/Makeconf offers
-  # SHLIB_OPENMP_*FLAGS, so the compilers group carries llvm-openmp's
+  # OpenMP for packages, with the groups: where etc/x64/Makeconf offers
+  # SHLIB_OPENMP_*FLAGS (slim and full, which also have OpenMP inside R
+  # since 2026-11-14), the compilers group carries llvm-openmp's
   # omp.h and libomp.lib (TC/openmp/, B22) and the base libomp.dll
   # (R_HOME/bin/x64, vendor-libs.sh's), which makes rzig count openmp/
   # (B40). The ways packages ask that unix checks in scenario 2: a C

@@ -42,10 +42,16 @@
 #     lib/libomp; Windows R_HOME/bin/x64/libomp.dll), which makes rzig
 #     count the group's openmp/ (B40); where it does not (minimal), no
 #     runtime, so rzig leaves openmp/ alone;
-#   - Windows (a tree that is not a conda env): the Tcl/Tk runtime is in
-#     R_HOME/Tcl (with Tcl's modules), Makeconf's TCL_VERSION names its
-#     DLLs (tcl86t, tk86t), Tcl/Tk's headers (tcl.h, tk.h) are in
-#     R_HOME/Tcl/include, and every DLL a PE file in the tree imports is
+#   - OpenMP inside R (every tree): libR (Windows: R.dll) links libomp
+#     in slim and full, and not in minimal (build.zig's variant table);
+#   - Windows (every tree): grDevices.dll imports the bitmap libraries of
+#     its variant (full png, jpeg, tiff; slim png; minimal none); without
+#     tcltk (slim, minimal) there is no tcltk.dll, no R_HOME/Tcl and
+#     Makeconf's TCLTK_LIBS is empty;
+#   - Windows (a tree that is not a conda env): with tcltk (full), the
+#     Tcl/Tk runtime is in R_HOME/Tcl (with Tcl's modules), Makeconf's
+#     TCL_VERSION names its DLLs (tcl86t, tk86t), Tcl/Tk's headers (tcl.h,
+#     tk.h) are in R_HOME/Tcl/include; and every DLL a PE file in the tree imports is
 #     in the tree (its own directory, R_HOME/bin/x64, or R_HOME/Tcl/bin
 #     for the Tcl/Tk DLLs) or the system's;
 #   - macOS (every tree): etc/r-zig.cmake, a CMake toolchain file that
@@ -64,7 +70,9 @@
 #   - x86_64 (every OS): no binary of R's own has a VEX or EVEX
 #     instruction (AVX, AVX2, FMA, AVX-512, on any register width): R is
 #     compiled for the baseline CPU, not the build machine's;
-#   - minimal: no binary of R's own links a library the profile excludes;
+#   - minimal: no binary of R's own links a library the profile excludes
+#     (Windows: R's own PE files by name, as bin/x64 also holds conda's
+#     DLLs; no winCairo.dll and no tcltk.dll);
 #   - linux: no ELF needs a glibc above the floor, 2.17;
 #   - unix: every rpath is relative to its file; none of R's own binaries
 #     needs a shared C++ runtime; linux: every DT_NEEDED is a bare name;
@@ -557,9 +565,7 @@ fi
 # rzig count the group's openmp/ (B40): unix, libR links libomp, which
 # vendor-libs.sh copies into lib/; Windows, libomp.dll in R_HOME/bin/x64
 # beside R's executables, which vendor-libs.sh copies there because
-# Makeconf offers OpenMP. R itself has no OpenMP on Windows (upstream's
-# choice), so nothing in the tree imports it and the DLL closure check
-# below would not notice it missing. Where Makeconf offers none
+# Makeconf offers OpenMP (and R.dll imports it: below). Where Makeconf offers none
 # (minimal), the base has no runtime, so rzig leaves openmp/ alone and a
 # configure script's flagless omp.h probe finds no header. (That a package
 # builds with the base and the group, and loads: verify-bundle.sh.)
@@ -585,6 +591,27 @@ if [ -z "$conda_tree" ]; then
     exit 1
   fi
   echo "== OpenMP for packages verified: $omp_ok; no omp.h or libomp.lib (the compilers group's openmp/)"
+fi
+
+# OpenMP inside R (build.zig's variant table, openmp_r), every tree: on
+# every OS, slim and full compile R's own C with -fopenmp and libR links
+# libomp, so libR (Windows: R.dll) names it; minimal compiles none and
+# names none. On Windows this differs from upstream R, which leaves it off
+# (2026-11-14, chore-release-11 PLAN.md finding 23). The variant follows
+# Makeconf's SHLIB_OPENMP_CFLAGS, which the table sets alike.
+case "$OS" in
+  windows) libr_file="$rh/bin/x64/R.dll"; omp_re='^libomp\.dll$' ;;
+  linux) libr_file="$rh/lib/libR.so"; omp_re='^libomp\.so' ;;
+  macos) libr_file="$rh/lib/libR.dylib"; omp_re='(^|/)libomp\.dylib$' ;;
+esac
+[ -f "$TREE/$libr_file" ] || { echo "error: $libr_file is missing" >&2; exit 1; }
+libr_omp="$(needed_of "$TREE/$libr_file" | grep -iE "$omp_re" || true)"
+if grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
+  [ -n "$libr_omp" ] || { echo "error: $libr_file does not link libomp, but this variant has OpenMP inside R (build.zig's Features.openmp_r)" >&2; exit 1; }
+  echo "== OpenMP inside R verified: $libr_file links $(echo $libr_omp)"
+else
+  [ -z "$libr_omp" ] || { echo "error: $libr_file links $libr_omp, but this variant has no OpenMP (minimal)" >&2; exit 1; }
+  echo "== OpenMP inside R verified: $libr_file links no libomp (no OpenMP in this variant)"
 fi
 
 # The baseline CPU (x86_64): R's own binaries are compiled for their
@@ -689,7 +716,97 @@ esac
 # Windows has no rpaths, glibc or Mach-O: the binary checks further down
 # are unix. Its own: the Tcl/Tk runtime and the DLL closure.
 if [ "$OS" = windows ]; then
-  if [ -z "$conda_tree" ]; then
+  # tcltk: the package's DLL where the variant has tcltk (full), and with
+  # it the Tcl/Tk runtime (below); elsewhere the stub, no DLL, no R_HOME/Tcl,
+  # and Makeconf's TCLTK_* empty (build.zig; unix's slim does the same).
+  win_tcltk=""
+  [ -f "$TREE/$rh/library/tcltk/libs/x64/tcltk.dll" ] && win_tcltk=1
+  tcltk_libs="$(sed -n 's/^TCLTK_LIBS = *//p' "$mk" | tr -d '\r')"
+  if [ -n "$win_tcltk" ] && [ -z "$tcltk_libs" ]; then
+    echo "error: library/tcltk/libs/x64/tcltk.dll is there, but Makeconf's TCLTK_LIBS is empty" >&2
+    exit 1
+  fi
+  if [ -z "$win_tcltk" ]; then
+    bad=""
+    [ -z "$tcltk_libs" ] || bad="$bad Makeconf's TCLTK_LIBS=$tcltk_libs"
+    [ ! -e "$TREE/$rh/Tcl" ] || bad="$bad $rh/Tcl"
+    grep -qs MY_TCLTK "$TREE/$rh/etc/Renviron.site" && bad="$bad etc/Renviron.site's MY_TCLTK"
+    if [ -n "$bad" ]; then
+      echo "error: no tcltk.dll (a variant without tcltk), yet:$bad (zig's install removes no file: build into a clean prefix)" >&2
+      exit 1
+    fi
+    echo "== tcltk verified: none in this variant (no tcltk.dll, no R_HOME/Tcl, TCLTK_LIBS empty)"
+  fi
+
+  # R's own PE files, by name: the core DLLs, the front-ends, the modules
+  # and the base packages' DLLs. bin/x64 also holds the conda DLLs
+  # vendor-libs.sh copies, which are not R's.
+  r_pe="$WORK/r-pe.txt"
+  {
+    for f in R Rblas Rlapack Rgraphapp Riconv; do echo "$TREE/$rh/bin/x64/$f.dll"; done
+    find "$TREE/$rh/bin" -maxdepth 2 -type f -name '*.exe' ! -path "$TREE/$tc_dir/*"
+    find "$TREE/$rh/modules/x64" -type f -name '*.dll'
+    find "$TREE/$rh/library" -type f -path '*/libs/x64/*.dll'
+  } > "$r_pe"
+  while IFS= read -r f; do
+    [ -f "$f" ] || { echo "error: ${f#$TREE/} is missing" >&2; exit 1; }
+  done < "$r_pe"
+
+  # The bitmap formats grDevices.dll links (the variant table: full png,
+  # jpeg, tiff; slim png; minimal none), by the DLLs it imports: the -D
+  # flags build.zig passes winbitmap.c follow the table, not only
+  # config.h's capabilities().
+  gd="$rh/library/grDevices/libs/x64/grDevices.dll"
+  gd_deps="$(needed_of "$TREE/$gd")"
+  [ -n "$gd_deps" ] || { echo "error: cannot read the imports of $gd (llvm-objdump -p)" >&2; exit 1; }
+  case "$VARIANT" in
+    full) want_fmt="png jpeg tiff" ;;
+    slim) want_fmt="png" ;;
+    *) want_fmt="" ;;
+  esac
+  bad=""
+  for fmt in png jpeg tiff; do
+    case "$fmt" in
+      png) re='^libpng[0-9]*\.dll$' ;;
+      jpeg) re='^(lib)?jpeg[0-9]*\.dll$' ;;
+      tiff) re='^(lib)?tiff[0-9]*\.dll$' ;;
+    esac
+    hit="$(printf '%s\n' "$gd_deps" | grep -iE "$re" || true)"
+    case " $want_fmt " in
+      *" $fmt "*) [ -n "$hit" ] || bad="$bad $fmt(not imported)" ;;
+      *) [ -z "$hit" ] || bad="$bad $fmt($hit imported)" ;;
+    esac
+  done
+  if [ -n "$bad" ]; then
+    echo "error: $gd for variant $VARIANT (wants:${want_fmt:+ }${want_fmt:-none}):$bad" >&2
+    exit 1
+  fi
+  echo "== grDevices.dll verified: imports the bitmap libraries of $VARIANT (${want_fmt:-none})"
+
+  # minimal: none of R's own PE files imports a library the profile
+  # excludes, and winCairo.dll and tcltk.dll are not built. The conda DLLs
+  # in bin/x64 are reported, not failed: libcurl -> libpsl -> ICU brings
+  # ICU in (as on unix).
+  if [ "$VARIANT" = minimal ]; then
+    win_excluded_re='^(lib)?(cairo|pango|harfbuzz|fontconfig|freetype|glib|gobject|gio|pixman|png|jpeg|tiff|tcl|tk|icu|omp|iomp|gomp|deflate)'
+    bad=""
+    for f in "$rh/library/grDevices/libs/x64/winCairo.dll" "$rh/library/tcltk/libs/x64/tcltk.dll"; do
+      [ ! -e "$TREE/$f" ] || bad="$bad $f(built)"
+    done
+    while IFS= read -r f; do
+      hit="$(needed_of "$f" | grep -iE "$win_excluded_re" || true)"
+      [ -z "$hit" ] || bad="$bad ${f#$TREE/}->$(echo $hit | tr ' ' ',')"
+    done < "$r_pe"
+    if [ -n "$bad" ]; then
+      echo "error: minimal R links libraries its profile excludes:$bad" >&2
+      exit 1
+    fi
+    echo "== minimal profile verified: $(wc -l < "$r_pe" | tr -d ' ') PE files of R's own, none links graphics/ICU/OpenMP/libdeflate/Tcl; no winCairo.dll, no tcltk.dll"
+    transitive="$(ls "$TREE/$rh/bin/x64" | grep -iE "$win_excluded_re" | tr '\n' ' ' || true)"
+    [ -z "$transitive" ] || echo "   note: vendored as dependencies of third-party libs (not of R): $transitive"
+  fi
+
+  if [ -z "$conda_tree" ] && [ -n "$win_tcltk" ]; then
     # Tcl/Tk where tcltk's .onLoad loads it (CRAN's layout): the DLLs in
     # Tcl/bin, through library.dynam's DLLpath, and only there (a copy in
     # bin/x64 wins the search order, then looks for init.tcl relative to
@@ -722,6 +839,8 @@ if [ "$OS" = windows ]; then
       exit 1
     fi
     echo "== Tcl/Tk verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), Makeconf's TCL_VERSION = $tclv, $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib, $(find "$TREE/$rh/Tcl/include" -type f | wc -l | tr -d ' ') headers in Tcl/include"
+  fi
+  if [ -z "$conda_tree" ]; then
 
     # No fontconfig configuration (PHASE8 open point D a): R on Windows
     # picks its fonts through Win32 and never loads one.

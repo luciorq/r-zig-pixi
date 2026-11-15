@@ -103,7 +103,9 @@ says which goal it serves.
   internal BLAS or openblas (scripts/env.sh:17-23). Windows builds only
   full (build.zig:401-406) and calls it slim on every channel (B42 = a,
   documented: Windows slim has full's content); minimal has no Windows
-  build.
+  build. (2026-11-14: superseded. Windows builds slim, full and minimal
+  from one variant table, as unix does:
+  .github/devdocs/feat-win-variants/PLAN.md.)
 - Group names: B38 = (a), `compilers` and `build-tools`. The brief calls
   the second group "minimal build tools".
 
@@ -262,6 +264,8 @@ channel-specific setting.
 Where names differ: Windows builds full, and every channel calls it slim
 (B42 = a), documented as "Windows slim has full's content". The user
 wants a really slim Windows slim later ("Later and future checks").
+(2026-11-14: superseded. Windows slim is really slim and every channel
+uses the same flavor names: .github/devdocs/feat-win-variants/PLAN.md.)
 
 ### 6. One toolchain per platform
 
@@ -848,7 +852,7 @@ What it means for this plan:
 | B39 | What Windows' usr/bin holds | (a) sh, make, coreutils, sed, grep, gawk, which, findutils; pkg-config joins through B43 | phases 4, 7 |
 | B40 | How rzig decides OpenMP is available | (a) only when the base has the libomp runtime | phase 2 |
 | B41 | conda's exceptions to the shared boundary | (a) omp.h with the base and the win-64 binutils copies, accepted and recorded | phase 4 |
-| B42 | Windows' flavor name | (a) slim on every channel, documented; a really slim Windows slim later | phase 3 |
+| B42 | Windows' flavor name | (a) slim on every channel, documented; a really slim Windows slim later (done 2026-11-14: feat-win-variants) | phase 3 |
 | B43 | Makeconf.win's tools r-zig did not ship | the user's: AR, RANLIB, gcc-ar and gcc-ranlib through rzig (B43-1 a: `zig-ar`/`zig-ranlib` as on unix); pkg-config (bare name, B43-3 a) and objdump from conda-forge; gcc-nm from conda-forge only if really needed (B43-2); reassessed after the stress suite | phases 2, 3, 7 |
 | B44 | Fortran on an OS whose phase 6 prototype fails | the user's: Fortran through flang must succeed on every OS, fixed with flang-pixi | phase 6 |
 
@@ -2098,6 +2102,10 @@ we want to work on that and make slim really slim, but later)."
 - Making Windows slim really slim is a later aim ("Later and future
   checks"). It relates to C1 (Windows minimal) and to the full-only
   add-on check.
+
+(2026-11-14: superseded. Windows builds slim, full and minimal from one
+variant table, as unix does, and Windows slim is really slim:
+.github/devdocs/feat-win-variants/PLAN.md.)
 
 Context:
 - Windows builds only full (build.zig:401-406), but env.sh and the
@@ -6978,6 +6986,8 @@ env -i HOME=/tmp/sa PATH=/usr/bin:/bin RZIG_TRACE=1 \
 - **A really slim Windows slim** (B42, the user's note of 2026-10-08):
   Windows slim has full's content for now; make it really slim later.
   It relates to C1 (Windows minimal) and the full-only add-on check.
+  (2026-11-14: done, with Windows minimal too: .github/devdocs/feat-win-
+  variants/PLAN.md.)
 - **GNU make built with zig** for all five platforms (B7 b).
 - **The release job** (B12): `v*` tags, GitHub Release, GPL sources
   mirrored.

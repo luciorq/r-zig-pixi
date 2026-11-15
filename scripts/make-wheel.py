@@ -214,7 +214,7 @@ def platform_tags(files: list[tuple[str, bytes]]) -> list[str]:
         if major >= 11 and minor > 0:
             major, minor = major + 1, 0
         return [f"macosx_{major}_{minor}_{arch}"]
-    die(f"no wheel platform tag for {system} (the minimal build is linux/macOS only)")
+    die(f"no wheel platform tag for {system} (no Windows wheel yet: the wheel is linux/macOS only, although the minimal build also runs on Windows)")
     return []
 
 

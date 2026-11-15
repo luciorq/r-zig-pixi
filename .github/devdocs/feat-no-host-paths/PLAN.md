@@ -1648,6 +1648,9 @@ zig 0.16's std.Build):
   had to follow `package`, because only package-standalone.sh vendored
   conda's DLLs and Tcl into the tree; `build -- --verbose` and a
   60-minute timeout against MSYS process-spawn hangs.
+  (2026-11-14: the first difference is gone. Windows has slim, full and
+  minimal from one variant table: .github/devdocs/feat-win-
+  variants/PLAN.md.)
   - **F1.7 done 2026-10-03** (a workflow: two implementers in worktrees,
     one for vendoring and CI, one for the Windows check; two review lenses
     and a skeptic each; a fix pass each; merged here, with the integration

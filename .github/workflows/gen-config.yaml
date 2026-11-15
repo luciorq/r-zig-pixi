@@ -13,6 +13,12 @@
 # local `pixi run configure` + gen-subst.sh procedure documented in
 # feat-zig-build/PLAN.md — this is that exact procedure, just on runners
 # instead of dev machines).
+#
+# Windows has no configure, so nothing here covers it. The win-slim,
+# win-full and win-minimal dirs are R's src/gnuwin32/fixed/h files with
+# the edits their PROVENANCE files list (the variant table's flips), and
+# build.zig's checkVariantConfig checks them against that table on every
+# build (.github/devdocs/feat-win-variants/PLAN.md).
 name: gen-config
 
 on:

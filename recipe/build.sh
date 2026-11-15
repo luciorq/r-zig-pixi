@@ -33,8 +33,9 @@ chmod +x scripts/*.sh
 # (build.zig's installEnvRuntime: the CA bundle, fontconfig's
 # configuration, Tcl/Tk; vendor-libs.sh: the shared libraries) is left
 # out here, since the prefix is the env: its own packages provide all of
-# it. On Windows, etc/Renviron.site points tcltk at the tk package's DLLs
-# instead (MY_TCLTK, installEnvRuntime).
+# it. A Windows full build points tcltk at the tk package's DLLs in
+# etc/Renviron.site instead (MY_TCLTK, installEnvRuntime); r-zig-slim has
+# no tcltk on any OS, so it writes no MY_TCLTK.
 # On Windows, winCairo.dll links cairo, which R's build compiles from the
 # recipe's cairo source (-Dcairo; zigbuild/cairo.zig).
 cairo=()

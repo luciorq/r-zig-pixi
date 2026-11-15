@@ -502,7 +502,9 @@ architecturally bakes in the console/GUI plumbing as required compile
 units — there is no source-level slim/full split available *inside*
 `R.dll` itself (matches the pre-existing "slim==full on Windows,
 gnuwin32 has no off-switches" note below, just deeper than previously
-documented). `R.dll`'s own `R-DLLLIBS` also links `-lRgraphapp`
+documented; 2026-11-14: the capability split is now done by config.h
+and the variant table, while R.dll keeps its structure:
+feat-win-variants/PLAN.md). `R.dll`'s own `R-DLLLIBS` also links `-lRgraphapp`
 unconditionally — so `Rgraphapp.dll` (`src/extra/graphapp/`, a `$(wildcard
 *.c)` full Win32 GUI-widget toolkit — buttons/menus/dialogs/tooltips/
 windows, ~30 files, no internal slim switch either) is a genuine, required
@@ -840,6 +842,9 @@ Windows source lists, several of which differ from unix's):
   on Windows). Keep that parity caveat. Independent of, and not resolved
   by, F6.0's GUI-executable scoping decision — that's about which
   *binaries* get built, not grDevices' own capability set.
+  (2026-11-14: superseded. Windows builds slim, full and minimal from
+  one variant table, as unix does, and Windows slim is really slim:
+  .github/devdocs/feat-win-variants/PLAN.md.)
 - gnuwin32 builds in-tree with no `make install`; the zig build installs
   into the prefix layout directly, which is actually *simpler* than the
   gnuwin32 manual-copy path.

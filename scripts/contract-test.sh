@@ -156,7 +156,7 @@ cat > "$LIB/contract.R" <<'RCODE'
   th_info <- capture.output(getDTthreads(verbose = TRUE))
   cat(th_info, sep = "\n")
   if (Sys.getenv("R_CONTRACT_VARIANT") == "minimal") {
-    mk <- readLines(file.path(R.home("etc"), "Makeconf"))
+    mk <- readLines(file.path(R.home("etc"), .Platform$r_arch, "Makeconf"))
     omp <- grep("^SHLIB_OPENMP_(C|CXX|F)FLAGS *=", mk, value = TRUE)
     stopifnot(length(omp) == 3L, all(grepl("= *$", omp)))
     if (Sys.info()[["sysname"]] != "Darwin")
@@ -298,7 +298,7 @@ cat > "$NM/nomake.R" <<'RCODE'
   if (Sys.info()[["sysname"]] == "Darwin") {
     p <- Rcpp:::.openmpPluginDarwin()
     stopifnot(identical(p$env$PKG_CXXFLAGS, "-fopenmp"))
-    mk <- readLines(file.path(R.home("etc"), "Makeconf"))
+    mk <- readLines(file.path(R.home("etc"), .Platform$r_arch, "Makeconf"))
     if (any(grepl("^SHLIB_OPENMP_CXXFLAGS *= *-", mk))) {
       g <- cppFunction("int g() { return 1; }", plugins = "openmp")
       stopifnot(g() == 1L)

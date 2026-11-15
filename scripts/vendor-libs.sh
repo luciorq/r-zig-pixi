@@ -19,7 +19,7 @@
 #   - Windows: conda's Library/bin DLLs into R_HOME/bin/x64, the directory
 #     of Rscript.exe and R.exe, where the loader looks first for every DLL
 #     the process loads (R.dll's, the modules', packages'), libomp.dll
-#     included, which only packages import (below).
+#     included (below).
 #
 # A no-op when the prefix is the env itself (the conda build: the
 # libraries are already there, as run dependencies).
@@ -77,14 +77,15 @@ if [ "$OS" = windows ]; then
   mapfile -t pes < <(find "$PREFIX" -type f \( -name '*.dll' -o -name '*.exe' \))
   n=0
   i=0
-  # libomp.dll, for packages: R itself has no OpenMP on Windows, so no PE
-  # file in the tree imports it, but a package built with Makeconf's
-  # SHLIB_OPENMP_*FLAGS does (rzig links it against the compilers group's
-  # TC/openmp/lib/libomp.lib), and the loader finds it here. So it comes
+  # libomp.dll: R.dll imports it where R has OpenMP (slim and full, as
+  # on unix since 2026-11-14), and so does a package built with
+  # Makeconf's SHLIB_OPENMP_*FLAGS (rzig links it against the compilers
+  # group's TC/openmp/lib/libomp.lib); the loader finds it here. It comes
   # wherever Makeconf offers packages OpenMP (build.zig writes -fopenmp
-  # there), with or without the group beside the tree: rzig counts
-  # TC/openmp/ only when the base has this file (feat-standalone-toolchain
-  # B40). The walk takes its own imports, as it does every copy's.
+  # there; the same variants), with or without the group beside the tree:
+  # rzig counts TC/openmp/ only when the base has this file
+  # (feat-standalone-toolchain B40). The walk would copy it for R.dll
+  # anyway, and takes its own imports, as it does every copy's.
   if grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$R_HOME_DIR/etc/x64/Makeconf" && [ ! -f "$BIN/libomp.dll" ]; then
     cp "$CLIB/libomp.dll" "$BIN/libomp.dll"
     pes+=("$BIN/libomp.dll")

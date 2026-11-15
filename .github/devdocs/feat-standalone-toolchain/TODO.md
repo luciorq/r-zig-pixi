@@ -1018,8 +1018,10 @@ Needs (answered): B14 (a), with B37 (a).
 - [ ] Which full-only features can become add-on R components (tcltk
       first); drop the separate full build only if readline/NLS can be
       settled
-- [ ] Make Windows slim really slim (B42, the user's note of 2026-10-08;
+- [x] Make Windows slim really slim (B42, the user's note of 2026-10-08;
       relates to C1, Windows minimal); until then it has full's content
+      (2026-11-14: done in release 11, with Windows full and minimal:
+      .github/devdocs/feat-win-variants/PLAN.md.)
 - [ ] Depend less on make for package installs (Windows needs sh/make
       for now): done for `R CMD INSTALL` of tier 0 to 2 packages by
       feat-zig-pkg-build (rzig build; its PLAN.md, "What the build-tools

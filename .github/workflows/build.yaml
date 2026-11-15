@@ -5,7 +5,8 @@ name: build-r
 # - core, on every pull request push and every push to main: the default
 #   leg on all 6 platforms and minimal on linux-64, the wheel's (7 legs);
 # - full, on a pull request labelled `full-ci` and on a manual dispatch,
-#   nothing else: all 16 legs (full, openblas and minimal too).
+#   nothing else: all 20 legs (full, openblas and minimal too, Windows
+#   included).
 # conda-package (6 jobs) runs on every push to main, in the full tier,
 # and on a pull request that changes what it builds from. A push to main
 # publishes only while the repository variable CONDA_PUBLISH is `true`:
@@ -96,7 +97,7 @@ jobs:
   # calls too (the same legs with upstream zig, F4): one step list. A leg
   # reads "<os> / <env>": this job is named after the runner, the called
   # one after the env. This job runs the core tier's 7 legs, build-full
-  # the full tier's other 9.
+  # the full tier's other 13.
   build:
     name: ${{ matrix.os }}
     needs: toolchain
@@ -128,15 +129,19 @@ jobs:
         env: [default]
         include:
           # minimal: the r-zig Python wheel's variant (pixi.toml
-          # [feature.minimal]); unix only. In the core tier on linux-64,
-          # whose wheel it builds and tests; the other three are in
-          # build-full. linux-x86_64's vendored config was captured
-          # locally, the other three by gen-config's minimal legs (run
-          # 36151245208, 2026-09-25).
+          # [feature.minimal]). In the core tier on linux-64, whose wheel
+          # it builds and tests; the other five platforms are in
+          # build-full. The wheel is unix only (build-r.yaml). linux-
+          # x86_64's vendored config was captured locally, the other
+          # three unix ones by gen-config's minimal legs (run
+          # 36151245208, 2026-09-25); win-minimal is vendored from
+          # gnuwin32's fixed/h (.github/devdocs/feat-win-variants/).
           - os: ${{ inputs.linux_runner || 'ubuntu-latest' }}
             env: minimal
-          # Windows: one variant only (R's Windows build has no slim/
-          # minimal switches; no wheel, no openblas), so only `default`.
+          # Windows: default (slim) here. full and minimal are in
+          # build-full, as on unix (one variant table for every OS since
+          # 2026-11-14: .github/devdocs/feat-win-variants/PLAN.md). No
+          # openblas on Windows yet.
           # build_args: zig build prints nothing until it finishes, so a
           # hung step leaves an empty log; with --verbose the last command
           # started is the last line, which is the diagnosis.
@@ -162,9 +167,10 @@ jobs:
       build_args: ${{ matrix.build_args }}
       timeout: ${{ matrix.timeout || 180 }}
 
-  # The full tier's other 9 legs, on the same runners: full on the four
-  # unix ones, openblas (external optimized BLAS/LAPACK, linux only for
-  # now, both archs), and minimal on the three build doesn't run. Only on
+  # The full tier's other 13 legs, on the same runners: full on all six,
+  # openblas (external optimized BLAS/LAPACK, linux only for now, both
+  # archs), and minimal on the five build doesn't run. The Windows legs
+  # take build's Windows build_args and timeouts (see there). Only on
   # a pull request labelled `full-ci` (its `labeled` event, then every
   # push while the label stays) and on a manual dispatch. It needs the
   # toolchain job as build does, with !cancelled() for the same reason.
@@ -192,10 +198,28 @@ jobs:
             env: minimal
           - os: macos-15-intel
             env: minimal
+          - os: windows-latest
+            env: full
+            build_args: "-- --verbose"
+            timeout: 90
+          - os: windows-latest
+            env: minimal
+            build_args: "-- --verbose"
+            timeout: 90
+          - os: windows-11-arm
+            env: full
+            build_args: "-- --verbose"
+            timeout: 150
+          - os: windows-11-arm
+            env: minimal
+            build_args: "-- --verbose"
+            timeout: 150
     uses: ./.github/workflows/build-r.yaml
     with:
       os: ${{ matrix.os }}
       env: ${{ matrix.env }}
+      build_args: ${{ matrix.build_args }}
+      timeout: ${{ matrix.timeout || 180 }}
 
   # Does the pull request change what conda-package builds from? The
   # recipe, the envs (pixi.toml, pixi.lock), the build (build.zig,

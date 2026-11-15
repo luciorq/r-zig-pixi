@@ -24,15 +24,20 @@ version = "0.1.0"
 # Fortran: LLVM flang, flang-pixi's zig-built flang-zig + flang-rt-zig
 #          (universe channel), on every platform. No gfortran anywhere.
 #
-# Two build variants, mapped to pixi environments:
+# Three build variants, mapped to pixi environments, on every OS (one
+# variant table: build.zig's variantFeatures; Windows too since
+# 2026-11-14):
 #   default -> "slim": headless. cairo+png graphics, ICU, pcre2, libcurl,
-#              compression, internal BLAS/LAPACK, R shlib. No X11/quartz/
-#              tcltk/readline/NLS/jpeg/tiff. R's recommended packages
-#              are a product of their own (pixi run recommended;
+#              compression, OpenMP, internal BLAS/LAPACK, R shlib. No
+#              X11/quartz/tcltk/readline/NLS/jpeg/tiff. R's recommended
+#              packages are a product of their own (pixi run recommended;
 #              r-zig-recommended), never in the R tree.
-#   full    -> adds tcltk, readline, NLS, jpeg+tiff devices.
-# Capabilities are baked at compile time, so these are separate configure
-# runs (separate objdirs/prefixes), not just dependency toggles.
+#   full    -> adds tcltk, NLS, jpeg+tiff devices, and readline (unix only:
+#              Windows R has its own console line editing).
+#   minimal -> slim without cairo, png, ICU, libdeflate and OpenMP (the
+#              wheel's variant; [feature.minimal]).
+# Capabilities are baked at compile time, so these are separate builds
+# (separate config dirs and prefixes), not just dependency toggles.
 
 [activation.env]
 R_VERSION = "4.6.2"
@@ -229,7 +234,7 @@ configure = { cmd = "bash zigbuild/tools/configure-only.sh", depends-on = ["fetc
 
 [tasks]
 # --- CI (build.yaml, workflow build-r, on GitHub Actions; needs `gh auth login`) ---
-# The full tier on demand, on main: all 16 legs and conda-package on all
+# The full tier on demand, on main: all 20 legs and conda-package on all
 # 6 platforms, which publishes as a push to main does, while the
 # repository variable CONDA_PUBLISH is `true` (a release switch:
 # build.yaml's publish step). A
@@ -287,7 +292,7 @@ icu = "*"
 tzdata = "*"
 libdeflate = "*"  # faster lazyload compression; was only transitive via libtiff
 # OpenMP: zig cc does -fopenmp codegen but ships no libomp or omp.h, so
-# LLVM's libomp, on every platform: R (unix) and packages link it, never
+# LLVM's libomp, on every platform: R and packages link it, never
 # libgomp (which libgcc still brings into the linux and win envs). It is
 # flang-pixi's build of it (`universe`, the zig_* build string), the one
 # flang-rt-zig is built with and the same release as flang-zig, whose
@@ -309,25 +314,28 @@ expat = "*"
 fontconfig = "*"
 freetype = "*"
 libpng = "*"
-# glib, not libglib alone (2026-10-08, glib 2.90.0): R's cairo device
-# compiles against pango's headers, which include glibconfig.h, and only
-# glib ships it (lib/glib-2.0/include). R links -lgobject-2.0 -lglib-2.0,
-# and the unversioned libraries those name are in glib-tools, which glib
-# brings; libglib has only the versioned ones. glib needs python, so
-# python is in R's build envs on unix. R's Windows build uses none of
-# glib, fontconfig, freetype and expat (its cairo has none of their
-# backends; zigbuild/cairo.zig); they stay in every env, as before.
-glib = "*"
+# glib: unix only ([target.unix.dependencies]).
 
 # conda-forge's linux cairo is built with X11 backends; its pkg-config
 # metadata needs the xorg proto files even though R is built --with-x=no
 [target.linux.dependencies]
 xorg-xorgproto = "*"
 
-# cairo/pango/harfbuzz (see above), then shell + GNU text tools for the
+# cairo/pango/harfbuzz and glib (see above), then shell + GNU text tools for the
 # scripts and configure runs (all from conda-forge)
 [target.unix.dependencies]
 cairo = "*"
+# glib, not libglib alone (2026-10-08, glib 2.90.0): R's cairo device
+# compiles against pango's headers, which include glibconfig.h, and only
+# glib ships it (lib/glib-2.0/include). R links -lgobject-2.0 -lglib-2.0,
+# and the unversioned libraries those name are in glib-tools, which glib
+# brings; libglib has only the versioned ones. glib needs python, so
+# python is in R's build envs on unix. Unix only since 2026-11-14: R's
+# Windows build uses no glib (its cairo has none of its backends;
+# zigbuild/cairo.zig), and on Windows glib's python brought tk, tcl and
+# libintl-devel into Windows slim. fontconfig, freetype and expat are
+# unused on Windows too; they stay in every env, as before.
+glib = "*"
 # pango/harfbuzz pinned to the lockfile's current generation: a fresh solve
 # (flang-zig-validation worktree, 2026-09-19) pulled pango 1.58 + the split
 # libharfbuzz 14.3, which break R 4.6.2's cairo device compile (hb.h
@@ -371,20 +379,17 @@ strace = "*"
 # rzig's (binutils.zig; feat-win-zig-binutils), and the toolchain tree
 # copies none. pixman: cairo's, which R's build compiles for winCairo.dll
 # (zigbuild/cairo.zig) with the env's libpng and zlib.
+# Windows slim has slim's libraries only (2026-11-14): tk comes with
+# feature.tcltk and libjpeg-turbo/libtiff with feature.img-formats, in
+# the full envs, as on unix. No gettext on Windows in any variant: R's
+# NLS there is its own src/extra/intl (build.zig), not libintl.
+# zstd: R.dll links -lzstd (WIN_R_DLL_LIBS) in every variant. Listed so
+# R's own link inputs do not depend on the toolchain's closure (on
+# Windows libcurl does not bring it).
 [target.win.dependencies]
 llvm-tools = "*"
 pixman = "*"
-# gnuwin32 has no slim switches: Windows R unconditionally builds the
-# bitmap devices (jpeg/tiff) and the tcltk package, so slim-on-Windows
-# carries these (B42: Windows slim has full's content; making it really
-# slim is an open item, .github/devdocs/feat-standalone-toolchain/TODO.md)
-libjpeg-turbo = "*"
-libtiff = "*"
-# Tcl/Tk 8.6: tcltk.dll links tcl86t/tk86t (WIN_TCLTK_LIBS) and R_HOME/Tcl
-# is 8.6's layout (build.zig installEnvRuntime); conda-forge's tk 9.0 has
-# other names (tcl90.dll, tcl9tk90.dll). recipe/recipe.yaml pins the same.
-tk = "8.6.*"
-gettext = "*"
+zstd = "*"
 # MSYS2's userland. The toolchain tree's build-tools group copies every
 # file of m2-bash, m2-make, m2-coreutils, m2-sed, m2-grep, m2-gawk,
 # m2-which, m2-findutils and m2-patch's usr/bin, with the MSYS DLLs they
@@ -432,8 +437,11 @@ uutils-coreutils = "*"
 # --- optional capabilities (compile-time: only via the 'full' environment) ---
 
 [feature.tcltk.dependencies]
-# 8.6: the vendored config links -ltcl8.6 -ltk8.6, and the tree ships
-# lib/tcl8.6 (build.zig installEnvRuntime); see [target.win.dependencies].
+# 8.6 on every OS. unix: the vendored config links -ltcl8.6 -ltk8.6, and
+# the tree ships lib/tcl8.6 (build.zig installEnvRuntime). Windows:
+# tcltk.dll links tcl86t/tk86t (TCLTK_LIBS) and R_HOME/Tcl is 8.6's
+# layout; conda-forge's tk 9.0 has other names (tcl90.dll,
+# tcl9tk90.dll). recipe/recipe.yaml pins the same.
 tk = "8.6.*"
 
 [feature.img-formats.dependencies]
@@ -444,6 +452,8 @@ libtiff = "*"
 readline = "*"
 ncurses = "*"
 
+# unix only: Windows R's NLS is its own src/extra/intl, so Windows full
+# needs no gettext (build.zig installs its libintl.h into R_HOME/include).
 [feature.nls.target.unix.dependencies]
 gettext = "*"
 
@@ -489,8 +499,10 @@ R_BLAS = "openblas"
 # [dependencies] (Fortran included) and the per-target coreutils
 # sections: keep them in sync. (The tasks are shared through
 # [feature.pipeline.tasks].)
-# Unix only: gnuwin32 has no switches for any of this (Windows is always
-# full, see build.zig).
+# On every OS since 2026-11-14 (win-minimal config dir; build.zig's
+# variant table). Windows gets the same MSYS2 userland and llvm-tools as
+# default's [target.win.dependencies], and zstd for R.dll's -lzstd. The
+# wheel ([feature.wheel]) stays unix only.
 #
 # The wheels (`pixi run -e wheel wheel`) wrap this variant's standalone
 # tree: r-zig is the tree. The runtime compiler for install.packages() is
@@ -498,7 +510,7 @@ R_BLAS = "openblas"
 # which the r-zig-compilers wheel requires (feat-standalone-toolchain
 # B29).
 [feature.minimal]
-platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64", "win-arm64"]
 
 [feature.minimal.activation.env]
 R_VERSION = "4.6.2"
@@ -507,7 +519,6 @@ R_BUILD_VARIANT = "minimal"
 [feature.minimal.dependencies]
 zig = "0.17.*"
 make = ">=4.4"
-pkg-config = "*"
 curl = "*"
 zlib = "*"
 bzip2 = "*"
@@ -515,6 +526,14 @@ xz = "*"
 liblzma-devel = "*"
 pcre2 = "*"
 libcurl = "*"
+flang-zig = { version = "==23.1.5", build-number = "==0" }  # pins: see [dependencies]
+flang-rt-zig = { version = "==23.1.5", build-number = "==1" }
+
+# pkg-config: unix only. On Windows conda-forge's pkg-config brings
+# libglib and libffi (minimal-deny.txt), and packages get the toolchain
+# group's pkgconf (build.zig's Rcmd_environ).
+[feature.minimal.target.unix.dependencies]
+pkg-config = "*"
 bash = "*"
 which = "*"
 sed = "*"
@@ -525,8 +544,26 @@ gzip = "*"
 unzip = "*"
 zip = "*"
 patch = "*"
-flang-zig = { version = "==23.1.5", build-number = "==0" }  # pins: see [dependencies]
-flang-rt-zig = { version = "==23.1.5", build-number = "==1" }
+
+# As default's [target.win.dependencies], without pixman (no cairo).
+[feature.minimal.target.win.dependencies]
+llvm-tools = "*"
+zstd = "*"
+m2-bash = "*"
+m2-make = "*"
+m2-coreutils = "*"
+m2-diffutils = "*"
+m2-findutils = "*"
+m2-texinfo = "*"
+m2-which = "*"
+m2-tar = "*"
+m2-gzip = "*"
+m2-sed = "*"
+m2-grep = "*"
+m2-gawk = "*"
+m2-unzip = "*"
+m2-zip = "*"
+m2-patch = "*"
 
 [feature.minimal.target.linux-64.dependencies]
 uutils-coreutils = "*"
@@ -546,7 +583,11 @@ uutils-coreutils = "*"
 [feature.minimal.target.osx-arm64.dependencies]
 uutils-coreutils = "*"
 
-# minimal's packages in pixi.lock, all four platforms, against
+# win-64 only, as default's [target.win-64.dependencies].
+[feature.minimal.target.win-64.dependencies]
+uutils-coreutils = "*"
+
+# minimal's packages in pixi.lock, all six platforms, against
 # scripts/minimal-deny.txt (the graphics stack, glib, python, ...). Reads
 # the lock only. Run it after every re-lock; CI runs it on the minimal
 # legs (build-r.yaml).
@@ -780,8 +821,9 @@ stress = { cmd = "build/compile-tree/slim/R-$R_VERSION-zig/Library/lib/R/bin/x64
 # _1009, which brought libglib and libffi (linux-aarch64, osx-arm64) and
 # libgcc-ng and libstdcxx-ng (linux) into minimal. After a re-lock, run
 # `pixi run -e minimal minimal-check` (scripts/minimal-deny.txt; CI runs
-# it too); verify-tree checks only what R links. minimal has no win-64,
-# so the group's win-64 solve leaves minimal's features out. wheel stays
+# it too); verify-tree checks only what R links. minimal has Windows
+# since 2026-11-14, so the group's win-64 and win-arm64 solves include
+# minimal's specs too (a subset of default's). wheel stays
 # out: it is Python-only and nothing in it builds or links R, and in the
 # group its python (libpython needs libcxx >= 20) would share versions
 # with R's build envs, where zig holds libcxx at 21.* on macOS.
