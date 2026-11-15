@@ -125,6 +125,16 @@ Silent differences (exit 0 on both sides, different output):
   `-n`; rzig prints the words as they are. No Makeconf value has either.
 - `R CMD config` with R_HOME containing spaces: the script broke (its
   `R_HOME=${R_HOME}` is unquoted in an eval); rzig answers.
+- Windows (kappa, 2026-11-13): the script runs under MSYS's sh and
+  make, which see the environment as MSYS converts it. A path from the
+  environment (`$$HOME`, CURDIR) prints in MSYS's spelling there
+  (`/tmp/...`); rzig, a native program, prints the native one R gives it
+  (`C:\...`; CURDIR `C:/...`, as make writes it). Same directory, other
+  spelling; for R's native callers (pkgbuild, rstan) the native one is
+  the usable one. `$$SHELL` prints MSYS bash's `/usr/bin/bash` under the
+  script and nothing under rzig (no SHELL in R's environment).
+  config-parity.sh maps the scratch directory's spellings to one token
+  on Windows and leaves the two `$$SHELL` cases out there.
 
 Exit 2 where make answers (decision 4 A: a refusal, never a wrong
 answer). The full list:

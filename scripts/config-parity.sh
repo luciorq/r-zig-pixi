@@ -38,6 +38,7 @@ if grep -q 'r-zig' "$script"; then
 fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/config-parity.XXXXXX")"
+work_sh="$work"   # as MSYS's sh spells it (Windows: /tmp/...)
 trap 'rm -rf "$work"' EXIT
 # Windows: one spelling (C:/...) for rzig and for MSYS's sh and make
 if command -v cygpath > /dev/null 2>&1; then work="$(cygpath -m "$work")"; fi
@@ -48,12 +49,29 @@ cd "$work"
 
 fail=0
 n=0
+skipped=""
+# Windows: R's script runs under MSYS's sh and make, which see the
+# environment as MSYS converts it (HOME, the working directory: /tmp/...),
+# while rzig, a native program, prints the native spellings it gets
+# (C:\... from R, C:/... for CURDIR). The values are the same directory, so
+# each output has the scratch directory's spellings replaced by
+# <work> (and a backslash after it by a slash) before the comparison.
+norm_paths() {
+  [ "$OS" = windows ] || return 0
+  local f
+  for f in "$@"; do
+    WU="$work_sh" WU2="$(cygpath -u "$work")" WM="$(cygpath -m "$work")" WW="$(cygpath -w "$work")" awk '
+      function rep(s, f,   o, i) { o = ""; while (f != "" && (i = index(s, f)) > 0) { o = o substr(s, 1, i - 1) "<work>"; s = substr(s, i + length(f)) } return o s }
+      { $0 = rep($0, ENVIRON["WW"]); $0 = rep($0, ENVIRON["WM"]); $0 = rep($0, ENVIRON["WU"]); $0 = rep($0, ENVIRON["WU2"]); gsub(/<work>\\/, "<work>/"); print }' "$f" > "$f.n" && mv "$f.n" "$f"
+  done
+}
 # compare <label> <args...>: R CMD config <args> against R's script
 compare() {
   local label="$1"; shift
   local rc_a=0 rc_b=0
   "$R" CMD config "$@" > a.out 2> a.err || rc_a=$?
   "$R" CMD sh "$script" "$@" > b.out 2> b.err || rc_b=$?
+  norm_paths a.out b.out a.err b.err
   n=$((n + 1))
   if [ "$rc_a" != "$rc_b" ] || ! cmp -s a.out b.out || ! cmp -s a.err b.err; then
     fail=$((fail + 1))
@@ -176,9 +194,17 @@ mk_case 'HOME = /x
 override R_HOME = /y
 CFLAGS = $$HOME $$R_HOME $$VAR'
 mk_case 'CFLAGS = $(MAKE) $(MAKELEVEL) $$MAKELEVEL $(CURDIR) $(origin MAKELEVEL) $(origin CURDIR) $(flavor CURDIR)'
-mk_case 'CFLAGS = $(SHELL) $$SHELL $(.SHELLFLAGS) $(MAKECMDGOALS)'
-mk_case 'export SHELL
+# $$SHELL: on Windows MSYS's bash puts its own SHELL (/usr/bin/bash) in
+# the environment of make's sh, which a native R and rzig never see: a
+# deliberate difference there (feat-config-rzig PLAN.md)
+if [ "$OS" != windows ]; then
+  mk_case 'CFLAGS = $(SHELL) $$SHELL $(.SHELLFLAGS) $(MAKECMDGOALS)'
+  mk_case 'export SHELL
 CFLAGS = $$SHELL'
+else
+  mk_case 'CFLAGS = $(SHELL) $(.SHELLFLAGS) $(MAKECMDGOALS)'
+  skipped=2
+fi
 mk_case 'vpath %.c src
 CFLAGS = ok "*" '"'"'?'"'"' \['
 printf 'CC = $(MAKECMDGOALS)\n' > "$work/user.mk"
@@ -228,4 +254,4 @@ if [ "$fail" != 0 ]; then
   echo "error: R CMD config differs from R's script in $fail of $n cases" >&2
   exit 1
 fi
-echo "== R CMD config (rzig) matches R's script with make in all $n cases, and exits 2 where only make can answer"
+echo "== R CMD config (rzig) matches R's script with make in all $n cases, and exits 2 where only make can answer${skipped:+ ($skipped \$\$SHELL cases left out on Windows)}"

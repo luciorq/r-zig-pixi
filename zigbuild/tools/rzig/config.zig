@@ -22,6 +22,7 @@
 //! (user's decision 2026-11-13, no fallback to make). A recursive value
 //! that holds `$(shell)` but is not printed does no harm.
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const Io = std.Io;
 const Ctx = @import("Ctx.zig");
@@ -230,9 +231,10 @@ fn evaluator(ctx: *Ctx, s: Setup, variable: []const u8, goal: []const u8) !makef
     try e.seedDefaults(if (s.windows) "make" else ctx.getenv("MAKE") orelse "make");
     try e.importEnvironment(ctx.env);
     if (s.windows) if (ctx.env.get("MAKE") != null) try e.setEnvironment("MAKE", "make");
-    // CURDIR: make (also Windows' GNU make) writes it with forward slashes
+    // CURDIR: make (also Windows' GNU make) writes it with forward slashes;
+    // by the host too, since a backslash is an escape in sh's words
     const cwd = try Io.Dir.cwd().realPathFileAlloc(ctx.io, ".", ctx.arena);
-    if (s.windows) mem.replaceScalar(u8, cwd, '\\', '/');
+    if (s.windows or builtin.os.tag == .windows) mem.replaceScalar(u8, cwd, '\\', '/');
     try e.seedMakeVariables(cwd, goal);
     // Windows: the script sets them from R_HOME; unix: R CMD's, or the
     // same defaults for rzig started by hand (Makeconf includes
@@ -638,7 +640,9 @@ test "what make exports to the echo, and the variables make sets itself" {
     }
     try f.write("mine.mk", "CFLAGS = $(CURDIR)\n", .default_file);
     var x = try runConfig(&f, &.{"CFLAGS"});
-    try testing.expect(x.out.len > 2 and x.out[0] == '/');
+    // the host's working directory, with forward slashes (C:/... on Windows)
+    try testing.expect(x.out.len > 2 and mem.indexOfScalar(u8, x.out, '\\') == null and
+        std.fs.path.isAbsolute(x.out[0 .. x.out.len - 1]));
     try f.env.put("MAKELEVEL", "3");
     try f.write("mine.mk", "CFLAGS = $(MAKELEVEL) $$MAKELEVEL\n", .default_file);
     x = try runConfig(&f, &.{"CFLAGS"});
