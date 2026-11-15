@@ -42,7 +42,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout }}
     steps:
       - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.11.0
+      - uses: prefix-dev/setup-pixi@v0.11.3
         with:
           # The pixi that wrote pixi.lock, bumped with it (pixi.lock's
           # format 7 needs pixi 0.68 or newer). Unset, setup-pixi installs

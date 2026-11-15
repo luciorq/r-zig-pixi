@@ -374,7 +374,8 @@ llvm-tools = "*"
 pixman = "*"
 # gnuwin32 has no slim switches: Windows R unconditionally builds the
 # bitmap devices (jpeg/tiff) and the tcltk package, so slim-on-Windows
-# carries these (parity caveat, tracked in TODO.md)
+# carries these (B42: Windows slim has full's content; making it really
+# slim is an open item, .github/devdocs/feat-standalone-toolchain/TODO.md)
 libjpeg-turbo = "*"
 libtiff = "*"
 # Tcl/Tk 8.6: tcltk.dll links tcl86t/tk86t (WIN_TCLTK_LIBS) and R_HOME/Tcl
