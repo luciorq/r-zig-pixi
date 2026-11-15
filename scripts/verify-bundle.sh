@@ -3003,7 +3003,12 @@ fi
 [ -n "$same" ] || { echo "error: under R CMD, rzig's check found '$r', not ${cmake_exe#"$VERIFY_DIR"/}" >&2; exit 1; }
 cmk_install with ||
   { cat "$cmk/with.log" >&2; echo "error: with the extras, cmkpkg (a static library built by CMake in its configure) did not install" >&2; exit 1; }
-if starts_line "$cmk/with.log" "zig-cc: cmkpkg: note:" || ! grep -q "^cmkpkg: cmake at .*/bin/toolchain/cmake/bin/cmake" "$cmk/with.log"; then
+# On Windows configure's sh is MSYS's, whose root is R_HOME/bin/toolchain
+# (msys-2.0.dll in TC/usr/bin), so `command -v` spells TC/cmake/bin/cmake
+# as /cmake/bin/cmake.
+cmk_at='^cmkpkg: cmake at .*/bin/toolchain/cmake/bin/cmake'
+[ "$OS" != windows ] || cmk_at='^cmkpkg: cmake at (.*/bin/toolchain)?/cmake/bin/cmake'
+if starts_line "$cmk/with.log" "zig-cc: cmkpkg: note:" || ! grep -Eq "$cmk_at" "$cmk/with.log"; then
   cat "$cmk/with.log" >&2; echo "error: with the extras, cmkpkg's configure did not run the group's cmake, or the preflight still noted it missing" >&2; exit 1
 fi
 (cd "$cmk" && env -i "${base_env[@]}" PATH="$cmk_path" "$RSCRIPT" --vanilla -e 'stopifnot(getExportedValue(loadNamespace("cmkpkg", lib.loc = "lib"), "f")() == 44L)') ||
