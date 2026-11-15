@@ -70,11 +70,15 @@ OBJ_DIR="$BUILD_DIR/obj-$R_VERSION-$FLAVOR"
 # (feat-standalone-toolchain B1, B36): each flavor's R tree is
 # dist/<flavor>/R-<ver>-zig, the toolchain tree (the groups' directories,
 # B30) dist/toolchain/R-<ver>-zig. So no flavor may be named toolchain,
-# conda or wheel, dist/'s other directories.
+# conda, wheel or recommended, dist/'s other directories.
 TOP="R-$R_VERSION-zig"
 # R_INSTALL_PREFIX override: the conda recipe installs into rattler's $PREFIX
 PREFIX="${R_INSTALL_PREFIX:-$ROOT/dist/$FLAVOR/$TOP}"
 TOOLCHAIN_PREFIX="${R_TOOLCHAIN_PREFIX:-$ROOT/dist/toolchain/$TOP}"
+# R's recommended packages (zig-recommended.sh): their own tree per
+# flavor, since mgcv links OpenMP, which minimal has not. The conda build
+# sets R_RECOMMENDED_PREFIX to its prefix, the env.
+RECOMMENDED_PREFIX="${R_RECOMMENDED_PREFIX:-$ROOT/dist/recommended/$FLAVOR/$TOP}"
 R_HOME_DIR="$PREFIX/$RH"
 # The toolchain groups (feat-standalone-toolchain B38) and the directories
 # under R_HOME/bin/toolchain each one holds (B20, B23, B24): compilers,

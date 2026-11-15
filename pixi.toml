@@ -27,7 +27,9 @@ version = "0.1.0"
 # Two build variants, mapped to pixi environments:
 #   default -> "slim": headless. cairo+png graphics, ICU, pcre2, libcurl,
 #              compression, internal BLAS/LAPACK, R shlib. No X11/quartz/
-#              tcltk/readline/NLS/jpeg/tiff, no recommended packages.
+#              tcltk/readline/NLS/jpeg/tiff. R's recommended packages
+#              are a product of their own (pixi run recommended;
+#              r-zig-recommended), never in the R tree.
 #   full    -> adds tcltk, readline, NLS, jpeg+tiff devices.
 # Capabilities are baked at compile time, so these are separate configure
 # runs (separate objdirs/prefixes), not just dependency toggles.
@@ -184,6 +186,23 @@ unpack-toolchain = "bash scripts/unpack-toolchain.sh"
 # scripts and makefiles run the build-tools group's sh and make. Needs `build` and
 # the toolchain tree (`toolchain`, or `unpack-toolchain`).
 compile-tree = "bash scripts/compile-tree.sh"
+# R's 15 recommended packages (feat-recommended-packages PLAN.md), from
+# the tarballs R's source carries, in the order of its
+# src/library/Recommended/Makefile.in, by their own zig build
+# (zigbuild/recommended/build.zig), installed by the compile tree's R
+# into dist/recommended/<flavor>/R-<ver>-zig: a tree of their own, never
+# the R tree. Arguments go to zig build (`-- -Djobs=6`: one package's
+# compile jobs; `--summary all`: each package's time).
+recommended = { cmd = "bash scripts/zig-recommended.sh", depends-on = ["compile-tree"] }
+# That build's unit tests: order.zig's makefile readers.
+recommended-test = "bash scripts/zig-recommended.sh test"
+# Static checks of that tree (only the 15, each library the base's or
+# the system's, relative rpaths, no build path) and
+# recipe/test-recommended.R with the base's R.
+verify-recommended = "bash scripts/verify-recommended.sh"
+# Its archive, dist/R-<ver>-<flavor>-<platform>-recommended.tar.gz
+# (Windows .zip), extracted over the base archive. Only archives.
+package-recommended = "bash scripts/package-standalone.sh recommended"
 # Tier 0/1 with an empty environment and only the tree's own programs on
 # PATH (unix: <tree>/bin, strace on linux; Windows: bin\x64 plus
 # System32): start R, install without compiling, and a compiled package

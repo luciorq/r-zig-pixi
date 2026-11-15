@@ -56,3 +56,8 @@ if [ -d pkgconf-src ]; then
   pkgconf=("-Dpkgconf=$(cygpath -m "$PWD/pkgconf-src")")
 fi
 R_TOOLCHAIN_PREFIX="$PREFIX" bash scripts/zig-toolchain.sh "${pkgconf[@]}"
+# R's recommended packages (feat-recommended-packages PLAN.md), into the
+# env with the env's R: r-zig-recommended's files (the recipe's globs;
+# r-zig-slim leaves them out). Last: they need R and, for Matrix's
+# makefile rules, make, which the build env has.
+R_RECOMMENDED_PREFIX="$PREFIX" bash scripts/zig-recommended.sh

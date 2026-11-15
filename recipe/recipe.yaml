@@ -1,5 +1,11 @@
 context:
   version: "4.6.2"
+  # R's recommended packages (share/make/vars.mk's R_PKGS_RECOMMENDED),
+  # as one glob: r-zig-recommended's files, which r-zig-slim leaves out
+  # (feat-recommended-packages PLAN.md). zigbuild/recommended/ reads the
+  # list from R's source; test-recommended.R holds the package to R's own
+  # list, so a name missing here fails there.
+  recommended: "{MASS,lattice,Matrix,nlme,survival,boot,cluster,codetools,foreign,KernSmooth,rpart,class,nnet,spatial,mgcv}"
 
 recipe:
   name: r-zig
@@ -438,11 +444,14 @@ outputs:
       # these, the conda build makes only Windows' usr/ (pkgconf), which
       # r-zig-build-tools owns; etc/ is the standalone tree's only on
       # Windows (PHASE7 Cr5); binutils/ is gone (feat-win-zig-binutils) and
-      # stays excluded so no old tree's copy can ride along
+      # stays excluded so no old tree's copy can ride along. R's
+      # recommended packages are r-zig-recommended's.
       files:
         exclude:
           - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
           - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
+          - lib/R/library/${{ recommended }}/**
+          - Library/lib/R/library/${{ recommended }}/**
     requirements:
       run:
         # R's own shared libraries (libR, base packages like stats/utils via
@@ -614,6 +623,8 @@ outputs:
             not_exists:
               - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
               - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
+              - lib/R/library/${{ recommended }}/**
+              - Library/lib/R/library/${{ recommended }}/**
     # Windows builds R with full's content, under the name slim on every
     # channel (feat-standalone-toolchain B42 a); a Windows slim that is
     # really slim is a later aim.
@@ -832,6 +843,63 @@ outputs:
             - test-toolchain.R
     about:
       summary: "The r-zig toolchain for r-zig-slim: r-zig-compilers and r-zig-build-tools"
+
+  # R's 15 recommended packages (MASS, lattice, Matrix, ..., mgcv), from
+  # the tarballs R's source carries, installed by build.sh's last step
+  # (scripts/zig-recommended.sh, zigbuild/recommended/build.zig) with the
+  # R and the compilers this build made (feat-recommended-packages
+  # PLAN.md). Opt-in: no other package depends on it (the user,
+  # 2026-11-12: "Recommended packages need to ship on their own conda
+  # package"). Its binaries need libR, Rblas, Rlapack and (mgcv) libomp,
+  # all r-zig-slim's (the Fortran runtime is static), so it pins the
+  # exact r-zig-slim build and has no run export of the staging host.
+  - package:
+      name: r-zig-recommended
+    inherit:
+      from: r-zig-build
+      run_exports: false
+    build:
+      files:
+        - lib/R/library/${{ recommended }}/**
+        - Library/lib/R/library/${{ recommended }}/**
+    requirements:
+      run:
+        - ${{ pin_subpackage("r-zig-slim", exact=True) }}
+    tests:
+      - package_contents:
+          files:
+            exists:
+              - if: win
+                then:
+                  - Library/lib/R/library/Matrix/libs/x64/Matrix.dll
+                  - Library/lib/R/library/mgcv/libs/x64/mgcv.dll
+                else:
+                  - lib/R/library/Matrix/libs/Matrix.so
+                  - lib/R/library/mgcv/libs/mgcv.so
+            not_exists:
+              - lib/R/bin/**
+              - Library/lib/R/bin/**
+              - lib/R/library/{base,stats,utils,tools}/**
+              - Library/lib/R/library/{base,stats,utils,tools}/**
+      - script:
+          content:
+            - if: win
+              then:
+                - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-recommended.R'
+              else:
+                - $PREFIX/bin/Rscript test-recommended.R
+        files:
+          recipe:
+            - test-recommended.R
+    about:
+      summary: R's 15 recommended packages (MASS, lattice, Matrix, nlme, survival, mgcv, ...) for r-zig-slim
+      # each package's DESCRIPTION: GPL (>= 2) cluster, foreign, lattice,
+      # mgcv, nlme, Matrix; GPL-2 | GPL-3 class, MASS, nnet, rpart,
+      # spatial; GPL codetools; LGPL (>= 2) survival; Unlimited boot,
+      # KernSmooth; Matrix's bundled SuiteSparse (its LICENCE file):
+      # BSD-3-Clause, LGPL-2.1-or-later, GPL-2.0-or-later, and METIS,
+      # Apache-2.0. The texts are in each package's directory.
+      license: GPL-2.0-or-later AND (GPL-2.0-only OR GPL-3.0-only) AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause AND Apache-2.0 AND LicenseRef-Unlimited
 
 about:
   homepage: https://www.r-project.org

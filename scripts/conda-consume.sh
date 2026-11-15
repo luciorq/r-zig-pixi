@@ -6,10 +6,11 @@
 # Library/bin/Rscript.bat, which rattler-build's test phase cannot run).
 # CI runs it on every conda-package leg before the publish; each host runs
 # it after conda-package (feat-standalone-toolchain phase 4; PHASE4 Cg8).
-# One manifest, four environments: the base alone, base + compilers,
-# base + build tools, and r-zig-toolchain, the metapackage of both groups
+# One manifest, five environments: the base alone, base + compilers,
+# base + build tools, r-zig-toolchain, the metapackage of both groups
 # (test-toolchain.R through activation, as a user's `pixi add
-# r-zig-toolchain` gets it; PHASE7 open point P a). Removing a group is
+# r-zig-toolchain` gets it; PHASE7 open point P a), and base + R's
+# recommended packages (feat-recommended-packages). Removing a group is
 # the package manager's, and the files that move between packages are the
 # upgrade test's.
 . "$(dirname "$0")/env.sh"
@@ -46,14 +47,18 @@ r-zig-build-tools = "*"
 [feature.toolchain.dependencies]
 r-zig-toolchain = "*"
 
+[feature.recommended.dependencies]
+r-zig-recommended = "*"
+
 [environments]
 compilers = ["compilers"]
 build-tools = ["build-tools"]
 toolchain = ["toolchain"]
+recommended = ["recommended"]
 EOF
 # the zig cache conda-package's recipe tests filled (pixi.toml)
 export R_ZIG_TEST_ZIG_CACHE="$cache"
-for t in default:test-preflight.R compilers:test-compilers.R build-tools:test-build-tools.R toolchain:test-toolchain.R; do
+for t in default:test-preflight.R compilers:test-compilers.R build-tools:test-build-tools.R toolchain:test-toolchain.R recommended:test-recommended.R; do
   echo "== ${t%%:*}: ${t#*:}"
   "$pixi" run --manifest-path "$T/pixi.toml" -e "${t%%:*}" Rscript "$rec/${t#*:}"
 done
