@@ -22,9 +22,9 @@ The groups follow the brief:
 | group | what it tests | rows |
 |---|---|---|
 | g3 | C libraries from the env (rzig's `-I`/`-L` rule) | curl, openssl, xml2, gert, units, systemfonts, textshaping, ragg, magick, hdf5r, ncdf4, gsl, Rmpfr, RPostgres |
-| g4 | own build systems and bundled code | nloptr, s2, igraph, stringi, stringi:bundled, qs2, fst, geos, Rhdf5lib |
+| g4 | own build systems and bundled code | nloptr, s2, igraph, stringi, stringi:bundled, qs2, fst, geos, Rhdf5lib, Rsamtools |
 | g2 | C++ across a library boundary (the C++ ABI risk) | lwgeom, sf, terra, gdalraster, RcppParallel, RcppParallel:system-tbb, protolite, arrow, arrow:source, V8 |
-| g1 | heavy C++ | Rcpp, RcppArmadillo, lme4, StanHeaders, rstan, duckdb, mlpack |
+| g1 | heavy C++ | Rcpp, RcppArmadillo, lme4, DESeq2, scran, StanHeaders, rstan, duckdb, mlpack |
 | g0 | rzig itself: many tiny jobs at a high `-j`, repeated | tinyjobs |
 
 The runner installs the rows in file order (cheap groups first), each after

@@ -4,17 +4,20 @@ Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
 #46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
 published.
 
-Status (2026-11-15): one tree, T/wt/rel11-fix (detached at 0e4f145,
-uncommitted): findings 25 (recipe/variants.yaml), 26 (stress on
-win-arm64), the review corrections, 27 (the lock bump), 28
-(etc/r-zig.cmake on every OS; Rhdf5lib), 29 (rzig names R's target to
-zig and flang on every OS; the env.sh platform guard; the pango and
-harfbuzz pins lifted) and 30 (clang's CPU names in -march/-mcpu;
-arrow on macOS x86_64). Lock 55d166564bd6 (dadd317726cf before
-finding 29's pango lift). The linux-64 chain, conda-package and the
-Rhdf5lib stress row pass there. New files: recipe/variants.yaml and
-zigbuild/tools/rzig/target.zig, both to be added with `git add`.
-Next: the user commits it on feat-win-arm64, then the CI full tier
+Status (2026-11-16): one tree, T/wt/rel11-fix (feat-win-arm64 at
+5dd40cf, which holds findings 25-30; 31 and 32 uncommitted):
+findings 25 (recipe/variants.yaml), 26 (stress on win-arm64), the review
+corrections, 27 (the lock bump), 28 (etc/r-zig.cmake on every OS;
+Rhdf5lib), 29 (rzig names R's target to zig and flang on every OS;
+the env.sh platform guard; the pango and harfbuzz pins lifted), 30
+(clang's CPU names in -march/-mcpu; arrow on macOS x86_64) and 31 (the
+C++ ABI on linux: the r-base constraint, three Bioconductor stress
+rows; 2026-11-16) and 32 (rzig passes objects with unknown extensions,
+such as htslib's .pico, as cached .o copies; 2026-11-16). Lock
+55d166564bd6 (dadd317726cf before finding 29's pango lift), unchanged
+by 31 and 32. The linux-64 chain, conda-package and the Rhdf5lib,
+DESeq2, scran and Rsamtools stress rows pass there. Next: the user
+commits findings 31 and 32 on feat-win-arm64, then the CI full tier
 (`full-ci` label), then a stress dispatch on all runners (tree and
 conda), then the publish preflight and the release of build 11.
 
@@ -983,6 +986,90 @@ flang-pixi), README sections for the three items, and findings 19-21.
       env behind zig's own directories on linux (no SDK) against
       keeping -I.
 
+31. **The C++ ABI on linux (2026-11-16): the six linux fail-abi stress
+    rows (magick, sf, terra, gdalraster, protolite, V8).** zig c++ links
+    its own libc++ (std::__1); conda-forge's linux C++ libraries are gcc
+    builds over libstdc++ (std::__cxx11), so a package that calls their
+    C++ API (Magick++, GDAL's OGR/GDAL classes, protobuf, a libstdc++
+    libv8) fails to load on undefined std::__1 symbols. macOS is not
+    affected (libc++ on both sides). Three probes and a judge, under T/:
+    - abi-libstdcxx: zig c++ against conda's libstdc++ (the env's
+      libstdcxx-devel headers in lib/gcc/x86_64-conda-linux-gnu/15.3.0,
+      -nostdinc++ with -I and --system-header-prefix, two shim headers,
+      link -nostdlib++ -l:libstdc++.so.6 -l:libgcc_s.so.1; zig ignores
+      -stdlib=libstdc++, maps -lstdc++ to its libc++ and drops -lgcc_s;
+      -isystem fails, zig's libc directories come first). All six
+      install, load and pass their smokes. But Rcpp passes std::string
+      across .so files (demangle() through R_GetCCallable): a libstdc++
+      package with a libc++ Rcpp gives 'double free' on any C++
+      exception, the reverse 'irrecoverable exception'. So the choice
+      is for all C++ on linux, not per package. R already loads
+      libstdc++.so.6 (GLIBCXX_3.4.36, the tree's lib/) through ICU;
+      packages need GLIBCXX_3.4.32.
+    - abi-condaforge-bin: conda-forge's prebuilt r-* packages beside
+      r-zig. conda-forge has r-base 4.6.2 but no r46 package builds
+      yet; the r45 binaries of the six load in r-zig's R 4.6.2 once
+      rlang is rebuilt (r45 rlang needs SETLENGTH, gone in R 4.6), but
+      mixing toolchains through Rcpp crashes (zig Rcpp with conda's
+      terra: double free). Found a hazard: with r-zig-slim in an env,
+      `pixi add r-magick` silently installs conda-forge's r-base over
+      r-zig's R (no clobber warning; channel priority does not stop
+      it).
+    - abi-cxxrebuild: rebuild the C++ libraries with zig and libc++:
+      Magick++ (19 files, seconds), GDAL 3.13.2 (about 5 min, 37 MB
+      stripped, without xerces-c, libkml, muparser), abseil + protobuf
+      (about 2 min), V8 from jeroen's libc++ bundle (its configure takes
+      it only when $CXX contains "clang"). All six work (not tested: a
+      C++ exception thrown inside libgdal and caught in a package), but
+      each library is a rebuild r-zig would own, and GDAL loses drivers.
+    - abi-judge: confirmed read-only in this tree that r-zig-slim had
+      no r-base constraint and that rzig has no stdlib selection today;
+      arrow's linux ok depends on arrow refusing its libstdc++ prebuilt
+      under libc++ (it builds from source), which option 1 (below)
+      changes.
+    User decision (2026-11-16): release 11 keeps the six as linux
+    fail-abi (their notes name this finding); recipe/recipe.yaml gives
+    r-zig-slim the run constraint `r-base <0a0`, so that solve fails and
+    names the conflict; stress/packages.tsv gets three Bioconductor rows
+    (DESeq2 and scran in g1, Rsamtools with Rhtslib's bundled htslib in
+    g4). Option 1, libstdc++ for all C++ on linux, goes on the next
+    branch; rerun there the cpp11 rows RPostgres, systemfonts,
+    textshaping and ragg too (textshaping's header passes std::vector
+    across packages to ragg, so switching per package is unsafe).
+    Stress on linux-64 (gamma, tree, zig 0.17.1, jobs 4, 14.9 min;
+    T/bioc-rows/run): DESeq2 and scran ok. Rsamtools is skipped:
+    Rhtslib's htslib Makefile links libhts.so from objects named .pico,
+    and zig cc (both zigs) stops at them ("kfunc.pico: unrecognized
+    file extension"); GNU ld reads them as objects. With .pico renamed
+    .pic.o by hand, Rhtslib and Rsamtools install and pass the smoke.
+    Fixed by finding 32; Rsamtools is now linux=ok. The r-base
+    constraint was checked with a noarch probe package: with it, adding
+    r-magick or r-base fails to solve and names r-base; without it,
+    r-magick pulls conda-forge's r-base 4.5.3 (T/bioc-rows/constraint).
+    The design and what was ruled out: .github/devdocs/CXX-STDLIB.md.
+
+32. **rzig: object files with unknown extensions (2026-11-16).**
+    Rhtslib's htslib links libhts.so from objects named kfunc.pico, ...;
+    zig cc (both zigs) classifies link inputs by extension and stops
+    ("kfunc.pico: unrecognized file extension"; `-Wl,kfunc.pico` fails
+    too), where GNU ld reads the file. zigbuild/tools/rzig/archives.zig,
+    which already passed archives without a known extension as cached
+    <name>.a copies (Z6), now reads an input's first bytes and passes a
+    relocatable object as <cache>/object-<key>/<name>.o: ELF ET_REL
+    (either byte order), Mach-O MH_OBJECT (32/64 bit, either byte order,
+    also in a universal file), COFF for x86, x64 or arm64 with no
+    optional header, LLVM bitcode (bare or wrapped). Unchanged: names
+    zig takes, source names, option values (-o, -include, ...),
+    compile-only calls, shared libraries and executables under any name
+    (a shared library without a SONAME is recorded by its path, which
+    must not be the cache's). Not covered: `-Wl,x.pico`, COFF bigobj and
+    arm64ec objects. macOS links libhts.dylib from .o files and is not
+    affected. Tests (gamma, zig 0.17.1, conda-forge and upstream): rzig
+    unit tests 213/213 each (two new), rzig-test parity 0 failed; stress
+    on linux-64 (tree, jobs 4; T/obj-inputs/run, run-up): Rsamtools ok
+    with both zigs (0.3 min, Rhtslib 0.15 min, smoke ok); its expect is
+    linux=ok macos=ok windows=?.
+
 ## Tests
 
 ### The integration tree (2026-11-13)
@@ -1071,8 +1158,10 @@ linux-64 (gamma), default env (slim), conda-forge's zig 0.17.0,
 All paths below are under
 /data/gamma/luciorq/workspaces/temp/r-zig-pixi/ (T).
 
+- 2026-11-16: T/wt/rel11-fix is feat-win-arm64 at 5dd40cf, which
+  holds findings 25-30; findings 31 and 32 are working-tree changes.
 - 2026-11-15: T/wt/rel11-fix (detached at 0e4f145, feat-win-arm64's
-  tip) holds findings 25-30 as working-tree changes, with the new
+  tip) held findings 25-30 as working-tree changes, with the new
   recipe/variants.yaml and zigbuild/tools/rzig/target.zig untracked; lock 55d166564bd6 (dadd317726cf
   until finding 29's pango lift). Logs, lock diff
   and solve probes: T/rel11-fix/. The lines below are older.

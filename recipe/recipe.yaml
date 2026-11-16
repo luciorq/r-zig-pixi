@@ -512,6 +512,13 @@ outputs:
         # with r-zig-compilers' pins in the zig 0.17 wave (B18; PHASE4
         # open point K a; feat-zig-017)
         - zig 0.17.*
+        # conda-forge's r-* packages depend on r-base; without this, adding
+        # one to an env with r-zig-slim silently installs conda-forge's R
+        # over r-zig's; with it the solve fails and names the conflict
+        # (chore-release-11 finding 31). The other outputs that hold R's
+        # files (r-zig-recommended) or run it pin r-zig-slim exactly, so
+        # they get it through that pin.
+        - r-base <0a0
     tests:
       # Mirrors scripts/smoke-test.sh's actual assertions (numerics: LAPACK
       # solve/qr, BLAS matmul, fft round-trip; pcre2 regex; zlib compression;

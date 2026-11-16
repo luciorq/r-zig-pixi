@@ -1005,6 +1005,22 @@ test "every OS: an archive input without zig's extension goes as a copy named .a
     }
 }
 
+test "every OS: an object input without zig's extension goes as a copy named .o" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    try f.env.put("XDG_CACHE_HOME", f.path("cache"));
+    // an ELF ET_REL object, as Rhtslib's htslib names them
+    try f.write("kfunc.pico", "\x7fELF\x02\x01\x01" ++ "\x00\x00\x00\x00\x00\x00\x00\x00\x00" ++ "\x01\x00\x3e\x00", .default_file);
+    for ([_]Ctx.Os{ .linux, .macos, .windows }) |os| {
+        c.os = os;
+        const l = try argv(c, .c, &.{ "-shared", "-Wl,-soname,libhts.so.3", "-o", "libhts.so", f.path("kfunc.pico"), "-lz" });
+        try testing.expect(cmdline.anyWord(l, f.path("cache/r-zig/object-f43453b3fe51a3fba833a8277427ab17/kfunc.pico.o")));
+        try testing.expect(!cmdline.anyWord(l, f.path("kfunc.pico")));
+    }
+}
+
 test "Windows: -c without -o names <stem>.o, as MinGW gcc" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
