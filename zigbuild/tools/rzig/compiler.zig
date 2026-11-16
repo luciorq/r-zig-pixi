@@ -15,12 +15,12 @@ const darwin = @import("darwin.zig");
 const windows = @import("windows.zig");
 const flang_rt = @import("flang_rt.zig");
 const environment = @import("environment.zig");
-const floors = @import("floors.zig");
 const linker_args = @import("linker_args.zig");
 const archives = @import("archives.zig");
 const dso_fini = @import("dso_fini.zig");
 const cfguard = @import("cfguard.zig");
 const strip = @import("strip.zig");
+const target = @import("target.zig");
 const Args = cmdline.Args;
 
 pub const Lang = enum { c, cxx };
@@ -38,21 +38,23 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     const a = ctx.arena;
     var before: Args = &.{};
     var link_last: Args = &.{};
+    // R's target, every OS (target.zig), never zig's native one, which
+    // is the platform of the zig that runs: an x64 zig on Windows on ARM
+    // compiled for x64 against an arm64 R (finding 29).
     switch (ctx.os) {
-        // The glibc floor build.zig uses for R itself: packages are often
-        // compiled on a newer login node than the compute nodes that load
-        // them, and glibc is backward compatible, so a floor, not a
-        // restriction. Not a native target, so zig adds no rpaths either.
-        .linux => before = &.{ "-target", linux_target },
+        // linux: <arch>-linux-gnu with the glibc floor build.zig uses for
+        // R itself: packages are often compiled on a newer login node than
+        // the compute nodes that load them, and glibc is backward
+        // compatible, so a floor, not a restriction. Not a native target,
+        // so zig adds no rpaths either. Windows: <arch>-windows-gnu
+        // (target.zig).
+        .linux, .windows => before = try ctx.arena.dupe([]const u8, &.{ "-target", target.zig(ctx.os, ctx.arch).? }),
         .macos => {
             const t = try darwin.target(ctx);
             before = t.before;
             link_last = t.link_last;
         },
-        // No target: zig cc's native Windows OS and ABI are already
-        // x86_64-windows-gnu, R's own. Its native CPU is the compiling
-        // machine's, which -mcpu=baseline (below) replaces.
-        .windows, .other => {},
+        .other => {},
     }
 
     var args = try marchArgs(ctx, try dropTune(ctx, caller));
@@ -78,8 +80,8 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     const soname = try sonameFlag(ctx, args);
     const undefined_version = ctx.os == .linux and !cmdline.compileOnly(args) and cmdline.anyContains(args, "-version-script");
     const fini = if (ctx.os == .linux and dso_fini.wanted(args)) try linkObject(ctx, dso_fini.file, dso_fini.consequence) else null;
-    // x86_64 code: an rzig for another architecture adds none
-    const cfg = if (ctx.os == .windows and builtin.cpu.arch == .x86_64 and cfguard.wanted(args)) try linkObject(ctx, cfguard.file, cfguard.consequence) else null;
+    // x86_64 code: a link for another architecture adds none
+    const cfg = if (ctx.os == .windows and ctx.arch == .x86_64 and cfguard.wanted(args)) try linkObject(ctx, cfguard.file, cfguard.consequence) else null;
     const g0 = !cmdline.debugOption(args);
     const strip_debug = (ctx.os == .linux or ctx.os == .macos) and strip.wanted(ctx, args);
     args = try envFlags(ctx, args);
@@ -168,15 +170,16 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
 
 /// The CPU packages are compiled for, on every OS: the baseline of the
 /// target's architecture (x86-64 on linux and Windows x86_64, generic on
-/// linux aarch64, apple-m1 on macOS arm64, core2 on macOS x86_64), as
-/// build.zig compiles R itself (cpu_model = .baseline). A package
-/// compiled on one machine is loaded on others: CI-built binary packages,
-/// a shared library on a cluster's compute nodes, so no instruction may
-/// depend on the compiling machine's CPU (AVX2, AVX-512). zig resolves a
-/// target that names its architecture to that baseline already (linux's
-/// and macOS's above), and no target to the machine's own CPU (Windows:
-/// target-cpu "skylake" on kappa, 2026-10-06); one explicit rule, the
-/// same flag everywhere.
+/// linux and Windows aarch64, apple-m1 on macOS arm64, core2 on macOS
+/// x86_64), as build.zig compiles R itself (cpu_model = .baseline). A
+/// package compiled on one machine is loaded on others: CI-built binary
+/// packages, a shared library on a cluster's compute nodes, so no
+/// instruction may depend on the compiling machine's CPU (AVX2, AVX-512).
+/// zig resolves a target that names its architecture to that baseline
+/// already, as every OS's -target above does since finding 29, and no
+/// target to the machine's own CPU (Windows before then: target-cpu
+/// "skylake" on kappa, 2026-10-06); the flag stays, one explicit rule,
+/// the same everywhere.
 /// Before the caller's arguments: zig takes the last -mcpu or -march, so
 /// a package's own -march=native still wins. zig reads -mtune as one of
 /// them too, which is why dropTune drops it.
@@ -221,16 +224,54 @@ fn dropTune(ctx: *Ctx, caller: Args) !Args {
 /// clang's driver, which refuses zig's -mcpu spelling ("unsupported
 /// argument 'generic+v8a+crypto' to option '-mcpu='", s2's bundled
 /// abseil on macOS, R2-4's --conda run).
+///
+/// A CPU name in clang's spelling, `-march=<cpu>` or `-mcpu=<cpu>`[+ext]
+/// (skylake-avx512, x86-64-v3, cortex-a76, apple-m1), is zig's with `-`
+/// as `_`: zig reads a `-` there as "remove feature" and stops ("unknown
+/// CPU feature: 'avx512'", "unknown CPU: 'x86'"; zig 0.17.1,
+/// 2026-11-15; arrow's bundled aws-checksums probes -march=skylake-avx512
+/// on x86_64). Only when the `_` form is a CPU zig knows for R's arch
+/// (ctx.arch) and the value as given is not; anything else stays as the
+/// caller wrote it (zig's own `cpu-feature` syntax, native, a typo).
 fn marchArgs(ctx: *Ctx, args: Args) !Args {
     var out: std.ArrayList([]const u8) = .empty;
     for (args, 0..) |x, i| {
-        const v = (if (cmdline.xarchValue(args, i)) null else cmdline.flagValue(x, "-march=")) orelse {
+        if (cmdline.xarchValue(args, i)) {
             try out.append(ctx.arena, x);
             continue;
-        };
-        try out.append(ctx.arena, (try armMcpu(ctx.arena, v)) orelse x);
+        }
+        if (cmdline.flagValue(x, "-march=")) |v| {
+            if (try armMcpu(ctx.arena, v)) |m| {
+                try out.append(ctx.arena, m);
+                continue;
+            }
+            try out.append(ctx.arena, (try clangCpu(ctx, "-march=", v)) orelse x);
+        } else if (cmdline.flagValue(x, "-mcpu=")) |v| {
+            try out.append(ctx.arena, (try clangCpu(ctx, "-mcpu=", v)) orelse x);
+        } else try out.append(ctx.arena, x);
     }
     return out.items;
+}
+
+/// `<flag><cpu>[+ext...]` with clang's CPU name in zig's spelling (the
+/// extensions as armMcpu names them), or null when nothing changes.
+fn clangCpu(ctx: *Ctx, flag: []const u8, v: []const u8) !?[]const u8 {
+    var it = mem.splitScalar(u8, v, '+');
+    const name = it.first();
+    if (mem.indexOfScalar(u8, name, '-') == null) return null;
+    const arch: std.Target.Cpu.Arch = switch (ctx.arch) {
+        .x86_64 => .x86_64,
+        .aarch64 => .aarch64,
+    };
+    if (arch.parseCpuModel(name) != null) return null;
+    const zname = try ctx.arena.dupe(u8, name);
+    mem.replaceScalar(u8, zname, '-', '_');
+    if (arch.parseCpuModel(zname) == null) return null;
+    var s: std.ArrayList(u8) = .empty;
+    try s.appendSlice(ctx.arena, flag);
+    try s.appendSlice(ctx.arena, zname);
+    try armExts(ctx.arena, &s, &it);
+    return s.items;
 }
 
 const arm_ext_names = std.StaticStringMap([]const u8).initComptime(.{
@@ -251,6 +292,12 @@ fn armMcpu(a: mem.Allocator, v: []const u8) !?[]const u8 {
     try s.appendSlice(a, "-mcpu=generic+v");
     for (ver) |c| try s.append(a, if (c == '.') '_' else c);
     try s.append(a, 'a');
+    try armExts(a, &s, &it);
+    return s.items;
+}
+
+/// clang's `+<ext>` list, the rest of `it`, in zig's words onto `s`.
+fn armExts(a: mem.Allocator, s: *std.ArrayList(u8), it: *mem.SplitIterator(u8, .scalar)) !void {
     while (it.next()) |e| {
         if (e.len == 0) continue;
         const off = e.len > 2 and mem.startsWith(u8, e, "no");
@@ -258,7 +305,6 @@ fn armMcpu(a: mem.Allocator, v: []const u8) !?[]const u8 {
         try s.append(a, if (off) '-' else '+');
         for (arm_ext_names.get(name) orelse name) |c| try s.append(a, if (c == '-') '_' else c);
     }
-    return s.items;
 }
 
 /// <rzig's directory>/<file>, a link object R's build installs beside
@@ -274,9 +320,9 @@ fn linkObject(ctx: *Ctx, file: []const u8, consequence: []const u8) !?[]const u8
     return null;
 }
 
-/// zig's name for this binary's own architecture. The shim asked `uname
-/// -m`, which agrees on x86_64 and aarch64, the two linux arches shipped.
-pub const linux_target = @tagName(builtin.cpu.arch) ++ "-linux-gnu." ++ floors.majorMinor(floors.glibc);
+/// linux's target for rzig's own architecture (target.zig), which the
+/// tests compare with.
+pub const linux_target = target.zig(.linux, .own).?;
 
 /// GNU ld records a bare "libR.so" as DT_NEEDED when a library has no
 /// SONAME; zig's lld records the path it resolved (e.g.
@@ -372,6 +418,8 @@ const testing = std.testing;
 const testutil = @import("testutil.zig");
 const expectArgs = testutil.expectArgs;
 const pre: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", linux_target };
+/// Windows' target for rzig's own architecture (target.zig).
+const win_target = target.zig(.windows, .own).?;
 /// `pre` of a command with -S: zig's unused -c is no warning (argv)
 const pre_s: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Wno-unused-command-line-argument", "-target", linux_target };
 /// A linux link without a -g option: `pre` and -Wl,--strip-debug.
@@ -398,9 +446,9 @@ test "every OS: the baseline CPU, once, before the target and the caller's own -
     const targets = [_]struct { os: Ctx.Os, target: Args }{
         .{ .os = .linux, .target = &.{ "-target", linux_target } },
         .{ .os = .macos, .target = mac },
-        // Windows: no target, so without the flag zig would compile for
-        // the machine's own CPU
-        .{ .os = .windows, .target = &.{} },
+        // Windows: R's target since finding 29; before it none, and
+        // without the flag zig compiled for the machine's own CPU
+        .{ .os = .windows, .target = &.{ "-target", win_target } },
     };
     for (targets) |t| {
         c.os = t.os;
@@ -410,7 +458,7 @@ test "every OS: the baseline CPU, once, before the target and the caller's own -
             // a package's own CPU choice comes later, so zig takes it
             try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-march=native", "-mcpu=haswell", "-c", "a.c", "-o", "a.o" } }), try argv(c, lang, &.{ "-march=native", "-mcpu=haswell", "-c", "a.c", "-o", "a.o" }));
             // -mtune=, which zig would take as the CPU, goes; the rest stays
-            try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-O2", "-march=x86-64", "-mtune", "-c", "a.c", "-o", "a.o" } }), try argv(c, lang, &.{ "-mtune=native", "-O2", "-march=x86-64", "-mtune=haswell", "-mtune", "-c", "a.c", "-o", "a.o" }));
+            try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, t.target, &.{ "-O2", "-march=haswell", "-mtune", "-c", "a.c", "-o", "a.o" } }), try argv(c, lang, &.{ "-mtune=native", "-O2", "-march=haswell", "-mtune=haswell", "-mtune", "-c", "a.c", "-o", "a.o" }));
             // links too: a shared library carries the objects' code
             const link = try argv(c, lang, &.{ "-shared", "-mtune=native", "-o", "pkg.so", "a.o" });
             try expectArgs(head, link[0..5]);
@@ -587,14 +635,14 @@ test "Windows: -idirafter, no rpath, -lz and -lomp through the environment's -L"
     const l = f.fmt("-L{s}", .{f.path("env/Library/lib")});
     const omp = f.path("env/Library/lib/libomp.lib");
     const z = f.path("env/Library/lib/libz.dll.a");
-    try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-c", "z.c", "-o", "z.o", "-idirafter", inc }, try argv(c, .c, &.{ "-c", "z.c", "-o", "z.o" }));
+    try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-c", "z.c", "-o", "z.o", "-idirafter", inc }, try argv(c, .c, &.{ "-c", "z.c", "-o", "z.o" }));
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", z, l, "-idirafter", inc, omp, "-lws2_32" },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", z, l, "-idirafter", inc, omp, "-lws2_32" },
         try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz" }),
     );
     // the caller's -lomp, resolved the same way; none added
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lomp" }),
     );
 }
@@ -638,7 +686,7 @@ test "Windows: the toolchain's openmp/: -idirafter, -L openmp/lib and libomp.lib
     try f.env.put("PATH", f.path("nothing"));
     for ([_][]const u8{ "env/Library/lib/R/bin/toolchain/gcc.exe", "env/Library/lib/R/bin/toolchain/openmp/include/omp.h", "env/Library/lib/R/bin/toolchain/openmp/lib/libomp.lib" }) |p| try f.touch(p);
     c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
-    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" };
+    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target };
     const implib: Args = &.{ "-Xlinker", "--out-implib=pkg.dll.rzig.lib" };
     const l = f.fmt("-L{s}", .{f.path("env/Library/lib")});
     const ol = f.fmt("-L{s}", .{f.path("env/Library/lib/R/bin/toolchain/openmp/lib")});
@@ -655,7 +703,7 @@ test "Windows: the toolchain's openmp/: -idirafter, -L openmp/lib and libomp.lib
     try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ "-c", "a.cpp", "-o", "a.o", "-idirafter", oinc } }), try argv(c, .cxx, &.{ "-c", "a.cpp", "-o", "a.o" }));
 }
 
-test "Windows: no target, the Fortran runtime before the -l lookup" {
+test "Windows: R's target, the Fortran runtime before the -l lookup" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
     defer f.deinit();
@@ -663,7 +711,7 @@ test "Windows: no target, the Fortran runtime before the -l lookup" {
     try f.touch("d/libz.dll.a");
     const l = f.fmt("-L{s}", .{f.path("d")});
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lws2_32" },
         try argv(&f.ctx, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", l, "-lz", "-lflang_rt.runtime" }),
     );
 }
@@ -686,7 +734,7 @@ test "every OS: -lgfortran and -lquadmath link flang's runtime, once; no gfortra
     const targets = [_]struct { os: Ctx.Os, target: Args, strip: Args = &.{}, implib: Args = &.{}, ws2: Args = &.{} }{
         .{ .os = .linux, .target = &.{ "-target", linux_target }, .strip = &.{"-Wl,--strip-debug"} },
         .{ .os = .macos, .target = mac, .strip = &.{"-Wl,--strip-debug"} },
-        .{ .os = .windows, .target = &.{}, .implib = &.{ "-Xlinker", "--out-implib=p.so.rzig.lib" }, .ws2 = &.{"-lws2_32"} },
+        .{ .os = .windows, .target = &.{ "-target", win_target }, .implib = &.{ "-Xlinker", "--out-implib=p.so.rzig.lib" }, .ws2 = &.{"-lws2_32"} },
     };
     for (targets) |t| {
         c.os = t.os;
@@ -892,6 +940,18 @@ test "-march=armv<N>-a[+ext]: zig's -mcpu, after -mcpu=baseline; other -march va
     // CPU names, other profiles, odd versions: kept
     const kept: Args = &.{ "-march=native", "-march=haswell", "-march=armv8-r", "-march=armv8-m.main", "-march=armv-a", "-march=armvx-a", "-march=", "-march", "-c", "a.c", "-o", "a.o" };
     try expectArgs(try mem.concat(c.arena, []const u8, &.{ pre, kept }), try argv(c, .c, kept));
+    // clang's CPU names, -march and -mcpu, for R's arch: zig's spelling;
+    // zig's own syntax, other arches' CPUs and unknown names kept
+    c.arch = .x86_64;
+    const pre_x = &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", target.zig(.linux, .x86_64).? };
+    try expectArgs(pre_x ++ &[_][]const u8{ "-march=skylake_avx512", "-mcpu=x86_64_v3", "-march=x86_64", "-c", "a.c" }, try argv(c, .c, &.{ "-march=skylake-avx512", "-mcpu=x86-64-v3", "-march=x86-64", "-c", "a.c" }));
+    const kept_x: Args = &.{ "-march=haswell-avx", "-mcpu=baseline-sse4_2", "-march=cortex-a76", "-march=x86_64_v4", "-mcpu=native", "-c", "a.c" };
+    try expectArgs(pre_x ++ kept_x, try argv(c, .c, kept_x));
+    c.arch = .aarch64;
+    const pre_a = &[_][]const u8{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", target.zig(.linux, .aarch64).? };
+    try expectArgs(pre_a ++ &[_][]const u8{ "-mcpu=cortex_a76+crypto-crc", "-mcpu=apple_m1", "-march=neoverse_n1", "-c", "a.c" }, try argv(c, .c, &.{ "-mcpu=cortex-a76+crypto+nocrc", "-mcpu=apple-m1", "-march=neoverse-n1", "-c", "a.c" }));
+    try expectArgs(pre_a ++ &[_][]const u8{ "-march=skylake-avx512", "-c", "a.c" }, try argv(c, .c, &.{ "-march=skylake-avx512", "-c", "a.c" }));
+    c.arch = .own;
     // macOS: after the baseline (apple-m1 on arm64), so the package's wins
     c.os = .macos;
     const got = try argv(c, .cxx, &.{ "-march=armv8-a+crc", "-c", "a.cpp", "-o", "a.o" });
@@ -921,7 +981,7 @@ test "linker options zig cannot take, through the whole line" {
     // StanHeaders' Makevars.win
     c.os = .windows;
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=StanHeaders.dll.rzig.lib", "-shared", "-o", "StanHeaders.dll", "a.o", "-lws2_32" },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-Xlinker", "--out-implib=StanHeaders.dll.rzig.lib", "-shared", "-o", "StanHeaders.dll", "a.o", "-lws2_32" },
         try argv(c, .cxx, &.{ "-shared", "-Wl,--allow-multiple-definition", "-o", "StanHeaders.dll", "a.o" }),
     );
 }
@@ -952,7 +1012,7 @@ test "Windows: -c without -o names <stem>.o, as MinGW gcc" {
     const c = &f.ctx;
     // QuickJSR
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-O2", "-c", "quickjs/libquickjs.c", "-o", "libquickjs.o" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-O2", "-c", "quickjs/libquickjs.c", "-o", "libquickjs.o" },
         try argv(c, .c, &.{ "-O2", "-c", "quickjs/libquickjs.c" }),
     );
     // unix: zig's default is <stem>.o already
@@ -1018,6 +1078,31 @@ test "a link object missing beside rzig: the link goes on without it, with a war
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 
+test "Windows: -target names R's arch, x86_64 and aarch64, on compiles and links; the CFG stub on x86_64 only (finding 29)" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    c.self_exe = f.path("tc/gcc.exe");
+    try f.touch("tc/cfguard.o");
+    // rzig's arch is R's: an arm64 R's rzig names aarch64 to the x64 zig
+    // an emulated win-64 environment put first on PATH (stress run
+    // 43773932212), which compiled for x64 with no target
+    for ([_]target.Arch{ .x86_64, .aarch64 }, [_][]const u8{ "x86_64-windows-gnu", "aarch64-windows-gnu" }) |arch, t| {
+        c.arch = arch;
+        const head: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", t };
+        try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ "-O2", "-c", "a.c", "-o", "a.o" } }), try argv(c, .c, &.{ "-O2", "-c", "a.c", "-o", "a.o" }));
+        const stub: Args = if (arch == .x86_64) &.{f.path("tc/cfguard.o")} else &.{};
+        try expectArgs(
+            try mem.concat(c.arena, []const u8, &.{ head, stub, &.{ "-Xlinker", "--out-implib=p.dll.rzig.lib", "-shared", "-o", "p.dll", "a.o", "-lws2_32" } }),
+            try argv(c, .c, &.{ "-shared", "-o", "p.dll", "a.o" }),
+        );
+        // a caller's own -target comes after R's, so zig takes it
+        try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ "-target", "x86_64-windows-msvc", "-c", "a.c", "-o", "a.o" } }), try argv(c, .c, &.{ "-target", "x86_64-windows-msvc", "-c", "a.c", "-o", "a.o" }));
+    }
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
 test "Windows links: the CFG stub and the import library before the caller's arguments, no -flto; nothing elsewhere" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
@@ -1026,10 +1111,10 @@ test "Windows links: the CFG stub and the import library before the caller's arg
     c.self_exe = f.path("tc/gcc.exe");
     try f.touch("tc/cfguard.o");
     try f.touch("tc/dso_fini.o");
-    // the stub is x86_64 code: an rzig for another architecture adds
+    // the stub is x86_64 code: a link for another architecture adds
     // none, though the file is there; the rest is the same
     const stub: Args = if (builtin.cpu.arch == .x86_64) &.{f.path("tc/cfguard.o")} else &.{};
-    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0" };
+    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target };
     // magick's link, and an executable (CMake's): -lws2_32 on the DLL only
     try expectArgs(
         try mem.concat(c.arena, []const u8, &.{ head, stub, &.{ "-Xlinker", "--out-implib=magick.dll.rzig.lib", "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2", "-lws2_32" } }),

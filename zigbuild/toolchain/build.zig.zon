@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .pkgconf = .{
-            .url = "https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.10.tar.xz",
-            .hash = "N-V-__8AAEIvLQAcTV0V_--qfqG14rkuXW1VEz95S5KD8YYn",
+            .url = "https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.11.tar.xz",
+            .hash = "N-V-__8AAJtPLQBQRtMEFFcqeOXniFMTNbPL0IjGxYpEnFw1",
             .lazy = true,
         },
         // The extras group's cmake/ (feat-extras-group): Kitware's release
@@ -18,28 +18,28 @@
         // for or not (zig unpacks every cached lazy dependency): delete
         // p/<hash>.tar.gz from zig's global cache.
         .cmake_linux_x86_64 = .{
-            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz",
-            .hash = "N-V-__8AABi0WAs7k2I5pQzTK1Z_y5a872JVILowbBEZfEX0",
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz",
+            .hash = "N-V-__8AALB5wQsZRbtbnOQ0-KA27JVywuEfAWmDVYDDxg_0",
             .lazy = true,
         },
         .cmake_linux_aarch64 = .{
-            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-aarch64.tar.gz",
-            .hash = "N-V-__8AADO3OQcfVug-MBmDJ_Q0Btalp5RRalgl7R2t_ynt",
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz",
+            .hash = "N-V-__8AAEombgeCpaRy9jptznuMf6wc3uJ26QYzYKwngv0w",
             .lazy = true,
         },
         .cmake_macos_universal = .{
-            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-macos-universal.tar.gz",
-            .hash = "N-V-__8AAH0BEA8BCi9JHUuC6QO8ATGs3Y8o46FaeUw9HE2x",
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz",
+            .hash = "N-V-__8AALuRqQ9uXDKfU3cP_xBgublGGl6n6fjbhlQKQd36",
             .lazy = true,
         },
         .cmake_windows_x86_64 = .{
-            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-windows-x86_64.zip",
-            .hash = "N-V-__8AAPS-igjjOs-BYmUS_loqhrI4qxD_hLltv9SiSnq4",
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-windows-x86_64.zip",
+            .hash = "N-V-__8AAD5o3QhPVsPwABFNVZzu7DJWiJdtFHQatfbFhwbU",
             .lazy = true,
         },
         .cmake_windows_arm64 = .{
-            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-windows-arm64.zip",
-            .hash = "N-V-__8AAPzOcAiU1hn_hDNT1OkWsnGa_95roWR5wN4BFbm0",
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-windows-arm64.zip",
+            .hash = "N-V-__8AADaqwAiO0qXhAOyTyEnA6Wtur8Vn7rOvo_Va9XIS",
             .lazy = true,
         },
     },

@@ -286,7 +286,7 @@ zlib = "*"
 bzip2 = "*"
 xz = "*"
 liblzma-devel = "*"
-pcre2 = "*"
+pcre2 = "10.47.*"  # mirrors recipe/variants.yaml (conda-forge's global pin)
 libcurl = "*"
 icu = "*"
 tzdata = "*"
@@ -336,14 +336,16 @@ cairo = "*"
 # libintl-devel into Windows slim. fontconfig, freetype and expat are
 # unused on Windows too; they stay in every env, as before.
 glib = "*"
-# pango/harfbuzz pinned to the lockfile's current generation: a fresh solve
-# (flang-zig-validation worktree, 2026-09-19) pulled pango 1.58 + the split
-# libharfbuzz 14.3, which break R 4.6.2's cairo device compile (hb.h
-# include churn). Independent of any toolchain choice; lift the pin only
-# together with a fix on the R side (or a newer R). harfbuzz is not a
-# direct dependency otherwise — listed only to hold its version.
-pango = "1.56.*"
-harfbuzz = "14.2.*"
+# pango for R's cairo device; harfbuzz for its headers (pango's include
+# hb.h; the recipe lists it for the same reason). Unpinned since
+# 2026-11-15 (chore-release-11 finding 27): pango 1.56.* and harfbuzz
+# 14.2.* were held from 2026-09-19, when a solve with pango 1.58 and the
+# split libharfbuzz 14.3 broke R's cairo device compile (hb.h include
+# churn). R 4.6.2 builds and runs its cairo device with pango 1.58 and
+# harfbuzz 15 (linux-64, 2026-11-15; osx-64 resolves harfbuzz 14.6), as
+# the conda recipe, which never pinned them, already did.
+pango = "*"
+harfbuzz = "*"
 bash = "*"
 which = "*"
 sed = "*"
@@ -413,6 +415,9 @@ m2-patch = "*"  # zig-build.sh applies zigbuild/patches/; conda-forge has no Win
 
 [target.osx-64.dependencies]
 uutils-coreutils = "*"
+
+[target.osx.dependencies]
+glib = "2.90.0.*"  # mirrors recipe/variants.yaml (conda-forge's global pin)
 
 [target.osx-arm64.dependencies]
 uutils-coreutils = "*"
@@ -506,7 +511,7 @@ R_BLAS = "openblas"
 #
 # The wheels (`pixi run -e wheel wheel`) wrap this variant's standalone
 # tree: r-zig is the tree. The runtime compiler for install.packages() is
-# the PyPI `ziglang` package (the same zig 0.17 as this env's: conda-forge has 0.17.0, PyPI 0.17.1),
+# the PyPI `ziglang` package (the same zig 0.17 as this env's: 0.17.1 on conda-forge and PyPI),
 # which the r-zig-compilers wheel requires (feat-standalone-toolchain
 # B29).
 [feature.minimal]
@@ -524,7 +529,7 @@ zlib = "*"
 bzip2 = "*"
 xz = "*"
 liblzma-devel = "*"
-pcre2 = "*"
+pcre2 = "10.47.*"  # pins: see [dependencies]
 libcurl = "*"
 flang-zig = { version = "==23.1.5", build-number = "==0" }  # pins: see [dependencies]
 flang-rt-zig = { version = "==23.1.5", build-number = "==1" }
@@ -661,9 +666,11 @@ python = ">=3.9"
 # package's sha256, and a package's test (and any env made from
 # dist/conda) installed the old r-zig-slim from the rattler cache
 # (kappa, 2026-10-11). The cost: every build downloads R's sources.
+# No -m: rattler-build reads recipe/variants.yaml by itself, conda-forge's
+# global pins for R's host libraries (chore-release-11 finding 25).
 # --error-*: two outputs packaging the same file, or a staging file no
-# output takes, fail the build instead of warning (no 0.76.1 build of
-# ours has warned).
+# output takes, fail the build instead of warning (no 0.76.1 or 0.80.1
+# build of ours has warned).
 # R_ZIG_TEST_ZIG_CACHE: one zig cache for the four recipe tests, which
 # the recipe passes to them as a secret (on unix rattler-build's test env
 # keeps no other variable of the caller's; recipe/recipe.yaml), so the
@@ -736,30 +743,42 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 # full, full-openblas, openblas, minimal and pkg). One env needs no group.
 # Each name is a sysdeps entry in stress/packages.tsv. stress.R warns when a
 # row's sysdep is missing here.
+# Six platforms, as the R envs: an env without the runner's platform is
+# not refused but installed for another one under emulation (pixi:
+# "win-arm64 is not supported by the current environment, falling back to
+# win-64"), and its x64 zig then compiled every package for x64 against
+# the arm64 tree (stress run 43773932212, chore-release-11 PLAN.md finding 26).
+# A library conda-forge lacks for a platform is left out there instead,
+# and stress.R reports it as missing from the env.
 [feature.stress]
-# not win-arm64: conda-forge has no libgdal-core (and other of the
-# libraries below) for it (2026-11-10)
-platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64", "win-arm64"]
 
+# on all six platforms (libboost-headers below is noarch)
 [feature.stress.dependencies]
 cmake = "*"             # nloptr, s2 (linux), RcppParallel, Rhdf5lib, arrow:source
-libgdal-core = "*"      # sf, terra, gdalraster (gdal-config, gdal.pc)
 geos = "*"              # sf, terra, lwgeom
 proj = "*"              # sf, terra, lwgeom
-udunits2 = "*"          # units
 libprotobuf = "*"       # protolite (protoc, protobuf.pc; brings libabseil)
 libxml2-devel = "*"     # xml2, igraph (xml2-config, libxml-2.0.pc)
 openssl = "*"           # openssl, s2
-imagemagick = "*"       # magick (Magick++.pc)
 libgit2 = "*"           # gert
 freetype = "*"          # systemfonts, textshaping, ragg
-harfbuzz = "*"          # textshaping (the default feature holds it at 14.2.*)
 fribidi = "*"           # textshaping
 libpng = "*"            # ragg
 libtiff = "*"           # ragg
 libjpeg-turbo = "*"     # ragg
 libwebp-base = "*"      # ragg
 fontconfig = "*"        # systemfonts
+zstd = "*"              # qs2
+
+# Not on win-arm64, where conda-forge has none of these (win-arm64
+# repodata, 2026-11-15); pixi has no "all but one platform" target, so
+# the list is in unix's table and in win-64's. Keep the two the same.
+[feature.stress.target.unix.dependencies]
+libgdal-core = "*"      # sf, terra, gdalraster (gdal-config, gdal.pc)
+udunits2 = "*"          # units
+imagemagick = "*"       # magick (Magick++.pc)
+harfbuzz = "*"          # textshaping
 hdf5 = "*"              # hdf5r (h5cc)
 libnetcdf = "*"         # ncdf4 (nc-config)
 gsl = "*"               # gsl (gsl-config)
@@ -767,28 +786,40 @@ mpfr = "*"              # Rmpfr
 gmp = "*"               # Rmpfr, gmp, igraph
 libpq = "*"             # RPostgres
 glpk = "*"              # igraph
-zstd = "*"              # qs2
+# RcppParallel:system-tbb. Not on win-64, where conda-forge's TBB is an
+# MSVC build that MinGW cannot link, and where it put -ltbb ahead of
+# RcppParallel's bundled TBB (round 1's R2, decision 18).
+tbb-devel = "*"
 
-# nloptr has no configure.win: its Makevars.ucrt links -lnlopt. Not on unix,
-# where nloptr then builds its bundled NLopt with cmake.
 [feature.stress.target.win-64.dependencies]
-nlopt = "*"  # none for win-arm64 on conda-forge (2026-11-10)
+libgdal-core = "*"
+udunits2 = "*"
+imagemagick = "*"
+harfbuzz = "*"
+hdf5 = "*"
+libnetcdf = "*"
+gsl = "*"
+mpfr = "*"
+gmp = "*"
+libpq = "*"
+glpk = "*"
+# nloptr has no configure.win: its Makevars.ucrt links -lnlopt. Not on
+# unix, where nloptr then builds its bundled NLopt with cmake. None for
+# win-arm64 on conda-forge (2026-11-10).
+nlopt = "*"
 
 # RPostgres includes Rtools' boost headers (round 1's S1, decision 18).
 [feature.stress.target.win.dependencies]
 libboost-headers = "*"
 
-# RcppParallel:system-tbb. Not on win-64, where conda-forge's TBB is an
-# MSVC build that MinGW cannot link, and where it put -ltbb ahead of
-# RcppParallel's bundled TBB (round 1's R2, decision 18).
-[feature.stress.target.unix.dependencies]
-tbb-devel = "*"
-
-# conda-forge's libheif 1.23.4 to 1.23.6 for osx-arm64 links a Homebrew
-# path (/opt/homebrew/.../libsharpyuv), so magick cannot load (round 1's
-# U1, decision 18). Lift when a clean build is out.
+# conda-forge's libheif 1.23.4 to 1.23.6 for osx-arm64 link a Homebrew
+# path (/opt/homebrew/.../libsharpyuv), so magick could not load (round
+# 1's U1, decision 18): those three are excluded. 1.23.7
+# (gpl_h0a5996c_103) links @rpath/libsharpyuv.0.dylib. The lock had
+# 1.23.3 here until the pango and harfbuzz pins were lifted; it has
+# 1.23.7 since (chore-release-11 findings 27 and 29, 2026-11-15).
 [feature.stress.target.osx-arm64.dependencies]
-libheif = "<1.23.4"
+libheif = "!=1.23.4,!=1.23.5,!=1.23.6"
 
 # pixi run -e stress stress [target ...] [--conda[=universe]] [--jobs=N] ...
 # The compile tree's R runs stress/stress.R (compile-tree: the dev tree

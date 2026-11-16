@@ -120,7 +120,7 @@ the environment (`pixi shell`, `conda activate`) or start R with
   naming `-lws2_32` (ragg with a conda environment's libraries) links
   (whether Rtools' libraries bring it for CRAN is not verified). A DLL
   imports from it only what it calls.
-- On Windows, `pkg-config` and `pkgconf` are pkgconf 3.0.10, built from
+- On Windows, `pkg-config` and `pkgconf` are pkgconf 3.0.11, built from
   source with zig into `R_HOME/bin/toolchain/usr/bin` (the build tools,
   on both channels). Under `R CMD`, when `PKG_CONFIG_PATH` is not set, R
   sets it to its own environment's `Library\lib\pkgconfig` and
@@ -392,8 +392,8 @@ beside it:
   on x86_64 and arm64 alike.
 - **The extras group**, one per platform:
   `R-<ver>-<platform>-extras.tar.gz` (`.zip` on Windows, about 10 MB on
-  linux-64): cmake 4.4.4 from Kitware's release archive, `bin/cmake` and
-  `share/cmake-4.4/` (Modules, Templates), under `cmake/`, for packages
+  linux-64): cmake 4.5.0 from Kitware's release archive, `bin/cmake` and
+  `share/cmake-4.5/` (Modules, Templates), under `cmake/`, for packages
   that build a bundled library with CMake. R puts `cmake/bin` on `PATH`
   after the build tools' directory, in R and under `R CMD`. Linux's
   cmake needs only glibc (2.17 on x86_64, 2.28 on aarch64); macOS has
@@ -457,6 +457,18 @@ The Linux build targets glibc 2.17 by default (both the R build itself
 and the package-compilation toolchain it ships), so binaries — and any
 CRAN package compiled against them — run on considerably older
 distributions than the build machine, without a separate build variant.
+
+### The platform packages are compiled for
+
+rzig names R's own platform on every command it runs, on every OS:
+`-target` to zig (`x86_64-linux-gnu.2.17`, `aarch64-native.13.0`,
+`aarch64-windows-gnu`, ...) and `--target=` to flang, with
+`-mcpu=baseline`, so a package is compiled for R's architecture and
+that architecture's baseline CPU, whatever zig or flang is found first
+on PATH. Windows left the target to zig until build 11, when an x64 zig
+on Windows on ARM compiled for x64 against an arm64 R. The scripts stop
+when pixi installed the environment for another platform than the
+machine's (an emulated one, such as win-64 on Windows on ARM).
 
 ## CI
 

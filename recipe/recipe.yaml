@@ -53,8 +53,8 @@ source:
   # same tarball (zigbuild/toolchain/build.zig.zon).
   - if: win
     then:
-      - url: https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.10.tar.xz
-        sha256: 9371b2f6372da574d4c6dc96fe9b1463037bcf6afcb6671c1555afde7b17e2de
+      - url: https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.11.tar.xz
+        sha256: d0cd841bc8e55b9da888106c00dc256d05b7d1d8e5a46f4be4eb4c5125bd2dc4
         target_directory: pkgconf-src
   # Windows: cairo's source, which R's build compiles and links statically
   # into winCairo.dll (zigbuild/cairo.zig; recipe/build.sh passes the
@@ -211,18 +211,20 @@ build:
   # 8, #42). #38, #39 (verify-bundle.sh) and #40 (the icu floor, `icu
   # 78.*`) merged in that window too but change no package.
   # 10 → 11 (2026-11-09; universe's newest is _10 on all five subdirs):
-  # win-64's pkg-config is pkgconf 3.0.10, which the toolchain build
-  # compiles from source with zig into R_HOME/bin/toolchain/usr/bin as
-  # pkgconf.exe and pkg-config.exe, on both channels (r-zig-build-tools
-  # owns it here); conda-forge's pkg-config 0.29.2, which printed
-  # Libs.private without --static (ncdf4, RPostgres), and its glib DLLs
-  # are gone, from the standalone tree and from r-zig-build-tools' run
-  # deps. etc/Rcmd_environ gives PKG_CONFIG_PATH a default, R's env's
-  # Library/lib/pkgconfig and Library/share/pkgconfig, which that
-  # package's activation used to set (feat-zig-pkgconf). Zig 0.17 on every
-  # platform (feat-zig-017): conda-forge's zig 0.17.0, flang-pixi's zig
-  # 0.17 builds (flang-zig 7, lld-zig 6, flang-rt-zig 11); r-zig-slim's
-  # run_constraints and r-zig-compilers' depends move to zig 0.17.*.
+  # win-64's pkg-config is pkgconf (3.0.10; 3.0.11 since 2026-11-15),
+  # which the toolchain build compiles from source with zig into
+  # R_HOME/bin/toolchain/usr/bin as pkgconf.exe and pkg-config.exe, on
+  # both channels (r-zig-build-tools owns it here); conda-forge's
+  # pkg-config 0.29.2, which printed Libs.private without --static
+  # (ncdf4, RPostgres), and its glib DLLs are gone, from the standalone
+  # tree and from r-zig-build-tools' run deps. etc/Rcmd_environ gives
+  # PKG_CONFIG_PATH a default, R's env's Library/lib/pkgconfig and
+  # Library/share/pkgconfig, which that package's activation used to set
+  # (feat-zig-pkgconf). Zig 0.17 on every platform (feat-zig-017):
+  # conda-forge's zig 0.17.0 (0.17.1 on conda-forge since 2026-11-12, in
+  # the lock since 2026-11-15), flang-pixi's zig 0.17 builds (flang-zig
+  # 7, lld-zig 6, flang-rt-zig 11); r-zig-slim's run_constraints and
+  # r-zig-compilers' depends move to zig 0.17.*.
   # win-64's binutils are rzig's (nm, objdump, strip, dlltool, windres,
   # as beside gcc.exe in R_HOME/bin/toolchain, owned by r-zig-slim), on
   # zig 0.17's dlltool and rc: binutils_impl_win-64 and binutils/ are
@@ -243,7 +245,10 @@ build:
   # tested and published as the other five (chore-release-11). Windows'
   # r-zig-slim is the slim variant, as on unix (no Tcl/Tk, JPEG, TIFF or
   # NLS), and its R.dll uses OpenMP and links libomp, as unix's libR does
-  # (chore-release-11 finding 23, 2026-11-14).
+  # (chore-release-11 finding 23, 2026-11-14). The host libraries take
+  # conda-forge's global pins (recipe/variants.yaml): pcre2 10.47 in
+  # place of 10.49, libdeflate 1.26 in place of the `<1.26` cap; glib
+  # 2.90.0 on macOS (chore-release-11 finding 25, 2026-11-15).
   number: 11
 
 outputs:
@@ -343,27 +348,19 @@ outputs:
         - bzip2
         - xz
         - liblzma-devel
+        # The libraries below without a version take conda-forge's global
+        # pin from recipe/variants.yaml (pcre2 10.47.*, icu 78.*,
+        # libdeflate 1.26.*, ...), as a conda-forge feedstock's do: their
+        # run exports then match the conda-forge packages r-zig-slim
+        # shares an env with. A version here would switch that off.
+        # icu, for one, was `icu 78.*` here (2026-11-05): conda-forge's
+        # zig needs libxml2-16, built against icu 78 only, and `<79` alone
+        # let the solver take the 2022 cairo/pango stack of icu 70.
         - pcre2
         - libcurl
-        # 78.* while conda-forge's zig (0.16, 0.17 too) needs libxml2-16, built
-        # against icu 78 only: with icu 79 in this host (79.1, 2026-10-22)
-        # r-zig-slim's run export becomes icu >=79.1,<80, and no test env
-        # that holds r-zig-slim and zig (r-zig-toolchain's, for one) can
-        # solve. A floor too: with `<79` alone, rattler's solver took the
-        # 2022 cairo/pango/harfbuzz stack built against icu 70 (2026-11-05),
-        # whose run export clashes with zig's icu 78 the same way. Lift it,
-        # with a build-number bump, when conda-forge's libxml2-16 is built
-        # against icu 79.
-        - icu 78.*
+        - icu
         - tzdata
-        # <1.26 while conda-forge's libgdal-core needs <1.26: libdeflate's
-        # run export pins r-zig-slim to the host's minor version, and builds
-        # 2 to 6, built against 1.26 on linux and macOS (win-64's took
-        # 1.25), could not share a conda env with sf, terra or gdalraster
-        # (stress round 1, U4). Lift it, with a build-number bump, when
-        # conda-forge's libgdal-core is built against 1.26 (its libdeflate
-        # migration).
-        - libdeflate <1.26
+        - libdeflate
         # flang-pixi's libomp, as pixi.toml: the zig_* build of the same
         # LLVM release as flang, on every platform (conda-forge's
         # win-arm64 libomp.dll breaks parallel regions with more than six
@@ -510,7 +507,8 @@ outputs:
         # the zig that built R and rzig: rzig finds the env's zig first
         # (B34), and B32's check stops a compile with another
         # major.minor; conda-forge's main label has 0.17.0 since
-        # 2026-10-13. Constrains an installed zig, pulls none in; moved
+        # 2026-10-13 and 0.17.1 since 2026-11-12 (the dev lock's since
+        # 2026-11-15). Constrains an installed zig, pulls none in; moved
         # with r-zig-compilers' pins in the zig 0.17 wave (B18; PHASE4
         # open point K a; feat-zig-017)
         - zig 0.17.*

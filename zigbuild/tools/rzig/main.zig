@@ -672,6 +672,7 @@ test {
     _ = @import("cfguard.zig");
     _ = @import("strip.zig");
     _ = @import("darwin.zig");
+    _ = @import("target.zig");
     _ = @import("windows.zig");
     _ = @import("environment.zig");
     _ = @import("flang_rt.zig");

@@ -9,6 +9,7 @@ const mem = std.mem;
 const Io = std.Io;
 const Allocator = mem.Allocator;
 const stdio = @import("stdio.zig");
+const target = @import("target.zig");
 
 pub const Os = enum {
     linux,
@@ -31,6 +32,9 @@ env: *std.process.Environ.Map,
 /// except in dry-run, where RZIG_OS can choose (see main.zig). Host
 /// mechanics (PATH separator, `.exe`, exec or spawn) never follow it.
 os: Os,
+/// The architecture rzig compiles for (target.zig): its own, which is
+/// R's. Unit tests set the other one to check its command lines.
+arch: target.Arch = .own,
 /// The shim this run stands for, in messages ("zig-cc", ...).
 name: []const u8,
 /// This binary's own path (symlinks resolved, `/` separators), from which

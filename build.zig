@@ -400,6 +400,15 @@ pub fn build(b: *std.Build) !void {
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
     const cairo_dir = b.option([]const u8, "cairo", "cairo's source tarball, unpacked (the conda build's; else build.zig.zon's cairo): Windows' winCairo.dll");
 
+    // R's platform is the native one of the zig that runs this build,
+    // which is the platform pixi installed the environment for (env.sh
+    // stops when that is not the platform its shell runs on: an emulated
+    // environment, chore-release-11 finding 29). It must be: R links that
+    // environment's conda libraries, so a -Dtarget naming another arch
+    // could only fail at the link. build.zig takes no -Dtarget, and
+    // makes the rest of the query explicit below. Packages are compiled
+    // for R's platform by rzig, which is built for it and names it on
+    // every command (zigbuild/tools/rzig/target.zig).
     const native = b.resolveTargetQuery(.{});
     const os: Os = switch (native.result.os.tag) {
         .linux => .linux,
@@ -1639,6 +1648,10 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const rcmd_env_wf = b.addWriteFiles();
     const rcmd_env = rcmd_env_wf.add("Rcmd_environ", try rcmdEnviron(ctx, io));
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rcmd_env, ctx.rhomeInstallDir("etc"), "Rcmd_environ").step);
+    // etc/r-zig.cmake: CMake's default toolchain file, as on unix
+    // (cmakeToolchain); etc/Rcmd_environ names it.
+    const cmake_tc = rcmd_env_wf.add("r-zig.cmake", cmakeToolchain(.windows));
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(cmake_tc, ctx.rhomeInstallDir("etc"), "r-zig.cmake").step);
 
     try installWindowsCompilerContract(ctx, io);
     // The env's runtime data, for a tree that is not the env (Tcl/Tk with
@@ -2780,7 +2793,13 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     no longer a dependency (AMENDMENTS Am2, Am3 b). pkgconf derives
 ///     each package's prefix from its .pc file's place. In the standalone
 ///     tree it names <top>/Library/lib/pkgconfig, which does not exist.
-/// CMAKE_GENERATOR, RC, UserNM and PKG_CONFIG_PATH are defaults:
+///   - CMAKE_TOOLCHAIN_FILE: etc/r-zig.cmake (cmakeToolchain), as
+///     etc/Renviron sets it on unix: CMake searches R's env (<env>/Library)
+///     and R_ZIG_EXTRA_ENV's <root>/Library first. The extras group's
+///     cmake.exe does not search them by itself (chore-release-11 finding
+///     28: Rhdf5lib found no OpenSSL).
+/// CMAKE_GENERATOR, RC, UserNM, PKG_CONFIG_PATH and CMAKE_TOOLCHAIN_FILE
+/// are defaults:
 /// one set in the environment wins (`${VAR-default}`), in double quotes:
 /// unquoted, R's environ reader (Renviron.c) takes each `\` of the
 /// expanded value as an escape, and a user's `C:\x\nm.exe` or
@@ -2810,6 +2829,9 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
         "## r-zig: pkgconf's search path, unless set: R's env's .pc files.",
         "R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig",
         "PKG_CONFIG_PATH=\"${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}\"",
+        "## r-zig: CMake's default toolchain file: it searches R's env and R_ZIG_EXTRA_ENV's first.",
+        "R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake",
+        "CMAKE_TOOLCHAIN_FILE=\"${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}\"",
     }) |line| {
         try out.appendSlice(b.allocator, line);
         try out.appendSlice(b.allocator, eol);
@@ -4039,7 +4061,7 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     _ = stage.add("etc/Makeconf", makeconf);
     _ = stage.add("etc/javaconf", try substFile(ctx, io, "etc/javaconf.in"));
     _ = stage.addCopyFile(ctx.path("etc/repositories"), "etc/repositories");
-    if (ctx.os == .macos) _ = stage.add("etc/r-zig.cmake", macos_cmake_toolchain);
+    _ = stage.add("etc/r-zig.cmake", cmakeToolchain(ctx.os));
 
     // --- include/ (public headers) ---
     for (rspec.public_headers) |h| {
@@ -4152,14 +4174,37 @@ fn ldpaths(ctx: *const Ctx) []const u8 {
     };
 }
 
-/// etc/r-zig.cmake on macOS, in every tree (the conda build's too): a
-/// CMake toolchain file that keeps the host's package managers out of
-/// CMake's searches. etc/Renviron makes it CMAKE_TOOLCHAIN_FILE's default
-/// (finalRenviron), which CMake (>= 3.21) reads from the environment when
-/// the command line names no toolchain file: a package's own
-/// -DCMAKE_TOOLCHAIN_FILE wins, and so does the variable when it is set
-/// already, an empty one included (CMake then uses none).
-///   - Why: CMake's Platform/Darwin.cmake puts Homebrew's prefix (`brew
+/// etc/r-zig.cmake, in every tree on every OS (the conda build's too): a
+/// CMake toolchain file that makes CMake search the environments rzig
+/// compiles packages against, and on macOS not the host's package
+/// managers. etc/Renviron (unix, finalRenviron) and etc/Rcmd_environ
+/// (Windows, rcmdEnviron) make it CMAKE_TOOLCHAIN_FILE's default, which
+/// CMake (>= 3.21) reads from the environment when the command line names
+/// no toolchain file: a package's own -DCMAKE_TOOLCHAIN_FILE wins, and so
+/// does the variable when it is set already, an empty one included (CMake
+/// then uses none).
+///   - The environments (chore-release-11 finding 28): rzig compiles
+///     against R's own environment and R_ZIG_EXTRA_ENV's
+///     (zigbuild/tools/rzig/environment.zig); the file puts both first in
+///     CMAKE_SYSTEM_PREFIX_PATH, in that order, before the prefixes the
+///     platform files append (UnixPaths.cmake: /usr/local, /usr, /, ...;
+///     WindowsPaths.cmake: Program Files, ...). R's own is <dir> for the
+///     file's <dir>/lib/R/etc: the conda env, or <env>/Library on Windows
+///     (R_HOME is <env>/Library/lib/R), or the standalone prefix.
+///     R_ZIG_EXTRA_ENV names a root, and its <root>/Library on Windows, as
+///     for rzig. Why: CMake searches a conda env's lib/ and include/ for
+///     find_library and find_path only as one of its prefixes. Conda's
+///     cmake (<env>/bin/cmake) adds its own install prefix, the env, after
+///     /usr; the extras group's Kitware cmake (R_HOME/bin/toolchain/cmake/
+///     bin, first on PATH under R CMD, feat-extras-group) adds its own
+///     directory, so the env was not searched at all: PATH's <env>/bin
+///     reaches find_package's config files only, and a find module with a
+///     pkg-config hint (FindCURL; FindOpenSSL on unix only). Stress run
+///     43773932212, tree legs: Rhdf5lib's HDF5 found no ZLIB_LIBRARY on
+///     linux and no OpenSSL on Windows. Conda's cmake, after /usr, took the
+///     runner's /usr/include/zlib.h with the env's libz.so (stress run
+///     38569895172: ZLIB "1.3"); the env first fixes that too.
+///   - macOS: CMake's Platform/Darwin.cmake puts Homebrew's prefix (`brew
 ///     --prefix`, else /opt/homebrew on arm64 and /usr/local on Intel)
 ///     first in CMAKE_SYSTEM_PREFIX_PATH, before the environment's, and
 ///     Fink's /sw and MacPorts' /opt/local last, whatever PATH says.
@@ -4169,36 +4214,60 @@ fn ldpaths(ctx: *const Ctx) []const u8 {
 ///     Darwin.cmake adds for a package manager, and $HOMEBREW_PREFIX
 ///     (`brew shellenv` sets it) is Homebrew's when it lives elsewhere
 ///     (`brew --prefix`); unset, it adds nothing.
-///   - CMAKE_SYSTEM_IGNORE_PREFIX_PATH (CMake >= 3.23; older ones skip it)
+///     CMAKE_SYSTEM_IGNORE_PREFIX_PATH (CMake >= 3.23; older ones skip it)
 ///     drops exactly these prefixes from every find_* search: the
 ///     system's, PATH's (find_package's <prefix> for each <prefix>/bin)
 ///     and CMAKE_PREFIX_PATH's. A prefix below one of them (a conda env in
 ///     /opt/homebrew/Caskroom) is kept, and so is a program found on PATH.
-///     The variable without SYSTEM stays the project's.
-///   - The environment's libraries: CMake finds them through PATH's
-///     <env>/bin (find_* search <prefix>/lib and <prefix>/include for it),
-///     CMAKE_PREFIX_PATH and, when the env's cmake runs, that cmake's own
-///     prefix (UnixPaths.cmake), none of them one of these four; the conda
-///     build's R_HOME is <env>/lib/R. A tree with the extras group runs its
-///     own cmake (R_HOME/bin/toolchain/cmake/bin comes first on PATH under
-///     R CMD, feat-extras-group), whose prefix is that directory: there
-///     PATH's <env>/bin and CMAKE_PREFIX_PATH are the only ways to the env.
-///   - Not linux: CMake's Linux platform adds no package manager's prefix
-///     (UnixPaths.cmake: /usr/local, /usr, /, its own and the install
-///     prefix, /usr/X11R6, /usr/pkg, /opt); Linuxbrew is searched only
-///     when PATH or CMAKE_PREFIX_PATH names it. Not Windows: CMake adds
-///     Program Files and its own prefix there (WindowsPaths.cmake), and
-///     etc/Rcmd_environ sets its generator and windres (rcmdEnviron).
-const macos_cmake_toolchain =
-    \\# r-zig: CMake's default toolchain file for package builds on macOS.
-    \\# etc/Renviron sets CMAKE_TOOLCHAIN_FILE to it; a CMAKE_TOOLCHAIN_FILE
-    \\# already set (empty: none) or a package's -DCMAKE_TOOLCHAIN_FILE wins.
-    \\# CMake searches Homebrew's, Fink's and MacPorts' prefixes whatever
-    \\# PATH says. This leaves them out of every find_* search (CMake >= 3.23),
-    \\# so packages link their environment's libraries, not the host's.
-    \\set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local /opt/local /sw $ENV{HOMEBREW_PREFIX})
-    \\
-;
+///     The variable without SYSTEM stays the project's. The SDK's usr
+///     stays first (Darwin.cmake inserts it at 0): zlib from the SDK.
+///   - CMake reads a toolchain file more than once per configure; each
+///     read appends the two prefixes again, which only repeats a search.
+///   - No target (chore-release-11 finding 29): rzig names R's on every
+///     command CMake's compiler runs, so CMAKE_<LANG>_COMPILER_TARGET would
+///     only add a second one, and CMAKE_SYSTEM_NAME or
+///     CMAKE_SYSTEM_PROCESSOR would switch CMake to cross-compiling
+///     (CMAKE_CROSSCOMPILING: no try_run, find_* rerooted).
+fn cmakeToolchain(os: Os) []const u8 {
+    const head =
+        \\# r-zig: CMake's default toolchain file for package builds.
+        \\# etc/Renviron (Windows: etc/Rcmd_environ) sets CMAKE_TOOLCHAIN_FILE to
+        \\# it; a CMAKE_TOOLCHAIN_FILE already set (empty: none) or a package's
+        \\# -DCMAKE_TOOLCHAIN_FILE wins.
+        \\# CMake searches first the environments rzig compiles packages against:
+        \\# R's own (this file is in <dir>/lib/R/etc) and R_ZIG_EXTRA_ENV's.
+        \\get_filename_component(_r_zig_env "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+        \\list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}")
+        \\if(NOT "$ENV{R_ZIG_EXTRA_ENV}" STREQUAL "")
+        \\  file(TO_CMAKE_PATH "$ENV{R_ZIG_EXTRA_ENV}" _r_zig_env)
+        \\
+    ;
+    const tail =
+        \\endif()
+        \\unset(_r_zig_env)
+        \\
+    ;
+    const unix_extra =
+        \\  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}")
+        \\
+    ;
+    const windows_extra =
+        \\  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}/Library")
+        \\
+    ;
+    const macos_ignore =
+        \\# CMake searches Homebrew's, Fink's and MacPorts' prefixes whatever
+        \\# PATH says. This leaves them out of every find_* search (CMake >= 3.23),
+        \\# so packages link their environment's libraries, not the host's.
+        \\set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local /opt/local /sw $ENV{HOMEBREW_PREFIX})
+        \\
+    ;
+    return switch (os) {
+        .windows => head ++ windows_extra ++ tail,
+        .macos => head ++ unix_extra ++ tail ++ macos_ignore,
+        else => head ++ unix_extra ++ tail,
+    };
+}
 
 /// etc/Renviron as it ships (phase A4, F1.4), unix only (Windows R reads
 /// etc/Rcmd_environ, rcmdEnviron, and etc/Renviron.site,
@@ -4206,8 +4275,8 @@ const macos_cmake_toolchain =
 /// (installing a package without compiling runs no tar or unzip),
 /// printing goes to a bare `lpr`, MAKE is R's `make` in every flavor and
 /// the build-tools group's usr/bin leads PATH (feat-standalone-toolchain
-/// B25), on macOS CMake's default toolchain file is etc/r-zig.cmake
-/// (macos_cmake_toolchain), and a tree that is not the env names its CA
+/// B25), CMake's default toolchain file is etc/r-zig.cmake
+/// (cmakeToolchain), and a tree that is not the env names its CA
 /// bundle, its fontconfig configuration and, in full, Tcl's script
 /// library (installEnvRuntime).
 /// `${X-default}` keeps a value set in the environment, as upstream's
@@ -4231,17 +4300,15 @@ fn finalRenviron(ctx: *const Ctx, io: std.Io, raw: []const u8) ![]u8 {
         }
         try out.append(b.allocator, '\n');
     }
-    // macOS: CMake's default toolchain file (macos_cmake_toolchain), in the
-    // conda build too. R reads this file at startup and R CMD sources it,
-    // so package builds get it either way.
-    if (ctx.os == .macos) {
-        try out.appendSlice(b.allocator,
-            \\## r-zig: CMake leaves out Homebrew's, Fink's and MacPorts' prefixes.
-            \\R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake
-            \\CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}
-            \\
-        );
-    }
+    // CMake's default toolchain file (cmakeToolchain), in the conda build
+    // too. R reads this file at startup and R CMD sources it, so package
+    // builds get it either way.
+    try out.appendSlice(b.allocator,
+        \\## r-zig: CMake searches R's environment and R_ZIG_EXTRA_ENV's first (macOS: not Homebrew's, Fink's or MacPorts').
+        \\R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake
+        \\CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}
+        \\
+    );
     // etc/Renviron, not Renviron.site: `R --vanilla`/`Rscript --vanilla`
     // imply --no-environ, which skips Renviron.site but still reads this
     // file. Why R_ZIG_CA_BUNDLE and not CURL_CA_BUNDLE: installEnvRuntime.

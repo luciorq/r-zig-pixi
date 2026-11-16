@@ -116,3 +116,4 @@ memory "both zigs"):
 | --- | --- | --- |
 | 2026-11-12 | 0.17.0 (conda-forge) | reproduced (above) |
 | 2026-11-14 | 0.17.0 (conda-forge) | the repro above run as written: same error; deleting `p/<hash>.tar.gz` fixes the next build |
+| 2026-11-15 | 0.17.1 (conda-forge, zig-0.17.1-89c0722_0) | the repro above run as written, with an empty scratch cache: the last `zig build` stops with the same hash mismatch (T/rel11-fix/zigfetch-probe/repro.log). The hashes of pkgconf 3.0.11 and cmake 4.5.0 (chore-release-11 finding 27) came from `zig fetch` with a scratch cache only. |

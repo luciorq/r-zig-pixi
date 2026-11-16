@@ -43,6 +43,27 @@ case "$OS-$(uname -m)" in
   windows-*) case "${PROCESSOR_IDENTIFIER:-}" in ARM*) PLAT=win-arm64 ;; *) PLAT=win-64 ;; esac ;;
   *) PLAT=unknown ;;
 esac
+# The platform pixi installed this environment for (conda-meta/pixi's
+# resolved_platform) must be PLAT: pixi installs an environment that does
+# not list the machine's platform for one the machine emulates, with a
+# WARN only (win-arm64 -> win-64; stress run 43773932212, whose x64 zig
+# then compiled for x64 against an arm64 R: chore-release-11 findings 26
+# and 29), and R built there, its zig and its libraries are that other
+# platform's. Not on macOS: an osx-64 environment under Rosetta on an
+# arm64 Mac is a supported setup there (its zig, R and libraries are all
+# osx-64, and rzig names osx-64 as the target), and the shell may run as
+# either arch (the wheel env has no bash of its own). No pixi
+# environment (rattler-build's, a plain conda env): nothing to compare.
+# The subdir read is the one in the resolved_platform block.
+pixi_meta="${CONDA_PREFIX:-}/conda-meta/pixi"
+if [ -n "${CONDA_PREFIX:-}" ] && command -v cygpath > /dev/null 2>&1; then pixi_meta="$(cygpath -u "$CONDA_PREFIX")/conda-meta/pixi"; fi
+if [ "$OS" != macos ] && [ -n "${CONDA_PREFIX:-}" ] && [ -f "$pixi_meta" ] && [ "$PLAT" != unknown ]; then
+  env_plat="$(sed -n '/"resolved_platform"/,/}/s/^ *"subdir": *"\([^"]*\)".*/\1/p' "$pixi_meta" | sed -n 1p)"
+  if [ -n "$env_plat" ] && [ "$env_plat" != "$PLAT" ]; then
+    echo "error: pixi installed the environment ${PIXI_ENVIRONMENT_NAME:-$CONDA_PREFIX} for $env_plat on this $PLAT machine, under emulation (pixi falls back to it when the environment's features do not list $PLAT, or --platform asked for it): R, zig and the libraries there are $env_plat's" >&2
+    exit 1
+  fi
+fi
 if [ "$OS" = windows ]; then ARCHIVE_EXT=zip; else ARCHIVE_EXT=tar.gz; fi
 # A group archive's extension (B17): the compilers group's is .tar.xz on
 # every platform since phase 6, B13: with zig and flang it was over

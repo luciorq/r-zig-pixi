@@ -42,7 +42,7 @@
 //!             on every machine, never an installed Visual Studio's). zig
 //!             rc preprocesses itself and defines RC_INVOKED, so windres'
 //!             --preprocessor, which named rzig's gcc.exe, is dropped.
-//!   as        `zig cc -c -x assembler`, for a .s file.
+//!   as        `zig cc -target <R's> -c -x assembler`, for a .s file.
 //!
 //! Each takes `@file` for the words in it (main.zig, response.zig), as
 //! GNU's do.
@@ -52,6 +52,7 @@ const mem = std.mem;
 const Io = std.Io;
 const Ctx = @import("Ctx.zig");
 const stdio = @import("stdio.zig");
+const rzig_target = @import("target.zig");
 
 pub const Error = error{ BadFile, OutOfMemory };
 
@@ -62,6 +63,8 @@ pub const Machine = enum {
     aarch64,
     i386,
 
+    /// rzig's own arch, which is Ctx.arch's default (.own) and R's
+    /// (target.zig); tests that set ctx.arch do not move it.
     pub const own: Machine = switch (builtin.cpu.arch) {
         .aarch64 => .aarch64,
         .x86 => .i386,
@@ -1389,7 +1392,8 @@ pub fn asArgv(ctx: *Ctx, args: []const []const u8) ![]const []const u8 {
     }
     if (inputs.items.len != 1) return usage(ctx, "rzig's as assembles one .s file");
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(a, &.{ "cc", "-c", "-x", "assembler" });
+    // R's target (target.zig, finding 29), not the running zig's native one
+    try argv.appendSlice(a, &.{ "cc", "-target", rzig_target.zig(.windows, ctx.arch).?, "-c", "-x", "assembler" });
     try argv.appendSlice(a, incs.items);
     try argv.appendSlice(a, &.{ inputs.items[0], "-o", out_file });
     return argv.items;
@@ -1657,11 +1661,17 @@ test "windres: GNU's options as zig rc's, the gcc preprocessor dropped" {
     _ = f.takeWarnings();
 }
 
-test "as: zig cc -c -x assembler" {
+test "as: zig cc -target <R's> -c -x assembler" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
     defer f.deinit();
-    try expectArgs(&.{ "cc", "-c", "-x", "assembler", "-I", "inc", "a.s", "-o", "a.o" }, try asArgv(&f.ctx, &.{ "--64", "-Iinc", "-o", "a.o", "a.s" }));
+    try expectArgs(&.{ "cc", "-target", rzig_target.zig(.windows, .own).?, "-c", "-x", "assembler", "-I", "inc", "a.s", "-o", "a.o" }, try asArgv(&f.ctx, &.{ "--64", "-Iinc", "-o", "a.o", "a.s" }));
+    // R's arch, whatever the zig that runs: rzig's own (finding 29)
+    for ([_]rzig_target.Arch{ .x86_64, .aarch64 }, [_][]const u8{ "x86_64-windows-gnu", "aarch64-windows-gnu" }) |arch, t| {
+        f.ctx.arch = arch;
+        try expectArgs(&.{ "cc", "-target", t, "-c", "-x", "assembler", "a.s", "-o", "a.o" }, try asArgv(&f.ctx, &.{ "-o", "a.o", "a.s" }));
+    }
+    f.ctx.arch = .own;
     try testing.expectError(error.Usage, asArgv(&f.ctx, &.{ "a.s", "b.s" }));
     _ = f.takeWarnings();
 }

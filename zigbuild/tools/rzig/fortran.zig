@@ -25,8 +25,9 @@
 //!   which compiles and links it as zig-cc does (Cc7).
 //! - Compiles (.f .f90 .F ...: -c, -S, -E, -M, -fsyntax-only) and probes
 //!   (--version, -v alone, -print-*, ...) run flang with the caller's
-//!   arguments, on macOS after the floor (floors.zig), so the caller's own
-//!   -mmacosx-version-min still wins. flang compiles for its target's
+//!   arguments, after R's target (`--target=`, target.zig; finding 29)
+//!   and on macOS the floor (floors.zig), so the caller's own --target
+//!   and -mmacosx-version-min still win. flang compiles for its target's
 //!   baseline CPU unless told otherwise (target-cpu x86-64 on linux-64 and
 //!   win-64, measured 2026-10-06), which zig-cc gets from -mcpu=baseline;
 //!   flang refuses that flag ("unsupported option '-mcpu='" on x86_64),
@@ -68,6 +69,7 @@ const compiler = @import("compiler.zig");
 const flang_rt = @import("flang_rt.zig");
 const floors = @import("floors.zig");
 const groups = @import("groups.zig");
+const rzig_target = @import("target.zig");
 const Args = cmdline.Args;
 
 /// What zig-fc runs for the caller's arguments. error.NoFlang, after the
@@ -77,12 +79,24 @@ pub fn command(ctx: *Ctx, caller: Args) !Ctx.Command {
         try groups.report(ctx, groups.no_flang, .compilers);
         return error.NoFlang;
     };
-    const floor: Args = if (ctx.os == .macos) &.{floors.macos_min_flag} else &.{};
+    const pre = try flangPre(ctx);
     return switch (kind(caller)) {
-        .flang => .{ .program = try mem.concat(ctx.arena, []const u8, &.{ &.{flang}, floor, caller, try modules(ctx, flang, caller) }) },
+        .flang => .{ .program = try mem.concat(ctx.arena, []const u8, &.{ &.{flang}, pre, caller, try modules(ctx, flang, caller) }) },
         .link => .{ .zig = try zigLink(ctx, caller) },
-        .split => split(ctx, flang, floor, caller),
+        .split => split(ctx, flang, pre, caller),
     };
+}
+
+/// Before the caller's arguments on every flang command: R's target
+/// (target.zig's flang triple), not flang's default, which is the
+/// platform the flang binary was built for (finding 29), and on macOS
+/// the floor. Both before the caller's, so a caller's own --target or
+/// -mmacosx-version-min wins (flang takes the last).
+fn flangPre(ctx: *Ctx) !Args {
+    var out: std.ArrayList([]const u8) = .empty;
+    if (rzig_target.flang(ctx.os, ctx.arch)) |t| try out.append(ctx.arena, try ctx.fmt("--target={s}", .{t}));
+    if (ctx.os == .macos) try out.append(ctx.arena, floors.macos_min_flag);
+    return out.items;
 }
 
 /// The Fortran runtime as Makeconf's FLIBS spells it (build.zig): flang's,
@@ -242,7 +256,7 @@ fn drop(ctx: *Ctx, args: Args, list: []const Refused) !Args {
 /// use (-L, -l, -shared, -Wl,...). The caller's -v reaches both, so
 /// autoconf's AC_FC_LIBRARY_LDFLAGS reads the line zig links with (ld.lld;
 /// macOS: `zig ld`).
-fn split(ctx: *Ctx, flang: []const u8, floor: Args, caller: Args) !Ctx.Command {
+fn split(ctx: *Ctx, flang: []const u8, pre: Args, caller: Args) !Ctx.Command {
     var root = tmpRoot(ctx.os, ctx.env, caller);
     if (ctx.os == .windows) root = try mem.replaceOwned(u8, ctx.arena, root, "\\", "/");
     const tmp = if (ctx.dry_run) try ctx.fmt("{s}/rzig-fc-dryrun", .{root}) else blk: {
@@ -301,7 +315,7 @@ fn split(ctx: *Ctx, flang: []const u8, floor: Args, caller: Args) !Ctx.Command {
         const obj = try ctx.fmt("{s}/{d}-{s}.o", .{ tmp, n, stem(x) });
         n += 1;
         const x_lang: Args = if (lang) |l| try ctx.arena.dupe([]const u8, &.{ "-x", l }) else &.{};
-        try steps.append(ctx.arena, .{ .program = try mem.concat(ctx.arena, []const u8, &.{ &.{flang}, floor, compile_args, &.{ "-Qunused-arguments", "-c" }, x_lang, &.{ x, "-o", obj }, mods }) });
+        try steps.append(ctx.arena, .{ .program = try mem.concat(ctx.arena, []const u8, &.{ &.{flang}, pre, compile_args, &.{ "-Qunused-arguments", "-c" }, x_lang, &.{ x, "-o", obj }, mods }) });
         try link.append(ctx.arena, obj);
     }
     try steps.append(ctx.arena, .{ .zig = try zigLink(ctx, link.items) });
@@ -405,7 +419,23 @@ fn cat(f: *testutil.Fixture, parts: []const Args) Args {
     return mem.concat(f.ctx.arena, []const u8, parts) catch @panic("OOM");
 }
 
-test "compiles, -E, -fsyntax-only and probes: flang with the caller's arguments, after the floor on macOS, the modules path last" {
+/// R's target as flang takes it, for rzig's own arch (target.zig).
+const fl_linux = "--target=" ++ rzig_target.flang(.linux, .own).?;
+const fl_macos = "--target=" ++ rzig_target.flang(.macos, .own).?;
+const fl_windows = "--target=" ++ rzig_target.flang(.windows, .own).?;
+
+/// What zig-fc puts before the caller's arguments on every flang command
+/// on `os` (flangPre): R's target, and on macOS the floor.
+fn fpre(os: Ctx.Os) Args {
+    return switch (os) {
+        .linux => &.{fl_linux},
+        .macos => &.{ fl_macos, floors.macos_min_flag },
+        .windows => &.{fl_windows},
+        .other => &.{},
+    };
+}
+
+test "compiles, -E, -fsyntax-only and probes: flang with the caller's arguments, after R's target and the floor on macOS, the modules path last" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
@@ -439,14 +469,13 @@ test "compiles, -E, -fsyntax-only and probes: flang with the caller's arguments,
     const m = try modulesFlang(&f);
     for ([_]Ctx.Os{ .linux, .macos, .windows }) |os| {
         c.os = os;
-        const floor: Args = if (os == .macos) &.{floors.macos_min_flag} else &.{};
-        for (reads) |call| try expectProgram(cat(&f, &.{ &.{m.fc}, floor, call, m.flag }), try command(c, call));
-        for (others) |call| try expectProgram(cat(&f, &.{ &.{m.fc}, floor, call }), try command(c, call));
+        for (reads) |call| try expectProgram(cat(&f, &.{ &.{m.fc}, fpre(os), call, m.flag }), try command(c, call));
+        for (others) |call| try expectProgram(cat(&f, &.{ &.{m.fc}, fpre(os), call }), try command(c, call));
     }
     // a flang with no modules directory beside it: no flag
     c.os = .linux;
     const fc = try plainFlang(&f);
-    for (reads ++ others) |call| try expectProgram(cat(&f, &.{ &.{fc}, call }), try command(c, call));
+    for (reads ++ others) |call| try expectProgram(cat(&f, &.{ &.{ fc, fl_linux }, call }), try command(c, call));
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 
@@ -501,53 +530,53 @@ test "sources and a link: a flang compile per Fortran source, then zig's link" {
     const q: Args = &.{ "-Qunused-arguments", "-c" };
     // configure's AC_LANG(Fortran) link probe
     try expectSplit(
-        &.{cat(&f, &.{ &.{ fc, "-O2" }, q, &.{ "conftest.f", "-o", o0 }, m.flag })},
+        &.{cat(&f, &.{ &.{ fc, fl_linux, "-O2" }, q, &.{ "conftest.f", "-o", o0 }, m.flag })},
         try zigCc(&f, cat(&f, &.{ &.{ "-o", "conftest", "-O2", o0 }, fl })),
         try command(c, &.{ "-o", "conftest", "-O2", "conftest.f" }),
     );
     // -v reaches both: autoconf's AC_FC_LIBRARY_LDFLAGS reads zig's line
     try expectSplit(
-        &.{cat(&f, &.{ &.{ fc, "-v" }, q, &.{ "conftest.f", "-o", o0 }, m.flag })},
+        &.{cat(&f, &.{ &.{ fc, fl_linux, "-v" }, q, &.{ "conftest.f", "-o", o0 }, m.flag })},
         try zigCc(&f, cat(&f, &.{ &.{ "-v", "-o", "conftest", o0 }, fl })),
         try command(c, &.{ "-v", "-o", "conftest", "conftest.f" }),
     );
     const a0 = f.fmt("{s}/0-a.o", .{d});
     // a source and an object
     try expectSplit(
-        &.{cat(&f, &.{ &.{ fc, "-shared" }, q, &.{ "a.f", "-o", a0 }, m.flag })},
+        &.{cat(&f, &.{ &.{ fc, fl_linux, "-shared" }, q, &.{ "a.f", "-o", a0 }, m.flag })},
         try zigCc(&f, cat(&f, &.{ &.{ "-shared", "-o", "p.so", a0, "b.o" }, fl })),
         try command(c, &.{ "-shared", "-o", "p.so", "a.f", "b.o" }),
     );
     // a C source is no step: zig compiles and links it (Cc7)
     try expectSplit(
-        &.{cat(&f, &.{ &.{ fc, "-shared" }, q, &.{ "a.f", "-o", a0 }, m.flag })},
+        &.{cat(&f, &.{ &.{ fc, fl_linux, "-shared" }, q, &.{ "a.f", "-o", a0 }, m.flag })},
         try zigCc(&f, cat(&f, &.{ &.{ "-shared", "-o", "p.so", a0, "glue.c" }, fl })),
         try command(c, &.{ "-shared", "-o", "p.so", "a.f", "glue.c" }),
     );
     // Fortran by -x, both of flang's names; no -x reaches the link
     for ([_][]const u8{ "f95", "f95-cpp-input" }) |lang| {
         try expectSplit(
-            &.{cat(&f, &.{ &.{ fc, "-shared" }, q, &.{ "-x", lang, "a", "-o", a0 }, m.flag })},
+            &.{cat(&f, &.{ &.{ fc, fl_linux, "-shared" }, q, &.{ "-x", lang, "a", "-o", a0 }, m.flag })},
             try zigCc(&f, cat(&f, &.{ &.{ "-shared", "-o", "p.so", a0 }, fl })),
             try command(c, &.{ "-shared", "-x", lang, "-o", "p.so", "a" }),
         );
         try expectSplit(
-            &.{cat(&f, &.{ &.{fc}, q, &.{ "-x", lang, "a", "-o", a0 }, m.flag })},
+            &.{cat(&f, &.{ &.{ fc, fl_linux }, q, &.{ "-x", lang, "a", "-o", a0 }, m.flag })},
             try zigCc(&f, cat(&f, &.{ &.{ a0, "-o", "p" }, fl })),
             try command(c, &.{ f.fmt("-x{s}", .{lang}), "a", "-o", "p" }),
         );
     }
     // a C source only an -x classified keeps it, on zig's line alone
     try expectSplit(
-        &.{cat(&f, &.{ &.{fc}, q, &.{ "-x", "f95", "a", "-o", a0 }, m.flag })},
+        &.{cat(&f, &.{ &.{ fc, fl_linux }, q, &.{ "-x", "f95", "a", "-o", a0 }, m.flag })},
         try zigCc(&f, cat(&f, &.{ &.{ "-x", "c", "g", "-x", "none", a0, "-o", "p", "x.o" }, fl })),
         try command(c, &.{ "-x", "c", "g", "-x", "f95", "a", "-o", "p", "-x", "none", "x.o" }),
     );
     // two sources with one base name: two objects, in the caller's order
     try expectSplit(
         &.{
-            cat(&f, &.{ &.{fc}, q, &.{ "a/x.f", "-o", f.fmt("{s}/0-x.o", .{d}) }, m.flag }),
-            cat(&f, &.{ &.{fc}, q, &.{ "b/x.f", "-o", f.fmt("{s}/1-x.o", .{d}) }, m.flag }),
+            cat(&f, &.{ &.{ fc, fl_linux }, q, &.{ "a/x.f", "-o", f.fmt("{s}/0-x.o", .{d}) }, m.flag }),
+            cat(&f, &.{ &.{ fc, fl_linux }, q, &.{ "b/x.f", "-o", f.fmt("{s}/1-x.o", .{d}) }, m.flag }),
         },
         try zigCc(&f, cat(&f, &.{ &.{ "-o", "p", f.fmt("{s}/0-x.o", .{d}), f.fmt("{s}/1-x.o", .{d}) }, fl })),
         try command(c, &.{ "-o", "p", "a/x.f", "b/x.f" }),
@@ -556,8 +585,8 @@ test "sources and a link: a flang compile per Fortran source, then zig's link" {
     // value as an input); a module used across the two files
     try expectSplit(
         &.{
-            cat(&f, &.{ &.{ fc, "-J", "mods" }, q, &.{ "m.f90", "-o", f.fmt("{s}/0-m.o", .{d}) }, m.flag }),
-            cat(&f, &.{ &.{ fc, "-J", "mods" }, q, &.{ "u.f90", "-o", f.fmt("{s}/1-u.o", .{d}) }, m.flag }),
+            cat(&f, &.{ &.{ fc, fl_linux, "-J", "mods" }, q, &.{ "m.f90", "-o", f.fmt("{s}/0-m.o", .{d}) }, m.flag }),
+            cat(&f, &.{ &.{ fc, fl_linux, "-J", "mods" }, q, &.{ "u.f90", "-o", f.fmt("{s}/1-u.o", .{d}) }, m.flag }),
         },
         try zigCc(&f, cat(&f, &.{ &.{ "-o", "p", f.fmt("{s}/0-m.o", .{d}), f.fmt("{s}/1-u.o", .{d}) }, fl })),
         try command(c, &.{ "-J", "mods", "-o", "p", "m.f90", "u.f90" }),
@@ -565,14 +594,14 @@ test "sources and a link: a flang compile per Fortran source, then zig's link" {
     // what zig cc refuses stays on the compile (flang 23 refuses -Mfree
     // there itself, loudly); a value of -Xlinker is no option
     try expectSplit(
-        &.{cat(&f, &.{ &.{ fc, "-Mfree", "-Xlinker", "-s" }, q, &.{ "a.f", "-o", a0 }, m.flag })},
+        &.{cat(&f, &.{ &.{ fc, fl_linux, "-Mfree", "-Xlinker", "-s" }, q, &.{ "a.f", "-o", a0 }, m.flag })},
         try zigCc(&f, cat(&f, &.{ &.{ "-Xlinker", "-s", "-o", "p", a0 }, fl })),
         try command(c, &.{ "-Mfree", "-Xlinker", "-s", "-o", "p", "a.f" }),
     );
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 
-test "a split on macOS and Windows: the floor on each compile; link-only options off the compile, on the link (Cc1, Cc2)" {
+test "a split on macOS and Windows: R's target and the floor on each compile; link-only options off the compile, on the link (Cc1, Cc2)" {
     var f: testutil.Fixture = undefined;
     try f.init(.macos);
     defer f.deinit();
@@ -585,14 +614,14 @@ test "a split on macOS and Windows: the floor on each compile; link-only options
     const a0 = f.path("t/rzig-fc-dryrun/0-a.o");
     // macOS SHLIB's link line, as R CMD SHLIB writes it with sources
     try expectSplit(
-        &.{cat(&f, &.{ &.{ m.fc, floors.macos_min_flag, "-Wl,-headerpad_max_install_names", "-O2" }, q, &.{ "a.f90", "-o", a0 }, m.flag })},
+        &.{cat(&f, &.{ &.{ m.fc, fl_macos, floors.macos_min_flag, "-Wl,-headerpad_max_install_names", "-O2" }, q, &.{ "a.f90", "-o", a0 }, m.flag })},
         try zigCc(&f, cat(&f, &.{ &.{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-framework", "Accelerate", "-F/x", "-O2", "-o", "x.so", a0 }, flibs(.macos) })),
         try command(c, &.{ "-dynamiclib", "-Wl,-headerpad_max_install_names", "-undefined", "dynamic_lookup", "-framework", "Accelerate", "-F/x", "-O2", "-o", "x.so", "a.f90" }),
     );
     // every measured option, with its value
     const refused: Args = &.{ "-bundle", "-weak_framework", "W", "-F", "/f", "-install_name", "n", "-current_version", "1", "-compatibility_version", "1", "-exported_symbols_list", "e", "-unexported_symbols_list", "u", "-bundle_loader", "b", "-multiply_defined", "suppress", "-force_load", "l.a", "-headerpad_max_install_names", "-single_module", "-flat_namespace", "-dead_strip", "-arch", "arm64", "-z", "now", "-u", "s", "-T", "t.ld", "-e", "main" };
     try expectSplit(
-        &.{cat(&f, &.{ &.{ m.fc, floors.macos_min_flag }, q, &.{ "a.f90", "-o", a0 }, m.flag })},
+        &.{cat(&f, &.{ &.{ m.fc, fl_macos, floors.macos_min_flag }, q, &.{ "a.f90", "-o", a0 }, m.flag })},
         try zigCc(&f, cat(&f, &.{ refused, &.{ "-o", "x", a0 }, flibs(.macos) })),
         try command(c, cat(&f, &.{ refused, &.{ "-o", "x", "a.f90" } })),
     );
@@ -601,10 +630,31 @@ test "a split on macOS and Windows: the floor on each compile; link-only options
     const w0 = "C:/Users/u/Temp/rzig-fc-dryrun/0-a.o";
     const win: Args = &.{ "-shared", "-s", "-static-libgcc", "-static-libstdc++", "-shared-libgcc", "-static-pie", "-mwindows", "-mconsole", "-municode", "-mthreads" };
     try expectSplit(
-        &.{cat(&f, &.{ &.{ m.fc, "-shared" }, q, &.{ "a.f90", "-o", w0 }, m.flag })},
+        &.{cat(&f, &.{ &.{ m.fc, fl_windows, "-shared" }, q, &.{ "a.f90", "-o", w0 }, m.flag })},
         try zigCc(&f, cat(&f, &.{ win, &.{ "-o", "x.dll", w0 }, flibs(.windows) })),
         try command(c, cat(&f, &.{ win, &.{ "-o", "x.dll", "a.f90" } })),
     );
+    _ = f.takeWarnings();
+}
+
+test "Windows: flang's --target and zig's -target name R's arch, x86_64 and aarch64 (finding 29)" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    c.dry_run = true;
+    try f.env.put("TEMP", "C:/t");
+    const fc = try plainFlang(&f);
+    for ([_]rzig_target.Arch{ .x86_64, .aarch64 }, [_][]const u8{ "x86_64", "aarch64" }) |arch, a| {
+        c.arch = arch;
+        const fl = f.fmt("--target={s}-w64-windows-gnu", .{a});
+        try expectProgram(&.{ fc, fl, "-O2", "-c", "a.f90", "-o", "a.o" }, try command(c, &.{ "-O2", "-c", "a.f90", "-o", "a.o" }));
+        // a split: the compile and zig's link, each for R's arch
+        const st = (try command(c, &.{ "-shared", "-o", "p.dll", "a.f90" })).steps;
+        try expectArgs(&.{ fc, fl, "-shared", "-Qunused-arguments", "-c", "a.f90", "-o", "C:/t/rzig-fc-dryrun/0-a.o" }, st.steps[0].program);
+        const link = st.steps[1].zig;
+        try expectArgs(&.{ "-target", f.fmt("{s}-windows-gnu", .{a}) }, link[5..7]);
+    }
     _ = f.takeWarnings();
 }
 
@@ -658,7 +708,7 @@ fn runtimeFlang(f: *testutil.Fixture, triple: []const u8) ![]const u8 {
     return a;
 }
 
-const linux_target = @tagName(builtin.cpu.arch) ++ "-linux-gnu." ++ floors.majorMinor(floors.glibc);
+const linux_target = compiler.linux_target;
 
 test "linux: a shared link of objects goes through zig cc, as zig-cc's, with the static runtime and -lm" {
     if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for flang
@@ -736,7 +786,7 @@ test "Windows: the shared link resolves -l to import libraries, adds the runtime
     // winshlib.mk: $(SHLIB_LD) $(SHLIB_LDFLAGS) $(LDFLAGS) $(DLLFLAGS) -o pkg.dll tmp.def <objects> $(ALL_LIBS),
     // then a DLL's default system library (windows.defaultLibs)
     try expectZig(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, f.path("d/libz.dll.a"), a, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", rzig_target.zig(.windows, .own).?, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, f.path("d/libz.dll.a"), a, "-lws2_32" },
         try command(c, &.{ "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, "-lz" }),
     );
 }
@@ -785,9 +835,9 @@ test "the compilers group's flang wins over PATH's; zig-fc runs it" {
     c.self_exe = f.path("tree/lib/R/bin/toolchain/zig-fc");
     _ = try plainFlang(&f);
     const tc = try f.touchProgram("tree/lib/R/bin/toolchain/flang/bin/flang");
-    try expectProgram(&.{ tc, "-c", "a.f90" }, try command(c, &.{ "-c", "a.f90" }));
+    try expectProgram(&.{ tc, fl_linux, "-c", "a.f90" }, try command(c, &.{ "-c", "a.f90" }));
     // its modules, from its own place (flang_rt.modulesDir)
     const mods = "tree/lib/R/bin/toolchain/flang/lib/clang/23/finclude/flang/x86_64-conda-linux-gnu";
     try f.tmp.dir.createDirPath(testing.io, mods);
-    try expectProgram(&.{ tc, "-c", "a.f90", "-fintrinsic-modules-path", f.path(mods) }, try command(c, &.{ "-c", "a.f90" }));
+    try expectProgram(&.{ tc, fl_linux, "-c", "a.f90", "-fintrinsic-modules-path", f.path(mods) }, try command(c, &.{ "-c", "a.f90" }));
 }

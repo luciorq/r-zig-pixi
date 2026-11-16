@@ -2932,7 +2932,8 @@ fi
 # from PATH, CC from R CMD config, AR and RANLIB from it too, so no
 # host ar is reached; the generator CMake's default on unix, Unix
 # Makefiles with the group's make, and Rcmd_environ's MSYS Makefiles on
-# Windows; macOS' CMAKE_TOOLCHAIN_FILE from etc/Renviron), and
+# Windows; CMAKE_TOOLCHAIN_FILE from etc/Renviron (Windows:
+# etc/Rcmd_environ), every OS (chore-release-11 finding 28)), and
 # src/Makevars links it. Its DESCRIPTION names cmake in SystemRequirements.
 # Before the extras: the install preflight notes the missing cmake and
 # goes on (the user's decision 3.1 a), and the configure stops with its

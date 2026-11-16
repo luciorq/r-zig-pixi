@@ -54,9 +54,11 @@
 #     tk.h) are in R_HOME/Tcl/include; and every DLL a PE file in the tree imports is
 #     in the tree (its own directory, R_HOME/bin/x64, or R_HOME/Tcl/bin
 #     for the Tcl/Tk DLLs) or the system's;
-#   - macOS (every tree): etc/r-zig.cmake, a CMake toolchain file that
-#     leaves out Homebrew's, Fink's and MacPorts' prefixes, and
-#     etc/Renviron makes it CMAKE_TOOLCHAIN_FILE's default;
+#   - every OS (every tree): etc/r-zig.cmake, a CMake toolchain file that
+#     puts R's env and R_ZIG_EXTRA_ENV's first in CMake's searches (on
+#     macOS it also leaves out Homebrew's, Fink's and MacPorts'
+#     prefixes), and etc/Renviron (Windows: etc/Rcmd_environ) makes it
+#     CMAKE_TOOLCHAIN_FILE's default;
 #   - every OS (a tree that is not a conda env): share/licenses/SOURCES
 #     (Windows: Library/share/licenses) records every file the tree has
 #     from the env, with its package and sha256, and each package's
@@ -200,6 +202,46 @@ if [ -n "$lo" ]; then
 fi
 echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig${lo:+, $tc_dir/$lo is its link object}, and nothing else is there"
 
+# R's target, named on every command rzig runs, every OS
+# (zigbuild/tools/rzig/target.zig; chore-release-11 finding 29): rzig
+# never leaves the target to the zig or the flang it finds, whose native
+# one is the platform its binary was built for (an x64 zig from an
+# emulated win-64 env compiled for x64 against an arm64 R). The dry runs
+# (RZIG_PRINT_ARGV: nothing runs) of a C compile, a C++ link and, on
+# Windows, as.exe give zig `-target <R's>`, and a Fortran compile gives
+# flang `--target=<flang-zig's default triple for R's platform>`. Each
+# runs the tree's own copy; zig-fc's needs a flang (the env's).
+case "$PLAT" in
+  linux-64) want_t=x86_64-linux-gnu.2.17; want_ft=x86_64-conda-linux-gnu ;;
+  linux-aarch64) want_t=aarch64-linux-gnu.2.17; want_ft=aarch64-conda-linux-gnu ;;
+  osx-64) want_t="x86_64-native.$MACOS_MIN"; want_ft=x86_64-apple-darwin13.4.0 ;;
+  osx-arm64) want_t="aarch64-native.$MACOS_MIN"; want_ft=arm64-apple-darwin20.0.0 ;;
+  win-64) want_t=x86_64-windows-gnu; want_ft=x86_64-w64-windows-gnu ;;
+  win-arm64) want_t=aarch64-windows-gnu; want_ft=aarch64-w64-windows-gnu ;;
+  *) echo "error: no target known for platform $PLAT" >&2; exit 1 ;;
+esac
+# dry_argv <tool> <args...>: the command's words, one per line
+# (less the ZIG_LIB_DIR= line rzig prints before zig's on macOS)
+dry_argv() { (cd "$WORK" && RZIG_PRINT_ARGV=1 "$TREE/$tc_dir/$1" "${@:2}") | tr -d '\r' | grep -v '^ZIG_LIB_DIR='; }
+# has_target <words>: `-target` then $want_t, once, before any other -target
+has_target() { printf '%s\n' "$1" | awk -v t="$want_t" '$0 == "-target" { n++; if (n == 1) { getline v; ok = (v == t) } } END { exit !(ok && n == 1) }'; }
+if [ "$OS" = windows ]; then
+  t_fc=zig-fc.exe
+  calls=("gcc.exe -O2 -c a.c -o a.o" "g++.exe -shared -o p.dll a.o" "as.exe -o a.o a.s")
+else
+  t_fc=zig-fc
+  calls=("zig-cc -O2 -c a.c -o a.o" "zig-cxx -shared -o p.so a.o")
+fi
+for c in "${calls[@]}"; do
+  # shellcheck disable=SC2086
+  argv="$(dry_argv $c)" || { echo "error: the dry run of $c failed" >&2; exit 1; }
+  has_target "$argv" || { printf '%s\n' "$argv" >&2; echo "error: $c does not give zig -target $want_t, R's target, once (target.zig; finding 29)" >&2; exit 1; }
+done
+argv="$(dry_argv "$t_fc" -O2 -c a.f90 -o a.o)" || { echo "error: the dry run of $t_fc -c a.f90 failed (no flang on PATH?)" >&2; exit 1; }
+printf '%s\n' "$argv" | sed -n 2p | grep -qxF -- "--target=$want_ft" ||
+  { printf '%s\n' "$argv" >&2; echo "error: $t_fc -c a.f90 does not give flang --target=$want_ft, R's target, first (target.zig; finding 29)" >&2; exit 1; }
+echo "== R's target verified: zig -target $want_t (${calls[*]%% *}), flang --target=$want_ft ($t_fc)"
+
 # rzig build's zig build roots for tier 2 (feat-zig-pkg-build; tier 1
 # runs no zig build, feat-tier1-engine), beside the compilers
 for f in build_t2.zig rpkg.zig; do
@@ -332,10 +374,17 @@ if [ "$OS" = windows ]; then
     'R_ZIG_NM=${R_HOME}/bin/toolchain/nm.exe' \
     'R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig' \
     'PKG_CONFIG_PATH="${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}"' \
-    'UserNM="${UserNM-${R_ZIG_NM}}"' 'RC="${RC-${R_ZIG_RC}}"'; do
+    'UserNM="${UserNM-${R_ZIG_NM}}"' 'RC="${RC-${R_ZIG_RC}}"' \
+    'R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake' \
+    'CMAKE_TOOLCHAIN_FILE="${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}"'; do
     has_line "$TREE/$rh/etc/Rcmd_environ" "$l" || bad="$bad
   $rh/etc/Rcmd_environ lacks: $l"
   done
+  # CMake's toolchain file (build.zig's cmakeToolchain, chore-release-11
+  # finding 28): R_ZIG_EXTRA_ENV's Library first in CMake's searches
+  has_line "$TREE/$rh/etc/r-zig.cmake" '  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}/Library")' ||
+    bad="$bad
+  $rh/etc/r-zig.cmake is missing or does not add R_ZIG_EXTRA_ENV's Library"
 else
   for l in 'PATH=${R_HOME}/bin/toolchain/usr/bin:${R_HOME}/bin/toolchain/cmake/bin:${PATH}' "MAKE=\${MAKE-'make'}"; do
     has_line "$TREE/$rh/etc/Renviron" "$l" || bad="$bad
@@ -890,15 +939,21 @@ if [ "$OS" = windows ]; then
   exit 0
 fi
 
-# macOS, every tree (the conda build's too): CMake's toolchain file
-# (build.zig's macos_cmake_toolchain). Without it CMake searches Homebrew's
-# prefix before the environment's whatever PATH says, and packages link
-# the host's libraries (stress round 2, H2). etc/Renviron makes it
-# CMAKE_TOOLCHAIN_FILE's default.
-if [ "$OS" = macos ]; then
+# unix, every tree (the conda build's too; Windows: the build tools'
+# check above): CMake's toolchain file (build.zig's cmakeToolchain). It puts
+# R's env and R_ZIG_EXTRA_ENV's first in CMake's searches: the extras
+# group's cmake searches neither by itself (chore-release-11 finding 28).
+# On macOS it also leaves out Homebrew's prefix, which CMake otherwise
+# searches before the environment's whatever PATH says (stress round 2,
+# H2). etc/Renviron makes it CMAKE_TOOLCHAIN_FILE's default.
+if [ "$OS" != windows ]; then
   bad=""
-  grep -q '^set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH .*/opt/homebrew' "$TREE/$rh/etc/r-zig.cmake" 2>/dev/null ||
-    bad="$bad etc/r-zig.cmake(missing, or no CMAKE_SYSTEM_IGNORE_PREFIX_PATH)"
+  grep -qxF '  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}")' "$TREE/$rh/etc/r-zig.cmake" 2>/dev/null ||
+    bad="$bad etc/r-zig.cmake(missing, or does not add R_ZIG_EXTRA_ENV)"
+  if [ "$OS" = macos ]; then
+    grep -q '^set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH .*/opt/homebrew' "$TREE/$rh/etc/r-zig.cmake" 2>/dev/null ||
+      bad="$bad etc/r-zig.cmake(no CMAKE_SYSTEM_IGNORE_PREFIX_PATH)"
+  fi
   grep -qxF 'R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake' "$TREE/$rh/etc/Renviron" &&
     grep -qxF 'CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}' "$TREE/$rh/etc/Renviron" ||
     bad="$bad etc/Renviron(no CMAKE_TOOLCHAIN_FILE)"

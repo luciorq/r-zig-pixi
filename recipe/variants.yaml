@@ -1,0 +1,72 @@
+# conda-forge's global pins for the host libraries R links, so
+# r-zig-slim's run exports match the conda-forge packages it has to share
+# an env with (sf, terra, gdalraster, ...). rattler-build reads this file
+# (it sits next to recipe.yaml) and applies a key only to a host or build
+# dependency listed without a version: `- pcre2` becomes `pcre2 10.47.*`.
+# Without it each host library floats to the newest build, ahead of
+# conda-forge's pin while a migration runs: pcre2 10.49 (2026-11-15,
+# finding 25 of chore-release-11/PLAN.md), icu 79 (2026-10-22) and
+# libdeflate 1.26 (stress round 1, U4) each gave r-zig-slim a run export
+# that conda-forge's libgdal-core, or zig's libxml2-16, could not meet.
+#
+# Values: conda-forge-pinning 2026.11.15.14.44.40, conda_build_config.yaml
+# (https://github.com/conda-forge/conda-forge-pinning-feedstock). Only the
+# keys of recipe.yaml's unversioned host dependencies; a key conda-forge
+# does not pin (harfbuzz, tzdata) is left out. One value is not
+# conda-forge's: glib on macOS (below). Update a value, with a
+# build-number bump, when conda-forge's pin moves (its migration closes).
+# conda-forge's file itself can be passed with -m only under its own
+# name: rattler-build 0.80.1 reads `# [selector]` lines from a file named
+# conda_build_config.yaml alone. Under another name it stops ("Zip key
+# elements do not all have same length: fortran_compiler_version", the
+# error recorded here for 0.76); named so, `rattler-build build
+# --render-only -m conda_build_config.yaml` renders all six outputs on
+# linux-64 with the values below, warning that it ignores
+# pin_run_as_build (2026-11-15). This file stays: its 18 keys are the
+# ones recipe.yaml uses (conda-forge's has 1244 lines), and it keeps
+# macOS's glib, which conda-forge's '2' would override.
+bzip2:
+  - 1
+cairo:
+  - 1
+expat:
+  - 2
+fontconfig:
+  - 2
+freetype:
+  - 2
+# glib: conda-forge pins '2'; macOS takes 2.90.0. conda-forge's macOS
+# glib 2.90.1 builds need libintl 1.0, while its graphviz and gtk3
+# (imagemagick's) still need libintl 0.25: with 2.90.1 in this host,
+# r-zig-slim's run export (libglib >=2.90.1) and imagemagick could not
+# share an env on osx-arm64 (finding 25). Back to '2' when conda-forge's
+# graphviz is built against libintl 1.0.
+glib:
+  - if: osx
+    then: '2.90.0'
+    else: '2'
+# icu: keep 78 until conda-forge's libxml2-16 (zig's dependency) is built against icu 79.
+icu:
+  - '78'
+libcurl:
+  - 8
+libdeflate:
+  - '1.26'
+libiconv:
+  - 1
+liblzma_devel:
+  - 5
+libpng:
+  - '1.6'
+pango:
+  - '1'
+pcre2:
+  - '10.47'
+pixman:
+  - 0
+xz:
+  - 5
+zlib:
+  - 1
+zstd:
+  - '1.5'

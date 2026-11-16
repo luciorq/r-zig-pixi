@@ -4,7 +4,21 @@ Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
 #46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
 published.
 
-Status (2026-11-13): pushed up to 51588ad (findings 17 and 18 fixed;
+Status (2026-11-15): one tree, T/wt/rel11-fix (detached at 0e4f145,
+uncommitted): findings 25 (recipe/variants.yaml), 26 (stress on
+win-arm64), the review corrections, 27 (the lock bump), 28
+(etc/r-zig.cmake on every OS; Rhdf5lib), 29 (rzig names R's target to
+zig and flang on every OS; the env.sh platform guard; the pango and
+harfbuzz pins lifted) and 30 (clang's CPU names in -march/-mcpu;
+arrow on macOS x86_64). Lock 55d166564bd6 (dadd317726cf before
+finding 29's pango lift). The linux-64 chain, conda-package and the
+Rhdf5lib stress row pass there. New files: recipe/variants.yaml and
+zigbuild/tools/rzig/target.zig, both to be added with `git add`.
+Next: the user commits it on feat-win-arm64, then the CI full tier
+(`full-ci` label), then a stress dispatch on all runners (tree and
+conda), then the publish preflight and the release of build 11.
+
+Status (2026-11-13; superseded): pushed up to 51588ad (findings 17 and 18 fixed;
 CI run 43487408414 green but for windows-11-arm's hermetic step,
 finding 20). The three items are done and merged in the integration
 tree T/wt/rel11-int (branch rel11-int), with the fixes the host chains
@@ -263,6 +277,8 @@ flang-pixi), README sections for the three items, and findings 19-21.
     zigbuild/toolchain/build.zig.zon:5 (minimum_zig_version 0.16.0).
     (2026-11-12, night: all corrected, with dated notes; build.zig.zon
     now says 0.17.0. Uncommitted.)
+    (2026-11-15: the win-arm64 stress subset is done in build 11:
+    finding 26.)
 
 13. **Channel order (2026-11-12, after the interim records).** Finding 7
     held only for direct requirements. flang-rt-zig 23.1.5 `_1` requires
@@ -468,6 +484,505 @@ flang-pixi), README sections for the three items, and findings 19-21.
     all six Windows variants) and conda-package on all six platforms
     passed.
 
+25. **Stress run 43773932212 (0e4f145, 2026-11-15): no conda leg could
+    make its env.** conda-package passed on every platform, then
+    stress.R's env (r-zig-slim, r-zig-toolchain and the sysdeps, from
+    dist/conda, universe, conda-forge) did not solve. Cause: the
+    recipe's host libraries had no versions and rattler-build got no
+    variant config, so each took the newest build on conda-forge.
+    pcre2 10.49 (a conda-forge migration, open; the global pin is
+    10.47) gave r-zig-slim `pcre2 >=10.49,<10.50.0a0`; every
+    libgdal-core needs `pcre2 >=10.47,<10.48.0a0` or older. Linux,
+    macOS and win-64: that conflict. windows-11-arm: `glpk` has no
+    win-arm64 build (stress.R's sysdeps, not the recipe; below).
+    Host versions in the CI build (all six platforms the same unless
+    noted) against conda-forge-pinning 2026.11.15.14.44.40 and the dev
+    lock: pcre2 10.49 (pin 10.47, lock 10.47); libcurl 8.23.0 (pin 8,
+    lock 8.22.0); expat 2.9.0 (pin 2, lock 2.8.5); glib 2.90.1 (pin 2,
+    lock 2.90.0); harfbuzz 15.0.0, osx-64 14.4.0 (no pin, lock 14.2.1);
+    pango 1.58.2, osx-64 1.56.4 (pin 1, lock 1.56.4); libdeflate 1.25
+    (the recipe's `<1.26`; pin 1.26, lock 1.25); icu 78.3 (pin 78, lock
+    78.3); the others equal. Only pcre2 is past conda-forge's pin. zig
+    in the build env: conda-forge's 0.17.1, the lock 0.17.0 (not a host
+    library; the recipe's `zig 0.17.*`).
+    Fix: recipe/variants.yaml, which rattler-build reads next to the
+    recipe with no flag, holds conda-forge's global pins for every
+    unversioned host library of r-zig-build (bzip2, cairo, expat,
+    fontconfig, freetype, glib, icu, libcurl, libdeflate, libiconv,
+    liblzma_devel, libpng, pango, pcre2, pixman, xz, zlib, zstd), as a
+    feedstock's .ci_support file does. The recipe's inline `icu 78.*`
+    and `libdeflate <1.26` go: the variant gives `icu 78.*` and
+    `libdeflate 1.26.*` (conda-forge's libgdal-core 3.12.4 and 3.13.3
+    now need libdeflate 1.26). conda-forge's conda_build_config.yaml
+    itself (conda-forge-pinning, as a locked pkg dependency, with -m)
+    was tried first: rattler-build 0.76.1 stops with "Zip key elements
+    do not all have same length: fortran_compiler_version" (its
+    os.environ selectors are conda-smithy's). One value is not
+    conda-forge's: glib 2.90.0 on macOS. conda-forge's macOS glib
+    2.90.1 builds need libintl 1.0, its graphviz and gtk3 (pulled by
+    imagemagick) libintl 0.25, so with 2.90.1 in the host
+    (`libglib >=2.90.1`) osx-arm64's stress env did not solve either.
+    Back to '2' when graphviz moves to libintl 1.0. Same build number
+    (11, unpublished); the build strings change (linux-64 r-zig-slim
+    h81b34b9_11 -> h3e03716_11). pixi.lock unchanged.
+    Tests (gamma, wt/fix-pin, rattler-build 0.76.1): render-only for
+    linux-64, osx-arm64 and win-64 applies all keys (liblzma-devel
+    matches liblzma_devel; pixman on Windows only; glib 2.90.0 on
+    macOS). A no-op probe recipe with r-zig-build's host section and
+    the same variants.yaml, built for all six platforms (macOS: host
+    solve and run exports only; linking its host needs codesign), gives
+    `pcre2 >=10.47,<10.48.0a0`, `libdeflate >=1.26,<1.27.0a0`,
+    `icu >=78.3,<79.0a0` everywhere and `libglib >=2.90.0` on macOS. A
+    pixi workspace per platform as stress.R writes it (r-zig-slim's run
+    deps plus those exports, the groups' run deps, pkg-config and the
+    sysdeps of the CI error), `pixi lock`: solves on linux-64,
+    linux-aarch64, osx-64, osx-arm64 and win-64; the same with the CI
+    build's exports (pcre2 10.49, libdeflate 1.25) fails on all six.
+    win-arm64 solves only without glpk gmp harfbuzz hdf5 imagemagick
+    libgdal-core libnetcdf libpq mpfr nlopt udunits2 (missing or
+    unsolvable on conda-forge win-arm64): stress.R's win-arm64 sysdeps
+    need their own fix. No full conda-package build was run.
+
+26. **Stress run 43773932212 (2026-11-15): the windows-11-arm legs
+    ran an emulated win-64 stress env.** pixi.toml's `[feature.stress]`
+    listed five platforms (no win-arm64: conda-forge has no libgdal-core
+    and others there, 2026-11-10). On the windows-11-arm runner
+    `pixi install -e stress` printed "WARN win-arm64 is not supported by
+    the current environment, falling back to win-64 (emulation)" and
+    `pixi list -e stress` "Installed for: win-64 (emulated on
+    win-arm64)", with zig_impl_win-64 0.17.0. The tree leg's stress.R
+    ran on the arm64 tree (`windows aarch64`) with that env first on
+    PATH and as R_ZIG_EXTRA_ENV; rzig gives zig no `-target` on Windows,
+    so the x64 zig compiled for x64: every link against R.dll failed
+    ("lld-link: error: R.dll: machine type arm64 conflicts with x64",
+    10 targets, 30 dependencies), and RcppParallel's bundled TBB took
+    the x86 path ("'_tpause' requires target feature 'waitpkg'"). The
+    conda leg's stress.R put every installed row's sysdeps into the
+    conda env for win-arm64 and pixi stopped: "No candidates were found
+    for glpk". conda-forge win-arm64 repodata (2026-11-15) has no
+    libgdal-core, udunits2, imagemagick, harfbuzz, hdf5, libnetcdf, gsl,
+    mpfr, gmp, libpq, glpk, nlopt or tbb-devel; libboost-headers is
+    noarch. build-r.yaml's windows-11-arm legs pass because default,
+    full and minimal list win-arm64 (native zig_impl_win-arm64). No
+    other env run on windows-11-arm lacks win-arm64 (wheel: not run on
+    Windows). Fixed: the stress feature has all six platforms, the
+    libraries above in unix's and win-64's target tables; stress.R
+    stops when the libraries env's conda-meta subdir is not R's
+    platform, and `--conda` leaves out the sysdeps the stress env lacks
+    on the platform (the report lists them as missing from the env).
+    Lock: additions only (stress win-arm64: 99 lines in the env, 20 new
+    package records; its zig was 0.17.1, the R envs' 0.17.0, as it is
+    in no solve group; the relock of finding 27 gives 0.17.1 to all).
+    Review (2026-11-15): `--conda` leaves sysdeps out only when the
+    libraries env is the stress env (`basename(R_ZIG_EXTRA_ENV)` is
+    `stress`); with any other env it keeps them all, since that env
+    does not say what conda-forge has for the platform.
+    Option C (rzig passes an explicit `-target` on Windows, as on linux
+    and macOS): done in build 11, on every tool path and every OS;
+    finding 29.
+
+27. **Lock bump (user request "bump all package versions in the
+    lockfiles", 2026-11-15).** Tree: T/wt/rel11-fix (detached at
+    0e4f145, with findings 25 and 26 as working-tree changes). `pixi
+    update` (all environments, all six platforms), then the pins below
+    and `pixi lock`. Lock sha256 93407b87795c -> dadd317726cf. Full list
+    (env, platform, package, old, new): T/rel11-fix/lock-diff.txt (1662
+    rows; summary T/rel11-fix/lock-summary.txt).
+    Versions (all platforms unless named):
+
+    | Package | Old -> new |
+    | --- | --- |
+    | zig, zig_impl_*, zig_* | 0.17.0 -> 0.17.1 (conda-forge, 2026-11-12) |
+    | libdeflate | 1.25 -> 1.26 (conda-forge's pin; finding 25) |
+    | libcurl, curl | 8.22.0 -> 8.23.0 |
+    | expat, libexpat | 2.8.5 -> 2.9.0 |
+    | glib, libglib | 2.90.0 -> 2.90.1 on linux and Windows; macOS 2.90.0 (pin) |
+    | python (glib's, pkg's) | 3.14.8 -> 3.15.2 |
+    | rattler-build (pkg) | 0.76.1 -> 0.80.1 |
+    | cmake (stress) | 4.4.4 -> 4.5.0 |
+    | libabseil (stress) | 20260526.0 -> 20260817.0 |
+    | m2-* (Windows) | MSYS2 2026-10 set: m2-bash 5.3.20, m2-msys2-runtime 3.6.11, m2-make 4.4.1.3, ... |
+    | others | bash 5.3, gzip 1.15, strace 7.3, patchelf 0.19.3, tzdata 2026e, libsqlite 3.54.1, xorg-libx11 1.8.14, ... |
+
+    Unchanged: pcre2 10.47 and icu 78.3 (pins), pango 1.56.4 and
+    harfbuzz 14.2.1 on unix (pins; lifted later the same day, the
+    open item below), flang-zig 23.1.5 _0, flang-rt-zig
+    23.1.5 _1, lld-zig and the zig_* llvm-openmp 23.1.5 _1 (pins),
+    cairo 1.18.6, tk 8.6. The stress env's win-arm64 (finding 26) is
+    new. The wheel env lost libcxx, libstdcxx and readline (python
+    3.15's closure).
+    Pins added (pixi.toml, where R's host libraries are; each says
+    "mirrors recipe/variants.yaml (conda-forge's global pin)"): `pcre2
+    = "10.47.*"` in [dependencies] and in [feature.minimal.dependencies]
+    (pixi update took 10.49 on linux and Windows); `glib = "2.90.0.*"`
+    in a new [target.osx.dependencies] (pixi update took 2.90.1 on
+    osx-64). With them every variants.yaml key resolves within its pin
+    in default, full, openblas, full-openblas, minimal and pkg on all
+    six platforms (`pixi list --locked -e <env> --platform <p>`,
+    T/rel11-fix/pincheck-2.txt). Pins kept: pango 1.56.* and harfbuzz
+    14.2.* (R 4.6.2's cairo device; lifted after the retest, below),
+    flang-zig/flang-rt-zig build numbers, llvm-openmp zig_*_1, tk 8.6.*,
+    zig 0.17.*, rattler-build >=0.76. Pin lifted: the stress env's
+    osx-arm64 `libheif <1.23.4`: libheif 1.23.7 gpl_h0a5996c_103 links
+    @rpath/libsharpyuv.0.dylib (no /opt/homebrew path). The stress env
+    still resolves libheif 1.23.3 there, and libgdal-core 3.13.2 with
+    libdeflate 1.25 on unix (until the pango lift below: 1.23.7, 3.13.3
+    and 1.26 since): the pango and harfbuzz pins of the default
+    feature hold imagemagick to builds that need openexr 3.4 and so
+    libdeflate 1.25 (a probe with `libgdal-core >=3.13.3` does not
+    solve). Its win-64 has libdeflate 1.26 and libgdal-core 3.13.3. The
+    R envs and the conda packages are not affected.
+    Lock-like files: R's build.zig.zon keeps cairo 1.18.6 (the newest
+    release). zigbuild/toolchain/build.zig.zon: pkgconf 3.0.10 -> 3.0.11
+    (security fixes GHSA-qcp5-98c5-hvh7 and GHSA-fr7f-m8jv-4qcm; the
+    same meson.build source list), cmake 4.4.4 -> 4.5.0 (Kitware,
+    2026-11-12; share/cmake-4.5). The hashes came from `zig fetch` with
+    an empty scratch ZIG_GLOBAL_CACHE_DIR (feat-zig-017/
+    ZIG-FETCH-CACHE.md; its repro still fails with zig 0.17.1). The
+    sha256 values in cmake.zig are Kitware's cmake-4.5.0-SHA-256.txt;
+    pkgconf.zig and recipe/recipe.yaml's pkgconf source take
+    d0cd841b...2dc4. README and comments that name zig 0.17.0, pkgconf
+    3.0.10 or cmake 4.4.4 are updated (history notes keep the old value
+    with the date of the change).
+    Tests (gamma, linux-64, T/rel11-fix/*.log; lock dadd317726cf):
+    `pixi install --frozen`: ok. `pixi run --frozen toolchain-test`: ok
+    (cmake.zig and pkgconf.zig pin tests). T/rel11-fix/chain.sh:
+    build, smoke, verify-tree, toolchain (cmake/ is cmake 4.5.0;
+    `cmake --version` runs), verify-toolchain, contract, check,
+    hermetic, `-e pkg conda-package` (rattler-build 0.80.1; the variant
+    table lists icu 78, libdeflate 1.26, pcre2 10.47; the same 67
+    overlinking warnings as rattler-build 0.76.1 had) and `-e pkg
+    conda-consume`: all ok. r-zig-slim-4.6.2-h3e03716_11's index.json
+    depends: `pcre2 >=10.47,<10.48.0a0`, `libdeflate >=1.26,<1.27.0a0`,
+    `icu >=78.3,<79.0a0`. Stress-like solves (T/rel11-fix/stress-solve,
+    `pixi lock`, channels universe then conda-forge): linux-64 with
+    dist/conda first and r-zig-slim, r-zig-toolchain, pkg-config and
+    the 30 sysdeps of the CI error: solves (r-zig-slim h3e03716_11,
+    libgdal-core 3.13.3, pcre2 10.47, libdeflate 1.26). The other five
+    platforms with r-zig-slim's run deps as plain deps (the probes of
+    finding 25; the linux-64 probe equals the built package's 18
+    versioned run deps): linux-aarch64, osx-64, osx-arm64 (libglib
+    >=2.90.0) and win-64 solve; win-arm64 solves without the libraries
+    conda-forge lacks there (finding 26). `pixi lock --check`: ok.
+    Open item done (2026-11-15, with finding 29): R's cairo device
+    with pango 1.58 and harfbuzz 15 in the dev env. pixi.toml's
+    `pango = "1.56.*"` and `harfbuzz = "14.2.*"` became "*", then `pixi
+    update pango harfbuzz libharfbuzz` (pango 1.56.4 -> 1.58.2 with the
+    new libpango and libpango-devel, harfbuzz 14.2.1 -> 15.0.0, osx-64
+    14.6.0; unix R envs and stress), then `pixi update -e stress`
+    (unix: libdeflate 1.25 -> 1.26, libgdal-core 3.13.2 -> 3.13.3,
+    imagemagick 7.1.2_27 -> 7.1.2_31, openexr 3.4.15 -> 3.5.4, proj 9.9.0,
+    geos 3.15.0, giflib 6.1.3, libjxl 0.13.0, ...; osx-arm64 libheif
+    1.23.3 -> 1.23.7). Lock dadd317726cf -> 55d166564bd6; Windows
+    unchanged; list: T/rel11-fix/lock-diff-29.txt. `pixi run build`
+    (linux-64) compiled R against pango 1.58.2, and smoke's "cairo
+    devices OK"; png(type = "cairo") with text and umlauts, svg() and
+    cairo_pdf() wrote their files, grSoftVersion() pango "1.58.2" (the
+    PNG checked by eye). The stress osx-arm64 libheif spec is now
+    `!=1.23.4,!=1.23.5,!=1.23.6` (pixi accepts it; `pixi lock --check`
+    was ok before the relock, which then took 1.23.7).
+    Not built yet with the lifted pins: macOS. osx-64 resolves harfbuzz
+    14.6.0 and pango 1.58.2 _1 (no libpango split), osx-arm64 harfbuzz
+    15.0.0 and pango _3; the pin of 2026-09-19 came from pango 1.58 with
+    libharfbuzz 14.3 (hb.h include churn). The CI full tier's
+    macos-15-intel and macos-latest rows (build, smoke, conda-package)
+    decide; if osx-64 fails, pin pango/harfbuzz for osx-64 alone
+    ([target.osx-64.dependencies]). Windows is unchanged (no pango).
+
+28. **Stress run 43773932212 (0e4f145, 2026-11-15): the tree's cmake
+    does not search the libraries env (Rhdf5lib).** Tree legs:
+    linux-64 and linux-aarch64 "Could NOT find ZLIB (missing:
+    ZLIB_LIBRARY) (found version "1.3.1")", then "Can not find target
+    ZLIB::ZLIB" (CMakeFilters.cmake:134); win-64 "Could NOT find
+    OpenSSL (missing: OPENSSL_CRYPTO_LIBRARY OPENSSL_INCLUDE_DIR)";
+    osx-arm64 ok. Stress 38569895172 (2026-10-14) was ok on all three.
+    Cause: build 11 puts the extras group's Kitware CMake 4.4.4
+    (R_HOME/bin/toolchain/cmake/bin) first on PATH under R CMD. CMake
+    searches a conda env's lib/ and include/ for find_library and
+    find_path only when the env is one of its prefixes. Conda's cmake
+    (<env>/bin/cmake, <env>/Library/bin/cmake.exe) adds its own install
+    prefix, the env, to CMAKE_SYSTEM_PREFIX_PATH (UnixPaths.cmake,
+    WindowsPaths.cmake). The tree's cmake adds its own directory
+    instead, so the env is not searched at all. PATH's <env>/bin
+    reaches only find_package's config files and the find modules with
+    a pkg-config hint: FindCURL everywhere, FindOpenSSL on unix only
+    (`if (UNIX)` in FindOpenSSL.cmake). FindZLIB has no pkg-config: on
+    linux it failed, and FindOpenSSL failed on Windows. The "1.3.1"
+    header is the runner's /usr/include/zlib.h (Ubuntu's zlib1g-dev),
+    found through /usr; its libz.so is in /usr/lib/x86_64-linux-gnu,
+    which CMake does not search (CMAKE_LIBRARY_ARCHITECTURE is empty
+    with zig cc). The 2026-10-14 log shows a second, older defect:
+    conda's cmake appends the env after /usr, so HDF5 took the
+    runner's zlib.h ("found version "1.3"") with the env's libz.so.
+    macOS was ok: FindOpenSSL used pkg-config and FindZLIB took the
+    SDK's libz.tbd (Darwin.cmake puts the SDK's usr first).
+    Who else: a standalone tree (base + extras) compiling against a
+    conda or pixi env through R_ZIG_EXTRA_ENV, the same as the CI tree
+    legs. Not the conda channel: r-zig-extras depends on conda-forge's
+    cmake, in the env's bin, and R_HOME/bin/toolchain/cmake does not
+    exist there; but conda users on Linux with a host zlib1g-dev or
+    libssl-dev get the host's headers before the env's (the older
+    defect above).
+    Fix (build.zig only): etc/r-zig.cmake, until now macOS only, ships
+    on every OS (cmakeToolchain; Windows: installed beside
+    etc/Rcmd_environ). It appends to CMAKE_SYSTEM_PREFIX_PATH, before
+    the platform files do, the environments rzig compiles against
+    (zigbuild/tools/rzig/environment.zig), in rzig's order: R's own,
+    the directory three levels above the file (<dir>/lib/R/etc; on
+    Windows <env>/Library), then R_ZIG_EXTRA_ENV (on Windows its
+    /Library). macOS keeps its CMAKE_SYSTEM_IGNORE_PREFIX_PATH line.
+    etc/Renviron (unix) and etc/Rcmd_environ (Windows, in double
+    quotes as the RC line) make it CMAKE_TOOLCHAIN_FILE's default,
+    `${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}`: a value set
+    in the environment (empty: none) and a package's
+    -DCMAKE_TOOLCHAIN_FILE still win. The env then comes before /usr
+    for conda's cmake too, which removes the older defect. CMake reads
+    a toolchain file more than once, so each prefix shows twice in
+    CMAKE_SYSTEM_PREFIX_PATH; that only repeats a search. Not done:
+    CMAKE_PREFIX_PATH in the environment (a user's own value would
+    replace it, and Windows needs <root>/Library, which an Renviron
+    default cannot add only when R_ZIG_EXTRA_ENV is set). stress.R
+    needs no change in code: `--conda` already unsets a
+    CMAKE_TOOLCHAIN_FILE under this R's R_HOME on every OS. Its comment
+    at the `mine` variables and stress/README.md ("A tree from build 7
+    on ships its own") said macOS; both now say every OS.
+    scripts/verify-tree.sh checks the file on every OS: unix, the
+    R_ZIG_EXTRA_ENV line in etc/r-zig.cmake (macOS also the ignore
+    line) and the two etc/Renviron lines; Windows, the two
+    etc/Rcmd_environ lines and the `/Library` line in etc/r-zig.cmake.
+    Tests (gamma, 2026-11-15). Tiny project
+    (cmk/tiny/CMakeLists.txt: project(t C), find_package ZLIB, OpenSSL,
+    CURL), CC = the rel11-int compile tree's zig-cc, under `env -i`:
+    - Tree cmake 4.4.4, PATH = cmake/bin, pkg env bin, /usr/bin, /bin:
+      ZLIB not found (missing ZLIB_LIBRARY ZLIB_INCLUDE_DIR), OpenSSL
+      and CURL found (pkg-config). The linux CI failure.
+    - Same without the env's bin on PATH (no pkg-config, as FindOpenSSL
+      on Windows): ZLIB, OpenSSL and CURL not found. The win-64 CI
+      failure.
+    - conda-forge cmake 4.4.4 (`pixi exec --spec cmake=4.4.4 --spec
+      zlib --spec openssl`): CMAKE_SYSTEM_PREFIX_PATH =
+      /usr/local;/usr;/;<env>;...; ZLIB and OpenSSL found in the env.
+    - Tree cmake with the generated linux r-zig.cmake as
+      CMAKE_TOOLCHAIN_FILE and R_ZIG_EXTRA_ENV = the pkg env, with and
+      without the env's bin on PATH: ZLIB 1.3.2, OpenSSL 3.6.5 and CURL
+      found in the pkg env. Own env only (file in <dir>/lib/R/etc,
+      <dir> holding the env's include and lib, no R_ZIG_EXTRA_ENV):
+      found in <dir>. The Windows file, run on linux with
+      R_ZIG_EXTRA_ENV = a root whose Library/ links the env: found in
+      <root>/Library. The macOS file on linux: same as linux.
+      CMAKE_TOOLCHAIN_FILE empty: not found (the opt-out works).
+    Rhdf5lib 2.0.0 (Bioconductor 3.23, biocmake 1.4.0), the rel11-int
+    compile tree's Rscript, cmk/rhdf5/run.sh: R_ZIG_EXTRA_ENV and
+    CONDA_PREFIX = rel11-int's pkg env, PATH = the pkg env's bin, the
+    default env's bin (zig), /usr/bin, /bin. Without the file: "Could
+    NOT find ZLIB (missing: ZLIB_LIBRARY ZLIB_INCLUDE_DIR)",
+    configuration failed. With it: Found OpenSSL, CURL and ZLIB 1.3.2
+    in the pkg env, DONE (Rhdf5lib), getHdf5Version() "1.14.6", 1.3 min
+    at MAKEFLAGS=-j8. The patch applies to 0e4f145 (`git apply
+    --check` in wt/rel11-fix: ok; applied to a copy, the result is
+    byte-identical to the edited build.zig); `zig ast-check build.zig`
+    (zig 0.17.0): ok; cmakeToolchain compiled alone (zig 0.17.0)
+    wrote the three files used above. Not run: a zig build of the
+    tree with the patch, Windows and macOS. packages.tsv: no change.
+    Rhdf5lib's row (linux=ok macos=ok windows=fail-package) is right
+    again with the fix; on win-64 the next stop is expected to be P4
+    (FLT16_MAX, the package cause) as in round 2. The next stress run
+    confirms it.
+    Folded into T/wt/rel11-fix (2026-11-15; lock unchanged,
+    dadd317726cf; logs in T/rel11-fix/). Tests on gamma, linux-64:
+    - `sh T/rel11-fix/chain.sh T/wt/rel11-fix T/rel11-fix/04-chain-cmake.log`
+      (each task `pixi run --frozen`): build, smoke, verify-tree ("CMake's
+      toolchain file verified"), toolchain, verify-toolchain, contract,
+      check, hermetic, `-e pkg conda-package` and `-e pkg
+      conda-consume`: all ok. r-zig-slim-4.6.2-h3e03716_11 holds
+      lib/R/etc/r-zig.cmake with the env lines and the two Renviron
+      lines.
+    - `pixi run --frozen -e stress stress
+      --out=T/rel11-fix/stress-rhdf5 Rhdf5lib`: Rhdf5lib ok, 1.08 min,
+      with the tree's cmake (R_HOME/bin/toolchain/cmake/bin); CURL
+      8.23.0, OpenSSL 3.6.5 and ZLIB 1.3.2 found in .pixi/envs/stress;
+      smoke "1.14.6".
+    - Control, the same with `CMAKE_TOOLCHAIN_FILE=` (no file;
+      T/rel11-fix/stress-rhdf5-nofile): install-failed, "Could NOT find
+      ZLIB (missing: ZLIB_LIBRARY ZLIB_INCLUDE_DIR)", then
+      CMakeFilters.cmake:134: the CI failure, reproduced.
+    - CMake rows with the file (T/rel11-fix/stress-cmake-ctl): s2 ok
+      (1.13 min), RcppParallel ok (0.44 min).
+    - `pixi lock --check`: ok. Not run: Windows and macOS; the CI full
+      tier and the stress dispatch cover them.
+
+29. **Explicit target everywhere (user request after finding 26, 2026-11-15:
+    "after the fail with wrong architecture / platform on the Windows on
+    ARM run, make sure pass platform flags explicitly").** Before: rzig
+    gave zig `-target` on linux (`<arch>-linux-gnu.2.17`) and macOS
+    (`<arch>-native.13.0`) only; on Windows zig used its native target,
+    the arch of the zig binary, so finding 26's x64 zig compiled for x64
+    against an arm64 R. flang got no target on any OS (its default
+    triple, the arch of the flang binary). rzig's `as` (Windows) ran
+    `zig cc -c -x assembler` with no target, and `rzig build`'s tier-2
+    plan said `native` on Windows.
+    Changed (one rule, from rzig's own build target, which is R's:
+    zigbuild/tools/rzig/target.zig, `Ctx.arch` defaulting to it):
+    - zig cc/c++ (compiles and links, zig-fc's links too): `-target
+      x86_64-windows-gnu` / `aarch64-windows-gnu` on Windows; linux and
+      macOS unchanged (the same strings, now from target.zig).
+    - flang (every zig-fc command: compiles, probes, split compiles):
+      `--target=` flang-zig 23.1.5's own default triple for R's platform,
+      before the caller's arguments (a caller's own --target wins):
+      x86_64/aarch64-conda-linux-gnu, x86_64-apple-darwin13.4.0,
+      arm64-apple-darwin20.0.0, x86_64/aarch64-w64-windows-gnu (from
+      `flang --version` on linux-64 and the triple-named .cfg files and
+      module directories of the other five platforms' flang-zig and
+      flang-rt-zig packages). A flang of R's platform then compiles
+      exactly as before, configuration file included: linux-64's object
+      is byte-identical with and without the flag, and `-###` shows the
+      same x86_64-conda-linux-gnu-flang.cfg. macOS keeps
+      -mmacosx-version-min=13.0 after it (`-triple arm64-apple-macosx13.0.0`
+      either way). linux-64's flang wrote aarch64 objects for
+      aarch64-conda-linux-gnu and aarch64-w64-windows-gnu, so a foreign
+      flang cross-compiles too.
+    - rzig's `as`: `zig cc -target <R's> -c -x assembler`.
+    - `rzig build` tier 2 (pkgplan.packageTarget): R's target on every OS
+      (Windows was `native`: the zig's arch and zig's native ABI).
+    - The CFG stub (cfguard.o) follows ctx.arch (the link's arch), not
+      the binary's; the same value outside tests.
+    - Already explicit, unchanged: dlltool `-m` and `zig rc /:target`
+      (binutils.zig, rzig's machine); ar/ranlib take no target
+      (llvm-ar's format: macOS's --format=darwin stays explicit).
+      Machine.own there, and flang_rt.zig's module directory prefixes,
+      follow rzig's build arch (builtin), which is Ctx.arch's default:
+      one value outside tests; unit tests that set ctx.arch move only
+      the zig and flang targets.
+    CPU model: none changes. Windows already passed -mcpu=baseline
+    (fix-rzig-baseline-cpu), which an explicit target keeps: `zig cc
+    -target x86_64-windows-gnu -mcpu=baseline -###` gives target-cpu
+    x86-64, aarch64 generic, as before. The explicit target fixes the
+    Windows OS version range to zig's default instead of the host's;
+    `_WIN32_WINNT` stays 0x0a00 (`-dM -E` of windows.h with the default,
+    win10_fe and win11_ge ranges), as R's own build already uses
+    (build.zig's non-native query). One change for assembly on
+    win-arm64: rzig's `as` had no target and no -mcpu, so zig took the
+    machine's CPU (a Snapdragon's +aes/+dotprod); now the target is
+    named and the CPU is aarch64's generic, so a .s file with `aese` or
+    `sdot` needs its own `.arch`/`.arch_extension` or a -mcpu passed
+    through (zig 0.17.1: "instruction requires: aes"), as C with
+    intrinsics already does through -mcpu=baseline. x86_64's assembler
+    does not gate instructions on CPU features.
+    Left implicit, on purpose (comments where they are): build.zig
+    builds R for the native arch of the zig that runs it, which is the
+    platform of the pixi env whose conda libraries R links; a -Dtarget
+    of another arch could only fail at the link, so build.zig takes none.
+    zigbuild/toolchain (pkgconf, the cmake archive) uses b.graph.host
+    for the same reason. etc/r-zig.cmake sets no CMAKE_SYSTEM_NAME,
+    CMAKE_SYSTEM_PROCESSOR or CMAKE_<LANG>_COMPILER_TARGET: the first two
+    turn CMake's cross-compiling mode on, the third adds a second target
+    to rzig's (build.zig, cmakeToolchain's comment). Makeconf's CC lines
+    name rzig, which adds the target. Workflows: pixi 0.84.2 has
+    `--platform` on `pixi install` and `pixi run`, but setup-pixi
+    installs the envs; rather than a flag on every `pixi run` line, the
+    guard below. recipe: rattler-build builds the native subdir per
+    runner; unchanged.
+    Guards: scripts/env.sh stops every task when the env's platform
+    (`$CONDA_PREFIX/conda-meta/pixi`, resolved_platform.subdir) is not
+    PLAT (the machine's; on Windows from PROCESSOR_IDENTIFIER): the
+    win-64-on-ARM env of finding 26 stops there. Not on macOS (review,
+    2026-11-15): an osx-64 env under Rosetta on an arm64 Mac (omicron)
+    is a supported setup, all osx-64, and the shell's own arch says
+    nothing there (the wheel env has no bash; /bin/bash runs as arm64).
+    The subdir read is the one in the resolved_platform block. No
+    conda-meta/pixi (rattler-build's env): no check. Tested on gamma
+    with a copy of conda-meta/pixi saying linux-aarch64: the error;
+    with the real one: passes. No guard in rzig or build.zig: a zig's
+    own arch is not visible without running it, and with the target
+    named it no longer matters. scripts/verify-tree.sh checks, on every
+    OS, that the dry runs (RZIG_PRINT_ARGV) of the tree's C compile, C++
+    link and (Windows) as.exe give `-target <R's>` once, and zig-fc's
+    compile `--target=<flang triple>` first.
+    Tests: rzig unit tests 211/211 (target.zig's triples for both arches
+    and every OS; Windows argv for x86_64 and aarch64 through ctx.arch:
+    compiles, DLL links with the CFG stub on x86_64 only, a caller's
+    -target after R's; zig-fc on Windows for both arches, split compile
+    and link; as.exe for both arches; the existing Windows tests now
+    expect the target). parity-test.sh: the Windows target is taken
+    out of rzig's side after checking it is there (the shims read
+    uname -m, which MSYS gives as x86_64 on Windows on ARM, so they stay
+    without one): 116 identical, 70 ok+, 33 deliberate, 0 failed. rzig
+    compiled for aarch64-windows-gnu, x86_64-windows-gnu, aarch64-macos
+    and aarch64-linux-gnu (`zig build -Dtarget=...` of rzig alone).
+    Tests on gamma, linux-64 (lock 55d166564bd6, logs in
+    T/rel11-fix/): `pixi run --frozen rzig-test` (unit tests and
+    parity) 08-rzig-test.log, `toolchain-test` 09-toolchain-test.log:
+    ok. `sh T/rel11-fix/chain.sh T/wt/rel11-fix T/rel11-fix/16-chain.log`:
+    build, smoke, verify-tree ("R's target verified: zig -target
+    x86_64-linux-gnu.2.17 (zig-cc zig-cxx), flang
+    --target=x86_64-conda-linux-gnu (zig-fc)"), toolchain,
+    verify-toolchain, contract, check, hermetic, `-e pkg conda-package`
+    and `-e pkg conda-consume`: all ok. linux unchanged but for flang:
+    the dry runs of an rzig built from 0e4f145 and of the new tree's
+    differ on linux only in flang's `--target=x86_64-conda-linux-gnu`
+    (and paths from where each rzig lives); macOS also only in flang's
+    `--target=`; Windows in `-target x86_64-windows-gnu` on every zig
+    command, as.exe included, and flang's `--target=`. `R CMD config
+    CC` is still `<R_HOME>/bin/toolchain/zig-cc -std=gnu23` (rzig adds
+    the target); a verbose R CMD SHLIB of a.c and b.f90
+    (17-shlib-verbose.log) shows `zig cc ... -target
+    x86_64-linux-gnu.2.17`, `flang --target=x86_64-conda-linux-gnu`,
+    clang's `-triple x86_64-unknown-linux5.10.0-gnu` and target-cpu
+    x86-64. Not run: macOS and Windows hosts (unit tests and dry runs
+    with RZIG_OS only); the CI full tier and the stress dispatch cover
+    them.
+    Lock: changed for finding 27's open item (below), not for this.
+    Not run on Windows yet: finding 28's etc/r-zig.cmake and its
+    Rcmd_environ default (CMake's find_library may now take conda's
+    MSVC import libraries from <env>/Library for MinGW links); read the
+    Windows stress rows RcppParallel, s2, Rhdf5lib and nloptr against
+    packages.tsv.
+
+30. **Stress run 43773932212 (2026-11-15): arrow and arrow:source on
+    macos-15-intel (`crc32c_sse42_avx512.c:65: always_inline function
+    '_mm512_loadu_si512' requires target feature 'avx512f'`).** Two
+    causes, both found:
+    - zig reads `-march=`/`-mcpu=` as `<cpu>[+feat][-feat]`, so a CPU
+      name in clang's spelling fails: `-march=skylake-avx512` is
+      skylake minus a feature "avx512" ("unknown CPU feature"),
+      `-march=x86-64-v3` "unknown CPU: 'x86'", `-mcpu=cortex-a76` and
+      `-mcpu=apple-m1` likewise (zig 0.17.1). arrow's
+      CXX_SUPPORTS_AVX512 probe (-march=skylake-avx512) failed so on
+      every x86_64 OS. Fixed in rzig (compiler.zig, marchArgs and
+      clangCpu): a -march/-mcpu value whose CPU name has a `-`, which
+      zig does not know as given but knows with `_` for R's arch
+      (std.Target.Cpu.Arch.parseCpuModel), is passed in zig's spelling
+      (skylake_avx512, x86_64_v3, cortex_a76+crypto-crc); anything else
+      is kept (zig's own `cpu-feature` syntax, native, another arch's
+      CPU, a typo). -Xarch_ values stay clang's. Unit tests for both
+      arches; through the rebuilt tree's zig-cc on gamma,
+      `-march=skylake-avx512` and `-mcpu=x86-64-v4` compile AVX-512
+      intrinsics (zmm in the object); `-march=bogus-cpu` still fails.
+    - The aws-checksums file itself: aws-c-common's
+      AWS_HAVE_AVX512_INTRINSICS probe (`__m512 a = _mm512_setzero_ps();`
+      with the AVX-512 flags and -Werror) fails under arrow's -Wall
+      ("unused variable 'a'", reproduced on omicron with the osx-64 tree
+      of rel11b under Rosetta: rc 0 without -Wall, 1 with), so the
+      bundled build leaves the AVX-512 flags off that file. Its
+      `#if defined(AWS_HAVE_AVX512_INTRINSICS)` still came true: the
+      stress env has conda-forge's aws-c-common 1.0.5 (hdf5 2.2.0 pulls
+      aws-c-s3 and the rest, every platform), whose aws/common/config.h
+      defines it, and rzig's `-I<env>/include` is searched before the
+      `-isystem` directories CMake gives for the bundled aws-c-common
+      (clang searches every -I before every -isystem). Not changed in
+      rzig: `-isystem <env>/include` would follow CMake's order, but zig
+      passes its own clang, libc (and on macOS the SDK's) directories
+      as -isystem before the caller's, so the env would lose to them
+      (the SDK's iconv.h over conda's libiconv, which R links); the
+      env-first order is deliberate (envFlags' comment). Any package
+      that bundles a library whose headers the env also has can meet
+      this; linux passes only because its probe passes there. Next
+      stress run: arrow and arrow:source on macos-15-intel are expected
+      to fail the same way (the -march fix does not reach aws-checksums'
+      probe); a later item, after the release: weigh `-isystem` for the
+      env behind zig's own directories on linux (no SDK) against
+      keeping -I.
+
 ## Tests
 
 ### The integration tree (2026-11-13)
@@ -551,10 +1066,16 @@ linux-64 (gamma), default env (slim), conda-forge's zig 0.17.0,
   suite and fails at hermetic (finding 20). upstream-zig run
   43487408234: every job green.
 
-## State (2026-11-13)
+## State (2026-11-15; older lines from 2026-11-13)
 
 All paths below are under
 /data/gamma/luciorq/workspaces/temp/r-zig-pixi/ (T).
+
+- 2026-11-15: T/wt/rel11-fix (detached at 0e4f145, feat-win-arm64's
+  tip) holds findings 25-30 as working-tree changes, with the new
+  recipe/variants.yaml and zigbuild/tools/rzig/target.zig untracked; lock 55d166564bd6 (dadd317726cf
+  until finding 29's pango lift). Logs, lock diff
+  and solve probes: T/rel11-fix/. The lines below are older.
 
 - feat-win-arm64 (origin 51588ad) = T/wt/feat-win-arm64, clean.
 - T/wt/rel11-int (branch rel11-int at 48d3650 + the 51588ad changes,
@@ -583,6 +1104,10 @@ All paths below are under
 
 ## To resume
 
+0. (2026-11-15) T/wt/rel11-fix holds the later work (findings 25-30).
+   The user commits it on feat-win-arm64 and pushes; then CI with the
+   `full-ci` label (every row), then the stress dispatch (item 3), then
+   item 4. Items 1 and 2 are done or decided.
 1. Run T/rel11/int/make-patches-9-11.sh; it must end with "ok". The
    user commits patches 1..11 on feat-win-arm64
    (T/rel11/handover/apply-patches.sh), adds the `full-ci` label and

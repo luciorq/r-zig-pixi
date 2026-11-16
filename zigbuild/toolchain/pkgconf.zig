@@ -12,7 +12,7 @@
 //! meson.build's project arguments and c_std, -DPKGCONFIG_IS_STATIC, and
 //! a config.h with what meson's probes give for *-windows-gnu (probed
 //! with zig 0.16 for x86_64 and aarch64: strdup, strcasecmp and
-//! strncasecmp only; the same from 3.0.7 to 3.0.10). No path of the build
+//! strncasecmp only; the same from 3.0.7 to 3.0.11). No path of the build
 //! machine: on _WIN32 the search path is <exe dir>/../lib/pkgconfig and
 //! <exe dir>/../share/pkgconfig (libpkgconf/personality.c), and
 //! PKG_DEFAULT_PATH only its fallback, so it, SYSTEM_LIBDIR,
@@ -32,9 +32,9 @@
 const std = @import("std");
 const mem = std.mem;
 
-pub const version = "3.0.10";
+pub const version = "3.0.11";
 pub const url = "https://distfiles.ariadne.space/pkgconf/pkgconf-" ++ version ++ ".tar.xz";
-pub const sha256 = "9371b2f6372da574d4c6dc96fe9b1463037bcf6afcb6671c1555afde7b17e2de";
+pub const sha256 = "d0cd841bc8e55b9da888106c00dc256d05b7d1d8e5a46f4be4eb4c5125bd2dc4";
 /// meson.build's `license`; COPYING is its text.
 pub const license = "ISC";
 pub const repository = "https://github.com/pkgconf/pkgconf";
@@ -159,7 +159,7 @@ test "recipe.yaml's win source is this url and sha256" {
 }
 
 test "meson.build's strings" {
-    const meson = "project(\n  'pkgconf',\n  'c',\n  version : '3.0.10',\n  license : 'ISC',\n";
-    try std.testing.expectEqualStrings("3.0.10", mesonString(meson, "version : '").?);
+    const meson = "project(\n  'pkgconf',\n  'c',\n  version : '3.0.11',\n  license : 'ISC',\n";
+    try std.testing.expectEqualStrings("3.0.11", mesonString(meson, "version : '").?);
     try std.testing.expect(mesonString(meson, "nothing '") == null);
 }
