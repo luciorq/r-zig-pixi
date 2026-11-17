@@ -4,7 +4,15 @@ Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
 #46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
 published.
 
-Status (2026-11-17, later): feat-win-arm64 at 3c9899e, which holds only
+Status (2026-11-17, evening): e38e0b5 commits the rest of findings
+33-36. upstream-zig 44153299671 on it: macos-latest's rzig-test failed
+1 of 213 ("linux shared links"): the test's Windows loop links on the
+machine's arch, which on an aarch64 machine wants clear_cache.o, and
+the test had created only cfguard.o. Fixed in the test (it creates
+both); checked with Arch.own forced to aarch64 on linux-64 and 213/213
+with both zigs natively. Next: that commit, CI, the targeted stress.
+
+Status (2026-11-17, later; superseded): feat-win-arm64 at 3c9899e, which holds only
 zigbuild/tools/rzig/clear_cache.c and clear_cache.zig; the other 20
 files of findings 33-36 (CMake 4.4.5, m2-tar, rzig's clear_cache.o, the
 record patch, lock a2d8b95874eb) were staged but left out of that

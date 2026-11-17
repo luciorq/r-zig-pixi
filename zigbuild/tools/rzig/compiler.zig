@@ -1049,10 +1049,12 @@ test "linux shared links: the finalization object first among the inputs; nothin
     defer f.deinit();
     const c = &f.ctx;
     // beside rzig, as R's build installs it (no R tree: no environment);
-    // Windows' too, for the loop below
+    // Windows' too, for the loop below (cfguard.o on an x86_64 machine,
+    // clear_cache.o on an aarch64 one)
     c.self_exe = f.path("tc/zig-cc");
     try f.touch("tc/dso_fini.o");
     try f.touch("tc/cfguard.o");
+    try f.touch("tc/clear_cache.o");
     const fini = f.path("tc/dso_fini.o");
     // after the SONAME and --undefined-version, before the caller's
     // arguments (and an -x it may give)
