@@ -56,10 +56,10 @@ rzig_names() {
 # The object installed beside rzig in R_HOME/bin/toolchain on this OS,
 # which rzig adds to links (zigbuild/tools/rzig/build.zig's linkObject;
 # feat-r-home-link-objects): linux's dso_fini.o, win-64's cfguard.o
-# (x86_64 code, cfguard.zig; none on win-arm64), none on macOS. The
-# base's other file there.
+# (x86_64 code, cfguard.zig), win-arm64's clear_cache.o (clear_cache.zig),
+# none on macOS. The base's other file there.
 link_object() {
-  case "$PLAT" in linux-*) echo dso_fini.o ;; win-64) echo cfguard.o ;; esac
+  case "$PLAT" in linux-*) echo dso_fini.o ;; win-64) echo cfguard.o ;; win-arm64) echo clear_cache.o ;; esac
 }
 
 # A configure script in package directory $1 (unix configure, Windows

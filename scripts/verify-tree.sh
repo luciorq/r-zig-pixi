@@ -189,12 +189,12 @@ fi
 # rzig's link object (zigbuild/tools/rzig/build.zig's linkObject): a
 # relocatable object for R's target, which rzig finds beside itself and
 # adds to links. Without it rzig warns at each such link and links
-# without it (dso_fini.zig, cfguard.zig).
+# without it (dso_fini.zig, cfguard.zig, clear_cache.zig).
 if [ -n "$lo" ]; then
   f="$TREE/$tc_dir/$lo"
-  # its first bytes: ELF's magic, or an x86-64 COFF object's machine
-  # (IMAGE_FILE_MACHINE_AMD64, little-endian)
-  case "$OS" in linux) magic=7f454c46 ;; windows) magic=6486 ;; esac
+  # its first bytes: ELF's magic, or a COFF object's machine for R's arch
+  # (IMAGE_FILE_MACHINE_AMD64 or _ARM64, little-endian)
+  case "$PLAT" in linux-*) magic=7f454c46 ;; win-64) magic=6486 ;; win-arm64) magic=64aa ;; esac
   if [ ! -f "$f" ] || [ "$(od -An -tx1 -N$((${#magic} / 2)) "$f" | tr -d ' \n')" != "$magic" ]; then
     echo "error: $tc_dir/$lo is missing or not an object for R's target (feat-r-home-link-objects)" >&2
     exit 1

@@ -4,7 +4,31 @@ Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
 #46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
 published.
 
-Status (2026-11-17, evening): e38e0b5 commits the rest of findings
+Status (2026-11-17, night): a4634e2 has the test fix. build-r
+44166873842 on it: default, full and minimal on windows-11-arm fail
+verify-tree, "bin/toolchain holds more than rzig and its link object:
+clear_cache.o": scripts/verify-helpers.sh's link_object named no object
+for win-arm64, and verify-tree.sh's COFF check knew only x86_64's
+machine (6486). Both now know win-arm64's clear_cache.o (machine 64aa,
+checked on a zig-built clear_cache.o); this also enables pkg-parity's
+and verify-bundle.sh's link-object checks on win-arm64. verify-tree
+passes on linux-64. upstream-zig 44166873928 is green. Stress 44166858733 on a4634e2
+(arrow, arrow:source, duckdb, magick; six runners, tree and conda):
+findings 33, 34 and 36 hold. arrow and arrow:source ok on linux (both
+arches) and macos-latest, tree and conda (cmake 4.4.5); duckdb ok on
+both Windows tree legs and every other leg that ran; magick ok on
+windows-11-arm, tree and conda (clear_cache.o), and on macOS and
+windows-latest, fail-abi on linux as expected; arrow fail-package on
+windows-11-arm (x64 libarrow) and fail-abi on windows-latest, as
+expected. macos-15-intel: arrow on the tree leg fails in the bundled
+aws-checksums (crc32c_sse42_avx512.c: AVX-512 intrinsics without
+avx512f; finding 30, expect `?`), arrow:source ok there; network only
+otherwise (DBI's download failed 3 times on the tree leg, so duckdb was
+skipped, the one unexpected row; purrr's on the conda leg, so arrow and
+arrow:source were skipped). duckdb was ok on both macos-15-intel legs in
+run 44111538560.
+
+Status (2026-11-17, evening; superseded): e38e0b5 commits the rest of findings
 33-36. upstream-zig 44153299671 on it: macos-latest's rzig-test failed
 1 of 213 ("linux shared links"): the test's Windows loop links on the
 machine's arch, which on an aarch64 machine wants clear_cache.o, and
