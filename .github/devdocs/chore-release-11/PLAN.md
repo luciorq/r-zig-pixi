@@ -4,7 +4,32 @@ Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
 #46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
 published.
 
-Status (2026-11-16): one tree, T/wt/rel11-fix (feat-win-arm64 at
+Status (2026-11-17, later): feat-win-arm64 at 3c9899e, which holds only
+zigbuild/tools/rzig/clear_cache.c and clear_cache.zig; the other 20
+files of findings 33-36 (CMake 4.4.5, m2-tar, rzig's clear_cache.o, the
+record patch, lock a2d8b95874eb) were staged but left out of that
+commit. CI on 3c9899e (build-r 44061457328, upstream-zig 44061457294)
+is green but tests none of findings 33-36. Stress run 44111538560 on
+3c9899e (arrow, arrow:source, duckdb, magick; six runners, tree and
+conda) repeats run 43947228208: arrow and arrow:source fail on every
+linux and macOS leg at Boost's locale CMakeLists:236 (CMake 4.5.0),
+duckdb fails configure on both Windows tree legs, magick on
+windows-11-arm fails at `__clear_cache`; duckdb ok on the other ten
+legs, magick ok on macOS and windows-latest, fail-abi on linux as
+expected. Next: commit the rest of findings 33-36, CI, the same
+targeted stress dispatch, the publish preflight, the release of build 11.
+
+Status (2026-11-17; superseded): feat-win-arm64 at bfb510a (findings 25-32);
+T/wt/rel11-fix holds findings 33-36 (the stress triage of run
+43947228208: CMake held at 4.4.5, m2-tar in the build-tools group,
+rzig's clear_cache.o for win-arm64, the record patch) as working-tree
+changes, with zigbuild/tools/rzig/clear_cache.c and clear_cache.zig
+untracked. Lock a2d8b95874eb (cmake 4.4.5 in the stress env). Next: the
+user commits and pushes, CI, a targeted stress dispatch (arrow,
+arrow:source, duckdb, magick on all six runners, tree and conda), then
+the publish preflight and the release of build 11.
+
+Status (2026-11-16; superseded): one tree, T/wt/rel11-fix (feat-win-arm64 at
 5dd40cf, which holds findings 25-30; 31 and 32 uncommitted):
 findings 25 (recipe/variants.yaml), 26 (stress on win-arm64), the review
 corrections, 27 (the lock bump), 28 (etc/r-zig.cmake on every OS;
@@ -1069,6 +1094,94 @@ flang-pixi), README sections for the three items, and findings 19-21.
     on linux-64 (tree, jobs 4; T/obj-inputs/run, run-up): Rsamtools ok
     with both zigs (0.3 min, Rhtslib 0.15 min, smoke ok); its expect is
     linux=ok macos=ok windows=?.
+
+33. **Stress run 43947228208 (bfb510a, 2026-11-16): arrow and
+    arrow:source fail on every linux and macOS leg, tree and conda**
+    (`CMake Error at .../_deps/boost-src/libs/locale/CMakeLists.txt:236
+    (source_group)`). Not seen at 0e4f145 (run 43773932212, CMake
+    4.4.4); finding 27's lock bump brought CMake 4.5.0, into the stress
+    env and the extras group. CMake 4.5.0's `source_group(TREE)`
+    compares path components (cmCMakePath::IsPrefix), and Boost 1.92.0's
+    locale CMakeLists, which arrow 26.0.1 fetches, passes a TREE its
+    files are not under by that test; Boost fixed it after 1.92.0
+    (boostorg/locale#273). Reproduced on gamma with Boost 1.92.0's
+    locale alone: 4.5.0 fails, 4.4.5 configures (T/triage/
+    arrow-boost-cmake). Fixed by holding CMake at 4.4.5 until a Boost
+    with the fix reaches arrow: the extras group's Kitware archives
+    (zigbuild/toolchain/cmake.zig, build.zig.zon: version, data_dir
+    share/cmake-4.4, the six archives; their sha256 checked against
+    Kitware's cmake-4.4.5-SHA-256.txt, their zon hashes with `zig
+    fetch`), r-zig-extras' run dep `cmake <4.5`, and the stress
+    feature's `cmake = "<4.5"` (lock a2d8b95874eb: cmake 4.5.0 -> 4.4.5
+    in the stress env on six platforms, nothing else). linux-64 on gamma
+    (2026-11-17, this tree): build, toolchain, verify-toolchain (cmake
+    4.4.5, share/cmake-4.4) pass; stress, tree, jobs 8 (T/triage/
+    stress-l64): arrow ok (6.2 min) and arrow:source ok (8.3 min),
+    through the tree's cmake 4.4.5.
+
+34. **Stress run 43947228208: duckdb fails on both Windows tree legs**
+    ("configuration failed for package 'duckdb'" after 0.06 min; ok at
+    0e4f145 in 24.6 min). duckdb 2.0.0's configure.win runs `tar xf
+    duckdb.tar`. The build-tools group has no tar, so the stress env's
+    m2-tar answered, a second MSYS2 install, which finding 27's bump
+    moved to msys2-runtime 3.6.11 (`_11` builds) while the group's sh is
+    its own; that tar exits 127 with no output under the group's sh.
+    The conda legs passed (System32's bsdtar answered there). Fix: the
+    build-tools group carries m2-tar (zigbuild/toolchain/build.zig,
+    the recipe's r-zig-build-tools run deps), as Rtools' usr/bin has
+    it; verify-toolchain.sh and test-build-tools.R check it. The cause
+    is inferred from the log and the PATH order, not reproduced on a
+    Windows host; the targeted stress run checks it.
+
+35. **windows-11-arm (runs 43879895297, 43947228208): textshaping
+    (and ragg after it) stops in lld: "invalid symbol index in addrsig
+    section"** in the r-windows clang-aarch64 freetype bundle. zig
+    turns on lld's identical code folding for a `-s` link on Windows,
+    and ICF reads .llvm_addrsig, which those objects have broken (an
+    index past the symbol table). Rtools45-aarch64 and r-universe link
+    their own freetype and never meet it. Not fixed for release 11:
+    recorded (stress.R classes it toolchain; the rows'
+    windows-aarch64= expects). After the release: ICF off on Windows
+    links (`/OPT:NOICF`), which also removes the risk that ICF folds two
+    functions whose addresses a package compares; or Rtools' static
+    C libraries as a win-arm64 gap-filler (r-universe research,
+    T/triage/runiverse).
+
+36. **windows-11-arm: magick's link stops at "undefined symbol:
+    __clear_cache"** (runs 43879895297, 43947228208; both zigs). The
+    clang-aarch64 bundle's libffi calls it for its closures; LLVM's
+    compiler-rt defines it on Windows with FlushInstructionCache
+    (clear_cache.c, `_WIN32`), zig's compiler_rt/clear_cache.zig leaves
+    that branch as a TODO (0.17.1). Fixed in rzig as the CFG
+    stub: zigbuild/tools/rzig/clear_cache.c, compiler-rt's function,
+    weak and excluded from MinGW auto-export, which R's build compiles
+    for aarch64 Windows into R_HOME/bin/toolchain/clear_cache.o; rzig
+    passes it on the links that get cfguard.o on x86_64
+    (clear_cache.zig; compiler.zig). Weak: a link that defines the
+    symbol itself keeps its own, with no duplicate (a strong copy
+    stopped such a link). Tests (gamma, cross-built, zig 0.17.1
+    conda-forge and upstream): a DLL calling `__builtin___clear_cache`
+    links with the object and exports only its own symbol; a DLL with
+    its own __clear_cache links; magick's static link against the
+    bundle (Magick++, librsvg, libffi, ...; iconv stubbed) links with
+    and without `-s`, 30.6 MB; rzig unit tests 213/213 with both zigs
+    (the Windows tests take both arches), parity 0 failed. magick's
+    windows-aarch64 expect is now windows=ok's; run time on
+    windows-11-arm is checked by the targeted stress run. To report
+    upstream to zig after the release.
+
+    The record patch of the same triage (stress.R, packages.tsv):
+    expect keys may name R's arch (`windows-aarch64=`, `macos-x86_64=`;
+    the most specific key wins, then os=, then a bare default); the
+    classifier's toolchain class takes `__clear_cache` and the addrsig
+    error; win-arm64 rows whose libraries conda-forge lacks there
+    (units, ncdf4, hdf5r, gsl, Rmpfr, igraph, nloptr, gdalraster,
+    terra, sf, ...) say so with windows-aarch64= expects; Rhtslib and
+    Rsamtools are windows=fail-dependency (htslib's regex.h, which
+    MinGW-w64 and conda-forge lack); DESeq2 is windows=ok; arrow is
+    windows-aarch64=fail-package (arrow 26.0.1 downloads an x64
+    libarrow) and macos-x86_64=? (finding 30's aws-checksums cause,
+    unseen behind finding 33).
 
 ## Tests
 

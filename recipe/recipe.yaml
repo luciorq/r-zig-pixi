@@ -619,10 +619,14 @@ outputs:
               - if: linux
                 then:
                   - lib/R/bin/toolchain/dso_fini.o
-              # x86_64 code (cfguard.zig); win-arm64 has none
+              # x86_64 code (cfguard.zig); win-arm64's is the cache
+              # flush (clear_cache.zig)
               - if: target_platform == "win-64"
                 then:
                   - Library/lib/R/bin/toolchain/cfguard.o
+              - if: target_platform == "win-arm64"
+                then:
+                  - Library/lib/R/bin/toolchain/clear_cache.o
             not_exists:
               - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
               - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
@@ -769,6 +773,9 @@ outputs:
             # a configure script that patches its sources (hdf5r's unix
             # configure; feat-win-link-fixes item 4)
             - m2-patch
+            # a configure script that unpacks its sources (duckdb 2.0.0:
+            # `tar xf duckdb.tar`; chore-release-11 finding 34)
+            - m2-tar
     tests:
       - package_contents:
           files:
@@ -822,7 +829,8 @@ outputs:
     requirements:
       run:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
-        - cmake
+        # <4.5: Boost <= 1.92's locale CMakeLists (chore-release-11 finding 33)
+        - cmake <4.5
     tests:
       - package_contents:
           files:

@@ -229,6 +229,13 @@ const windows_dirs = [_]Dir{
             // that patches its sources (hdf5r's unix configure: "patch:
             // command not found"). It imports msys-2.0.dll alone.
             m2Tool("m2-patch"),
+            // tar.exe: a configure script that unpacks its sources (duckdb
+            // 2.0.0's configure.win: `tar xf duckdb.tar`), as Rtools' usr/bin
+            // has it. Another MSYS2's tar on PATH (the stress env's m2-tar)
+            // exited 127 with no output under this sh (chore-release-11
+            // finding 34); System32's bsdtar answered on the conda legs.
+            // It imports msys-2.0.dll, msys-iconv-2.dll and msys-intl-8.dll.
+            m2Tool("m2-tar"),
         },
     },
 };

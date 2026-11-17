@@ -19,6 +19,7 @@ const linker_args = @import("linker_args.zig");
 const archives = @import("archives.zig");
 const dso_fini = @import("dso_fini.zig");
 const cfguard = @import("cfguard.zig");
+const clear_cache = @import("clear_cache.zig");
 const strip = @import("strip.zig");
 const target = @import("target.zig");
 const Args = cmdline.Args;
@@ -80,8 +81,11 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     const soname = try sonameFlag(ctx, args);
     const undefined_version = ctx.os == .linux and !cmdline.compileOnly(args) and cmdline.anyContains(args, "-version-script");
     const fini = if (ctx.os == .linux and dso_fini.wanted(args)) try linkObject(ctx, dso_fini.file, dso_fini.consequence) else null;
-    // x86_64 code: a link for another architecture adds none
-    const cfg = if (ctx.os == .windows and ctx.arch == .x86_64 and cfguard.wanted(args)) try linkObject(ctx, cfguard.file, cfguard.consequence) else null;
+    // Windows: the CFG stub is x86_64 code, the cache flush aarch64's
+    const cfg = if (ctx.os == .windows and cfguard.wanted(args)) switch (ctx.arch) {
+        .x86_64 => try linkObject(ctx, cfguard.file, cfguard.consequence),
+        .aarch64 => try linkObject(ctx, clear_cache.file, clear_cache.consequence),
+    } else null;
     const g0 = !cmdline.debugOption(args);
     const strip_debug = (ctx.os == .linux or ctx.os == .macos) and strip.wanted(ctx, args);
     args = try envFlags(ctx, args);
@@ -158,7 +162,9 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     if (strip_debug) try out.append(a, "-Wl,--strip-debug");
     if (fini) |o| try out.append(a, o);
     // zig's MinGW runtime lacks __guard_dispatch_icall_dummy (stress
-    // round 2, Z11: magick's bundle); cfguard.zig
+    // round 2, Z11: magick's bundle; cfguard.zig), and its aarch64
+    // compiler_rt __clear_cache (finding 36: the same bundle's libffi;
+    // clear_cache.zig)
     if (cfg) |o| try out.append(a, o);
     // zig's import library, which GNU ld does not write, where it is
     // deleted after the link; windows.implib
@@ -308,7 +314,8 @@ fn armExts(a: mem.Allocator, s: *std.ArrayList(u8), it: *mem.SplitIterator(u8, .
 }
 
 /// <rzig's directory>/<file>, a link object R's build installs beside
-/// rzig (build.zig's linkObject: dso_fini.zig's, cfguard.zig's). Not
+/// rzig (build.zig's linkObject: dso_fini.zig's, cfguard.zig's,
+/// clear_cache.zig's). Not
 /// there (a broken install, rzig copied alone): null and a warning, and
 /// the link goes on without it. null when rzig does not know its
 /// directory (environment.toolchain; unit tests that set no self_exe).
@@ -1082,11 +1089,18 @@ test "a link object missing beside rzig: the link goes on without it, with a war
     // nothing written anywhere: no cache, no object
     try testing.expect(!c.exists(f.path("tc")));
     try testing.expect(!c.exists(f.path("no")));
-    // Windows: an rzig for another architecture than x86_64 wants no
-    // stub, so it misses none
+    // Windows: the object of R's architecture, x86_64's CFG stub and
+    // aarch64's cache flush
     c.os = .windows;
-    _ = try argv(c, .c, &.{ "-shared", "-o", "pkg.dll", "a.o" });
-    try testing.expectEqualStrings(if (builtin.cpu.arch == .x86_64) f.fmt("rzig-test: warning: no {s}: code compiled with Control Flow Guard cannot link\n", .{f.path("tc/cfguard.o")}) else "", f.takeWarnings());
+    for ([_]target.Arch{ .x86_64, .aarch64 }, [_][]const u8{
+        f.fmt("rzig-test: warning: no {s}: code compiled with Control Flow Guard cannot link\n", .{f.path("tc/cfguard.o")}),
+        f.fmt("rzig-test: warning: no {s}: code that calls __clear_cache (libffi's closures) cannot link\n", .{f.path("tc/clear_cache.o")}),
+    }) |arch, want| {
+        c.arch = arch;
+        _ = try argv(c, .c, &.{ "-shared", "-o", "pkg.dll", "a.o" });
+        try testing.expectEqualStrings(want, f.takeWarnings());
+    }
+    c.arch = .own;
     // rzig's directory unknown: none, and no warning
     c.self_exe = null;
     c.os = .linux;
@@ -1094,13 +1108,14 @@ test "a link object missing beside rzig: the link goes on without it, with a war
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 
-test "Windows: -target names R's arch, x86_64 and aarch64, on compiles and links; the CFG stub on x86_64 only (finding 29)" {
+test "Windows: -target names R's arch, x86_64 and aarch64, on compiles and links; the CFG stub on x86_64, the cache flush on aarch64 (findings 29, 36)" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
     defer f.deinit();
     const c = &f.ctx;
     c.self_exe = f.path("tc/gcc.exe");
     try f.touch("tc/cfguard.o");
+    try f.touch("tc/clear_cache.o");
     // rzig's arch is R's: an arm64 R's rzig names aarch64 to the x64 zig
     // an emulated win-64 environment put first on PATH (stress run
     // 43773932212), which compiled for x64 with no target
@@ -1108,7 +1123,7 @@ test "Windows: -target names R's arch, x86_64 and aarch64, on compiles and links
         c.arch = arch;
         const head: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", t };
         try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ "-O2", "-c", "a.c", "-o", "a.o" } }), try argv(c, .c, &.{ "-O2", "-c", "a.c", "-o", "a.o" }));
-        const stub: Args = if (arch == .x86_64) &.{f.path("tc/cfguard.o")} else &.{};
+        const stub: Args = &.{f.path(if (arch == .x86_64) "tc/cfguard.o" else "tc/clear_cache.o")};
         try expectArgs(
             try mem.concat(c.arena, []const u8, &.{ head, stub, &.{ "-Xlinker", "--out-implib=p.dll.rzig.lib", "-shared", "-o", "p.dll", "a.o", "-lws2_32" } }),
             try argv(c, .c, &.{ "-shared", "-o", "p.dll", "a.o" }),
@@ -1126,10 +1141,11 @@ test "Windows links: the CFG stub and the import library before the caller's arg
     const c = &f.ctx;
     c.self_exe = f.path("tc/gcc.exe");
     try f.touch("tc/cfguard.o");
+    try f.touch("tc/clear_cache.o");
     try f.touch("tc/dso_fini.o");
-    // the stub is x86_64 code: a link for another architecture adds
-    // none, though the file is there; the rest is the same
-    const stub: Args = if (builtin.cpu.arch == .x86_64) &.{f.path("tc/cfguard.o")} else &.{};
+    // the object of R's architecture (rzig's own here): x86_64's CFG
+    // stub, aarch64's cache flush; the rest is the same
+    const stub: Args = &.{f.path(if (builtin.cpu.arch == .x86_64) "tc/cfguard.o" else "tc/clear_cache.o")};
     const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target };
     // magick's link, and an executable (CMake's): -lws2_32 on the DLL only
     try expectArgs(
@@ -1154,13 +1170,13 @@ test "Windows links: the CFG stub and the import library before the caller's arg
         &.{"--version"},
         &.{ "-r", "-flto", "a.o", "-o", "part.o" },
     }) |args| for (try argv(c, .cxx, args)) |x| {
-        try testing.expect(mem.find(u8, x, "cfguard") == null and mem.find(u8, x, "implib") == null);
+        try testing.expect(mem.find(u8, x, "cfguard") == null and mem.find(u8, x, "clear_cache") == null and mem.find(u8, x, "implib") == null);
     };
     // linux and macOS: none, and -flto stays
     for ([_]Ctx.Os{ .linux, .macos }) |os| {
         c.os = os;
         const got = try argv(c, .c, &.{ "-shared", "-flto", "-o", "p.so", "a.o" });
-        for (got) |x| try testing.expect(mem.find(u8, x, "cfguard") == null and mem.find(u8, x, "implib") == null);
+        for (got) |x| try testing.expect(mem.find(u8, x, "cfguard") == null and mem.find(u8, x, "clear_cache") == null and mem.find(u8, x, "implib") == null);
         try testing.expect(cmdline.anyWord(got, "-flto"));
     }
     try testing.expectEqual(0, c.discard.items.len);

@@ -31,12 +31,14 @@
 #     out of rzig's side (where it goes is compiler.zig's unit tests'
 #     business) and reported as "ok+";
 #   - rzig adds the finalization object of linux shared libraries
-#     (dso_fini.zig) and the CFG stub of Windows links (cfguard.zig), the
-#     link objects R's build installs beside rzig, which the shims never
+#     (dso_fini.zig) and the object of Windows links (x86_64's CFG stub,
+#     cfguard.zig; aarch64's cache flush, clear_cache.zig), the link
+#     objects R's build installs beside rzig, which the shims never
 #     added: taken out of its side too, after checking that it is there
 #     exactly when the rule says (a linux link with -shared as a word, no
 #     -nostartfiles or -nostdlib; a Windows command with -o as a word, by
-#     an x86_64 rzig; no compile-only flag), and reported as "ok+". A
+#     an x86_64 or aarch64 rzig; no compile-only flag), and reported as
+#     "ok+". A
 #     Windows link also names its
 #     import library under the stub's rule (windows.implib: the lines
 #     `-Xlinker` and `--out-implib=<output>.rzig.lib`), and a Windows DLL
@@ -101,7 +103,7 @@ tree() {
   # build.zig, linkObject): the ones that build made beside $RZIG (the
   # real builds below link dso_fini.o), else empty files, which the dry
   # and stub runs only name
-  for n in dso_fini.o cfguard.o; do
+  for n in dso_fini.o cfguard.o clear_cache.o; do
     if [ -f "${RZIG%/*}/$n" ]; then cp "${RZIG%/*}/$n" "$tc/$n"; else : > "$tc/$n"; fi
   done
   for n in zig-cc zig-cxx zig-ar zig-ranlib; do
@@ -195,7 +197,7 @@ for f in libgfortran.dll.a libquadmath.dll.a; do touchf "$W/gcclib/$f"; done
 prog "$W/gf/gfortran" "echo '$W/gcclib/libgfortran.dll.a'"
 
 pass=0 own=0 deliberate=0 fail=0
-obj_re='/lib/R/bin/toolchain/(dso_fini|cfguard)\.o$'
+obj_re='/lib/R/bin/toolchain/(dso_fini|cfguard|clear_cache)\.o$'
 # a Windows link's import library (windows.implib): the lines -Xlinker and
 # --out-implib=<output>.rzig.lib; drop_implib takes both out
 implib_re='^--out-implib=.*\.rzig\.lib$'
@@ -234,9 +236,9 @@ run_case() {
   [ "$os" = macos ] && ! declare -p CASE_ENV > /dev/null 2>&1 && env+=(FAKE_SDK="$SDK")
   local p=${CASE_PATH:-}
   # the finalization object's rule (dso_fini.zig's `wanted`, linux only)
-  # and the CFG stub's (cfguard.zig's `wanted`, Windows only: an -o; the
-  # stub is x86_64 code, compiler.zig); the import library's is the
-  # stub's rule on every architecture
+  # and the Windows object's (cfguard.zig's `wanted`, Windows only: an
+  # -o; x86_64's CFG stub, aarch64's cache flush, compiler.zig); the
+  # import library's is the same rule
   if [ "$os" = linux ] && [ "$shim" != zig-ar ] && [ "$shim" != zig-ranlib ] &&
     [[ " $* " == *" -shared "* && " $* " != *" -nostartfiles "* && " $* " != *" -nostdlib "* ]]; then
     obj_want=1
@@ -247,7 +249,7 @@ run_case() {
     for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) obj_want=0 ;; esac; done
   fi
   [ "$os" = windows ] && implib_want=$obj_want
-  [ "$os" = windows ] && [ "$(uname -m)" != x86_64 ] && obj_want=0
+  case "$(uname -m)" in x86_64|aarch64|arm64) ;; *) [ "$os" = windows ] && obj_want=0 ;; esac
   if [ "$os" = windows ] && [ "$shim" != zig-ar ] && [ "$shim" != zig-ranlib ] &&
     [[ " $* " == *" -shared "* && " $* " != *" -nostdlib "* && " $* " != *" -nodefaultlibs "* ]]; then
     ws2_want=1

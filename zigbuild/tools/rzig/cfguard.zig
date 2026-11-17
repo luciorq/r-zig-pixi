@@ -19,10 +19,10 @@
 //! link makes no image, and zig's COFF -r takes one object). Nothing uses it
 //! unless libmingw32's mingw_cfguard_support.obj is pulled in; other links
 //! carry its 16 bytes of code. A zig whose libmingw32 has guard_dispatch.S's
-//! member never pulls that member, as the symbol is already defined. R on
-//! Windows is x86_64 here (win-64), and the code is x86_64's: R's build
-//! makes no cfguard.o for another architecture, and an rzig built for one
-//! (Windows on ARM, cross-built only) adds none (compiler.zig).
+//! member never pulls that member, as the symbol is already defined. The
+//! code is x86_64's: R's build makes no cfguard.o for another
+//! architecture, and on Windows on ARM rzig adds clear_cache.o in its
+//! place (clear_cache.zig, compiler.zig).
 //!
 //! The symbol is excluded from lld's MinGW auto-export (a DLL with no .def
 //! file and no dllexport exports every global symbol), with the

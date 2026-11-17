@@ -2842,7 +2842,8 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 /// rzig into R_HOME/bin/toolchain under the names Makeconf uses
 /// (feat-no-host-paths F3): one binary, a copy per name, dispatching on
 /// the name it was started as, and beside them the object rzig adds to
-/// links (rzig_build.linkObject: linux's dso_fini.o, Windows' cfguard.o;
+/// links (rzig_build.linkObject: linux's dso_fini.o, Windows' cfguard.o
+/// on x86_64 and clear_cache.o on aarch64;
 /// feat-r-home-link-objects). They are the only files directly in that
 /// directory: the toolchain groups' files sit in its subdirectories
 /// (feat-standalone-toolchain B19, B30). The base carries them on every

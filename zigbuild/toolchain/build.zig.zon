@@ -18,28 +18,28 @@
         // for or not (zig unpacks every cached lazy dependency): delete
         // p/<hash>.tar.gz from zig's global cache.
         .cmake_linux_x86_64 = .{
-            .url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz",
-            .hash = "N-V-__8AALB5wQsZRbtbnOQ0-KA27JVywuEfAWmDVYDDxg_0",
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-linux-x86_64.tar.gz",
+            .hash = "N-V-__8AAP7kWAvB8Sz7VQ-H2TsS32GZpfIyEP2nZx7xeH_0",
             .lazy = true,
         },
         .cmake_linux_aarch64 = .{
-            .url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz",
-            .hash = "N-V-__8AAEombgeCpaRy9jptznuMf6wc3uJ26QYzYKwngv0w",
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-linux-aarch64.tar.gz",
+            .hash = "N-V-__8AAMe3OQcfr2sIFOyh0053trgFzti-ioG9UD_IdiJd",
             .lazy = true,
         },
         .cmake_macos_universal = .{
-            .url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-macos-universal.tar.gz",
-            .hash = "N-V-__8AALuRqQ9uXDKfU3cP_xBgublGGl6n6fjbhlQKQd36",
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-macos-universal.tar.gz",
+            .hash = "N-V-__8AAIlSEA-hX49kdtISa7HIXS3XN39KRJpam_J0gPRt",
             .lazy = true,
         },
         .cmake_windows_x86_64 = .{
-            .url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-windows-x86_64.zip",
-            .hash = "N-V-__8AAD5o3QhPVsPwABFNVZzu7DJWiJdtFHQatfbFhwbU",
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-windows-x86_64.zip",
+            .hash = "N-V-__8AAPLZigg5sbvvxGm_-msyisTfC51TpXxP7zNZ0sJ4",
             .lazy = true,
         },
         .cmake_windows_arm64 = .{
-            .url = "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-windows-arm64.zip",
-            .hash = "N-V-__8AADaqwAiO0qXhAOyTyEnA6Wtur8Vn7rOvo_Va9XIS",
+            .url = "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-windows-arm64.zip",
+            .hash = "N-V-__8AAArqcAiXySyLFRoXQXUW5A43HGJSFTGTtFdpGTXX",
             .lazy = true,
         },
     },

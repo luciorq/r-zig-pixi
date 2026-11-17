@@ -239,7 +239,7 @@ changes; a copy without `.git` says "unknown". Then one line per target:
 | package | the row; `(!)` marks a result that differs from `expect` |
 | status | `ok`, `install-failed`, `smoke-failed` (the load or the smoke call), `unload-failed` (`unloadNamespace()` gave an error or a warning, or R crashed in it), `exit-failed` (R's exit after the unload did not return 0), `timeout`, `skipped` (a dependency failed), `download-failed`, `unavailable` (not on CRAN or Bioconductor), `error` (the harness) |
 | class | the runner's guess at the cause, from the failing part of the log |
-| expect | the row's expectation for this OS |
+| expect | the row's expectation for this OS and arch (`windows-aarch64=` before `windows=`) |
 | min, MB | install minutes and installed size |
 | first error | the first error line of the log |
 

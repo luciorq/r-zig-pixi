@@ -201,7 +201,8 @@ pixi run contract      # CRAN packages compiled with the tree and the groups (Rc
 
 `build` installs `dist/<flavor>/R-<ver>-zig/`, the base that ships: R
 and its libraries, with only rzig, the compiler front Makeconf names, and
-its link object (linux `dso_fini.o`, win-64 `cfguard.o`) in
+its link object (linux `dso_fini.o`, win-64 `cfguard.o`, win-arm64
+`clear_cache.o`) in
 `R_HOME/bin/toolchain`. `toolchain` copies the toolchain groups' files
 from the environment into `dist/toolchain/R-<ver>-zig/`, and upstream
 zig from PyPI's `ziglang` wheel into its `zig/`, each directory with its
@@ -362,7 +363,8 @@ beside it:
   Its
   `R_HOME/bin/toolchain` holds only rzig, the compiler front R's
   Makeconf names, and the object rzig adds to links (linux
-  `dso_fini.o`, win-64 `cfguard.o`). Each flavor has the same features
+  `dso_fini.o`, win-64 `cfguard.o`, win-arm64 `clear_cache.o`). Each
+  flavor has the same features
   on every OS, except where the Variants table says otherwise
   (readline, memory profiling).
 - **The compilers group**, one per platform:
@@ -392,8 +394,9 @@ beside it:
   on x86_64 and arm64 alike.
 - **The extras group**, one per platform:
   `R-<ver>-<platform>-extras.tar.gz` (`.zip` on Windows, about 10 MB on
-  linux-64): cmake 4.5.0 from Kitware's release archive, `bin/cmake` and
-  `share/cmake-4.5/` (Modules, Templates), under `cmake/`, for packages
+  linux-64): cmake 4.4.5 from Kitware's release archive (held below 4.5,
+  which breaks the Boost arrow fetches), `bin/cmake` and
+  `share/cmake-4.4/` (Modules, Templates), under `cmake/`, for packages
   that build a bundled library with CMake. R puts `cmake/bin` on `PATH`
   after the build tools' directory, in R and under `R CMD`. Linux's
   cmake needs only glibc (2.17 on x86_64, 2.28 on aarch64); macOS has

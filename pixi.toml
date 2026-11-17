@@ -755,7 +755,7 @@ platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64", "win-
 
 # on all six platforms (libboost-headers below is noarch)
 [feature.stress.dependencies]
-cmake = "*"             # nloptr, s2 (linux), RcppParallel, Rhdf5lib, arrow:source
+cmake = "<4.5"          # nloptr, s2 (linux), RcppParallel, Rhdf5lib, arrow:source; <4.5: finding 33
 geos = "*"              # sf, terra, lwgeom
 proj = "*"              # sf, terra, lwgeom
 libprotobuf = "*"       # protolite (protoc, protobuf.pc; brings libabseil)

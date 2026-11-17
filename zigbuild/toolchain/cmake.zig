@@ -28,13 +28,18 @@
 const std = @import("std");
 const mem = std.mem;
 
-pub const version = "4.5.0";
+/// Held below 4.5: cmake 4.5.0 rewrote source_group(TREE) to compare
+/// path components, so Boost <= 1.92's libs/locale/CMakeLists.txt (its
+/// TREE include/boost/locale with include/boost/locale.hpp in FILES)
+/// fails to configure; Boost's fix (boostorg/locale#273, 2026-10-31) is
+/// after 1.92.0, which arrow 26 fetches (chore-release-11 finding 33).
+pub const version = "4.4.5";
 /// The directory share/ holds the modules in: cmake-<major>.<minor>.
-pub const data_dir = "share/cmake-4.5";
+pub const data_dir = "share/cmake-4.4";
 pub const release = "https://github.com/Kitware/CMake/releases/download/v" ++ version ++ "/";
 /// cmake's source tarball, SOURCES' `source:` line (Kitware's sha256).
 pub const source_url = release ++ "cmake-" ++ version ++ ".tar.gz";
-pub const source_sha256 = "424352d6133e8455e020da787008e8dc67abb18820af3532572ab35657e49213";
+pub const source_sha256 = "a0c54c88abb8078dd8eccadb717fc6bb194bf18e7d44c86309910288886e04e2";
 /// LICENSE.rst's licence.
 pub const license = "BSD-3-Clause";
 /// What built the archives: Kitware's release of this tag (SOURCES'
@@ -76,11 +81,11 @@ fn archive(comptime platform: []const u8, comptime ext: []const u8, sha256: []co
     return .{ .dep = dep, .platform = platform, .file = file, .url = release ++ file, .sha256 = sha256, .root = root };
 }
 
-pub const linux_x86_64 = archive("linux-x86_64", ".tar.gz", "81f0d5b0960fb6adc8197030ffc827fba937640d51e73e39e0e9e40d88c66f6f", "");
-pub const linux_aarch64 = archive("linux-aarch64", ".tar.gz", "0c8447e7bba9701467b5ac6155d157aa9e309e71af4981f78bd4b9176107f553", "");
-pub const macos_universal = archive("macos-universal", ".tar.gz", "a645d69fd21e521759cc0c64e7c60462d43faf0c7214ac05f75c80f7c5037dde", "CMake.app/Contents/");
-pub const windows_x86_64 = archive("windows-x86_64", ".zip", "301b1728317ccd84e984b02e366a8293735bc5ac618757d3d8f58b578f062411", "");
-pub const windows_arm64 = archive("windows-arm64", ".zip", "7dba95db83ec1e8fa3f221c06454ebc692c8f06d93bf5fdf840113fa28018690", "");
+pub const linux_x86_64 = archive("linux-x86_64", ".tar.gz", "ed85135c5a5135b45e50423cb406dea04ca3338da0b8ef3c9ede963559680be0", "");
+pub const linux_aarch64 = archive("linux-aarch64", ".tar.gz", "301d5063ab259577c1b57ce5490b1aab9ea5c56dc4c822f73499553dab94925f", "");
+pub const macos_universal = archive("macos-universal", ".tar.gz", "679e77a96b9ef9484cc6c1445255fc4f84206b48a65420efbedf16bdab55fbff", "CMake.app/Contents/");
+pub const windows_x86_64 = archive("windows-x86_64", ".zip", "326c826486d46a23cf9d5a1c9ee3a567d427bdd02c4a34071937a2a675cff004", "");
+pub const windows_arm64 = archive("windows-arm64", ".zip", "b0b54ebdd3e7b9f5ad733d865541d6e0a3b774182e4318b26890221432835359", "");
 pub const archives = [_]Archive{ linux_x86_64, linux_aarch64, macos_universal, windows_x86_64, windows_arm64 };
 
 /// The archive for a machine, or null where Kitware publishes none.
@@ -141,10 +146,10 @@ test "one archive per machine; both macOS arches share the universal one" {
     try std.testing.expectEqualStrings("macos-universal", archiveFor(.macos, .x86_64).?.platform);
     try std.testing.expectEqualStrings("macos-universal", archiveFor(.macos, .aarch64).?.platform);
     try std.testing.expectEqualStrings("windows-arm64", archiveFor(.windows, .aarch64).?.platform);
-    try std.testing.expectEqualStrings("cmake-4.5.0-windows-x86_64.zip", archiveFor(.windows, .x86_64).?.file);
+    try std.testing.expectEqualStrings("cmake-4.4.5-windows-x86_64.zip", archiveFor(.windows, .x86_64).?.file);
     try std.testing.expectEqualStrings("cmake_macos_universal", macos_universal.dep);
-    try std.testing.expectEqualStrings("cmake-4.5.0-macos-universal", macos_universal.top());
-    try std.testing.expectEqualStrings("https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-aarch64.tar.gz", linux_aarch64.url);
+    try std.testing.expectEqualStrings("cmake-4.4.5-macos-universal", macos_universal.top());
+    try std.testing.expectEqualStrings("https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-linux-aarch64.tar.gz", linux_aarch64.url);
     try std.testing.expect(archiveFor(.linux, .riscv64) == null);
 }
 
@@ -153,10 +158,10 @@ test "wanted: the program, Modules and Templates, the licences; nothing else" {
     try std.testing.expectEqualStrings("bin/cmake", wanted(l, "bin/cmake", false).?.to);
     try std.testing.expect(wanted(l, "bin/cmake", false).?.kind == .program);
     try std.testing.expect(wanted(l, "bin/cmake", true) == null);
-    for ([_][]const u8{ "bin/ctest", "bin/cpack", "bin/ccmake", "bin/cmake-gui", "man/man1/cmake.1", "share/aclocal/cmake.m4", "share/cmake-4.5/Help/generator/Unix Makefiles.rst", "share/cmake-4.5/Licenses/LGPLv3.txt", "doc/cmake/html/index.html", "doc/cmake/CMake.qch", "doc/cmake/cmake.org.html" }) |r|
+    for ([_][]const u8{ "bin/ctest", "bin/cpack", "bin/ccmake", "bin/cmake-gui", "man/man1/cmake.1", "share/aclocal/cmake.m4", "share/cmake-4.4/Help/generator/Unix Makefiles.rst", "share/cmake-4.4/Licenses/LGPLv3.txt", "doc/cmake/html/index.html", "doc/cmake/CMake.qch", "doc/cmake/cmake.org.html" }) |r|
         try std.testing.expect(wanted(l, r, false) == null);
-    try std.testing.expectEqualStrings("share/cmake-4.5/Modules/FindZLIB.cmake", wanted(l, "share/cmake-4.5/Modules/FindZLIB.cmake", false).?.to);
-    try std.testing.expectEqualStrings("share/cmake-4.5/Templates/Windows/Logo.png", wanted(l, "share/cmake-4.5/Templates/Windows/Logo.png", false).?.to);
+    try std.testing.expectEqualStrings("share/cmake-4.4/Modules/FindZLIB.cmake", wanted(l, "share/cmake-4.4/Modules/FindZLIB.cmake", false).?.to);
+    try std.testing.expectEqualStrings("share/cmake-4.4/Templates/Windows/Logo.png", wanted(l, "share/cmake-4.4/Templates/Windows/Logo.png", false).?.to);
     const lic = wanted(l, "doc/cmake/cmcurl/COPYING", false).?;
     try std.testing.expectEqualStrings("cmcurl/COPYING", lic.to);
     try std.testing.expect(lic.kind == .license);
@@ -167,7 +172,7 @@ test "wanted: the program, Modules and Templates, the licences; nothing else" {
     // macOS: under the app bundle only
     const m = macos_universal;
     try std.testing.expectEqualStrings("bin/cmake", wanted(m, "CMake.app/Contents/bin/cmake", false).?.to);
-    try std.testing.expectEqualStrings("share/cmake-4.5/Modules/FindZLIB.cmake", wanted(m, "CMake.app/Contents/share/cmake-4.5/Modules/FindZLIB.cmake", false).?.to);
+    try std.testing.expectEqualStrings("share/cmake-4.4/Modules/FindZLIB.cmake", wanted(m, "CMake.app/Contents/share/cmake-4.4/Modules/FindZLIB.cmake", false).?.to);
     for ([_][]const u8{ "CMake.app/Contents/MacOS/CMake", "CMake.app/Contents/Frameworks/QtCore.framework/QtCore", "bin/cmake", "CMake.app/Contents/Info.plist" }) |r|
         try std.testing.expect(wanted(m, r, false) == null);
 }
