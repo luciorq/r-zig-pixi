@@ -273,8 +273,14 @@ SHLIB_OPENMP_FFLAGS = @OPENMP@
 SHLIB_PTHREAD_FLAGS = @PTHREAD@
 STRIP_SHARED_LIB = $(BINPREF)strip.exe --strip-unneeded
 STRIP_STATIC_LIB = $(BINPREF)strip.exe --strip-debug
-TCLTK_CPPFLAGS = -I "$(TCL_HOME)/include" -DWin32
-TCLTK_LIBS = -L"$(TCL_HOME)/bin" -ltcl$(TCL_VERSION) -ltk$(TCL_VERSION)
+## r-zig: build.zig writes these two from the variant table. full gets
+## upstream's values: -I "$(TCL_HOME)/include" -DWin32 and
+## -L"$(TCL_HOME)/bin" -ltcl$(TCL_VERSION) -ltk$(TCL_VERSION). slim and
+## minimal (no tcltk) get empty values, as unix's slim Makeconf does.
+## This differs from upstream, whose Makeconf keeps them fixed even when
+## R is built without tcltk.
+TCLTK_CPPFLAGS = @MK_TCLTK_CPPFLAGS@
+TCLTK_LIBS = @MK_TCLTK_LIBS@
 
 STATIC_LIBR =
 

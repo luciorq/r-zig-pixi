@@ -9,7 +9,7 @@
 #define IEEE_754 1
 /* #undef WORDS_BIGENDIAN */
 #define R_INLINE inline
-/* #undef HAVE_VISIBILITY_ATTRIBUTE */
+#define HAVE_VISIBILITY_ATTRIBUTE 1
 /* all R platforms have the next two */
 #define SUPPORT_UTF8 1
 #define SUPPORT_MBCS 1

@@ -1,0 +1,20 @@
+win-minimal: Windows R 4.6.2, variant minimal.
+
+Not generated: Windows has no configure. config.h and Rconfig.h are R's
+own src/gnuwin32/fixed/h/ files (GENERATED_FROM names the R version),
+with r-zig's edits:
+- HAVE_CURL_CURL_H and HAVE_LIBCURL defined (the internet module).
+- USE_ICU, HAVE_OPENMP and SUPPORT_OPENMP defined where the variant has
+  ICU and OpenMP.
+- The defines that build.zig's variant table names (Features,
+  checkVariantConfig) flipped to the variant's value: ENABLE_NLS
+  (config.h and Rconfig.h), HAVE_TCLTK, HAVE_JPEG, HAVE_TIFF,
+  HAVE_TIFFIO_H, HAVE_PNG, USE_ICU, HAVE_LIBDEFLATE, HAVE_LIBDEFLATE_H,
+  USE_LIBDEFLATE, HAVE_OPENMP, HAVE_OPENMP_SIMDRED, SUPPORT_OPENMP.
+subst.txt is written by hand: the link lists of upstream's Makefile.win
+files, one key per feature (BITMAP_LIBS, TCLTK_LIBS, CAIRO_LIBS,
+BUILD_DEVCAIRO_TRUE, R_OPENMP_CFLAGS, SHLIB_OPENMP_CFLAGS, and the
+Windows-only ICU_LIBS and LIBDEFLATE_LIBS), plus the WIN_* lists every
+variant shares. etc/x64/Makeconf comes from ../win-common/Makeconf.win.
+build.zig checks every file here against the variant table on each
+build, and stops on a mismatch.

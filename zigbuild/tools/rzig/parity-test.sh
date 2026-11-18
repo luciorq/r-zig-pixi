@@ -31,26 +31,32 @@
 #     out of rzig's side (where it goes is compiler.zig's unit tests'
 #     business) and reported as "ok+";
 #   - rzig adds the finalization object of linux shared libraries
-#     (dso_fini.zig) and the CFG stub of Windows links (cfguard.zig), the
-#     link objects R's build installs beside rzig, which the shims never
+#     (dso_fini.zig) and the object of Windows links (x86_64's CFG stub,
+#     cfguard.zig; aarch64's cache flush, clear_cache.zig), the link
+#     objects R's build installs beside rzig, which the shims never
 #     added: taken out of its side too, after checking that it is there
 #     exactly when the rule says (a linux link with -shared as a word, no
 #     -nostartfiles or -nostdlib; a Windows command with -o as a word, by
-#     an x86_64 rzig; no compile-only flag), and reported as "ok+". A
+#     an x86_64 or aarch64 rzig; no compile-only flag), and reported as
+#     "ok+". A
 #     Windows link also names its
 #     import library under the stub's rule (windows.implib: the lines
 #     `-Xlinker` and `--out-implib=<output>.rzig.lib`), and a Windows DLL
 #     link its default system library (windows.defaultLibs: a last
 #     `-lws2_32` when -shared is a word, no compile-only flag, no
 #     -nostdlib or -nodefaultlibs; feat-win-link-fixes item 2), checked
-#     and taken out the same way;
+#     and taken out the same way; and every Windows zig command names
+#     R's target, `-target <rzig's arch>-windows-gnu` (target.zig,
+#     chore-release-11 finding 29), where the shims leave Windows to
+#     zig's native target (their uname -m says x86_64 under MSYS on
+#     Windows on ARM, so they cannot name it), also checked and taken out;
 #   - what a case's CASE_DELIBERATE sed script does to the bash side, with
 #     CASE_WHY: F3b's other differences (rzig never reads CONDA_PREFIX; the
 #     tree's headers on every call, -idirafter on Windows), the message
 #     for an archive ar cannot seed, an archive input passed as an .a
 #     copy in rzig's cache (archives.zig), no -Wl,--strip-debug on a
 #     link whose input objects have debug info (strip.zig reads them; a
-#     shim cannot reasonably parse ELF), and the toolchain's openmp/
+#     shim cannot reasonably parse ELF or Mach-O), and the toolchain's openmp/
 #     (feat-standalone-toolchain B40: rzig counts it when the base has the
 #     libomp runtime; the shims never knew it).
 # check NAME COMMAND... adds a case that passes when COMMAND does: the
@@ -97,7 +103,7 @@ tree() {
   # build.zig, linkObject): the ones that build made beside $RZIG (the
   # real builds below link dso_fini.o), else empty files, which the dry
   # and stub runs only name
-  for n in dso_fini.o cfguard.o; do
+  for n in dso_fini.o cfguard.o clear_cache.o; do
     if [ -f "${RZIG%/*}/$n" ]; then cp "${RZIG%/*}/$n" "$tc/$n"; else : > "$tc/$n"; fi
   done
   for n in zig-cc zig-cxx zig-ar zig-ranlib; do
@@ -191,7 +197,7 @@ for f in libgfortran.dll.a libquadmath.dll.a; do touchf "$W/gcclib/$f"; done
 prog "$W/gf/gfortran" "echo '$W/gcclib/libgfortran.dll.a'"
 
 pass=0 own=0 deliberate=0 fail=0
-obj_re='/lib/R/bin/toolchain/(dso_fini|cfguard)\.o$'
+obj_re='/lib/R/bin/toolchain/(dso_fini|cfguard|clear_cache)\.o$'
 # a Windows link's import library (windows.implib): the lines -Xlinker and
 # --out-implib=<output>.rzig.lib; drop_implib takes both out
 implib_re='^--out-implib=.*\.rzig\.lib$'
@@ -202,6 +208,12 @@ drop_implib() {
 # last line -lws2_32, which drop_ws2 takes out when $1 is 1
 drop_ws2() {
   awk -v drop="$1" '{ l[NR] = $0; if ($0 == "-lws2_32") last = NR } END { for (i = 1; i <= NR; i++) if (!(drop == 1 && i == last)) print l[i] }'
+}
+# Windows' target (target.zig): the lines -target and <arch>-windows-gnu,
+# the first -target of the command; drop_wintarget takes both out
+win_target="$(uname -m)-windows-gnu"
+drop_wintarget() {
+  awk -v t="$win_target" '{ l[NR] = $0 } END { d = 0; for (i = 1; i <= NR; i++) { if (!d && l[i] == "-target" && i < NR && l[i + 1] == t) { d = 1; i++; continue }; print l[i] } }'
 }
 why_tree="rzig names the tree it is installed in as such, not as the shim's <its dir>/../../../.."
 why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not installed in adds nothing"
@@ -216,7 +228,7 @@ why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not instal
 #   CASE_DELIBERATE  sed script for the bash side's output, and CASE_WHY
 run_case() {
   local name=$1 os=$2 tool=$3; shift 3
-  local shim=$tool uname_s side status ok=1 t=${CASE_TREE:-tree} obj_want=0 implib_want=0 ws2_want=0 n a
+  local shim=$tool uname_s side status ok=1 t=${CASE_TREE:-tree} obj_want=0 implib_want=0 ws2_want=0 wt_want=0 n a
   case $tool in gcc) shim=zig-cc ;; g++) shim=zig-cxx ;; gcc-ar|ar) shim=zig-ar ;; gcc-ranlib|ranlib) shim=zig-ranlib ;; esac
   case $os in linux) uname_s=Linux ;; macos) uname_s=Darwin ;; windows) uname_s=MINGW64_NT-10.0-26100 ;; esac
   local -a env=(HOME="$W/home" LC_ALL=C)
@@ -224,9 +236,9 @@ run_case() {
   [ "$os" = macos ] && ! declare -p CASE_ENV > /dev/null 2>&1 && env+=(FAKE_SDK="$SDK")
   local p=${CASE_PATH:-}
   # the finalization object's rule (dso_fini.zig's `wanted`, linux only)
-  # and the CFG stub's (cfguard.zig's `wanted`, Windows only: an -o; the
-  # stub is x86_64 code, compiler.zig); the import library's is the
-  # stub's rule on every architecture
+  # and the Windows object's (cfguard.zig's `wanted`, Windows only: an
+  # -o; x86_64's CFG stub, aarch64's cache flush, compiler.zig); the
+  # import library's is the same rule
   if [ "$os" = linux ] && [ "$shim" != zig-ar ] && [ "$shim" != zig-ranlib ] &&
     [[ " $* " == *" -shared "* && " $* " != *" -nostartfiles "* && " $* " != *" -nostdlib "* ]]; then
     obj_want=1
@@ -237,12 +249,14 @@ run_case() {
     for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) obj_want=0 ;; esac; done
   fi
   [ "$os" = windows ] && implib_want=$obj_want
-  [ "$os" = windows ] && [ "$(uname -m)" != x86_64 ] && obj_want=0
+  case "$(uname -m)" in x86_64|aarch64|arm64) ;; *) [ "$os" = windows ] && obj_want=0 ;; esac
   if [ "$os" = windows ] && [ "$shim" != zig-ar ] && [ "$shim" != zig-ranlib ] &&
     [[ " $* " == *" -shared "* && " $* " != *" -nostdlib "* && " $* " != *" -nodefaultlibs "* ]]; then
     ws2_want=1
     for a in "$@"; do case "$a" in -c|-S|-E|-M|-MM) ws2_want=0 ;; esac; done
   fi
+  # R's target on every Windows command zig compiles or links with
+  if [ "$os" = windows ] && [ "$shim" != zig-ar ] && [ "$shim" != zig-ranlib ]; then wt_want=1; fi
   local -a sides=(bash dry)
   [ "$os" = linux ] && sides+=(real)
   for side in "${sides[@]}"; do
@@ -278,7 +292,11 @@ run_case() {
     n=$(( $(grep -cxF -- -lws2_32 "$W/out.$side" || :) - $(grep -cxF -- -lws2_32 "$W/want" || :) ))
     [ "$n" = "$ws2_want" ] || { ok=0; echo "    $side: $n default -lws2_32 added, want $ws2_want" >> "$W/report"; }
     [ "$ws2_want" = 0 ] || own_added=1
-    grep -vxF -- "$own_l" "$W/out.$side" | { grep -vE -- "$obj_re" || :; } | drop_implib | drop_ws2 "$ws2_want" > "$W/cmp.$side"
+    n=$(( $(grep -cxF -- "$win_target" "$W/out.$side" || :) - $(grep -cxF -- "$win_target" "$W/want" || :) ))
+    [ "$n" = "$wt_want" ] || { ok=0; echo "    $side: $n Windows targets named, want $wt_want" >> "$W/report"; }
+    [ "$wt_want" = 0 ] || own_added=1
+    grep -vxF -- "$own_l" "$W/out.$side" | { grep -vE -- "$obj_re" || :; } | drop_implib | drop_ws2 "$ws2_want" |
+      { if [ "$wt_want" = 1 ]; then drop_wintarget; else cat; fi; } > "$W/cmp.$side"
     cmp -s "$W/want" "$W/cmp.$side" || { ok=0; diff -u "$W/want" "$W/cmp.$side" | sed 's/^/    /' >> "$W/report" || :; }
   done
   if [ "$ok" = 1 ] && ! cmp -s "$W/out.bash" "$W/cmp.dry"; then
@@ -330,11 +348,11 @@ run_case "nothing de-duplicated off macOS" linux zig-cc -shared -o pkg.so a.o -l
 run_case "gcc name" linux gcc -c a.c
 run_case "g++ name, SONAME" linux g++ -shared -o libg.so a.o
 run_case "a package's own -march/-mcpu after -mcpu=baseline" linux zig-cxx -march=native -mcpu=haswell -O2 -c a.cpp
-run_case "-mtune= dropped (zig would take it as the CPU)" linux zig-cc -mtune=native -O2 -mtune=haswell -march=x86-64 -c a.c
+run_case "-mtune= dropped (zig would take it as the CPU)" linux zig-cc -mtune=native -O2 -mtune=haswell -march=haswell -c a.c
 
 # --- debug info, __DATE__ (compiler.zig): every case has -Wno-error=date-time ----
-# (every linux link without a -g option has -Wl,--strip-debug; in rzig, not
-# one with an input object that has debug info)
+# (every linux and macOS link without a -g option has -Wl,--strip-debug; in
+# rzig, not one with an input object that has debug info)
 run_case "-g given: no -g0" linux zig-cc -g -O2 -c a.c -o a.o
 run_case "-ggdb3, -gdwarf-4: no -g0" linux zig-cxx -O2 -ggdb3 -gdwarf-4 -c a.cpp -o a.o
 run_case "-g on a shared link: no -g0, no --strip-debug" linux zig-cxx -g -shared -o pkg.so a.o
@@ -342,7 +360,7 @@ run_case "-gline-tables-only on an executable link: no --strip-debug" linux zig-
 # strip.zig's objects (testdata/): one compiled with -g, one with -g0
 cp "$here/testdata/f-g.o" "$W/cwd/dbg.o"; cp "$here/testdata/f-g0.o" "$W/cwd/nodbg.o"; cp "$here/testdata/f-g.o" "$W/cwd/libdbg.a"
 CASE_DELIBERATE='/^-Wl,--strip-debug$/d'
-CASE_WHY="rzig reads the link's input objects (strip.zig): one with debug info keeps it; the shims do not parse ELF"
+CASE_WHY="rzig reads the link's input objects (strip.zig): one with debug info keeps it; the shims do not parse ELF or Mach-O"
 run_case "an input object with debug info: no --strip-debug (load_all())" linux zig-cxx -shared -o pkg.so nodbg.o dbg.o -lR
 run_case "objects without debug info, an archive with some: --strip-debug" linux zig-cc -shared -o pkg.so nodbg.o libdbg.a
 run_case "a caller's -Werror=date-time after ours" linux zig-cc -Werror=date-time -O2 -c a.c -o a.o
@@ -561,7 +579,7 @@ run_case "ar into a missing directory: warned, still pinned" macos zig-ar rcs no
 run_case "ranlib" macos zig-ranlib libnew.a
 
 # --- Windows: windows.zig (gcc/g++ as Makeconf.win names them) --------------------------
-run_case "compile: no target, -mcpu=baseline, no mirror" windows gcc -std=gnu2x -I"$RH/include" -DNDEBUG -O2 -Wall -c a.c -o a.o
+run_case "compile: R's target, -mcpu=baseline, no mirror" windows gcc -std=gnu2x -I"$RH/include" -DNDEBUG -O2 -Wall -c a.c -o a.o
 run_case "a package's own -march after -mcpu=baseline" windows g++ -march=native -c a.cpp
 run_case "-mtune= dropped" windows gcc -mtune=generic -O2 -c a.c -o a.o
 run_case "-l lookup: .dll.a, zig's own names, lib<n>.lib" windows gcc -shared -s -static-libgcc -o pkg.dll tmp.def a.o \
@@ -1018,5 +1036,5 @@ check "a compile with no zig: 127, the compilers group" \
   bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' -c a.c > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
     grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err'"
 
-echo "== $pass identical, $own identical but for rzig's own-environment -L, link object, import library or default system library, $deliberate deliberate differences, $fail failed"
+echo "== $pass identical, $own identical but for rzig's own-environment -L, link object, import library, default system library or Windows target, $deliberate deliberate differences, $fail failed"
 [ "$fail" = 0 ]

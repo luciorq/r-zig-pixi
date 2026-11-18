@@ -32,8 +32,7 @@ const Ctx = @import("Ctx.zig");
 const makefile = @import("makefile.zig");
 const shellwords = @import("shellwords.zig");
 const floors = @import("floors.zig");
-const compiler = @import("compiler.zig");
-const darwin = @import("darwin.zig");
+const rzig_target = @import("target.zig");
 
 pub const Tier = enum { r_only, makevars, zig, make };
 
@@ -528,8 +527,6 @@ pub const Planner = struct {
     }
 };
 
-/// zig's target for a package's own zig code (tier 2): what rzig compiles
-/// C for, with `-mcpu=baseline` added by the root.
 /// The name of the first variable MAKEFLAGS assigns, or null: a word
 /// after GNU make's ` -- ` (where it puts command-line assignments), or
 /// a NAME=value word anywhere (make takes those as assignments too).
@@ -568,12 +565,12 @@ test makeflagsAssignment {
     try testing.expectEqualStrings("X", makeflagsAssignment("-- X=1 Y=2").?);
 }
 
+/// zig's target for a package's own zig code (tier 2): what rzig compiles
+/// C for (target.zig), R's on every OS, with `-mcpu=baseline` added by the
+/// root. Windows named it "native" before finding 29: the arch of the zig
+/// that runs, and zig's native ABI there, not R's MinGW one.
 pub fn packageTarget(ctx: *const Ctx) []const u8 {
-    return switch (ctx.os) {
-        .linux => compiler.linux_target,
-        .macos => darwin.triple,
-        .windows, .other => "native",
-    };
+    return rzig_target.zig(ctx.os, ctx.arch) orelse "native";
 }
 
 /// plan.zon's text.
@@ -1004,7 +1001,7 @@ test "Windows: Makevars.win, .def, libs/x64, gcc.exe" {
     try expectWords(&.{ "-lpthread", f.fmt("-L{s}/bin/x64", .{r}), "-lR" }, plan.libs);
     try testing.expect(plan.def);
     try testing.expectEqualStrings("", plan.win_def);
-    try testing.expectEqualStrings("native", plan.target);
+    try testing.expectEqualStrings(rzig_target.zig(.windows, .own).?, plan.target);
     // a package's own .def
     try f.touch("cli/src/cli-win.def");
     const plan2 = try p.plan(.{ .r_home = r, .pkg_dir = f.path("cli"), .name = "cli", .linkingto = &.{} }, class);

@@ -30,16 +30,40 @@ case "$(uname -s)" in
 esac
 
 # The platform, as conda names it (linux-64, linux-aarch64, osx-64,
-# osx-arm64, win-64), and the archive format: the archives' names say
-# both (feat-standalone-toolchain B17).
+# osx-arm64, win-64, win-arm64), and the archive format: the archives'
+# names say both (feat-standalone-toolchain B17). On Windows not uname:
+# the MSYS2 tools are x86_64 binaries, which Windows on ARM runs under
+# emulation, so their uname says x86_64 there; PROCESSOR_IDENTIFIER is
+# the machine's ("ARMv8 (64-bit) Family 8 ..." on ARM).
 case "$OS-$(uname -m)" in
   linux-x86_64) PLAT=linux-64 ;;
   linux-*) PLAT="linux-$(uname -m)" ;;
   macos-x86_64) PLAT=osx-64 ;;
   macos-*) PLAT="osx-$(uname -m)" ;;
-  windows-*) PLAT=win-64 ;;
+  windows-*) case "${PROCESSOR_IDENTIFIER:-}" in ARM*) PLAT=win-arm64 ;; *) PLAT=win-64 ;; esac ;;
   *) PLAT=unknown ;;
 esac
+# The platform pixi installed this environment for (conda-meta/pixi's
+# resolved_platform) must be PLAT: pixi installs an environment that does
+# not list the machine's platform for one the machine emulates, with a
+# WARN only (win-arm64 -> win-64; stress run 43773932212, whose x64 zig
+# then compiled for x64 against an arm64 R: chore-release-11 findings 26
+# and 29), and R built there, its zig and its libraries are that other
+# platform's. Not on macOS: an osx-64 environment under Rosetta on an
+# arm64 Mac is a supported setup there (its zig, R and libraries are all
+# osx-64, and rzig names osx-64 as the target), and the shell may run as
+# either arch (the wheel env has no bash of its own). No pixi
+# environment (rattler-build's, a plain conda env): nothing to compare.
+# The subdir read is the one in the resolved_platform block.
+pixi_meta="${CONDA_PREFIX:-}/conda-meta/pixi"
+if [ -n "${CONDA_PREFIX:-}" ] && command -v cygpath > /dev/null 2>&1; then pixi_meta="$(cygpath -u "$CONDA_PREFIX")/conda-meta/pixi"; fi
+if [ "$OS" != macos ] && [ -n "${CONDA_PREFIX:-}" ] && [ -f "$pixi_meta" ] && [ "$PLAT" != unknown ]; then
+  env_plat="$(sed -n '/"resolved_platform"/,/}/s/^ *"subdir": *"\([^"]*\)".*/\1/p' "$pixi_meta" | sed -n 1p)"
+  if [ -n "$env_plat" ] && [ "$env_plat" != "$PLAT" ]; then
+    echo "error: pixi installed the environment ${PIXI_ENVIRONMENT_NAME:-$CONDA_PREFIX} for $env_plat on this $PLAT machine, under emulation (pixi falls back to it when the environment's features do not list $PLAT, or --platform asked for it): R, zig and the libraries there are $env_plat's" >&2
+    exit 1
+  fi
+fi
 if [ "$OS" = windows ]; then ARCHIVE_EXT=zip; else ARCHIVE_EXT=tar.gz; fi
 # A group archive's extension (B17): the compilers group's is .tar.xz on
 # every platform since phase 6, B13: with zig and flang it was over
@@ -67,25 +91,31 @@ OBJ_DIR="$BUILD_DIR/obj-$R_VERSION-$FLAVOR"
 # (feat-standalone-toolchain B1, B36): each flavor's R tree is
 # dist/<flavor>/R-<ver>-zig, the toolchain tree (the groups' directories,
 # B30) dist/toolchain/R-<ver>-zig. So no flavor may be named toolchain,
-# conda or wheel, dist/'s other directories.
+# conda, wheel or recommended, dist/'s other directories.
 TOP="R-$R_VERSION-zig"
 # R_INSTALL_PREFIX override: the conda recipe installs into rattler's $PREFIX
 PREFIX="${R_INSTALL_PREFIX:-$ROOT/dist/$FLAVOR/$TOP}"
 TOOLCHAIN_PREFIX="${R_TOOLCHAIN_PREFIX:-$ROOT/dist/toolchain/$TOP}"
+# R's recommended packages (zig-recommended.sh): their own tree per
+# flavor, since mgcv links OpenMP, which minimal has not. The conda build
+# sets R_RECOMMENDED_PREFIX to its prefix, the env.
+RECOMMENDED_PREFIX="${R_RECOMMENDED_PREFIX:-$ROOT/dist/recommended/$FLAVOR/$TOP}"
 R_HOME_DIR="$PREFIX/$RH"
 # The toolchain groups (feat-standalone-toolchain B38) and the directories
 # under R_HOME/bin/toolchain each one holds (B20, B23, B24): compilers,
 # zig/ (upstream zig, B4), flang/ (flang-zig, B9) and openmp/; build-tools,
 # usr/ and Windows' etc/ (MSYS's mount table, phase 7); Windows'
-# binutils are rzig's own names since feat-win-zig-binutils, the base's.
-# Only those that exist count: a group's
+# binutils are rzig's own names since feat-win-zig-binutils, the base's;
+# extras, cmake/ (Kitware's cmake release archive: bin/cmake and
+# share/cmake-<v>/, feat-extras-group). Only those that exist count: a group's
 # archive holds its directories that the toolchain tree has
 # (package-standalone.sh).
-TOOLCHAIN_GROUPS="compilers build-tools"
+TOOLCHAIN_GROUPS="compilers build-tools extras"
 group_dirs() {
   case "$1" in
     compilers) echo "zig flang openmp" ;;
     build-tools) echo "usr etc" ;;
+    extras) echo "cmake" ;;
     *) echo "error: no toolchain group named '$1'" >&2; return 1 ;;
   esac
 }
@@ -121,6 +151,7 @@ COMPILE_TREE="$BUILD_DIR/compile-tree/$FLAVOR/$TOP"
 TOOLCHAIN="$ROOT/toolchain"
 TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
 CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
+CRAN_CDN_URL="https://cloud.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
 CHECKSUM_FILE="$ROOT/scripts/checksums/R-$R_VERSION.sha256"
 
 # macOS defaults to 256 open files; zig's linker opens every object of
@@ -151,7 +182,8 @@ fi
 # toolchain-test) build, compile and test with it. Not conda-package,
 # whose rattler-build gives the recipe a clean environment and so its
 # build env's zig, nor wheel-test, which compiles with the venv's
-# ziglang. On win-64 conda-forge's real binary is x86_64-w64-mingw32-zig:
+# ziglang. On Windows conda-forge's real binary is <arch>-w64-mingw32-zig
+# (x86_64 on win-64, aarch64 on win-arm64):
 # its `zig` is a .bat, which MSYS bash cannot run.
 # Empty with no zig at all (scripts that run none still work).
 #
@@ -170,7 +202,7 @@ if [ -n "${ZIG_BIN:-}" ]; then
     *) ZIG="$(command -v "$ZIG_BIN" || true)" ;;
   esac
 else
-  ZIG="$(command -v zig || command -v x86_64-w64-mingw32-zig || true)"
+  ZIG="$(command -v zig || command -v x86_64-w64-mingw32-zig || command -v aarch64-w64-mingw32-zig || true)"
 fi
 case "$ZIG" in
   ''|/*|[A-Za-z]:[/\\]*) ;;
@@ -218,13 +250,20 @@ MACOS_MIN=13.0
 # for MACOS_MIN; only compiling needs macOS 15 (feat-zig-017).
 ZIG_MACOS_MIN=15.0
 # A Mach-O file's minos (LC_BUILD_VERSION; LC_VERSION_MIN_MACOSX on old
-# files), empty when it has neither.
+# files), empty when it has neither. A universal file has one per slice
+# (otool -l lists every slice); this prints the highest, so no slice
+# escapes the floor checks.
 macho_minos() {
   otool -l "$1" 2>/dev/null | awk '
+    function gt(a, b,   x, y, i) { split(a, x, "."); split(b, y, ".")
+      for (i = 1; i <= 3; i++) if (x[i] + 0 != y[i] + 0) return x[i] + 0 > y[i] + 0
+      return 0 }
     /cmd LC_BUILD_VERSION/      { b = 1; next }
     /cmd LC_VERSION_MIN_MACOSX/ { v = 1; next }
-    b && $1 == "minos"   { print $2; exit }
-    v && $1 == "version" { print $2; exit }'
+    (b && $1 == "minos") || (v && $1 == "version") {
+      if (m == "" || gt($2, m)) m = $2
+      b = 0; v = 0 }
+    END { if (m != "") print m }'
 }
 # True when version $1 is above $2 (MAJOR.MINOR[.PATCH]), without sort -V.
 version_gt() {

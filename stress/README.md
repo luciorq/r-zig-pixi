@@ -14,7 +14,7 @@ package does not fail the run.
 |---|---|
 | `packages.tsv` | the data: one row per target, with its group, OSes, system libraries, env vars, timeout, expected result, smoke call and a note. The header explains each column. |
 | `stress.R` | the one entry script. Base R only. `--help` prints its options. |
-| `pixi.toml`, `[feature.stress]` | the `stress` environment: the system libraries the rows need (GDAL, GEOS, PROJ, cmake, ...), plus the default feature's zig and flang. |
+| `pixi.toml`, `[feature.stress]` | the `stress` environment: the system libraries the rows need (GDAL, GEOS, PROJ, cmake, ...), plus the default feature's zig and flang. All six platforms; on win-arm64 without the libraries conda-forge has no build of there (libgdal-core, udunits2, imagemagick, harfbuzz, hdf5, libnetcdf, gsl, mpfr, gmp, libpq, glpk, nlopt; 2026-11-15), which the report lists as sysdeps missing from the env. |
 | `.github/workflows/stress.yaml` | the manual CI workflow. |
 
 The groups follow the brief:
@@ -22,9 +22,9 @@ The groups follow the brief:
 | group | what it tests | rows |
 |---|---|---|
 | g3 | C libraries from the env (rzig's `-I`/`-L` rule) | curl, openssl, xml2, gert, units, systemfonts, textshaping, ragg, magick, hdf5r, ncdf4, gsl, Rmpfr, RPostgres |
-| g4 | own build systems and bundled code | nloptr, s2, igraph, stringi, stringi:bundled, qs2, fst, geos, Rhdf5lib |
+| g4 | own build systems and bundled code | nloptr, s2, igraph, stringi, stringi:bundled, qs2, fst, geos, Rhdf5lib, Rsamtools |
 | g2 | C++ across a library boundary (the C++ ABI risk) | lwgeom, sf, terra, gdalraster, RcppParallel, RcppParallel:system-tbb, protolite, arrow, arrow:source, V8 |
-| g1 | heavy C++ | Rcpp, RcppArmadillo, lme4, StanHeaders, rstan, duckdb, mlpack |
+| g1 | heavy C++ | Rcpp, RcppArmadillo, lme4, DESeq2, scran, StanHeaders, rstan, duckdb, mlpack |
 | g0 | rzig itself: many tiny jobs at a high `-j`, repeated | tinyjobs |
 
 The runner installs the rows in file order (cheap groups first), each after
@@ -46,7 +46,7 @@ lifetime rule (feat-tier1-engine).
 The tree: the compile tree, build/compile-tree/slim/R-<ver>-zig, with the
 stress env's libraries. The stress task makes it on every run (it depends
 on `compile-tree`) from the dev tree that `pixi run build` makes and the
-toolchain tree's openmp/ and usr/ (Windows: openmp/ and binutils/), so
+toolchain tree's openmp/ and usr/ (Windows: openmp/, usr/ and etc/), so
 both must exist first:
 
 ```sh
@@ -69,7 +69,11 @@ pixi run -e stress stress --conda=universe g3 # the packages published on prefix
 
 `--conda` makes the env in `<run dir>/conda` with pixi, then runs `stress.R`
 again with that env's R. The compile tree's R starts it, so `build` and
-`toolchain` must have run first here too.
+`toolchain` must have run first here too. The env's channels are
+`dist/conda` (plain `--conda`), then universe, then conda-forge: universe
+must come before conda-forge (the main README's install section says
+why). `--conda=universe` tests what universe has published, build 10
+(R 4.6.1) until build 11 is published.
 
 Useful options (`--help` lists them all):
 
@@ -170,7 +174,7 @@ nothing else on the machine:
   symlinks) per zig. Since build 7 it also keeps a copy of each archive
   linked under a name without an extension (V8 on macOS:
   `archive-<key>/v8_monolith.a`, 161 MB). linux's finalization object and
-  Windows' CFG stub are R's, in `R_HOME/bin/toolchain`, not in the cache
+  win-64's CFG stub are R's, in `R_HOME/bin/toolchain`, not in the cache
   (feat-r-home-link-objects). The runner lists the
   cache's entries when it starts, and at its end removes the ones the run
   added; report.md names them. It never removes an older
@@ -191,8 +195,10 @@ nothing else on the machine:
   the env's whether `brew` is on PATH or not (round 2: arrow linked
   `/opt/homebrew/lib/libsnappy.a`). A package that passes its own
   `-DCMAKE_TOOLCHAIN_FILE` keeps it. `--keep-path` turns
-  this file off. A tree from build 7 on ships its own, `etc/r-zig.cmake`,
-  which also leaves out Fink's `/sw` and MacPorts' `/opt/local`, and its
+  this file off. A tree from build 7 on ships its own, `etc/r-zig.cmake`
+  (on every OS from build 11: it puts R's env and `R_ZIG_EXTRA_ENV`'s
+  first in CMake's searches), which also leaves out Fink's `/sw` and
+  MacPorts' `/opt/local`, and its
   `etc/Renviron` makes it `CMAKE_TOOLCHAIN_FILE`'s default. The runner
   then writes none, so a run tests the tree's file, as a user gets it.
 - Windows only: `R_TOOLS_SOFT` is the env's `Library`, where packages built
@@ -203,6 +209,18 @@ The distribution comes from where R lives. An R inside a conda env (its root
 has `conda-meta`) is "conda", and that env holds the libraries. Otherwise it
 is "tree", and the libraries env is `R_ZIG_EXTRA_ENV`. The stress env sets it
 (the `pipeline` feature), so rzig adds that env's `-I`, `-L` and rpath.
+The libraries env must be R's platform: its conda-meta's `subdir` is
+compared with R's (`R.version$arch`), and a mismatch stops the run before
+anything is installed. pixi installs an env whose platforms lack the
+runner's for another platform under emulation instead of refusing it (on
+windows-11-arm, win-64 until 2026-11-15: the stress feature then listed five
+platforms): its zig then compiled every package for x64, and every link
+against the arm64 R.dll failed (`machine type arm64 conflicts with x64`,
+stress run 43773932212). rzig now names R's platform to zig and flang
+on every OS (`-target`, `--target=`; chore-release-11 finding 29), so a
+zig of another arch compiles for R's, and the repo's scripts (env.sh)
+stop when pixi installed an environment for another platform than the
+machine's.
 
 The timeout uses `system2(timeout=)`: on Linux and macOS R kills the child's
 process group, on Windows its job object. Only the Linux path has been seen
@@ -221,7 +239,7 @@ changes; a copy without `.git` says "unknown". Then one line per target:
 | package | the row; `(!)` marks a result that differs from `expect` |
 | status | `ok`, `install-failed`, `smoke-failed` (the load or the smoke call), `unload-failed` (`unloadNamespace()` gave an error or a warning, or R crashed in it), `exit-failed` (R's exit after the unload did not return 0), `timeout`, `skipped` (a dependency failed), `download-failed`, `unavailable` (not on CRAN or Bioconductor), `error` (the harness) |
 | class | the runner's guess at the cause, from the failing part of the log |
-| expect | the row's expectation for this OS |
+| expect | the row's expectation for this OS and arch (`windows-aarch64=` before `windows=`) |
 | min, MB | install minutes and installed size |
 | first error | the first error line of the log |
 
@@ -287,4 +305,9 @@ the log.
   selected rows and the rows among their dependencies (units and s2 for
   sf). A run's env can therefore change a package's build path: on macOS,
   s2 takes abseil from the env when libprotobuf is there. The tree's
-  stress env holds them all.
+  stress env holds them all. A sysdep the stress env has no build of on
+  this platform (win-arm64: pixi.toml's `[feature.stress]`) is left out of
+  the conda env as well, so that it does not fail the whole solve; the
+  report lists it under sysdeps missing from the env. This applies only
+  when `R_ZIG_EXTRA_ENV` is the stress env (its directory is named
+  `stress`); with any other libraries env every sysdep stays in.

@@ -42,7 +42,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout }}
     steps:
       - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.11.0
+      - uses: prefix-dev/setup-pixi@v0.11.3
         with:
           # The pixi that wrote pixi.lock, bumped with it (pixi.lock's
           # format 7 needs pixi 0.68 or newer). Unset, setup-pixi installs
@@ -50,8 +50,9 @@ jobs:
           # binary, so each pixi release would also drop every cached env.
           # The other workflows pin the same version.
           pixi-version: v0.84.2
-          # minimal also needs the python-only `wheel` env for its last steps
-          environments: ${{ inputs.env == 'minimal' && 'minimal wheel' || inputs.env }}
+          # minimal on unix also needs the python-only `wheel` env for its
+          # last steps (no Windows wheel yet)
+          environments: ${{ (inputs.env == 'minimal' && !startsWith(inputs.os, 'windows')) && 'minimal wheel' || inputs.env }}
           # No cache, as toolchain.yaml: the build's last step (-Dbase)
           # copies the licence files of the packages the tree takes files
           # from, out of pixi's package cache. An env restored from
@@ -84,7 +85,7 @@ jobs:
         run: |
           zig="$(pixi run -e ${{ inputs.env }} fetch-zig)"
           echo "ZIG_BIN=$zig" >> "$GITHUB_ENV"
-      # minimal's packages in pixi.lock, on all four of its platforms,
+      # minimal's packages in pixi.lock, on all six of its platforms,
       # against scripts/minimal-deny.txt: a partial re-lock can bring the
       # graphics stack or glib into it (pixi.toml, [environments]).
       - name: Check minimal's locked packages
@@ -97,7 +98,7 @@ jobs:
         run: pixi run -e ${{ inputs.env }} rzig-test
       # `zig build` installs the tree that ships (feat-no-host-paths F1,
       # F1.7), with the runtime data it needs from the env (the CA bundle,
-      # fontconfig's configuration, Windows' Tcl/Tk), and zig-build.sh
+      # fontconfig's configuration, Windows full's Tcl/Tk), and zig-build.sh
       # then copies the env's shared libraries into it (vendor-libs.sh;
       # Windows: conda's DLLs into bin/x64). Every check below runs on
       # that tree, and the archive is made from it last (F1.6).
@@ -106,10 +107,17 @@ jobs:
       # Static checks of the installed tree, before anything runs it:
       # Makeconf, the compilers are rzig, the CA bundle, relative rpaths,
       # the glibc and macOS floors, the C++ runtime, load commands,
-      # minimal's excluded libraries; Windows: the Tcl/Tk runtime and the
-      # DLL closure (scripts/verify-tree.sh). The variants CI packages.
+      # minimal's excluded libraries, OpenMP inside R; Windows: the DLL
+      # closure, grDevices' bitmap libraries and, in full, the Tcl/Tk
+      # runtime (scripts/verify-tree.sh). The variants CI packages, and
+      # full on every OS: full is the only Windows variant with tcltk.dll,
+      # R_HOME/Tcl and libintl.h, so without it nothing in CI checks them
+      # (feat-win-variants). One rule for every OS: the check is cheap,
+      # and linux-64 full passed it and hermetic locally (feat-zig-017);
+      # macOS full runs them first in CI. openblas differs from default
+      # only in BLAS, so it is skipped.
       - name: Verify the installed tree (Makeconf, rzig, libraries, floors)
-        if: inputs.env == 'default' || inputs.env == 'minimal'
+        if: inputs.env == 'default' || inputs.env == 'minimal' || inputs.env == 'full'
         run: pixi run -e ${{ inputs.env }} verify-tree
       - name: Smoke test
         run: pixi run -e ${{ inputs.env }} smoke
@@ -131,25 +139,27 @@ jobs:
       # R and installs source R-only and binary packages with an empty
       # environment and only its own bin/ on PATH (unix: plus /bin/sh, and
       # on linux strace fails any other program; Windows: bin\x64 plus
-      # System32).
+      # System32). Also full on every OS, as verify-tree: on Windows full
+      # it loads tcltk from R_HOME/Tcl (hermetic-check.sh).
       - name: Hermetic tier 0/1 check (installed tree, empty environment)
-        if: inputs.env == 'default' || inputs.env == 'minimal'
+        if: inputs.env == 'default' || inputs.env == 'minimal' || inputs.env == 'full'
         run: pixi run -e ${{ inputs.env }} hermetic
       # Standalone archive: package-standalone.sh only archives this job's
       # installed tree (cheap), the base (feat-standalone-toolchain B19).
-      # Only the default (slim; Windows' one variant) and minimal variants
+      # Only the default (slim) and minimal variants, on every OS,
       # are packaged in CI for now — full/openblas relocation is exercised
       # manually, not automated yet (B31 a). minimal's tree is the wheel's
       # input, so it can't be skipped. verify-package checks the archives
-      # themselves, the base and this platform's two group archives as
+      # themselves, the base and this platform's three group archives as
       # downloaded above (it does not rebuild them), extracted elsewhere
-      # one after the other, in three scenarios: the base alone, then with
-      # the compilers group, then with the build-tools group. R and
+      # one after the other, in four scenarios: the base alone, then with
+      # the compilers group, then with the build-tools group, then with
+      # the extras group (cmake, feat-extras-group). R and
       # packages compiled with them run with nothing from the build env
       # (unix: env -i, TLS with the shipped CA bundle; Windows: what must
       # load from the tree alone runs with only bin\x64 and System32 on
       # PATH) (scripts/verify-bundle.sh, PHASE3 section 8).
-      - name: Package + verify the standalone archives (base, compilers, build-tools)
+      - name: Package + verify the standalone archives (base, compilers, build-tools, extras)
         if: inputs.env == 'default' || inputs.env == 'minimal'
         run: pixi run -e ${{ inputs.env }} verify-package
       # The base archive verify-package checked and its .sha256, kept a
@@ -164,19 +174,21 @@ jobs:
             dist/R-*
             !dist/R-*-compilers.*
             !dist/R-*-build-tools.*
+            !dist/R-*-extras.*
           retention-days: 7
           if-no-files-found: error
       # The r-zig wheel: the minimal tree verify-package just packaged,
       # zipped with the r_zig Python package, then pip-installed into a
       # fresh venv (ziglang from PyPI) and used with the pixi env scrubbed
       # away — including R CMD INSTALL of a C/C++ package through ziglang.
+      # unix only: there is no Windows wheel yet (make-wheel.py).
       - name: Build + test the r-zig wheel
-        if: inputs.env == 'minimal'
+        if: inputs.env == 'minimal' && !startsWith(inputs.os, 'windows')
         run: |
           pixi run -e wheel wheel
           pixi run -e wheel wheel-test
       - name: Upload the r-zig wheel
-        if: inputs.env == 'minimal'
+        if: inputs.env == 'minimal' && !startsWith(inputs.os, 'windows')
         uses: actions/upload-artifact@v7
         with:
           name: r-zig-wheel-${{ inputs.os }}

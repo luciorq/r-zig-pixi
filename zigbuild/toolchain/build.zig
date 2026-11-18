@@ -8,8 +8,8 @@
 //! needs no R source and runs no R configure. scripts/zig-toolchain.sh
 //! (pixi run toolchain) installs dist/toolchain/R-<ver>-zig with it, and
 //! package-standalone.sh's toolchain mode archives the groups from there
-//! (B17). `test` runs conda.zig's, wheel.zig's and pkgconf.zig's unit
-//! tests (pixi run toolchain-test). With -Dbase it writes the R tree's records instead
+//! (B17). `test` runs conda.zig's, wheel.zig's, pkgconf.zig's and
+//! cmake.zig's unit tests (pixi run toolchain-test). With -Dbase it writes the R tree's records instead
 //! (PHASE8 open points A a, F a; installBase, below):
 //!   zig build --build-file zigbuild/toolchain/build.zig --prefix <R tree> -Dprefix=<R tree> -Dbase
 //! which scripts/zig-build.sh runs after vendor-libs.sh. zig 0.17's
@@ -44,6 +44,12 @@
 //!                           B43), on both channels
 //!   etc/       build-tools  Windows: fstab, r-zig's own MSYS mount table,
 //!                           written here, not copied (PHASE7 open point D)
+//!   cmake/     extras       Kitware's cmake release archive for this
+//!                           machine, build.zig.zon's lazy cmake_<platform>
+//!                           (cmake.zig; feat-extras-group): bin/cmake and
+//!                           share/cmake-<v>/{Modules,Templates},
+//!                           LICENSES/cmake/ from its doc/cmake/, SOURCES
+//!                           with each file's sha256 as this build hashes it
 //! (Windows' binutils are rzig's own names beside it, R's base, since
 //! feat-win-zig-binutils: no binutils/ directory, B24's conda copies gone.)
 //! Which group holds which directory: scripts/env.sh's group_dirs.
@@ -69,6 +75,10 @@
 //! (wheel.zig; PHASE5 open points A, B, C): the wheel's URL and sha256
 //! and the source of its zig come from fetch-zig's marker, which
 //! scripts/zig-toolchain.sh passes the directory of as -Dziglang=<dir>.
+//! cmake/'s SOURCES block is the same shape too: Kitware's archive's URL
+//! and sha256, cmake's source tarball, and a file line per file with its
+//! sha256 (an archive has no RECORD; zig checks its own hash of the
+//! tree, build.zig.zon's).
 //!
 //! The conda build (recipe/build.sh, from step 3) runs this into the env
 //! itself, with R_TOOLCHAIN_PREFIX=$PREFIX: there conda's own packages
@@ -80,14 +90,16 @@
 //! other usr/ file there: the env's MSYS tools are its own m2 packages
 //! (Library/usr/bin), and conda keeps
 //! conda-forge's zig and flang-pixi's flang-zig, through r-zig-compilers
-//! (B30); the conda build fetches nothing (PHASE5 open point J;
-//! zig-toolchain.sh skips fetch-zig by the same test as prefix_is_env
-//! below).
+//! (B30), and conda-forge's cmake, through r-zig-extras; the conda build
+//! fetches nothing (PHASE5 open point J; zig-toolchain.sh skips fetch-zig
+//! by the same test as prefix_is_env below, and cmake's dependency is
+//! asked for only when the prefix is not the env).
 const std = @import("std");
 const mem = std.mem;
 const conda = @import("conda.zig");
 const wheel = @import("wheel.zig");
 const pkgconf = @import("pkgconf.zig");
+const cmake = @import("cmake.zig");
 const sources_tool = @import("sources_tool.zig");
 
 /// A file a directory copies from the env.
@@ -140,7 +152,7 @@ fn ompHeaders(comptime include: []const u8) [4]Copy {
 }
 
 /// flang-zig's LLVM major, which names flang-rt-zig's directories
-/// (lib/clang/<major>/). It is the pin's (pixi.toml: flang-zig 23.1.1): a
+/// (lib/clang/<major>/). It is the pin's (pixi.toml: flang-zig 23.1.5): a
 /// new major moves the pin, this constant and SOURCES together. R's
 /// build.zig (findFlangRt) and rzig (flang_rt.modulesDir) scan
 /// lib/clang/* instead, because they must find whatever flang the env or
@@ -217,6 +229,13 @@ const windows_dirs = [_]Dir{
             // that patches its sources (hdf5r's unix configure: "patch:
             // command not found"). It imports msys-2.0.dll alone.
             m2Tool("m2-patch"),
+            // tar.exe: a configure script that unpacks its sources (duckdb
+            // 2.0.0's configure.win: `tar xf duckdb.tar`), as Rtools' usr/bin
+            // has it. Another MSYS2's tar on PATH (the stress env's m2-tar)
+            // exited 127 with no output under this sh (chore-release-11
+            // finding 34); System32's bsdtar answered on the conda legs.
+            // It imports msys-2.0.dll, msys-iconv-2.dll and msys-intl-8.dll.
+            m2Tool("m2-tar"),
         },
     },
 };
@@ -237,13 +256,23 @@ pub fn build(b: *std.Build) !void {
     const arena = b.allocator;
     const io = b.graph.io;
 
-    const test_step = b.step("test", "Run the conda-meta and wheel readers', SOURCES writer's and pkgconf pins' unit tests");
-    // pkgconf.zig's pin test reads the recipe (paths.recipe).
+    const test_step = b.step("test", "Run the conda-meta and wheel readers', SOURCES writer's and pkgconf's, cmake's and cairo's pins' unit tests");
+    // pkgconf.zig's and cairo.zig's pin tests read the recipe and R's
+    // build.zig.zon (paths). cairo.zig is R's build's (zigbuild/), tested
+    // here with the other pins.
+    const root_abs = try buildRoot(b, io);
     const paths = b.addOptions();
-    paths.addOption([]const u8, "recipe", b.fmt("{s}/../../recipe/recipe.yaml", .{try buildRoot(b, io)}));
-    for ([_][]const u8{ "conda.zig", "wheel.zig", "pkgconf.zig" }) |root| {
+    paths.addOption([]const u8, "recipe", b.fmt("{s}/../../recipe/recipe.yaml", .{root_abs}));
+    paths.addOption([]const u8, "zon", b.fmt("{s}/../../build.zig.zon", .{root_abs}));
+    for ([_]std.Build.LazyPath{
+        b.path("conda.zig"),
+        b.path("wheel.zig"),
+        b.path("pkgconf.zig"),
+        b.path("cmake.zig"),
+        b.graph.cwdRelativePath(b.fmt("{s}/../cairo.zig", .{root_abs})),
+    }) |root| {
         const mod = b.createModule(.{
-            .root_source_file = b.path(root),
+            .root_source_file = root,
             .target = b.graph.host,
         });
         mod.addOptions("paths", paths);
@@ -255,7 +284,8 @@ pub fn build(b: *std.Build) !void {
     // zig 0.17's configure step does not see --prefix (the maker installs
     // there): -Dprefix names the same directory, which the toolchain tree's
     // copies, records and prefix_is_env read now. scripts/zig-toolchain.sh
-    // and zig-build.sh pass both. Without it, only `test` runs.
+    // and zig-build.sh pass both; for `test` zig-toolchain.sh leaves it
+    // out, so only the unit tests run and nothing is fetched (offline).
     const prefix_opt = b.option([]const u8, "prefix", "The same directory as --prefix (zig 0.17's configure step does not see --prefix): the toolchain tree, or with -Dbase the R tree");
 
     // This configure step reads the env's conda-meta, the package cache and
@@ -367,6 +397,13 @@ pub fn build(b: *std.Build) !void {
         } else {
             b.getInstallStep().dependOn(&b.addFail("the toolchain tree's zig/ comes from PyPI's ziglang wheel: run pixi run toolchain (scripts/zig-toolchain.sh runs fetch-zig and passes -Dziglang=<dir>)").step);
         }
+    }
+    // The extras group's cmake/ (feat-extras-group): Kitware's archive,
+    // never into the env, as zig/: conda keeps conda-forge's cmake,
+    // through r-zig-extras.
+    if (!prefix_is_env) {
+        try installCmake(b, io, tc, os);
+        try summary.print(arena, "{s}cmake/ (cmake)", .{if (summary.items.len == 0) "" else ", "});
     }
     std.debug.print("r-zig: toolchain tree {s}: {s}{s}\n", .{
         prefix,
@@ -782,6 +819,82 @@ fn installZig(b: *std.Build, io: std.Io, dir: []const u8, tc: []const u8, os: st
     var sources: std.Io.Writer.Allocating = .init(arena);
     conda.writeSources(arena, &sources.writer, copies) catch |err|
         return fail("ziglang: cannot write zig/SOURCES ({t})", .{err});
+    const wf = b.addWriteFiles();
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(wf.add("SOURCES", sources.written()), dest, "SOURCES").step);
+}
+
+/// cmake/ from Kitware's release archive for this machine (cmake.zig),
+/// build.zig.zon's lazy dependency, which zig fetches into
+/// zigbuild/toolchain/zig-pkg/ and checks against its .hash: the files
+/// cmake.wanted keeps, each installed with its mode (bin/cmake's exec bit:
+/// zig's fetch sets it on an ELF or Mach-O file), and SOURCES, one block in
+/// conda's shape (one writer, one checker): the archive's URL and Kitware's
+/// sha256, its platform as the build, the version, licence, cmake's source
+/// tarball and Kitware's repository and tag (`feedstock:`), and a file line
+/// per installed file, its path in the archive (under its top directory)
+/// and the sha256 this build computes of it.
+fn installCmake(b: *std.Build, io: std.Io, tc: []const u8, os: std.Target.Os.Tag) !void {
+    const arena = b.allocator;
+    const arch = b.graph.host.result.cpu.arch;
+    const a = cmake.archiveFor(os, arch) orelse
+        return fail("cmake: Kitware publishes no cmake {s} archive for {t}-{t} (zigbuild/toolchain/cmake.zig)", .{ cmake.version, arch, os });
+    // Not yet fetched: zig fetches it and runs this configure step again
+    // (std.Build.dependencyLazy), as pkgconf's.
+    const dep = try b.dependencyLazy(a.dep, .{});
+    const root = try realPath(b, io, dep.builder.root.root_dir.path orelse ".");
+    const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/cmake", .{tc}) };
+    const windows = os == .windows;
+
+    var d = std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch |err|
+        return fail("cmake: cannot read {s} ({t}), zig's unpacked {s}", .{ root, err, a.file });
+    defer d.close(io);
+    var walker = try d.walk(arena);
+    defer walker.deinit();
+    const record = try arena.create(conda.Record);
+    record.* = .{
+        .name = "cmake",
+        .version = cmake.version,
+        .build = a.platform,
+        .url = a.url,
+        .sha256 = a.sha256,
+        .license = cmake.license,
+        .upstream = .{
+            .sources = try arena.dupe(conda.Source, &.{.{ .url = cmake.source_url, .sha256 = cmake.source_sha256 }}),
+            .feedstock = cmake.repository,
+            .commit = cmake.tag,
+        },
+    };
+    var copies: std.ArrayList(conda.Copy) = .empty;
+    var n_program: usize = 0;
+    var n_data: usize = 0;
+    var n_license: usize = 0;
+    while (try walker.next(io)) |e| {
+        if (e.kind != .file) continue;
+        const rel = try mem.replaceOwned(u8, arena, e.path, "\\", "/");
+        const placed = cmake.wanted(a, rel, windows) orelse continue;
+        const src = dep.path(rel);
+        switch (placed.kind) {
+            .license => {
+                n_license += 1;
+                b.getInstallStep().dependOn(&b.addInstallFileWithDir(src, dest, b.fmt("LICENSES/cmake/{s}", .{placed.to})).step);
+            },
+            .program, .data => {
+                if (placed.kind == .program) n_program += 1 else n_data += 1;
+                b.getInstallStep().dependOn(&b.addInstallFileWithDir(src, dest, placed.to).step);
+                try copies.append(arena, .{
+                    .record = record,
+                    .from = b.fmt("{s}/{s}", .{ a.top(), rel }),
+                    .to = placed.to,
+                    .sha256 = try arena.dupe(u8, &try sha256Hex(b, io, b.fmt("{s}/{s}", .{ root, rel }))),
+                });
+            },
+        }
+    }
+    if (n_program != 1 or n_data == 0 or n_license == 0)
+        return fail("cmake: {s} under {s} has {d} cmake program(s), {d} files of {s}/{{Modules,Templates}} and {d} licence files; expected 1, some and some", .{ a.file, root, n_program, n_data, cmake.data_dir, n_license });
+    var sources: std.Io.Writer.Allocating = .init(arena);
+    conda.writeSources(arena, &sources.writer, copies.items) catch |err|
+        return fail("cmake: cannot write cmake/SOURCES ({t})", .{err});
     const wf = b.addWriteFiles();
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(wf.add("SOURCES", sources.written()), dest, "SOURCES").step);
 }

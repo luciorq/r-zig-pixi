@@ -19,6 +19,13 @@ by this document**.
 | **blast-zig-pixi** | Application template: foreign build system (NCBI autotools) + zig shims + `pixi-build-rattler-build`; distribution patterns (v3 flags/extras + repodata-v2 twin packages, microarch variants). | Shipping to `universe`, 5 platforms |
 | **zig-pixi-build-backend** | Future-facing: recipe-free `pixi_build_zig` backend (pixi fork), cross-first (~18 platforms). The bet on where the ecosystem goes. | Working PoC, unpublished, needs fork checkout |
 
+(2026-11-12: the flang-pixi and r-zig-pixi rows are as of 2026-09-19.
+Now flang-pixi's LLVM 23.1.5 toolchain (lld-zig, flang-zig, flang-rt-zig
+and its zig-built llvm-openmp `zig_*`) is on universe for six subdirs,
+and universe holds r-zig-slim 4.6.1 build 10 for five subdirs; build 11
+(R 4.6.2, zig 0.17, win-arm64 added) is in release on #48,
+.github/devdocs/chore-release-11/PLAN.md.)
+
 Three build-approach poles, deliberately kept distinct: shims over a
 foreign build system (blast), vendored-config + `zig build` (R), and
 native recipe-free `zig build` (backend). Convergence is in
@@ -65,7 +72,13 @@ Every project in the family adopts, or already has, these:
    interactive validation only. win-arm64: cross-built where feasible
    (flang-pixi does), never emulated in CI (blast measured it: cannot
    fit the 6h ceiling); native win-arm64 zig upstream is "not planned",
-   so cross-only is confirmed policy.
+   so cross-only is confirmed policy. (2026-11-12: no longer the
+   policy for r-zig-pixi: conda-forge's zig 0.17.0 and PyPI's ziglang
+   0.17.1 have native win-arm64 builds, and R's win-arm64 builds and
+   tests natively on GitHub's `windows-11-arm` runner, a leg of
+   build.yaml; R's Windows build runs the R it builds, so it cannot
+   cross-build. Only the MSYS2 tools, x86_64 binaries, run there under
+   Windows' x64 emulation.)
 8. **v3 package specs with a v2 compatibility story**: blast already
    ships v3 (`flags`, `extras`) with repodata-v2 twin packages for old
    clients. This resolves the compatibility concern that deferred v3 in
@@ -187,6 +200,6 @@ maturing.
 - [ ] flang-pixi: its own uncommitted Windows-OpenMP status/runbook entries (user's repo).
 - [x] Remove flang-zig-validation worktree + branch — done 2026-09-19 (uncommitted diff preserved at /data/gamma/luciorq/workspaces/temp/r-zig-validation-uncommitted.patch).
 - [x] pango/harfbuzz pin ahead of next lockfile refresh — r-zig-pixi pixi.toml pinned 2026-09-19 (pango 1.56.*, harfbuzz 14.2.*; lockfile unchanged). Still open for any other R-building repo.
-- [ ] universe channel hygiene: delete superseded flang-rt `_1.._3` + wrong-metadata pixi-built files, **and r-zig-slim's five `_1` files (gfortran builds, superseded by the flang `_2` uploads of 2026-09-24)** — needs delete-scoped key (`pixi run -e pkg conda-channel-delete -- --yes universe <subdir> <file>`).
+- [x] universe channel hygiene: delete superseded flang-rt `_1.._3` + wrong-metadata pixi-built files, **and r-zig-slim's five `_1` files (gfortran builds, superseded by the flang `_2` uploads of 2026-09-24)** — needs delete-scoped key (`pixi run -e pkg conda-channel-delete -- --yes universe <subdir> <file>`). (2026-11-12: done: universe's repodata for the five subdirs has no r-zig-slim `_1` and no flang-rt-zig 23.1.1 `_1`..`_3`; the pixi-built files were not re-checked.)
 - [x] gamma/omicron: leftover `actions.runner.*` services removed 2026-09-24 — omicron uninstalled/deregistered/deleted, kappa's stray runner dir deleted; gamma's systemd unit needs the user's sudo (`svc.sh stop/uninstall`), then deregistration.
 - [ ] omicron/kappa: `r-zig-pixi-test` scratch dirs — keep or remove (user call).

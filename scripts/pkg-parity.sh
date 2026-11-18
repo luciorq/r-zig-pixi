@@ -147,7 +147,7 @@ exports_of() {
   case "$OS" in
     linux) nm -D --defined-only "$1" | awk '{print $3}' ;;
     macos) nm -gU "$1" | awk '{print $3}' ;;
-    windows) x86_64-w64-mingw32-objdump -p "$1" | awk '/\[Ordinal\/Name Pointer\] Table/ {f=1; next} f && NF == 0 {exit} f {print $NF}' ;;
+    windows) llvm-objdump -p "$1" | awk '/^ Ordinal +RVA +Name$/ {f=1; next} f && NF == 0 {exit} f {print $NF}' ;;
   esac | LC_ALL=C sort
 }
 # rzig's command lines from a traced install log, normalised (see the
@@ -402,7 +402,19 @@ if [ "$OS" = windows ]; then mconf="$RH/etc/x64/Makeconf"; else mconf="$RH/etc/M
 # Windows, R RHOME backslashes, which no make -n line starts with
 # (feat-shlib-rzig-build round 1, kappa)
 plrh="$("$R_EXE" RHOME | tr -d '\r' | tr '\\' /)"
-R_HOME="$plrh" R_INCLUDE_DIR="$plrh/include" R_SHARE_DIR="$plrh/share" "$mk" -s -f "$mconf" -f "$pl/print-var.mk" print-compilers | awk 'NF {print $1}' | sort -u > "$WORK/logs/shlib-pkgload-compilers"
+# make runs from R, as pkgload's does (system2, no shell): on
+# windows-11-arm this MSYS make segfaults, even for --version, when Git
+# bash's own MSYS runtime starts it directly (run 43437326154), while
+# every make that R started in the same job worked
+PL_MAKE="$(mpath "$mk")" PL_MCONF="$(mpath "$mconf")" PL_PV="$(mpath "$pl/print-var.mk")" PL_RH="$plrh" \
+  "$RSCRIPT" --vanilla -e '
+    e <- Sys.getenv(c("PL_MAKE", "PL_MCONF", "PL_PV", "PL_RH"))
+    Sys.setenv(R_HOME = e[["PL_RH"]], R_INCLUDE_DIR = file.path(e[["PL_RH"]], "include"),
+               R_SHARE_DIR = file.path(e[["PL_RH"]], "share"))
+    out <- system2(e[["PL_MAKE"]], c("-s", "-f", shQuote(e[["PL_MCONF"]]), "-f", shQuote(e[["PL_PV"]]),
+                   "print-compilers"), stdout = TRUE)
+    if (!is.null(attr(out, "status"))) stop("make print-compilers: exit ", attr(out, "status"))
+    writeLines(out)' | tr -d '\r' | awk 'NF {print $1}' | sort -u > "$WORK/logs/shlib-pkgload-compilers"
 [ -s "$WORK/logs/shlib-pkgload-compilers" ] || fail "pkgload: make print-compilers printed no compiler"
 # pkgload's two steps on a dry run's output: the lines kept, then those of
 # them with a `-c <source>`; prints both counts

@@ -66,13 +66,15 @@ stopifnot(file.exists(file.path(tc, if (windows) c("gcc.exe", "rzig.exe") else c
           file.exists(file.path(R.home(), "share", "zig", "rpkg", "build_t2.zig")),
           !dir.exists(file.path(tc, "binutils")), !dir.exists(file.path(tc, "usr")))
 ## rzig's link object beside it (feat-r-home-link-objects): linux's
-## dso_fini.o, Windows' cfguard.o, none on macOS
-lo <- if (windows) "cfguard.o" else if (Sys.info()[["sysname"]] == "Linux") "dso_fini.o"
+## dso_fini.o, x86_64 Windows' cfguard.o (cfguard.zig), aarch64
+## Windows' clear_cache.o (clear_cache.zig), none on macOS
+lo <- if (windows) { if (R.version$arch == "x86_64") "cfguard.o" else "clear_cache.o" } else if (Sys.info()[["sysname"]] == "Linux") "dso_fini.o"
 stopifnot(is.null(lo) || file.exists(file.path(tc, lo)))
 ## no writer of R_ZIG_TOOLCHAIN_HINT came back (B35) (PHASE4 Cc9)
 for (f in file.path(R.home("etc"), c("Renviron", "Renviron.site")))
     if (file.exists(f)) stopifnot(!any(startsWith(readLines(f, warn = FALSE), "R_ZIG_TOOLCHAIN_HINT=")))
-cat("base: rzig, its link object and rpkg, no group's directory, no R_ZIG_TOOLCHAIN_HINT written: OK\n")
+cat("base: rzig, ", if (is.null(lo)) "no link object on this platform" else paste("its link object", lo),
+    ", rpkg, no group's directory, no R_ZIG_TOOLCHAIN_HINT written: OK\n", sep = "")
 
 lib <- file.path(d, "lib")
 dir.create(lib)
@@ -170,17 +172,16 @@ stopifnot(r$status != 0L, length(comp) == 1L, length(bt) == 1L, comp < bt,
           !dir.exists(file.path(lib, "rzigconf")))
 cat("base: a configure script stops in the preflight with both groups' texts, and does not run: OK\n")
 
-## Windows: R CMD config with no build tools in this env names them, as
-## on unix (test-compilers.R), and exits with rzig's 127: rcmdfn.c runs
-## rzig's check before config.sh's sh, so cmd.exe has no sh to miss
-## (patch 0010; PHASE7 open point J a)
-if (windows) {
-    r <- run_to(file.path(R.home("bin"), "R"), c("CMD", "config", "CC")); cat(r$out, sep = "\n")
-    stopifnot(r$status == 127L,
-              any(startsWith(r$out, "Building packages needs the r-zig build tools for R ")),
-              !any(grepl("is not recognized", r$out, fixed = TRUE)))
-    cat("base: R CMD config names the build tools, exit 127: OK\n")
-}
+## R CMD config with no build tools in this env: rzig answers it, no make
+## and no sh (patch 0010, feat-config-rzig), on every OS; on Windows
+## through rcmdfn.c, so cmd.exe has no sh to miss
+r <- run_to(file.path(R.home("bin"), "R"), c("CMD", "config", "CC")); cat(r$out, sep = "\n")
+stopifnot(r$status == 0L, length(r$out) == 1L,
+          grepl("/bin/toolchain/(zig-cc|gcc[.]exe)( |$)", r$out))
+r <- run_to(file.path(R.home("bin"), "R"), c("CMD", "config", "--all"))
+stopifnot(r$status == 0L, any(startsWith(r$out, "CXX17STD = ")),
+          "## The following variables are defunct" %in% r$out)
+cat("base: R CMD config answers without the build tools: OK\n")
 
 ## a user's own R_ZIG_TOOLCHAIN_HINT: shown after rzig's text on a 127
 ## (PHASE3 C8; PHASE4 open point B b, Cg4)

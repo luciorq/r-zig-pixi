@@ -92,6 +92,23 @@ root <- sub("/(Library/)?lib/R$", "", rhome)                 # R's own environme
 dist <- if (dir.exists(file.path(root, "conda-meta"))) "conda" else "tree"
 conda <- opt("conda")
 if (flag("tree") && !is.null(conda)) stop("--tree and --conda: choose one", call. = FALSE)
+# conda's name for this R's platform: the --conda env's, and the one the
+# libraries env must have
+subdir <- switch(paste(os, arch), "linux x86_64" = "linux-64", "linux aarch64" = "linux-aarch64",
+                 "macos x86_64" = "osx-64", "macos aarch64" = "osx-arm64", "windows x86_64" = "win-64",
+                 "windows aarch64" = "win-arm64", NA_character_)
+# the names of a conda env's packages, and its platform (the first
+# package that is not noarch says it)
+env_pkgs <- function(prefix) sub("-[^-]+-[^-]+\\.json$", "", list.files(file.path(prefix, "conda-meta"), "\\.json$"))
+env_subdir <- function(prefix) {
+  for (f in list.files(file.path(prefix, "conda-meta"), "\\.json$", full.names = TRUE)) {
+    x <- paste(readLines(f, warn = FALSE), collapse = "\n")
+    m <- regmatches(x, regexpr("\"subdir\": *\"[^\"]*\"", x))
+    s <- sub(".*\"([^\"]*)\"$", "\\1", m)
+    if (length(s) && s != "noarch") return(s)
+  }
+  NA_character_
+}
 
 # --- the data file and the selection ----------------------------------------
 tsv <- normalizePath(Sys.getenv("STRESS_TSV", file.path(dirname(script), "packages.tsv")), winslash = "/")
@@ -160,6 +177,21 @@ if (flag("list")) {
   quit(status = 0)
 }
 
+# --- the libraries env's platform --------------------------------------------
+# The tree's libraries env (R_ZIG_EXTRA_ENV, the stress env; with --conda
+# also the list of what that env's platform has) or the conda env R is in.
+# Its platform must be this R's: pixi installs an env whose platforms lack
+# the runner's for another one, under emulation (win-64 on win-arm64), and
+# that env's zig then compiled every package for x64 against an arm64 R
+# (stress run 43773932212, chore-release-11 PLAN.md finding 26).
+libs <- if (dist == "conda") root else Sys.getenv("R_ZIG_EXTRA_ENV")
+if (nzchar(libs) && dir.exists(libs) && !is.na(subdir)) {
+  es <- env_subdir(libs)
+  if (!is.na(es) && es != subdir)
+    stop("the libraries env ", libs, " is ", es, ", this R is ", subdir, " (", os, " ", arch, "): pixi installed the env ",
+         "for another platform (emulation); give its feature ", subdir, " in pixi.toml", call. = FALSE)
+}
+
 # --- the run directory ----------------------------------------------------------
 stamp <- format(Sys.time(), "%Y%m%d-%H%M%S")
 out <- opt("out", file.path("build", "stress", paste(os, arch, if (is.null(conda)) dist else "conda", stamp, sep = "-")))
@@ -180,11 +212,17 @@ if (!flag("resume") && length(list.files(lib))) stop(lib, " is not empty: use --
 # today's [tests-T11]; after any other status, "this package cannot be
 # built (see above)" (PHASE4 open point J a), which classify sends to
 # package for a src/build.zig make cannot build.
+# abi's "error: <name>: unrecognized file extension": a bare library name,
+# no path and no extension, is MSVC link syntax from a conda .pc file
+# (win-64 gdal.pc: `-LIBPATH:<dir> gdal`), as -LIBPATH: and /W3 are; the
+# link line with -LIBPATH: comes before the error, outside the text read
+# (gdalraster, stress run 43773932212, 2026-11-15). A path that zig cannot
+# read stays toolchain (V8's ../.deps/v8_monolith).
 patterns <- c(
   network   = "cannot open URL|cannot open the connection to '?https?:|Could not resolve host|Failed to connect|Connection (timed out|refused|reset)|Temporary failure in name resolution|status was '[45][0-9][0-9]|HTTP (error|status) [45][0-9][0-9]|HTTP/[0-9.]+ [45][0-9][0-9]|Timeout of [0-9]+ seconds was reached|curl: \\([0-9]+\\)|download (failed|error)|SSL connect error",
   resource  = "No space left on device|[Cc]annot allocate memory|[Oo]ut of memory|std::bad_alloc|Killed signal terminated|virtual memory exhausted|OutOfMemory",
-  abi       = "(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__cxx11|B5cxx11|St3__1|std::__1|__cxa_|__gxx_personality|_Unwind_|\\?[A-Za-z_][A-Za-z0-9_@?$]*@@)|undefined symbol: _Z|could not open 'lib(MSVCRT|OLDNAMES|LIBCMT|msvcprt)\\.a'|-LIBPATH:|Windows Kits/10/Lib|/(W[0-4]|bigobj|wd[0-9]+): unrecognized file extension",
-  toolchain = "unknown CPU: '|unrecognized file extension|Could NOT find Threads|thread [0-9]+ panic: |/bin/R(term\\.exe|script\\.exe)?: No such file or directory|is not a full path to an existing compiler tool|windres: command not found|Building for: NMake Makefiles|make: invalid option -- \\?|ar(\\.exe)?: [^ ]+\\.o: No such file or directory|unsupported linker arg: |-Werror,-Wdate-time|version script assignment of '[^']+' to symbol '[^']+' failed: symbol not defined|rzig: |(zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib): (cannot |waiting for |could not |no flang|warning: no |warning: R_ZIG_EXTRA_ENV)|rzig build: (no zig|cannot |waiting for zig build)|R_HOME/share/zig/rpkg is not installed|r-zig toolchain (is|\\(compiled code or a configure script\\), which is) (incomplete|not installed)|this package cannot be built \\(see above\\)|zig: error|error: unable to (spawn|create|open|load|parse|emit)|LLVM ERROR|PLEASE submit a bug report|unknown target CPU|unsupported option|unsupported argument '[^']*' to option '|unknown argument|compiler cannot create executables|relocation R_[A-Z0-9_]+ .*against|(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__(u)?(div|mod|mul)ti3|___chkstk_ms|__extend|__trunc|__emutls|__guard_(dispatch|check)_icall)",
+  abi       = "(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__cxx11|B5cxx11|St3__1|std::__1|__cxa_|__gxx_personality|_Unwind_|\\?[A-Za-z_][A-Za-z0-9_@?$]*@@)|undefined symbol: _Z|could not open 'lib(MSVCRT|OLDNAMES|LIBCMT|msvcprt)\\.a'|-LIBPATH:|Windows Kits/10/Lib|/(W[0-4]|bigobj|wd[0-9]+): unrecognized file extension|(^|\\s)error: [A-Za-z][A-Za-z0-9_+-]*: unrecognized file extension",
+  toolchain = "unknown CPU: '|unrecognized file extension|Could NOT find Threads|thread [0-9]+ panic: |/bin/R(term\\.exe|script\\.exe)?: No such file or directory|is not a full path to an existing compiler tool|windres: command not found|Building for: NMake Makefiles|make: invalid option -- \\?|ar(\\.exe)?: [^ ]+\\.o: No such file or directory|unsupported linker arg: |-Werror,-Wdate-time|version script assignment of '[^']+' to symbol '[^']+' failed: symbol not defined|rzig: |(zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib): (cannot |waiting for |could not |no flang|warning: no |warning: R_ZIG_EXTRA_ENV)|rzig build: (no zig|cannot |waiting for zig build)|R_HOME/share/zig/rpkg is not installed|r-zig toolchain (is|\\(compiled code or a configure script\\), which is) (incomplete|not installed)|this package cannot be built \\(see above\\)|zig: error|error: unable to (spawn|create|open|load|parse|emit)|LLVM ERROR|PLEASE submit a bug report|unknown target CPU|unsupported option|unsupported argument '[^']*' to option '|unknown argument|compiler cannot create executables|relocation R_[A-Z0-9_]+ .*against|(undefined (symbol|reference)|[Ss]ymbol not found)[^\n]*(__(u)?(div|mod|mul)ti3|___chkstk_ms|__extend|__trunc|__emutls|__guard_(dispatch|check)_icall|__clear_cache)|invalid symbol index in addrsig section",
   crash     = "\\*\\*\\* caught (segfault|bus error|illegal operation) \\*\\*\\*|R is aborting now|An irrecoverable exception occurred",
   upstream  = "Library not loaded: (/opt/homebrew|/usr/local/(opt|Cellar))/|(system library '|cannot find -l|library not found for -l|unable to find library -l)(debug|optimized)\\b|[Tt]he specified procedure could not be found|failed to solve the environment|Cannot solve the request|[Cc]ould not solve for environment specs",
   sysdep    = "(?m)configure: error|was not found in the pkg-config search path|No package '[^']+' found|fatal error: '?[^ ']+\\.h(pp|xx)?'?( file)? not found|\\.h: No such file|cannot find -l|unable to find (dynamic |static )?system library|library not found for -l|command not found|: not found$|[Cc][Mm]ake.*not found|Could NOT find")
@@ -247,19 +285,23 @@ if (!is.null(conda) && !in_ws) {
     if (!dir.exists(channel)) stop("no conda channel at ", channel, ": run `pixi run -e pkg conda-package`, or use --conda=universe", call. = FALSE)
     channel <- normalizePath(channel, winslash = "/")
   }
-  # conda-forge before universe, as pixi.toml and README: universe's index
-  # names ../conda-forge as its base (channel_relations), so listed first
-  # it gives pixi, whose channel priority is strict, every conda-forge
-  # package from prefix.dev's mirror, which can lag (phase 4 on kappa:
-  # win-64's r-zig-slim, built locally as _9 before the 2026-10-19
-  # decision kept 8, needed a libcurl the mirror did not have yet)
-  channels <- unique(c(if (channel != "https://prefix.dev/universe") channel, "conda-forge", "https://prefix.dev/universe"))
-  subdir <- switch(paste(os, arch), "linux x86_64" = "linux-64", "linux aarch64" = "linux-aarch64",
-                   "macos x86_64" = "osx-64", "macos aarch64" = "osx-arm64", "windows x86_64" = "win-64",
-                   stop("no conda subdir for ", os, " ", arch, call. = FALSE))
+  # universe before conda-forge, as pixi.toml and README: under strict
+  # channel priority flang-rt-zig's llvm-openmp (zig_*) is only visible
+  # when universe comes first (2026-11-12, chore-release-11 PLAN.md)
+  channels <- unique(c(if (channel != "https://prefix.dev/universe") channel, "https://prefix.dev/universe", "conda-forge"))
+  if (is.na(subdir)) stop("no conda subdir for ", os, " ", arch, call. = FALSE)
   # the installed rows' sysdeps only, as a user installs what they need: a
-  # conflict in one row's libraries then does not block the other rows
-  deps <- unique(c("r-zig-slim", "r-zig-toolchain", "pkg-config", needed))
+  # conflict in one row's libraries then does not block the other rows.
+  # Not those the stress env lacks on this platform: pixi.toml leaves out
+  # what conda-forge has no build of for it (win-arm64: glpk, libgdal-core,
+  # ...), which would fail the whole solve; the run with the conda env's R
+  # reports them as sysdeps missing from the env, as the tree's run does.
+  # Only when the libraries env is the stress env: another env does not
+  # say what conda-forge has for the platform, so all sysdeps stay.
+  absent <- if (nzchar(libs) && dir.exists(libs) && basename(libs) == "stress") setdiff(needed, env_pkgs(libs)) else character()
+  if (length(absent)) message("stress: not in the stress env (", libs, ") for ", subdir, ", so not in the conda env: ",
+                              paste(absent, collapse = " "))
+  deps <- unique(c("r-zig-slim", "r-zig-toolchain", "pkg-config", setdiff(needed, absent)))
   q <- function(x) paste0("\"", x, "\"", collapse = ", ")
   for (d in c(ws, file.path(out, "logs"))) dir.create(d, showWarnings = FALSE)
   writeLines(c("# written by stress/stress.R --conda", "[workspace]", "name = \"stress-conda\"",
@@ -270,11 +312,20 @@ if (!is.null(conda) && !in_ws) {
   # the caller's own pixi workspace (pixi run -e stress) must not leak in
   Sys.unsetenv(c("PIXI_PROJECT_MANIFEST", "PIXI_PROJECT_ROOT", "PIXI_PROJECT_NAME", "PIXI_PROJECT_VERSION",
                  "PIXI_ENVIRONMENT_NAME", "PIXI_ENVIRONMENT_PLATFORMS", "PIXI_IN_SHELL", "PIXI_PROMPT", "R_ZIG_EXTRA_ENV"))
-  # nor what this R's etc/Renviron set for itself (its CA bundle, and on
-  # macOS its CMake toolchain file): the conda R keeps a value that is
+  # nor what this R's etc/Renviron set for itself (its CA bundle and its
+  # CMake toolchain file): the conda R keeps a value that is
   # set, and its children would use this R's files, not its own
   mine <- c("CMAKE_TOOLCHAIN_FILE", "R_ZIG_CMAKE_TOOLCHAIN_FILE", "R_ZIG_CA_BUNDLE")
   Sys.unsetenv(mine[startsWith(chartr("\\", "/", Sys.getenv(mine)), paste0(rhome, "/"))])
+  # nor any variable that names the caller's conda env (its activation's:
+  # CONDA_PREFIX, PKG_CONFIG_PATH, a package's own), PATH excepted, which
+  # pixi run puts the new env first on: a row's configure took the
+  # caller's libraries from them (K2, s2 on win-64)
+  cp <- chartr("\\", "/", Sys.getenv("CONDA_PREFIX"))
+  if (nzchar(cp)) {
+    e <- Sys.getenv()
+    Sys.unsetenv(setdiff(names(e)[grepl(cp, chartr("\\", "/", e), fixed = TRUE)], c("PATH", "Path")))
+  }
   Sys.setenv(STRESS_CHANNEL = channel)
   mf <- shQuote(file.path(ws, "pixi.toml"))
   elog <- file.path(out, "logs", "conda-env.log")
@@ -284,7 +335,7 @@ if (!is.null(conda) && !in_ws) {
     # a result too (the realistic target cannot be installed): report it
     why <- grep("[[:alnum:]]", readLines(elog, warn = FALSE), value = TRUE)
     msg <- sprintf("pixi install failed (%s) for r-zig-slim + r-zig-toolchain + %s from %s",
-                   st, paste(needed, collapse = " "), paste(channels, collapse = ", "))
+                   st, paste(setdiff(needed, absent), collapse = " "), paste(channels, collapse = ", "))
     cls <- classify(first_error(elog)$text)                   # upstream: the channels' packages conflict (U4)
     md <- c(sprintf("## r-zig stress: %s %s, conda", os, arch), "", sprintf("**The conda env could not be made** (class %s): %s.", cls, msg),
             "", "Its log (`logs/conda-env.log`) ends:", "", "```", tail(why, 40), "```")
@@ -311,7 +362,7 @@ if (nzchar(sysroot) && dir.exists(sysroot)) sysroot <- normalizePath(sysroot, wi
 }
 envdir <- if (win && nzchar(sysroot)) file.path(sysroot, "Library") else sysroot
 meta <- function(pattern) sub("\\.json$", "", list.files(file.path(sysroot, "conda-meta"), pattern))
-have <- sub("-[^-]+-[^-]+$", "", meta("\\.json$"))
+have <- env_pkgs(sysroot)
 sysdeps_missing <- if (nzchar(sysroot)) setdiff(needed, have) else needed
 if (length(sysdeps_missing)) message("warning: sysdeps not in the env: ", paste(sysdeps_missing, collapse = " "))
 
@@ -391,6 +442,16 @@ info <- list(
   msys_from_tree = msys_tree,
   zig = if (nzchar(zig)) tryCatch(system2(zig, "version", stdout = TRUE, stderr = FALSE)[1], error = function(e) "") else "",
   cc = tryCatch(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "--no-user-files", "CC"), stdout = TRUE)[1], error = function(e) ""),
+  # the cmake a package's configure runs under R CMD: a tree's extras group
+  # (R_HOME/bin/toolchain/cmake/bin, which R puts before this PATH's
+  # entries, feat-extras-group) when it has one, else the env's
+  # ("none" when there is none: command -v exits 1, system2 then returns
+  # character(0) with a warning, not an error)
+  cmake = local({
+    x <- tryCatch(suppressWarnings(system2(file.path(R.home("bin"), "R"), c("CMD", "sh", "-c", shQuote("command -v cmake")),
+                                           stdout = TRUE)), error = function(e) character())
+    if (length(x) && !is.na(x[1]) && nzchar(x[1])) x[1] else "none"
+  }),
   builder = builder,
   sysdeps_missing = paste(sysdeps_missing, collapse = " "), tsv = tsv, out = out, rzig_cache = rzig_cache,
   rzig_cache_removed = "", args = paste(argv, collapse = " "), minutes = 0, finished = FALSE, error = "")
@@ -413,7 +474,7 @@ write_report <- function(final = FALSE) {
           sprintf("%s. %s, commit %s. %s min, jobs %d, PATH %s.", info$date, info$r,
                   if (nzchar(commit)) sub("^([0-9a-f]{12})[0-9a-f]+", "\\1", commit) else "unknown",
                   info$minutes, jobs, info$path),
-          sprintf("zig %s; CC `%s`; libraries env `%s`%s.", info$zig, info$cc, sysroot,
+          sprintf("zig %s; CC `%s`; cmake `%s`; libraries env `%s`%s.", info$zig, info$cc, info$cmake, sysroot,
                   if (dist == "conda") sprintf(" (%s from %s)", info$r_zig, info$channel) else ""),
           sprintf("Builder %s (R_ZIG_PKG_BUILDER).", builder),
           if (length(sysdeps_missing)) sprintf("Sysdeps missing from the env: %s.", info$sysdeps_missing),
@@ -456,11 +517,17 @@ row_env <- function(x) {
   if (!length(kv)) return(character())
   setNames(gsub("{env}", envdir, sub("^[^=]*=", "", kv), fixed = TRUE), sub("=.*", "", kv))
 }
+# the most specific key wins: os-arch= (R's arch: windows-aarch64=), then
+# os=, then a bare value, the default for every other platform
 expected <- function(e) {
   e <- words(e)
   if (!length(e)) return("?")
-  hit <- grep(paste0("^", os, "="), e, value = TRUE)
-  if (length(hit)) sub(".*=", "", hit[1]) else if (!any(grepl("=", e))) e[1] else "?"
+  for (k in c(paste0(os, "-", arch), os)) {
+    hit <- e[startsWith(e, paste0(k, "="))]
+    if (length(hit)) return(sub(".*=", "", hit[1]))
+  }
+  bare <- e[!grepl("=", e)]
+  if (length(bare)) bare[1] else "?"
 }
 tarball <- function(p) {
   f <- list.files(file.path(out, "src"), paste0("^", p, "_.*\\.tar\\.gz$"), full.names = TRUE)

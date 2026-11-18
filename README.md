@@ -3,42 +3,61 @@
 R, built as a conda package with the [Zig](https://ziglang.org) toolchain
 (`zig cc`/`zig c++` in place of a system compiler) and driven end-to-end
 through [pixi](https://pixi.sh). One dependency graph — pixi resolves
-everything from conda-forge, Zig included — instead of a system compiler
-toolchain plus a separate build system.
+everything from conda-forge, Zig included, and prefix.dev's `universe`
+channel (LLVM flang and libomp, [flang-pixi](https://github.com/luciorq/flang-pixi)'s
+zig-built LLVM 23.1.5) — instead of a system compiler toolchain plus a
+separate build system.
 
 ## Use cases
 
 ### Install R from the built conda packages
 
-The packages target `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64`
-and `win-64`, and are published to the `universe` channel on prefix.dev.
+The packages target `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64`,
+`win-64` and `win-arm64` (Windows on ARM), and are published to the
+`universe` channel on prefix.dev.
 The channel is public: adding it is all it takes, with no login.
-Publishing is paused until the next build-number bump: until then
-universe has build 8's two packages, `r-zig-slim` and `r-zig-toolchain`
-(which brings the compilers and build tools), and not yet
-`r-zig-compilers` or `r-zig-build-tools`.
+A release is published by hand, not on every merge: universe has
+build 10 (R 4.6.1; five platforms, no `win-arm64`) until build 11
+(R 4.6.2, all six platforms) is published. `win-arm64` is new in build
+11: R and the groups go through the same CI steps as `win-64`, on
+GitHub's `windows-11-arm` runner, where the build tools (MSYS2's x64
+binaries) run under x64 emulation; one check there is still open (see
+CI).
 
 ```bash
 pixi init my-r-project
 cd my-r-project
-pixi workspace channel add https://prefix.dev/universe
+pixi workspace channel add --prepend https://prefix.dev/universe
 pixi add r-zig-slim
 pixi run Rscript -e 'R.version.string'
 ```
 
+`--prepend` matters: universe must come before conda-forge. r-zig-slim
+and r-zig-compilers depend on `llvm-openmp`'s `zig_*` build,
+flang-pixi's libomp (LLVM 23.1.5), which only universe has; conda-forge
+has an `llvm-openmp` too. With pixi's default (strict) channel priority
+the first channel that has a package name is the only one it takes that
+package from, so with conda-forge first the solve finds no `zig_*` build
+and fails. With conda or mamba, list universe first the same way
+(`-c https://prefix.dev/universe -c conda-forge`). r-zig uses this
+libomp on every platform: it is the one R is built and tested with, and
+conda-forge's win-arm64 `libomp.dll` breaks parallel regions with more
+than six shared variables (data.table crashed).
+
 `r-zig-slim` is R alone: it runs R and installs packages that need no
-compiling (R-only source packages and binary packages). On Windows it has
-full's content (Tcl/Tk, JPEG, TIFF, NLS): R's Windows build has no
-switches to leave them out. It carries rzig, the compiler front R's
-Makeconf names; the compilers and the build tools are two groups, each a
-package that pins the exact `r-zig-slim` build. To compile packages, add
-r-zig-toolchain (r-zig-compilers and r-zig-build-tools):
+compiling (R-only source packages and binary packages). It is the slim
+variant on every OS: no Tcl/Tk, JPEG, TIFF or translations (Windows too
+since build 11; see Variants). It carries rzig, the compiler front R's
+Makeconf names; the compilers, the build tools and cmake are three
+groups, each a package that pins the exact `r-zig-slim` build. To
+compile packages, add r-zig-toolchain (r-zig-compilers,
+r-zig-build-tools and r-zig-extras):
 
 ```bash
 pixi add r-zig-toolchain
 ```
 
-- `r-zig-compilers` (zig 0.17, LLVM flang, OpenMP) alone installs
+- `r-zig-compilers` (zig 0.17, LLVM flang 23.1.5, OpenMP) alone installs
   packages that have no configure script and whose Makevars only sets
   variables. It also compiles such code at run time (`R CMD SHLIB`:
   Rcpp's `sourceCpp()`, inline, TMB, knitr's engines) with no make: R
@@ -46,14 +65,36 @@ pixi add r-zig-toolchain
   their compiler check passes too.
 - `r-zig-build-tools` (make; on Windows also sh, the MSYS2 tools and
   pkg-config) is for configure scripts, Makevars
-  rules, Objective-C and `R CMD config` (rstan on macOS calls it).
-  Installing pkgbuild, pak, devtools or the packages cpp11's
-  `cpp_source()` requires from source needs it once: processx has
-  Makevars rules, and ps and pak have configure scripts.
-  r-zig-toolchain has both groups from the start.
+  rules and Objective-C. Installing pkgbuild, pak, devtools or the
+  packages cpp11's `cpp_source()` requires from source needs it once:
+  processx has Makevars rules, and ps and pak have configure scripts.
+- `r-zig-extras` (cmake, conda-forge's) is for packages that build a
+  bundled library with CMake (nloptr, for example).
+
+r-zig-toolchain has all three groups from the start.
+
+`R CMD config` needs no group, on every OS: R CMD runs rzig, which reads
+Makeconf and the site's and user's Makevars itself, with no make and no
+sh (pkgbuild, pak and configure scripts call it first; rstan after each
+`stan_model()` compile). A Makevars construct only make can evaluate
+(`$(shell)` in a `:=`, `define`, `!=` and the like) makes it exit 2,
+naming the construct, file and line.
+
+R's 15 recommended packages (MASS, lattice, Matrix, nlme, survival,
+mgcv, boot, cluster, codetools, foreign, KernSmooth, rpart, class, nnet,
+spatial) are not in r-zig-slim. They are the package
+`r-zig-recommended`, built with the same R and compilers and pinned to
+the exact `r-zig-slim` build; nothing depends on it, r-zig-toolchain
+included. It needs no group to use:
+
+```bash
+pixi add r-zig-recommended
+```
 
 Without a group, an install that needs it stops with a message naming the
-package to add. In an environment used without activation (an IDE
+package to add; without cmake it is only a note, since whether a
+package's build runs cmake is not known before it runs (its configure
+then decides). In an environment used without activation (an IDE
 pointed at `<env>/bin/R`), the build tools are not on `PATH`: activate
 the environment (`pixi shell`, `conda activate`) or start R with
 `pixi run`.
@@ -79,7 +120,7 @@ the environment (`pixi shell`, `conda activate`) or start R with
   naming `-lws2_32` (ragg with a conda environment's libraries) links
   (whether Rtools' libraries bring it for CRAN is not verified). A DLL
   imports from it only what it calls.
-- On Windows, `pkg-config` and `pkgconf` are pkgconf 3.0.10, built from
+- On Windows, `pkg-config` and `pkgconf` are pkgconf 3.0.11, built from
   source with zig into `R_HOME/bin/toolchain/usr/bin` (the build tools,
   on both channels). Under `R CMD`, when `PKG_CONFIG_PATH` is not set, R
   sets it to its own environment's `Library\lib\pkgconfig` and
@@ -116,17 +157,19 @@ pixi run -e pkg conda-package
 pixi run -e pkg conda-consume
 ```
 
-`conda-package` produces the four packages,
+`conda-package` produces the six packages,
 `dist/conda/<platform>/r-zig-slim-*.conda`, `r-zig-compilers-*.conda`,
-`r-zig-build-tools-*.conda` and `r-zig-toolchain-*.conda`, via
+`r-zig-build-tools-*.conda`, `r-zig-extras-*.conda`,
+`r-zig-toolchain-*.conda` and `r-zig-recommended-*.conda`, via
 `rattler-build`, using this repo's own recipe (`recipe/recipe.yaml`), and
 tests each one in a fresh environment of its own. Useful for testing a
 change to the build before publishing, or for producing a package for a
 platform not published upstream. Each run empties `dist/conda` first, so
 the previous run's packages do not survive it. `conda-consume` then
 installs them as a user does: a fresh pixi workspace from `dist/conda`,
-with `r-zig-slim` alone and with each group in an environment of its
-own, where it runs the recipe's tests through pixi's activation. CI runs
+with `r-zig-slim` alone, with each group, with `r-zig-toolchain` and
+with `r-zig-recommended`, each in an environment of its own, where it
+runs the recipe's tests through pixi's activation. CI runs
 both on every `conda-package` leg, before the publish.
 
 ### Publish to your own channel
@@ -135,10 +178,13 @@ both on every `conda-package` leg, before the publish.
 pixi run -e pkg conda-publish
 ```
 
-Uploads the just-built packages for the current platform via
-`rattler-build upload`. Each platform has its own task
-(`[feature.pkg.target.<platform>.tasks]` in `pixi.toml`), so this is
-typically run once per machine/OS as part of a release.
+Uploads the just-built packages for the current platform
+(`dist/conda/<platform>/*.conda`) to the `universe` channel via
+`rattler-build upload prefix --skip-existing`. Each platform has its own
+task (`[feature.pkg.target.<platform>.tasks]` in `pixi.toml`), so it
+never uploads another platform's packages. It is CI's publish step (see
+CI), not run by hand for `universe`; for a channel of your own, change
+`--channel` in that task or run `rattler-build upload` yourself.
 
 ### Run R from source without packaging
 
@@ -149,39 +195,83 @@ pixi run build         # zig build, no autoconf/make/gnuwin32
 pixi run verify-tree   # static checks of the installed tree (Makeconf, rpaths, floors)
 pixi run smoke         # quick sanity check
 pixi run check         # R's own regression suite
-pixi run toolchain     # the toolchain tree: the groups' files (zig, flang, OpenMP headers, make; Windows sh, make, pkg-config)
+pixi run toolchain     # the toolchain tree: the groups' files (zig, flang, OpenMP headers, make, cmake; Windows sh, make, pkg-config)
 pixi run contract      # CRAN packages compiled with the tree and the groups (Rcpp, data.table, minqa)
 ```
 
 `build` installs `dist/<flavor>/R-<ver>-zig/`, the base that ships: R
 and its libraries, with only rzig, the compiler front Makeconf names, and
-its link object (linux `dso_fini.o`, Windows `cfguard.o`) in
+its link object (linux `dso_fini.o`, win-64 `cfguard.o`, win-arm64
+`clear_cache.o`) in
 `R_HOME/bin/toolchain`. `toolchain` copies the toolchain groups' files
 from the environment into `dist/toolchain/R-<ver>-zig/`, and upstream
 zig from PyPI's `ziglang` wheel into its `zig/`, each directory with its
 `SOURCES` (package, version, sha256, where its source is) and
 `LICENSES/`; one toolchain tree serves every flavor of the platform.
+Its `cmake/` comes from Kitware's cmake release archive for the
+platform, which the toolchain build fetches itself (network; zig's
+package cache keeps it).
 For that `zig/`, `toolchain` downloads the wheel once per platform (about
 100 MB, `pixi run fetch-zig`; kept unpacked in `build/zig-upstream/`),
 even for the tasks that use only the compile tree, which leaves `zig/`
 and `flang/` out; an offline machine needs that directory.
 `contract` compiles packages in a copy of the installed tree with the
 groups added, `build/compile-tree/<flavor>/R-<ver>-zig/`, as a user who
-extracted all three archives has it (see Standalone archives). The
+extracted all four archives has it (see Standalone archives). The
 archives and their checks:
 
 ```bash
-pixi run package-toolchain   # the two group archives (runs toolchain first)
+pixi run package-toolchain   # the three group archives (runs toolchain first)
 pixi run verify-toolchain    # static checks of the toolchain tree (records, copies, closures)
-pixi run verify-package      # the base archive, then the three scenarios with the group archives
+pixi run verify-package      # the base archive, then the four scenarios with the group archives
 ```
 
-Three variants are available as pixi environments: `default` (slim —
-headless, no X11/tcltk/NLS), `full` (adds tcltk, readline, NLS, jpeg
-and tiff devices), and `minimal` (smaller than slim: also no cairo/png,
-ICU, OpenMP or libdeflate; linux/macOS only). `minimal` is the variant
-the Python wheel wraps. minimal has no OpenMP: a Fortran `use omp_lib`
-compiles but does not link.
+R's recommended packages have a tree of their own,
+`dist/recommended/<flavor>/R-<ver>-zig/`, never the R tree: `build`
+leaves them out, and `recommended` installs them from the tarballs R's
+source carries, in the order of R's own makefile, with the compile
+tree's R (Matrix's makefile rules need the build-tools group's make).
+The step is `zigbuild/recommended/build.zig`:
+
+```bash
+pixi run recommended           # the 15 packages (runs compile-tree first; `-- -Djobs=6` per package)
+pixi run recommended-test      # that build's unit tests
+pixi run verify-recommended    # static checks of the tree, then the packages' tests with the base's R
+pixi run package-recommended   # their archive (see Standalone archives)
+```
+
+### Variants
+
+Three variants are available as pixi environments, on every OS:
+`default` (slim), `full` and `minimal`. One table in build.zig
+(`variantFeatures`) defines them, and the build stops when a vendored
+config disagrees with it:
+
+| Feature | slim (`default`) | full | minimal |
+|---|---|---|---|
+| cairo devices, `png()` | yes | yes | no |
+| `jpeg()`, `tiff()` | no | yes | no |
+| tcltk | no | yes | no |
+| translations (NLS) | no | yes | no |
+| ICU, libdeflate | yes | yes | no |
+| OpenMP for packages | yes | yes | no |
+| OpenMP inside R | yes | yes | no |
+| readline | no | unix only | no |
+
+readline is unix only: Windows R has its own console line editing.
+Memory profiling (`Rprofmem()`) is on in every Windows variant and off
+on unix, as in CRAN's R.
+OpenMP inside R on Windows differs from CRAN's R, which leaves it off
+there; r-zig links LLVM's libomp on every OS. On Windows, `jpeg()`,
+`tiff()` (and `png()` on minimal) give R's usual "no support" warning
+in a variant without that format. The record is
+`.github/devdocs/feat-win-variants/PLAN.md`. On Windows, R's cairo
+devices (`svg()`, `cairo_pdf()`, `cairo_ps()`, `type = "cairo"`) use a
+cairo that R's build compiles from source and links into winCairo.dll,
+the same on x86_64 and ARM; its licence texts are in
+`R_HOME/share/licenses/cairo`. `minimal` is the variant the Python
+wheel wraps (unix only; no Windows wheel yet). minimal has no OpenMP: a
+Fortran `use omp_lib` compiles but does not link.
 
 ### Build with upstream zig
 
@@ -193,9 +283,10 @@ is), and the project keeps both working; upstream zig is the reference.
 platform once (checksum-pinned; a wheel is a zip, so no Python is
 involved), unpacks it under `build/zig-upstream/` and prints its zig's
 path. The tasks that run zig, `build`, `check`, `rzig-test`, the
-toolchain tree's `toolchain` and `toolchain-test`, and the two that
-compile packages with the built tree (`contract`, `verify-package`),
-take it from `ZIG_BIN`; the other checks look at the trees it built:
+toolchain tree's `toolchain` and `toolchain-test`, and the ones that
+compile packages with the built tree (`contract`, `verify-package`,
+`recommended`), take it from `ZIG_BIN`; the other checks look at the
+trees it built:
 
 ```bash
 export ZIG_BIN="$(pixi run fetch-zig)"   # PowerShell: $env:ZIG_BIN = pixi run fetch-zig
@@ -215,9 +306,9 @@ environment, without `ZIG_BIN`. `wheel-test` always compiles with the
 ```bash
 pixi run -e minimal build              # the installed tree, libraries vendored
 pixi run -e minimal verify-tree        # its static checks
-pixi run -e minimal package-toolchain  # the toolchain tree and its two group archives
+pixi run -e minimal package-toolchain  # the toolchain tree and its three group archives
 pixi run -e minimal verify-package     # archive the tree, check the archives relocated
-pixi run -e wheel wheel                # -> dist/wheel/{r_zig,r_zig_compilers,r_zig_build_tools,r_zig_toolchain}-4.6.1-*.whl
+pixi run -e wheel wheel                # -> dist/wheel/{r_zig,r_zig_compilers,r_zig_build_tools,r_zig_toolchain}-4.6.2-*.whl
 pixi run -e wheel wheel-test           # pip-install them into fresh venvs, a group at a time, and use them
 ```
 
@@ -226,7 +317,8 @@ so it needs `pixi run -e minimal toolchain` first (`package-toolchain`
 runs it, and `verify-package` needs the group archives it makes).
 
 The four wheels split as the conda packages do, for Linux and macOS (no
-Windows wheels yet). `r-zig` (import name `r_zig`) is the whole
+Windows wheels yet), less the extras group and the recommended packages,
+which have no wheel yet. `r-zig` (import name `r_zig`) is the whole
 relocatable `minimal` tree, rzig included, plus console scripts
 `R`/`Rscript` and `r_zig.r_home()` for embedders such as rpy2; it
 installs packages that need no compiling. To compile packages, add
@@ -237,8 +329,9 @@ installs packages that have no configure script and whose Makevars only
 sets variables, and compiles such code at run time (`R CMD SHLIB`:
 Rcpp's `sourceCpp()`, inline, TMB) with no make. r-zig-build-tools
 brings GNU make, for the rest: configure scripts, Makevars rules,
-Objective-C, `R CMD config`, and installing pkgbuild, pak or devtools
-from source once. None of the four is on PyPI yet: install them from
+Objective-C, and installing pkgbuild, pak or devtools
+from source once. There is no r-zig-extras wheel yet: `pip install
+cmake` gives PyPI's cmake. None of the four is on PyPI yet: install them from
 `dist/wheel`, ziglang first, so that pip needs no index for the rest:
 
 ```bash
@@ -259,23 +352,25 @@ Details: `.github/devdocs/feat-wheel-minimal/PLAN.md`.
 ### Standalone archives
 
 R also comes as plain archives that need nothing installed first: no
-conda, pixi or Python. Three kinds, `.tar.gz` (Windows `.zip`) but the
+conda, pixi or Python. Five kinds, `.tar.gz` (Windows `.zip`) but the
 compilers group, `.tar.xz` on every platform, each with a `.sha256`
 beside it:
 
 - **The base**, one per flavor and platform:
   `R-<ver>-<flavor>-<platform>.tar.gz`, for example
-  `R-4.6.1-slim-linux-64.tar.gz`. R alone, with its libraries: it runs R
-  and installs packages that need no compiling. Its
+  `R-4.6.2-slim-linux-64.tar.gz`. R alone, with its libraries: it runs R,
+  installs packages that need no compiling and answers `R CMD config`.
+  Its
   `R_HOME/bin/toolchain` holds only rzig, the compiler front R's
   Makeconf names, and the object rzig adds to links (linux
-  `dso_fini.o`, Windows `cfguard.o`). Windows slim has full's content
-  (Tcl/Tk, JPEG, TIFF, NLS): R's Windows build has no switches to leave
-  them out.
+  `dso_fini.o`, win-64 `cfguard.o`, win-arm64 `clear_cache.o`). Each
+  flavor has the same features
+  on every OS, except where the Variants table says otherwise
+  (readline, memory profiling).
 - **The compilers group**, one per platform:
   `R-<ver>-<platform>-compilers.tar.xz`, about 95 MB (linux-64). It
   holds zig 0.17 (PyPI's `ziglang` build, which is the ziglang.org
-  release), flang 23.1.1 (flang-pixi's flang-zig and flang-rt-zig, the
+  release), flang 23.1.5 (flang-pixi's flang-zig and flang-rt-zig, the
   compiler R's own Fortran was built with: the driver, its runtime and
   the intrinsic modules) and OpenMP's headers (Windows also
   `libomp.lib`), which the `minimal` flavor, built without OpenMP, leaves
@@ -297,44 +392,67 @@ beside it:
   in `R_HOME/bin/toolchain` beside gcc.exe: they are rzig, which reads
   and writes COFF itself and runs `zig dlltool`, `zig rc` and `zig cc`,
   on x86_64 and arm64 alike.
+- **The extras group**, one per platform:
+  `R-<ver>-<platform>-extras.tar.gz` (`.zip` on Windows, about 10 MB on
+  linux-64): cmake 4.4.5 from Kitware's release archive (held below 4.5,
+  which breaks the Boost arrow fetches), `bin/cmake` and
+  `share/cmake-4.4/` (Modules, Templates), under `cmake/`, for packages
+  that build a bundled library with CMake. R puts `cmake/bin` on `PATH`
+  after the build tools' directory, in R and under `R CMD`. Linux's
+  cmake needs only glibc (2.17 on x86_64, 2.28 on aarch64); macOS has
+  Kitware's universal binary (macOS 11 and later); Windows' loads only
+  system DLLs.
+- **The recommended packages**, one per flavor and platform:
+  `R-<ver>-<flavor>-<platform>-recommended.tar.gz` (`.zip` on Windows,
+  about 25 MB for linux-64 slim): R's 15 recommended packages under
+  `R_HOME/library/`, compiled with that flavor's R (mgcv links OpenMP,
+  which the `minimal` base has not, so the flavor is in the name).
+  Extracted over the base, they need no group.
 
-Every archive has the same top directory, `R-<ver>-zig/`, and a group
-archive's files sit under its `R_HOME/bin/toolchain/`, each directory
+Every archive has the same top directory, `R-<ver>-zig/`; the
+recommended packages' files sit under its `R_HOME/library/`, and a group
+archive's under its `R_HOME/bin/toolchain/`, each directory
 with `SOURCES` (the package each file comes from, a conda-forge package,
 for `flang/` flang-pixi's packages on prefix.dev's `universe` channel,
-or, for `zig/`, PyPI's `ziglang` wheel, its sha256, and where its source
-is) and `LICENSES/`. Extract the ones you need into one directory; no
-file is in two of them:
+or, for `zig/`, PyPI's `ziglang` wheel, for `cmake/`, Kitware's
+release archive, its sha256, and where its source is) and `LICENSES/`.
+Extract the ones you need into one directory; no file is in two of
+them:
 
 ```bash
-sha256sum -c R-4.6.1-slim-linux-64.tar.gz.sha256
-tar -xzf R-4.6.1-slim-linux-64.tar.gz           # R-4.6.1-zig/
-tar -xJf R-4.6.1-linux-64-compilers.tar.xz      # + R-4.6.1-zig/lib/R/bin/toolchain/zig/, flang/ and openmp/
-tar -xzf R-4.6.1-linux-64-build-tools.tar.gz    # + R-4.6.1-zig/lib/R/bin/toolchain/usr/bin/make
-R-4.6.1-zig/bin/Rscript -e 'R.version.string'
-# Windows: R-4.6.1-win-64-build-tools.zip + R-4.6.1-zig\Library\lib\R\bin\toolchain\usr\bin\ (sh, make, ...) and etc\
+sha256sum -c R-4.6.2-slim-linux-64.tar.gz.sha256
+tar -xzf R-4.6.2-slim-linux-64.tar.gz           # R-4.6.2-zig/
+tar -xJf R-4.6.2-linux-64-compilers.tar.xz      # + R-4.6.2-zig/lib/R/bin/toolchain/zig/, flang/ and openmp/
+tar -xzf R-4.6.2-linux-64-build-tools.tar.gz    # + R-4.6.2-zig/lib/R/bin/toolchain/usr/bin/make
+tar -xzf R-4.6.2-linux-64-extras.tar.gz         # + R-4.6.2-zig/lib/R/bin/toolchain/cmake/
+tar -xzf R-4.6.2-slim-linux-64-recommended.tar.gz  # + R-4.6.2-zig/lib/R/library/{MASS,Matrix,...}/
+R-4.6.2-zig/bin/Rscript -e 'R.version.string'
+# Windows: R-4.6.2-win-64-build-tools.zip + R-4.6.2-zig\Library\lib\R\bin\toolchain\usr\bin\ (sh, make, ...) and etc\
 ```
 
-On macOS, `tar -xf` extracts all three, the `.tar.xz` too. On Windows,
+On macOS, `tar -xf` extracts all five, the `.tar.xz` too. On Windows,
 `tar -xf` extracts the `.zip` files the same way, and R is
-`R-4.6.1-zig\Library\lib\R\bin\x64\Rscript.exe`. Once the base is
+`R-4.6.2-zig\Library\lib\R\bin\x64\Rscript.exe`. Once the base is
 extracted, R's own reader extracts the compilers `.tar.xz`; run it where
 you extracted R:
 
 ```bat
-R-4.6.1-zig\Library\lib\R\bin\x64\Rscript.exe -e "untar('R-4.6.1-win-64-compilers.tar.xz', exdir = '.', tar = 'internal')"
+R-4.6.2-zig\Library\lib\R\bin\x64\Rscript.exe -e "untar('R-4.6.2-win-64-compilers.tar.xz', exdir = '.', tar = 'internal')"
 ```
 
 System32's `tar -xf` extracts it too where `tar --version` lists liblzma
 (Windows 11's current builds; Windows 10's `tar.exe` has none). Use one
-directory per flavor: the bases share the top directory, and the groups
-serve every flavor of their platform. When a compile misses a group,
+directory per flavor: the bases and the recommended packages share the
+top directory, and the groups serve every flavor of their platform.
+When a compile misses a group,
 rzig's message says which archive to extract or what to put on `PATH`.
 
-`pixi run package` makes the base archive of the environment's flavor
-and `pixi run package-toolchain` the group archives, in `dist/`; CI keeps
-the base archives for a week and the group archives for 30 days (see
-CI). No release publishes them yet.
+`pixi run package` makes the base archive of the environment's flavor,
+`pixi run package-toolchain` the group archives and `pixi run
+package-recommended` the recommended packages' archive, in `dist/`; CI
+keeps the base archives for a week and the group archives for 30 days
+(see CI), and makes no recommended packages' archive. No release
+publishes them yet.
 
 ### Older Linux HPC servers
 
@@ -343,30 +461,45 @@ and the package-compilation toolchain it ships), so binaries — and any
 CRAN package compiled against them — run on considerably older
 distributions than the build machine, without a separate build variant.
 
+### The platform packages are compiled for
+
+rzig names R's own platform on every command it runs, on every OS:
+`-target` to zig (`x86_64-linux-gnu.2.17`, `aarch64-native.13.0`,
+`aarch64-windows-gnu`, ...) and `--target=` to flang, with
+`-mcpu=baseline`, so a package is compiled for R's architecture and
+that architecture's baseline CPU, whatever zig or flang is found first
+on PATH. Windows left the target to zig until build 11, when an x64 zig
+on Windows on ARM compiled for x64 against an arm64 R. The scripts stop
+when pixi installed the environment for another platform than the
+machine's (an emulated one, such as win-64 on Windows on ARM).
+
 ## CI
 
 Everything runs on GitHub-hosted runners: `toolchain` (the toolchain
 groups, once per platform), `build` (ubuntu-latest,
-ubuntu-24.04-arm, macos-latest, macos-15-intel × slim/full, plus the
-linux openblas variants, minimal on all four, and windows-latest's one
-variant; the same steps in the same order on every OS, on the installed
-tree, which is the tree the standalone base archive packs), and
-`conda-package` for all
-five subdirs (linux-64, linux-aarch64, osx-arm64, osx-64, win-64), which
-publishes to the `universe` channel on prefix.dev via OIDC trusted
-publishing on every push to `main` while the repository variable
-`CONDA_PUBLISH` is `true`. That variable is a release switch: it is set
-only for a build-number bump's publish and deleted after it, so other
-merges upload nothing (build 9 was published on 2026-11-05).
+ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest,
+windows-11-arm × slim/full/minimal, plus the linux openblas variants;
+the same steps in the same order on
+every OS, on the installed tree, which is the tree the standalone base
+archive packs), and `conda-package` for all six subdirs (linux-64,
+linux-aarch64, osx-arm64, osx-64, win-64, win-arm64; the only job that
+builds R's recommended packages), which publishes to
+the `universe` channel on prefix.dev via OIDC trusted publishing on
+every push to `main` while the repository variable `CONDA_PUBLISH` is
+`true`. That variable is a release switch: it is set only for a
+build-number bump's publish and deleted after it, so other merges upload
+nothing (build 10 was published on 2026-11-09).
 There is no self-hosted fleet — the former gamma/omicron/kappa runners
 were decommissioned in September 2026 and fully removed on 2026-09-24.
-Docs-only changes (`*.md`, `.github/devdocs/`) skip the workflow.
+Docs-only changes (`*.md`, `.github/devdocs/`, `LICENSE`) skip the
+workflow.
 
 The full matrix above runs only on request: on a pull request labelled
 `full-ci` and on a manual dispatch (`pixi run ci-trigger` for main, `gh
 workflow run build.yaml --ref <branch>` for a branch). Every other pull
 request push and every push to `main` runs the core tier: `default` on
-all five platforms and `minimal` on linux-64 (6 legs). `conda-package`
+all six platforms and `minimal` on linux-64 (7 legs; the full tier has
+20). `conda-package`
 also runs on every push to `main`, which publishes (with
 `CONDA_PUBLISH`), and on a pull
 request that changes `recipe/`, `pixi.toml`, `pixi.lock`, `build.zig`,
@@ -374,22 +507,28 @@ request that changes `recipe/`, `pixi.toml`, `pixi.lock`, `build.zig`,
 `.github/devdocs/chore-ci-tiers/PLAN.md`.
 
 The build legs of both tiers wait for the `toolchain` job
-(`.github/workflows/toolchain.yaml`), five legs, one per platform. Each
+(`.github/workflows/toolchain.yaml`), six legs, one per platform. Each
 runs the toolchain build's unit tests (`toolchain-test`), makes the
-toolchain tree and its two group archives (`package-toolchain`), checks
+toolchain tree and its three group archives (`package-toolchain`), checks
 the tree (`verify-toolchain`) and uploads the archives as the artifact
 `toolchain-<OS>-<arch>` (for example `toolchain-Linux-X64`). Every build
 leg downloads its platform's archives first and unpacks them
 (`unpack-toolchain`), so `contract` compiles in the compile tree. The
-packaging legs (`default` on all five platforms, `minimal`) run
-`verify-package`: the base archive, then the three scenarios with the
+packaging legs (`default` on all six platforms, `minimal`) run
+`verify-package`: the base archive, then the four scenarios with the
 downloaded group archives (the base alone, with the compilers group,
-with the build-tools group). They upload the base archive as
+with the build-tools group, with the extras group). They upload the base archive as
 `standalone-<env>-<runner>` (for example `standalone-default-macos-latest`).
 The base archives are kept for 7 days, the group archives for 30, as
 long as GitHub lets a run's failed legs be re-run (they download them
 again); nothing publishes the archives yet. A platform whose `toolchain` leg fails fails only its own
 build legs.
+
+Open in build 11's CI (run 43344258167, 2026-11-12; everything else
+passed): macos-15-intel's `default` and `minimal` legs (one VEX
+instruction in `libR.dylib`) and windows-11-arm's `pkg-parity` step (a
+make segfault) are under investigation. windows-11-arm's `contract`
+(data.table with OpenMP) passes.
 
 `upstream-zig` runs the same `build` steps (`.github/workflows/build-r.yaml`,
 shared by both workflows) on `default` for ubuntu-latest, macos-latest
@@ -424,6 +563,9 @@ gh variable delete CONDA_PUBLISH             # after universe and a fresh env ch
 ## More detail
 
 Build internals, platform-specific fixes, and the CI/publish pipeline are
-tracked in `.github/devdocs/` (`PLAN.md`/`TODO.md` at the repo root point
-at the current feature's docs).
+tracked in `.github/devdocs/`, one directory per branch. The current
+release's plan is `.github/devdocs/chore-release-11/PLAN.md`;
+`PLAN.md`/`TODO.md` at the repo root are symlinks to
+`.github/devdocs/feat-zig-build/`'s (milestone 5, 2026-07, the original
+build design that code comments cite), not the current work.
 

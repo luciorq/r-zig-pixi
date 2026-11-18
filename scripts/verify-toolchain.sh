@@ -6,7 +6,8 @@
 # file copied unchanged from a conda package (flang/: flang-pixi's
 # flang-zig and flang-rt-zig, from universe, B9 a, phase 6; Windows' usr/:
 # conda-forge's m2 packages, phase 7) or, in zig/, from PyPI's
-# ziglang wheel (B4, phase 5), or that package's record, except
+# ziglang wheel (B4, phase 5), in cmake/, from Kitware's cmake release
+# archive (feat-extras-group), or that package's record, except
 # etc/fstab (Windows), r-zig's own MSYS mount table (PHASE7 open point D),
 # and Windows' usr/bin/pkgconf.exe and pkg-config.exe, pkgconf built from
 # its source tarball by the toolchain build (zigbuild/toolchain/pkgconf.zig),
@@ -19,7 +20,8 @@
 #     no other;
 #   - copies: every other file is the target of a `file:` line of
 #     SOURCES, with the sha256 that line gives (the package's: conda-meta's
-#     paths_data; the wheel's RECORD), and every such target is there;
+#     paths_data; the wheel's RECORD; for cmake/, the toolchain build's
+#     hash of the archive's file), and every such target is there;
 #   - build paths: SOURCES and LICENSES name none of the checkout, the
 #     tree's own place, zig's caches, the env or $HOME (verify-tree.sh's
 #     list), and neither does pkgconf, which r-zig builds. A copy that
@@ -33,9 +35,11 @@
 #     it (B21; none of today's needs the base's runtime): linux, glibc's
 #     libraries, at most GLIBC 2.28 (conda-forge's baseline: these run
 #     only to compile; make needs 2.17), and rpaths relative to the file;
+#     no exception (Kitware's cmake has its C++ runtime linked in);
 #     macOS, /usr/lib and /System, minos at most MACOS_MIN (zig/'s zig:
 #     ZIG_MACOS_MIN, zig 0.17's own floor), rpaths
-#     relative; Windows, every DLL a PE file imports beside it or the
+#     relative, thin or universal (Kitware's cmake is universal); Windows,
+#     every DLL a PE file imports beside it or the
 #     system's (usr/bin/'s tools find their DLLs beside them);
 #   - OpenMP (the compilers group, B22): openmp/include/omp.h; Windows
 #     also openmp/lib/libomp.lib;
@@ -48,7 +52,9 @@
 #   - zig (the compilers group, B4): zig/zig runs and prints the version
 #     SOURCES records for ziglang;
 #   - flang (the compilers group, B9 a): flang/bin/flang runs and says the
-#     flang-zig version SOURCES records.
+#     flang-zig version SOURCES records;
+#   - cmake (the extras group, feat-extras-group): cmake/bin/cmake runs,
+#     says the version SOURCES records, and finds its modules beside it.
 # Nothing here asks a copy to be stripped or changed: they are conda's
 # binaries as conda ships them (C24). A separate script from
 # verify-tree.sh, which checks the R trees (the base).
@@ -246,9 +252,11 @@ bad=""
 n_bin=0
 zig_exe="$TREE/$tc/zig/zig"
 flang_exe="$TREE/$tc/flang/bin/flang"
-if [ "$OS" = windows ]; then zig_exe="$zig_exe.exe"; flang_exe="$flang_exe.exe"; fi
+cmake_exe="$TREE/$tc/cmake/bin/cmake"
+if [ "$OS" = windows ]; then zig_exe="$zig_exe.exe"; flang_exe="$flang_exe.exe"; cmake_exe="$cmake_exe.exe"; fi
 zig_seen=""
 flang_seen=""
+cmake_seen=""
 candidates() {
   [ -s "$WORK/copies.txt" ] && tr '\n' '\0' < "$WORK/copies.txt" | LC_ALL=C xargs -0 grep -l "$1" || true
 }
@@ -264,6 +272,7 @@ case "$OS" in
       n_bin=$((n_bin + 1))
       [ "$f" != "$zig_exe" ] || zig_seen=1
       [ "$f" != "$flang_exe" ] || flang_seen=1
+      [ "$f" != "$cmake_exe" ] || cmake_seen=1
       rel="${f#"$TREE"/}"
       for dep in $(needed_of "$f"); do
         case "$dep" in
@@ -290,11 +299,14 @@ case "$OS" in
     what="$n_bin ELF files: DT_NEEDED glibc's only, rpaths relative, GLIBC at most ${worst:-?} (ceiling $GLIBC_TOOLS_CEILING)"
     ;;
   macos)
+    # thin 64-bit Mach-O (cf fa ed fe) and universal (ca fe ba be: Kitware's
+    # cmake, x86_64 and arm64); otool reads both, each slice in turn
     while IFS= read -r f; do
-      head -c4 "$f" | od -An -tx1 | grep -q "cf fa ed fe" || continue
+      case "$(head -c4 "$f" | od -An -tx1 | tr -d ' \n')" in cffaedfe|cafebabe) ;; *) continue ;; esac
       n_bin=$((n_bin + 1))
       [ "$f" != "$zig_exe" ] || zig_seen=1
       [ "$f" != "$flang_exe" ] || flang_seen=1
+      [ "$f" != "$cmake_exe" ] || cmake_seen=1
       rel="${f#"$TREE"/}"
       # zig/'s files: zig's own floor (env.sh's ZIG_MACOS_MIN)
       floor="$MACOS_MIN"
@@ -311,8 +323,8 @@ case "$OS" in
         case "$rp" in @loader_path|@loader_path/*) ;; *) bad="$bad
   $rel: rpath $rp" ;; esac
       done
-    done < <(candidates $'^\xcf\xfa\xed\xfe')
-    what="$n_bin Mach-O files: dependencies the system's, minos <= $MACOS_MIN (zig/: <= $ZIG_MACOS_MIN, zig's own floor), rpaths relative"
+    done < <(candidates $'^\xcf\xfa\xed\xfe'; candidates $'^\xca\xfe\xba\xbe')
+    what="$n_bin Mach-O files, thin or universal: dependencies the system's, minos <= $MACOS_MIN (zig/: <= $ZIG_MACOS_MIN, zig's own floor), rpaths relative"
     ;;
   windows)
     while IFS= read -r f; do
@@ -320,6 +332,7 @@ case "$OS" in
       n_bin=$((n_bin + 1))
       [ "$f" != "$zig_exe" ] || zig_seen=1
       [ "$f" != "$flang_exe" ] || flang_seen=1
+      [ "$f" != "$cmake_exe" ] || cmake_seen=1
       for dep in $(needed_of "$f"); do
         [ -f "${f%/*}/$dep" ] || win_system_dll "$dep" || bad="$bad
   ${f#"$TREE"/}: imports $dep (neither beside it nor the system's)"
@@ -332,6 +345,8 @@ if [ -d "$TREE/$tc/zig" ] && [ -z "$zig_seen" ]; then bad="$bad
   the binary detection missed ${zig_exe#"$TREE"/} (zig/ is in the tree)"; fi
 if [ -d "$TREE/$tc/flang" ] && [ -z "$flang_seen" ]; then bad="$bad
   the binary detection missed ${flang_exe#"$TREE"/} (flang/ is in the tree)"; fi
+if [ -d "$TREE/$tc/cmake" ] && [ -z "$cmake_seen" ]; then bad="$bad
+  the binary detection missed ${cmake_exe#"$TREE"/} (cmake/ is in the tree)"; fi
 if [ -n "$bad" ]; then
   echo "error: the toolchain's binaries load or need what the tree does not hold:$bad" >&2
   exit 1
@@ -366,10 +381,21 @@ echo "== OpenMP verified: $omp (in $tc)"
 # and says the env's root and /tmp (seen on kappa, 2026-10-20).
 if [ "$OS" = windows ] && [ -d "$TREE/$tc/usr" ]; then
   ub="$TREE/$tc/usr/bin"
-  names="sh bash make sed grep gawk awk which find xargs patch pkg-config pkgconf
+  names="sh bash make sed grep gawk awk which find xargs patch tar pkg-config pkgconf
     basename rm cp mv mkdir cat tr sort uname chmod ln ls expr touch head
     tail wc env printf mktemp test ["
   mkdir -p "$WORK/run" "$WORK/temp"
+  # program, its arguments (one word list): run from cmd.exe with PATH =
+  # System32 in the scratch directory, as R starts them (a native parent).
+  # Not as this script's child: on windows-11-arm (CI, 2026-11-11) every
+  # MSYS2 program in TC exited non-zero with no output when this script's
+  # own MSYS2 bash (the env's m2, x86_64 under emulation) started it, while
+  # the same sh.exe started from cmd.exe (the mount-table check below)
+  # ran. A child of an MSYS2 process inherits from it; R's are not.
+  run_cmd() {
+    printf '@"%s" %s\r\n' "$(cygpath -w "$1")" "$2" > "$WORK/run/run.bat"
+    (cd "$WORK/run" && PATH="$WIN_SYSTEM32" "$WIN_SYSTEM32/cmd.exe" //c run.bat 2>&1 < /dev/null)
+  }
   bad=""
   n=0
   for x in $names; do
@@ -378,18 +404,20 @@ if [ "$OS" = windows ] && [ -d "$TREE/$tc/usr" ]; then
   usr/bin/$x.exe (missing)"
       continue
     fi
-    args=(--version)
-    [ "$x" != "[" ] || args=(1 = 1 "]")
-    if ! out="$(cd "$WORK/run" && PATH="$WIN_SYSTEM32" "$ub/$x.exe" "${args[@]}" 2>&1 < /dev/null)"; then
+    args="--version"
+    [ "$x" != "[" ] || args="1 = 1 ]"
+    rc=0
+    out="$(run_cmd "$ub/$x.exe" "$args")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
       bad="$bad
-  usr/bin/$x.exe ${args[*]}: $(printf '%s' "$out" | tr -d '\r' | head -3 | tr '\n' ' ')"
+  usr/bin/$x.exe $args: exit $rc: $(printf '%s' "$out" | tr -d '\r' | head -3 | tr '\n' ' ')"
       continue
     fi
     n=$((n + 1))
   done
   want="$(awk '{ sub(/\r$/, "") } $1 == "package:" { p = $2 } p == "m2-make" && $1 == "version:" && v == "" { v = $2 } END { print v }' "$TREE/$tc/usr/SOURCES")"
   want="${want%.*}"
-  got="$(cd "$WORK/run" && PATH="$WIN_SYSTEM32" "$ub/make.exe" --version 2>&1 | tr -d '\r' | sed -n '1s/^GNU Make //p')" || true
+  got="$(run_cmd "$ub/make.exe" --version | tr -d '\r' | sed -n '1s/^GNU Make //p')" || true
   [ -n "$want" ] && [ "$got" = "$want" ] || bad="$bad
   usr/bin/make.exe says GNU Make '$got', SOURCES records m2-make '${want:-(none)}' (less MSYS's release)"
   fstab="$TREE/$tc/etc/fstab"
@@ -443,4 +471,19 @@ got="$("$flang_exe" --version 2>&1 | tr -d '\r' | sed -n '1s/^flang version //p'
 [ -n "$want" ] && [ "$got" = "$want" ] ||
   { echo "error: ${flang_exe#"$TREE"/} says '$got', SOURCES records flang-zig '${want:-(none)}'" >&2; exit 1; }
 echo "== flang verified: ${flang_exe#"$TREE"/} $got, the flang-zig version SOURCES records"
+
+# The extras group's cmake (feat-extras-group): Kitware's archive; it
+# runs, says the version SOURCES records for it, and finds its modules at
+# ../share/cmake-<major>.<minor> (--system-information would configure a
+# project; this asks only where its root is). Standalone only, as zig/.
+[ -x "$cmake_exe" ] || { echo "error: ${cmake_exe#"$TREE"/} is missing (the extras group's cmake)" >&2; exit 1; }
+want="$(awk '{ sub(/\r$/, "") } $1 == "package:" { p = $2 } p == "cmake" && $1 == "version:" && v == "" { v = $2 } END { print v }' "$TREE/$tc/cmake/SOURCES")"
+got="$("$cmake_exe" --version 2>&1 | tr -d '\r' | sed -n '1s/^cmake version //p')" || true
+[ -n "$want" ] && [ "$got" = "$want" ] ||
+  { echo "error: ${cmake_exe#"$TREE"/} says '$got', SOURCES records cmake '${want:-(none)}'" >&2; exit 1; }
+printf 'message("${CMAKE_ROOT}")\n' > "$WORK/root.cmake"
+root="$(cd "$WORK" && "$cmake_exe" -P root.cmake 2>&1 | tr -d '\r')" || true
+[ -f "$root/Modules/CMakeDetermineCCompiler.cmake" ] ||
+  { echo "error: ${cmake_exe#"$TREE"/}'s CMAKE_ROOT is '$root', which holds no Modules/CMakeDetermineCCompiler.cmake" >&2; exit 1; }
+echo "== cmake verified: ${cmake_exe#"$TREE"/} $got, the cmake version SOURCES records; its modules at ${root#"$TREE"/}"
 echo "== toolchain tree verified ($OS)"

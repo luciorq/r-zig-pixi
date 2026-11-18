@@ -33,9 +33,16 @@ chmod +x scripts/*.sh
 # (build.zig's installEnvRuntime: the CA bundle, fontconfig's
 # configuration, Tcl/Tk; vendor-libs.sh: the shared libraries) is left
 # out here, since the prefix is the env: its own packages provide all of
-# it. On Windows, etc/Renviron.site points tcltk at the tk package's DLLs
-# instead (MY_TCLTK, installEnvRuntime).
-bash scripts/zig-build.sh
+# it. A Windows full build points tcltk at the tk package's DLLs in
+# etc/Renviron.site instead (MY_TCLTK, installEnvRuntime); r-zig-slim has
+# no tcltk on any OS, so it writes no MY_TCLTK.
+# On Windows, winCairo.dll links cairo, which R's build compiles from the
+# recipe's cairo source (-Dcairo; zigbuild/cairo.zig).
+cairo=()
+if [ -d cairo-src ]; then
+  cairo=("-Dcairo=$(cygpath -m "$PWD/cairo-src")")
+fi
+bash scripts/zig-build.sh "${cairo[@]}"
 # The toolchain build (zigbuild/toolchain/build.zig), into the env itself,
 # as the dev tree's groups are installed into dist/toolchain/R-<ver>-zig.
 # Here too conda's own packages provide the groups' files where they are
@@ -50,3 +57,8 @@ if [ -d pkgconf-src ]; then
   pkgconf=("-Dpkgconf=$(cygpath -m "$PWD/pkgconf-src")")
 fi
 R_TOOLCHAIN_PREFIX="$PREFIX" bash scripts/zig-toolchain.sh "${pkgconf[@]}"
+# R's recommended packages (feat-recommended-packages PLAN.md), into the
+# env with the env's R: r-zig-recommended's files (the recipe's globs;
+# r-zig-slim leaves them out). Last: they need R and, for Matrix's
+# makefile rules, make, which the build env has.
+R_RECOMMENDED_PREFIX="$PREFIX" bash scripts/zig-recommended.sh

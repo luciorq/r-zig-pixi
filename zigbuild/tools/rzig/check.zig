@@ -1,8 +1,7 @@
 //! rzig's check mode (feat-standalone-toolchain B26 a, B32 a): whether a
 //! toolchain group's tools are there, before anything is compiled. The
 //! install preflight (patch 0009: `--rzig-check=package`, one call per
-//! package) and R CMD config (patch 0010: `--rzig-check=build-tools`)
-//! call it by CC's name, so the text that names a missing group comes
+//! package) calls it by CC's name, so the text that names a missing group comes
 //! from one place on every channel: rzig. Any of rzig's names takes it,
 //! as its only argument (zig-cc, or gcc.exe on Windows):
 //!
@@ -12,10 +11,13 @@
 //!                             `command -v` finds it: on unix the first
 //!                             word of $MAKE (etc/Renviron sets it), else
 //!                             make; on Windows make, whatever MAKE says
-//!                             (install.R and R CMD config run make there),
+//!                             (install.R runs make there),
 //!                             and sh, which runs configure.win (the
 //!                             binutils Makeconf.win names are rzig's own
 //!                             names beside it, binutils.zig)
+//!   --rzig-check=extras       cmake on PATH, as a package's configure or
+//!                             makefile runs it (the extras group,
+//!                             feat-extras-group)
 //!   --rzig-check=package      the install preflight for the package in
 //!                             the working directory (patch 0009), decided
 //!                             as `rzig build` decides (pkgbuild.decide: the
@@ -45,6 +47,14 @@
 //!                             CLINK_CPPFLAGS is set after the preflight, a
 //!                             user Makevars skips 0009, and use_LTO and
 //!                             Windows' --debug are not passed.
+//!                             And a note, never a stop: a package that
+//!                             needs make whose DESCRIPTION's
+//!                             SystemRequirements name cmake, with no
+//!                             cmake on PATH, gets the extras group's text
+//!                             after "<pkg>: note: ..." on stderr, whatever
+//!                             the exit (the user's decision 3.1 a,
+//!                             2026-11-13: whether its build runs cmake is
+//!                             not known before it runs, so no stop).
 //!
 //! All there: one line on stdout, what it found, and exit 0. A tool
 //! missing: a line that says which, then its group's text (groups.zig), on
@@ -94,7 +104,7 @@ const pkgplan = @import("pkgplan.zig");
 
 pub const flag = "--rzig-check";
 
-pub const Kind = enum { compilers, fortran, build_tools, package };
+pub const Kind = enum { compilers, fortran, build_tools, extras, package };
 
 /// The check `arg` asks for; null when it is none. zig-fc's (`fc`) plain
 /// check is fortran's.
@@ -104,6 +114,7 @@ pub fn parse(arg: []const u8, fc: bool) error{UnknownCheck}!?Kind {
     const v = arg[flag.len + 1 ..];
     if (mem.eql(u8, v, "fortran")) return .fortran;
     if (mem.eql(u8, v, "build-tools")) return .build_tools;
+    if (mem.eql(u8, v, "extras")) return .extras;
     if (mem.eql(u8, v, "package")) return .package;
     return error.UnknownCheck;
 }
@@ -122,6 +133,7 @@ pub fn run(ctx: *Ctx, kind: Kind) !Result {
         .compilers => compilers(ctx, false),
         .fortran => compilers(ctx, true),
         .build_tools => buildTools(ctx),
+        .extras => extras(ctx),
         .package => package(ctx),
     };
 }
@@ -203,7 +215,7 @@ const Found = union(enum) { ok: []const u8, missing: []const u8 };
 
 /// The build tools: what was found (one line), or what is missing.
 fn buildToolsFound(ctx: *Ctx) !Found {
-    // R on Windows runs make whatever MAKE says (install.R, R CMD config)
+    // R on Windows runs make whatever MAKE says (install.R)
     const make_var = if (ctx.os == .windows) null else ctx.getenv("MAKE");
     var words = mem.tokenizeScalar(u8, make_var orelse "make", ' ');
     const word = words.next() orelse "make";
@@ -214,19 +226,27 @@ fn buildToolsFound(ctx: *Ctx) !Found {
             try ctx.fmt("no {s} on PATH (MAKE={s})", .{ word, m })
         else
             "no make on PATH";
-        return .{ .missing = if (isPath(word)) what else try notOnPath(ctx, what, word) };
+        return .{ .missing = if (isPath(word)) what else try notOnPath(ctx, what, word, usr_bin) };
     };
     const line = try ctx.fmt("build-tools ok: make at {s}", .{try display(ctx, make)});
-    // R runs configure.win and config.sh through sh (install.R, rcmdfn.c)
+    // R runs configure.win through sh (install.R)
     if (ctx.os != .windows) return .{ .ok = line };
-    const sh = (try find_zig.onPath(ctx, "sh")) orelse return .{ .missing = try notOnPath(ctx, "no sh on PATH", "sh") };
+    const sh = (try find_zig.onPath(ctx, "sh")) orelse return .{ .missing = try notOnPath(ctx, "no sh on PATH", "sh", usr_bin) };
     return .{ .ok = try ctx.fmt("{s}; sh at {s}", .{ line, try display(ctx, sh) }) };
 }
 
-/// `what`, the line for a build tool PATH does not have, saying so when R's
-/// own environment has it where r-zig-build-tools installs it (PHASE4 open
-/// point I a): unix <dir>/bin (conda-forge's make), Windows m2's
-/// <dir>/usr/bin (make and sh; <dir> is <root>/Library there). That is an
+/// Where a conda env's package puts a group's tool, under the env's
+/// <dir>: unix bin; on Windows (<dir> is <root>/Library) m2's usr/bin for
+/// the build tools, bin for cmake.
+const Sub = struct { unix: []const u8, windows: []const u8 };
+const usr_bin: Sub = .{ .unix = "bin", .windows = "usr/bin" };
+const env_bin: Sub = .{ .unix = "bin", .windows = "bin" };
+
+/// `what`, the line for a tool PATH does not have, saying so when R's
+/// own environment has it where its group's package installs it (PHASE4 open
+/// point I a): unix <dir>/bin (conda-forge's make and cmake), Windows m2's
+/// <dir>/usr/bin (make and sh) and <dir>/bin (cmake; <dir> is
+/// <root>/Library there). That is an
 /// environment used without activation: an IDE pointed at <env>/bin/R, or
 /// win-64's R.bat, which adds nothing to PATH. On Windows R itself puts
 /// <dir>/usr/bin on PATH, after the group's usr/bin, under R CMD and in
@@ -234,11 +254,57 @@ fn buildToolsFound(ctx: *Ctx) !Found {
 /// outside R. Finding the tool stays PATH's (B34's note); this only says
 /// why it was not found. The standalone tree and the wheel have none
 /// there.
-fn notOnPath(ctx: *Ctx, what: []const u8, name: []const u8) ![]const u8 {
+fn notOnPath(ctx: *Ctx, what: []const u8, name: []const u8, sub: Sub) ![]const u8 {
     const e = (try environment.own(ctx)) orelse return what;
-    const bin = try ctx.fmt("{s}/{s}", .{ e.dir, if (ctx.os == .windows) "usr/bin" else "bin" });
+    const bin = try ctx.fmt("{s}/{s}", .{ e.dir, if (ctx.os == .windows) sub.windows else sub.unix });
     const p = (try find_zig.inDir(ctx, bin, name)) orelse return what;
     return ctx.fmt("{s}; {s} is installed in R's environment, which is not on PATH: activate it (pixi shell, conda activate) or start R with pixi run", .{ what, try display(ctx, p) });
+}
+
+fn extras(ctx: *Ctx) !Result {
+    return switch (try extrasFound(ctx)) {
+        .ok => |line| .{ .code = 0, .line = line },
+        .missing => |what| fail(ctx, 127, what, .extras),
+    };
+}
+
+/// The extras group: cmake on PATH, as a package's configure script or
+/// makefile runs it (`cmake`, a plain name).
+fn extrasFound(ctx: *Ctx) !Found {
+    const cmake = (try find_zig.onPath(ctx, "cmake")) orelse
+        return .{ .missing = try notOnPath(ctx, "no cmake on PATH", "cmake", env_bin) };
+    return .{ .ok = try ctx.fmt("extras ok: cmake at {s}", .{try display(ctx, cmake)}) };
+}
+
+/// Whether DESCRIPTION's SystemRequirements field (with its continuation
+/// lines) names cmake, in any case: how a CRAN package says its build runs
+/// it (nloptr, s2, RcppParallel... "CMake (>= 3.x)", "cmake").
+pub fn needsCmake(description: []const u8) bool {
+    var lines = mem.splitScalar(u8, description, '\n');
+    var in_field = false;
+    while (lines.next()) |raw| {
+        const l = mem.trimEnd(u8, raw, "\r");
+        if (l.len > 0 and (l[0] == ' ' or l[0] == '\t')) {
+            if (in_field and std.ascii.findIgnoreCase(l, "cmake") != null) return true;
+            continue;
+        }
+        in_field = std.ascii.startsWithIgnoreCase(l, "SystemRequirements:");
+        if (in_field and std.ascii.findIgnoreCase(l["SystemRequirements:".len..], "cmake") != null) return true;
+    }
+    return false;
+}
+
+/// The preflight's note for cmake (the header): a package that needs make
+/// and names cmake in SystemRequirements, with no cmake on PATH. Printed,
+/// never a stop.
+fn cmakeNote(ctx: *Ctx, name: []const u8, pkg_dir: []const u8) !void {
+    const path = try ctx.fmt("{s}/DESCRIPTION", .{pkg_dir});
+    const text = std.Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(1 << 20)) catch return;
+    if (!needsCmake(text)) return;
+    switch (try extrasFound(ctx)) {
+        .ok => {},
+        .missing => |what| try groups.report(ctx, try ctx.fmt("{s}: note: its SystemRequirements name cmake, and {s}: its build stops where it runs cmake", .{ name, what }), .extras),
+    }
 }
 
 /// A switch in the environment, as install.R sets it: set, not empty, not "0".
@@ -336,6 +402,7 @@ fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
     const needs_make = configure or d.tier == .make;
     const why: ?[]const u8 = if (configure) "a configure script R runs" else if (d.tier == .make) d.reason else null;
     const res = try groupsFor(ctx, name, why, fortran);
+    if (needs_make) try cmakeNote(ctx, name, pkg_dir);
     if (res.code != 0) return res;
     const tier: []const u8 = switch (d.tier) {
         .r_only => "no src/",
@@ -398,6 +465,7 @@ test parse {
     try testing.expectEqual(Kind.fortran, (try parse("--rzig-check=fortran", false)).?);
     try testing.expectEqual(Kind.build_tools, (try parse("--rzig-check=build-tools", true)).?);
     try testing.expectEqual(Kind.package, (try parse("--rzig-check=package", false)).?);
+    try testing.expectEqual(Kind.extras, (try parse("--rzig-check=extras", false)).?);
     for ([_][]const u8{ "--rzig-check=make", "--rzig-check=", "--rzig-check=Fortran" }) |x| {
         try testing.expectError(error.UnknownCheck, parse(x, false));
     }
@@ -848,4 +916,87 @@ test "compilers: a zig that does not run, exit 1 and why" {
         try testing.expectEqual(1, (try run(c, .compilers)).code);
         try testing.expectEqualStrings(f.fmt("rzig-test: {s} does not say its zig version{s}", .{ zig, tail }), f.takeWarnings());
     }
+}
+
+test "extras: cmake on PATH; none, exit 127 and the extras group's text; the env's named" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const text = try groups.text(c.arena, .extras, groups.this);
+    try f.env.put("PATH", f.path("nothing"));
+    try testing.expectEqual(127, (try run(c, .extras)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no cmake on PATH\n{s}", .{text}), f.takeWarnings());
+    // conda-forge's cmake in R's environment, not on PATH
+    try f.tmp.dir.createDirPath(testing.io, "env/lib/R/bin/toolchain");
+    c.self_exe = f.path("env/lib/R/bin/toolchain/zig-cc");
+    const cmake = try f.touchProgram("env/bin/cmake");
+    try testing.expectEqual(127, (try run(c, .extras)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no cmake on PATH; {s} is installed in R's environment, which is not on PATH: activate it (pixi shell, conda activate) or start R with pixi run\n{s}", .{ cmake, text }), f.takeWarnings());
+    try f.env.put("PATH", f.path("env/bin"));
+    const r = try run(c, .extras);
+    try testing.expectEqual(0, r.code);
+    try testing.expectEqualStrings(f.fmt("extras ok: cmake at {s}", .{cmake}), r.line);
+    // Windows: conda-forge's cmake.exe is in Library/bin, not m2's usr/bin
+    c.os = .windows;
+    try f.env.put("PATH", f.path("nothing"));
+    try f.tmp.dir.createDirPath(testing.io, "wenv/Library/lib/R/bin/toolchain");
+    c.self_exe = f.path("wenv/Library/lib/R/bin/toolchain/gcc.exe");
+    _ = try f.touchProgram("wenv/Library/usr/bin/cmake");
+    try testing.expectEqual(127, (try run(c, .extras)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no cmake on PATH\n{s}", .{text}), f.takeWarnings());
+    const wcmake = try f.touchProgram("wenv/Library/bin/cmake");
+    try testing.expectEqual(127, (try run(c, .extras)).code);
+    try testing.expect(mem.startsWith(u8, f.takeWarnings(), f.fmt("rzig-test: no cmake on PATH; {s} is installed", .{slashed(&f, wcmake)})));
+}
+
+test needsCmake {
+    try testing.expect(needsCmake("Package: nloptr\nSystemRequirements: cmake (>= 3.2.0) to build nlopt\n"));
+    // a continuation line, CRLF, any case
+    try testing.expect(needsCmake("Package: s2\r\nSystemRequirements: OpenSSL >= 1.0.1,\r\n    CMake (>= 3.5)\r\nLicense: Apache\r\n"));
+    try testing.expect(needsCmake("systemrequirements: CMAKE\n"));
+    // another field's cmake, or none
+    try testing.expect(!needsCmake("Package: x\nDescription: no\n    cmake here\nSystemRequirements: GNU make\n"));
+    try testing.expect(!needsCmake("Package: x\nSystemRequirements: GNU make\nNote: cmake\n"));
+    try testing.expect(!needsCmake(""));
+}
+
+test "package: a note, never a stop, for a make package whose SystemRequirements name cmake" {
+    // the user's decision 3.1 (a), 2026-11-13
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-ins
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    const zig = try fakeZig(&f, "bin/zig", same_zig);
+    try f.env.put("ZIG_BIN", zig);
+    const make = try f.touchProgram("p/make");
+    try f.env.put("PATH", f.path("p"));
+    const text = try groups.text(c.arena, .extras, groups.this);
+    try f.write("n/DESCRIPTION", "Package: nl\nSystemRequirements: cmake (>= 3.2.0)\n", .default_file);
+    try f.write("n/src/Makevars", "all: $(SHLIB)\n", .default_file);
+    try f.touch("n/src/a.c");
+    var res = try packageIn(c, r, f.path("n"));
+    try testing.expectEqual(0, res.code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: nl: note: its SystemRequirements name cmake, and no cmake on PATH: its build stops where it runs cmake\n{s}", .{text}), f.takeWarnings());
+    // with cmake: no note, and the line as before
+    _ = try f.touchProgram("p/cmake");
+    res = try packageIn(c, r, f.path("n"));
+    try testing.expectEqual(0, res.code);
+    try testing.expectEqualStrings("", f.takeWarnings());
+    try testing.expect(mem.endsWith(u8, res.line, f.fmt("build-tools ok: make at {s}", .{make})));
+    // a package that needs no make: no note (rzig build runs no cmake)
+    try f.tmp.dir.deleteFile(testing.io, "p/cmake");
+    try f.write("t/DESCRIPTION", "Package: t\nSystemRequirements: cmake\n", .default_file);
+    try f.touch("t/src/a.c");
+    res = try packageIn(c, r, f.path("t"));
+    try testing.expectEqual(0, res.code);
+    try testing.expectEqualStrings("", f.takeWarnings());
+    // with the build tools missing too: the stop, and the note after it
+    try f.env.put("PATH", f.path("nothing"));
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("n"))).code);
+    const w = f.takeWarnings();
+    try testing.expect(mem.startsWith(u8, w, "rzig-test: nl needs make: "));
+    try testing.expect(mem.endsWith(u8, w, f.fmt("rzig-test: nl: note: its SystemRequirements name cmake, and no cmake on PATH: its build stops where it runs cmake\n{s}", .{text})));
 }

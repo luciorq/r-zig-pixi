@@ -1,6 +1,6 @@
 //! Build R with `zig build` — no autoconf, no make (Milestone 5).
 //!
-//! The build graph replicates what R 4.6.1's configure+make pipeline does,
+//! The build graph replicates what R 4.6.2's configure+make pipeline does,
 //! on linux-64 and macOS so far (see .github/devdocs/feat-zig-build/,
 //! FINALIZATION.md for phase status — F1-F5 done, F6 Windows remains):
 //!   1. configure results are replayed from a vendored per-(platform,variant)
@@ -19,10 +19,13 @@
 //!
 //! Two independent build options select the profile:
 //!   -Dvariant=slim|full|minimal  (default slim) — tcltk/readline/NLS/
-//!      jpeg/tiff for full; minimal (the Python-wheel profile, unix only)
-//!      additionally drops cairo/png, ICU, OpenMP and libdeflate. Each is
-//!      a real configure profile (own vendored config dir), not a flag
-//!      toggle, since these are compile-time capabilities in R.
+//!      jpeg/tiff for full; minimal (the Python-wheel profile)
+//!      additionally drops cairo/png, ICU, OpenMP and libdeflate. One
+//!      table (variantFeatures) holds for every OS, Windows included
+//!      (readline is unix's only). Each is a real configure profile (own
+//!      vendored config dir, checked against the table by
+//!      checkVariantConfig), not a flag toggle, since these are
+//!      compile-time capabilities in R.
 //!   -Dblas=internal|openblas  (default internal) — orthogonal to variant;
 //!      a pure link-time swap (R calls BLAS/LAPACK through a fixed
 //!      Fortran ABI either way), so no separate vendored config needed.
@@ -47,8 +50,9 @@ const floors = @import("zigbuild/tools/rzig/floors.zig");
 // The static-libc++ mirror against conda-forge zig's shared one, rzig's
 // for packages and R's own build's (staticLibcxxLibDir).
 const libcxx_mirror = @import("zigbuild/tools/rzig/libcxx_mirror.zig");
+const cairo = @import("zigbuild/cairo.zig");
 
-const r_version = "4.6.1";
+const r_version = "4.6.2";
 
 /// macOS deployment target of everything this build links, and of the
 /// packages compiled through rzig (which spells it "<arch>-native.13.0"):
@@ -94,8 +98,76 @@ const Arch = enum {
 /// [feature.minimal] has the rationale) and is what the r-zig Python wheel
 /// wraps. Which pieces of the compile graph it drops is not decided here
 /// but read from its vendored config (Ctx.openmp/Ctx.devcairo), the same
-/// way configure's own Makefiles decide.
+/// way configure's own Makefiles decide; checkVariantConfig stops the build
+/// when that config disagrees with variantFeatures.
 const Variant = enum { slim, full, minimal };
+
+/// What a variant has: one table for every OS (the user, 2026-11-14:
+/// Windows stops being "always full"; chore-release-11 PLAN.md finding 23).
+/// The vendored config dir says the same, define by define and key by key,
+/// and checkVariantConfig compares the two on every build.
+const Features = struct {
+    nls: bool, // ENABLE_NLS: translated messages
+    tcltk: bool, // HAVE_TCLTK, TCLTK_LIBS: the tcltk package's DLL
+    jpeg: bool, // HAVE_JPEG, -ljpeg in BITMAP_LIBS
+    tiff: bool, // HAVE_TIFF, -ltiff in BITMAP_LIBS
+    png: bool, // HAVE_PNG
+    cairo: bool, // BUILD_DEVCAIRO_TRUE "": cairo.so, winCairo.dll
+    icu: bool, // USE_ICU (Windows: ICU_LIBS)
+    libdeflate: bool, // USE_LIBDEFLATE (Windows: LIBDEFLATE_LIBS)
+    // OpenMP for packages: SHLIB_OPENMP_CFLAGS (Makeconf), and with it
+    // libomp in the base
+    openmp_pkgs: bool,
+    // OpenMP inside R: SUPPORT_OPENMP, HAVE_OPENMP_SIMDRED,
+    // R_OPENMP_CFLAGS; R's own C is compiled with -fopenmp and libR links
+    // libomp. On Windows too, unlike upstream, whose config.h leaves it
+    // off because MinGW's libgomp was "too slow to be usable"
+    // (gnuwin32/fixed/h/config.h, main/Makefile.win's array-CPPFLAGS);
+    // r-zig links LLVM's libomp there, as on unix.
+    openmp_r: bool,
+    // OS-inherent, not the variant's choice:
+    readline: bool, // HAVE_LIBREADLINE: unix full only (Windows has getline)
+    memory_profiling: bool, // R_MEMORY_PROFILING: upstream's default per OS (Windows on, unix off)
+};
+
+fn variantFeatures(variant: Variant, os: Os) Features {
+    const slim = Features{
+        .nls = false,
+        .tcltk = false,
+        .jpeg = false,
+        .tiff = false,
+        .png = true,
+        .cairo = true,
+        .icu = true,
+        .libdeflate = true,
+        .openmp_pkgs = true,
+        .openmp_r = true,
+        .readline = false,
+        .memory_profiling = os == .windows,
+    };
+    return switch (variant) {
+        .slim => slim,
+        .full => blk: {
+            var f = slim;
+            f.nls = true;
+            f.tcltk = true;
+            f.jpeg = true;
+            f.tiff = true;
+            f.readline = os != .windows;
+            break :blk f;
+        },
+        .minimal => blk: {
+            var f = slim;
+            f.png = false;
+            f.cairo = false;
+            f.icu = false;
+            f.libdeflate = false;
+            f.openmp_pkgs = false;
+            f.openmp_r = false;
+            break :blk f;
+        },
+    };
+}
 
 /// F3.2: orthogonal to Variant — a pure link-time swap, not a separate
 /// configure profile. R's own C code calls BLAS/LAPACK through a fixed
@@ -112,27 +184,39 @@ const Ctx = struct {
     // only libR/libRblas/libRlapack use this. Packages/modules always use
     // SHLIB_EXT, which is ".so" on every platform R supports.
     variant: Variant,
+    feat: Features, // variantFeatures(variant, os)
     blas: Blas,
     conda: []const u8,
     src_abs: []const u8, // absolute path of R source tree
     src: std.Build.LazyPath,
     prefix: []const u8, // absolute install prefix
     rhome: []const u8, // prefix ++ "/lib/R"
-    config_dir: []const u8, // "zigbuild/config/<platform>-<variant>" — vendored config.h/Rconfig.h/subst.txt/(Makeconf.win on Windows)
-    // From the vendored S-table (unix; see build()): OpenMP compile/link
-    // flags only when configure found them (R_OPENMP_CFLAGS non-empty), and
-    // grDevices' cairo.so only when configure would have built it
-    // (BUILD_DEVCAIRO_TRUE is "" — src/library/grDevices/src/Makefile.in's
-    // `@BUILD_DEVCAIRO_TRUE@ cairodevice`). Both false for minimal only.
+    config_dir: []const u8, // "zigbuild/config/<platform>-<variant>" (Windows: win-<variant>) — vendored config.h/Rconfig.h/subst.txt
+    // From the vendored S-table (applyVariantConfig, every OS): OpenMP
+    // compile/link flags for R's own C only when configure found them
+    // (R_OPENMP_CFLAGS non-empty), packages' OpenMP when Makeconf offers
+    // it (SHLIB_OPENMP_CFLAGS non-empty; Windows' etc/x64/Makeconf
+    // @OPENMP@), and grDevices' cairo.so (Windows: winCairo.dll) only
+    // when configure would have built it (BUILD_DEVCAIRO_TRUE is "" —
+    // src/library/grDevices/src/Makefile.in's `@BUILD_DEVCAIRO_TRUE@
+    // cairodevice`). All false for minimal only.
     openmp: bool,
+    openmp_pkgs: bool,
     devcairo: bool,
     flangrt_dir: []const u8, // conda clang resource dir holding libflang_rt.runtime.a (findFlangRt)
+    // config.h's CC_VER and FC_VER, which R_compiled_by() returns: what
+    // the compilers of this build say (versionLine), on every OS
+    cc_ver: []const u8,
+    fc_ver: []const u8,
     sdk: []const u8, // macOS: the installed SDK's root (xcrun); "" elsewhere
     // The zig lib dir of R's links, null for zig's own: a mirror of it
     // where conda-forge's zig would link a shared libc++
     // (staticLibcxxLibDir). Set on every unix link (addSharedLib, R.bin);
     // always null on Windows, whose links leave it alone.
     zig_lib_dir: ?std.Build.LazyPath,
+    // Windows: cairo's unpacked source (-Dcairo), else null for
+    // build.zig.zon's lazy `cairo` (zigbuild/cairo.zig; winCairo.dll).
+    cairo_dir: ?[]const u8,
     prefix_is_env: bool, // the install prefix is the env R is built in (the conda build): samePhysicalDir
     // Every C compile of R's own starts with these (addCGroup, the cairo
     // module): no directory of the build machine in __FILE__, the debug
@@ -312,9 +396,19 @@ pub fn build(b: *std.Build) !void {
         return error.MissingRSource;
     };
 
-    var variant = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal (unix only)") orelse .slim;
+    const variant = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
+    const cairo_dir = b.option([]const u8, "cairo", "cairo's source tarball, unpacked (the conda build's; else build.zig.zon's cairo): Windows' winCairo.dll");
 
+    // R's platform is the native one of the zig that runs this build,
+    // which is the platform pixi installed the environment for (env.sh
+    // stops when that is not the platform its shell runs on: an emulated
+    // environment, chore-release-11 finding 29). It must be: R links that
+    // environment's conda libraries, so a -Dtarget naming another arch
+    // could only fail at the link. build.zig takes no -Dtarget, and
+    // makes the rest of the query explicit below. Packages are compiled
+    // for R's platform by rzig, which is built for it and names it on
+    // every command (zigbuild/tools/rzig/target.zig).
     const native = b.resolveTargetQuery(.{});
     const os: Os = switch (native.result.os.tag) {
         .linux => .linux,
@@ -389,20 +483,6 @@ pub fn build(b: *std.Build) !void {
         std.mem.trim(u8, b.run(&.{ "/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path" }), " \t\r\n")
     else
         "";
-    // gnuwin32 has no slim/full switch at all (jpeg/tiff/tcltk are always
-    // on — "slim==full on Windows", a pre-existing project convention);
-    // -Dvariant is meaningless there, force .full regardless of what was
-    // passed rather than silently building something that doesn't exist.
-    // Except minimal: nobody asks for it by accident, and quietly handing
-    // back a full build (tcltk, jpeg, tiff, cairo) is the opposite of what
-    // was asked for.
-    if (os == .windows) {
-        if (variant == .minimal) {
-            std.debug.print("error: -Dvariant=minimal is not available on Windows (gnuwin32 has no switches to drop cairo/ICU/OpenMP; Windows always builds full)\n", .{});
-            return error.UnsupportedVariant;
-        }
-        variant = .full;
-    }
     const arch: Arch = switch (target.result.cpu.arch) {
         .x86_64 => .x86_64,
         .aarch64 => .aarch64,
@@ -422,7 +502,17 @@ pub fn build(b: *std.Build) !void {
         .macos => ".dylib",
         .windows => ".dll",
     };
-    const config_dir = b.fmt("zigbuild/config/{s}-{s}", .{ platform, @tagName(variant) });
+    // Windows: one directory per variant for both arches,
+    // zigbuild/config/win-{slim,full,minimal} (and win-common's
+    // Makeconf.win, which all three share). gnuwin32's config.h is R's own
+    // fixed one, which picks R_CPU and R_PLATFORM by __aarch64__, and R's
+    // Windows build keeps R_ARCH /x64 on aarch64 too (MkRules.rules: WIN =
+    // 64), so nothing in it is the arch's. Each dir is that file with the
+    // variant table's flips (its PROVENANCE).
+    const config_dir = if (os == .windows)
+        b.fmt("zigbuild/config/win-{s}", .{@tagName(variant)})
+    else
+        b.fmt("zigbuild/config/{s}-{s}", .{ platform, @tagName(variant) });
 
     // R_HOME: <prefix>/lib/R on unix. On Windows this MUST NOT be "lib/R"
     // — NTFS case-folds it into a conda/pixi env's own "Lib" (Python's
@@ -486,6 +576,7 @@ pub fn build(b: *std.Build) !void {
         .os = os,
         .dylib_ext = dylib_ext,
         .variant = variant,
+        .feat = variantFeatures(variant, os),
         .blas = blas,
         .conda = conda,
         .src_abs = src_abs,
@@ -495,19 +586,15 @@ pub fn build(b: *std.Build) !void {
         .config_dir = config_dir,
         .sdk = sdk,
         .zig_lib_dir = try staticLibcxxLibDir(b, io, os),
+        .cairo_dir = cairo_dir,
         .prefix_is_env = samePhysicalDir(io, arena, install_prefix, conda),
-        // Windows keeps these defaults. Its compile graph never passes
-        // `.openmp = true`, so R itself has no OpenMP there, and `openmp`
-        // decides only what packages get: etc/x64/Makeconf's
-        // SHLIB_OPENMP_*FLAGS (@OPENMP@, installWindowsCompilerContract),
-        // and with them libomp.dll in the base (vendor-libs.sh). The files
-        // their compiles and links need are the compilers group's
-        // TC/openmp/ (zigbuild/toolchain/build.zig). It builds its own cairo
-        // device. unix overwrites both from subst.txt right after
-        // loadSubstTable below.
-        .openmp = true,
-        .devcairo = true,
+        // From subst.txt, once it is loaded: applyVariantConfig.
+        .openmp = false,
+        .openmp_pkgs = false,
+        .devcairo = false,
         .flangrt_dir = try findFlangRt(b, io, conda, os),
+        .cc_ver = versionLine(b, &.{ b.graph.zig_exe, "cc", "--version" }),
+        .fc_ver = versionLine(b, &.{ flang_bin, "--version" }),
         .path_flags = &.{},
         .subst = std.StringHashMap([]const u8).init(arena),
         .mk_subst = std.StringHashMap([]const u8).init(arena),
@@ -572,8 +659,7 @@ pub fn build(b: *std.Build) !void {
         try ctx.subst.put("BLAS_LIBS", "-lopenblas");
         try ctx.subst.put("LAPACK_LIBS", "");
     }
-    ctx.openmp = ctx.subst.get("R_OPENMP_CFLAGS").?.len > 0;
-    ctx.devcairo = ctx.subst.get("BUILD_DEVCAIRO_TRUE").?.len == 0;
+    try applyVariantConfig(&ctx, io);
     // FC is the toolchain's Fortran front, rzig's zig-fc (feat-no-host-
     // paths F3c, zigbuild/tools/rzig/fortran.zig), as CC and CXX are its
     // zig-cc and zig-cxx: it runs the flang rzig finds (the toolchain's
@@ -589,7 +675,12 @@ pub fn build(b: *std.Build) !void {
     // Generated headers (what config.status + src/include/Makefile make)
     // ------------------------------------------------------------------
     const geninc = b.addWriteFiles();
-    _ = geninc.addCopyFile(b.path(b.fmt("{s}/config.h", .{config_dir})), "config.h");
+    {
+        // The vendored config.h, with the two lines that name the
+        // capture's compilers rewritten for this build's (setDefine).
+        const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/config.h", .{config_dir})), b.allocator, .limited(4 * 1024 * 1024));
+        _ = geninc.add("config.h", try setDefine(b, try setDefine(b, raw, "CC_VER", ctx.cc_ver), "FC_VER", ctx.fc_ver));
+    }
     _ = geninc.addCopyFile(b.path(b.fmt("{s}/Rconfig.h", .{config_dir})), "Rconfig.h");
     _ = geninc.add("Rversion.h", try genRversionH(&ctx, io));
     _ = geninc.add("Rmath.h", try substFile(&ctx, io, "src/include/Rmath.h0.in"));
@@ -660,13 +751,16 @@ pub fn build(b: *std.Build) !void {
     addCGroup(&ctx, libR_mod, "src/appl", &rspec.appl_c, .{ .openmp = true });
     addCGroup(&ctx, libR_mod, "src/nmath", &rspec.nmath_c, .{ .openmp = true });
     addCGroup(&ctx, libR_mod, "src/extra/tre", &rspec.tre_c, .{
+        .visibility = true,
         .openmp = true,
         .extra = &.{"-I%S/src/extra"},
     });
     addCGroup(&ctx, libR_mod, "src/extra/tzone", &rspec.tzone_c, .{
+        .visibility = true,
         .extra = &.{ "-I%S/src/extra/tzone", "-I%S/src/main" },
     });
     addCGroup(&ctx, libR_mod, "src/extra/xdr", &rspec.xdr_c, .{
+        .visibility = true,
         .openmp = true,
         .extra = &.{"-I%S/src/extra/xdr"},
     });
@@ -720,7 +814,7 @@ pub fn build(b: *std.Build) !void {
     const inetmod = newCMod(&ctx);
     inetmod.addIncludePath(ctx.geninc);
     inetmod.addIncludePath(ctx.path("src/include"));
-    addCGroup(&ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{ .openmp = true });
+    addCGroup(&ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{ .openmp = true, .visibility = true });
     ctx.linkSibling(inetmod, ctx.libR);
     inetmod.linkSystemLibrary("curl", .{ .use_pkg_config = .no });
     ctx.relRPaths(inetmod, .modules);
@@ -734,6 +828,7 @@ pub fn build(b: *std.Build) !void {
 
     {
         const m = newPkgMod(&ctx, "src/library/stats/src", &rspec.stats_c, .{
+            .visibility = true,
             .openmp = true,
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
@@ -750,6 +845,7 @@ pub fn build(b: *std.Build) !void {
     }
     {
         const m = newPkgMod(&ctx, "src/library/graphics/src", &rspec.graphics_c, .{
+            .visibility = true,
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
         try pkg_libs.append(arena, .{ .pkg = "graphics", .lib = addSharedLib(&ctx, "pkg_graphics", m) });
@@ -765,38 +861,42 @@ pub fn build(b: *std.Build) !void {
         try pkg_libs.append(arena, .{ .pkg = "grDevices", .lib = addSharedLib(&ctx, "pkg_grDevices", m) });
     }
     {
-        const m = newPkgMod(&ctx, "src/library/grid/src", &rspec.grid_c, .{});
+        const m = newPkgMod(&ctx, "src/library/grid/src", &rspec.grid_c, .{ .visibility = true });
         try pkg_libs.append(arena, .{ .pkg = "grid", .lib = addSharedLib(&ctx, "pkg_grid", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/methods/src", &rspec.methods_c, .{
+            .visibility = true,
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
         try pkg_libs.append(arena, .{ .pkg = "methods", .lib = addSharedLib(&ctx, "pkg_methods", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/parallel/src", &rspec.parallel_c, .{
+            .visibility = true,
             .extra = &.{"-DHAVE_CONFIG_H"},
         });
         try pkg_libs.append(arena, .{ .pkg = "parallel", .lib = addSharedLib(&ctx, "pkg_parallel", m) });
     }
     {
-        const m = newPkgMod(&ctx, "src/library/splines/src", &rspec.splines_c, .{});
+        const m = newPkgMod(&ctx, "src/library/splines/src", &rspec.splines_c, .{ .visibility = true });
         try pkg_libs.append(arena, .{ .pkg = "splines", .lib = addSharedLib(&ctx, "pkg_splines", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/tools/src", &rspec.tools_c, .{
+            .visibility = true,
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
         try pkg_libs.append(arena, .{ .pkg = "tools", .lib = addSharedLib(&ctx, "pkg_tools", m) });
     }
     {
         const m = newPkgMod(&ctx, "src/library/utils/src", &rspec.utils_c, .{
+            .visibility = true,
             .extra = &.{ "-DHAVE_CONFIG_H", "-I%S/src/main" },
         });
         try pkg_libs.append(arena, .{ .pkg = "utils", .lib = addSharedLib(&ctx, "pkg_utils", m) });
     }
-    if (ctx.variant == .full) {
+    if (ctx.feat.tcltk) {
         // tcltk (library/tcltk/libs/tcltk.so): real Tk bindings, only
         // built for full — slim ships a stub .onLoad that errors out and
         // no compiled code at all (see the R-code side in
@@ -815,7 +915,7 @@ pub fn build(b: *std.Build) !void {
         try extra.append(arena, "-DHAVE_CONFIG_H");
         var it = std.mem.tokenizeScalar(u8, ctx.subst.get("TCLTK_CPPFLAGS").?, ' ');
         while (it.next()) |tok| try extra.append(arena, tok);
-        addCGroup(&ctx, m, "src/library/tcltk/src", &rspec.tcltk_c, .{ .extra = extra.items });
+        addCGroup(&ctx, m, "src/library/tcltk/src", &rspec.tcltk_c, .{ .visibility = true, .extra = extra.items });
         // linux: conda-forge's libtcl8.6.so and libtk8.6.so carry no
         // DT_SONAME, and for such a library lld records in DT_NEEDED the
         // path it was given, which zig makes the env's absolute one. So
@@ -972,13 +1072,16 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // .github/devdocs/feat-cross-platform-standardization/PLAN.md
     // Phase 4.
     try loadSubstFile(ctx, io, ctx.config_dir);
+    // The variant's switches (ctx.openmp, ctx.openmp_pkgs, ctx.devcairo),
+    // and the config dir checked against the variant table, as on unix.
+    try applyVariantConfig(ctx, io);
     // Only a handful of @VAR@ tokens exist at all (found by grepping the
     // vendored file directly, not assumed): CC_VER/FC_VER/VERSION in
     // config.h, PACKAGE_VERSION/RMATH_HAVE_WORKING_LOG1P in Rmath.h0.in.
     try ctx.subst.put("VERSION", r_version);
     try ctx.subst.put("PACKAGE_VERSION", r_version);
-    try ctx.subst.put("CC_VER", "zig cc (LLVM/clang, MinGW target)");
-    try ctx.subst.put("FC_VER", "flang (flang-pixi flang-zig, MinGW target)");
+    try ctx.subst.put("CC_VER", ctx.cc_ver);
+    try ctx.subst.put("FC_VER", ctx.fc_ver);
     try ctx.subst.put("RMATH_HAVE_WORKING_LOG1P", "# define HAVE_WORKING_LOG1P 1");
     // libgnuintl.h.in's 4 tokens — gnuwin32's own Makefile.win generates
     // libgnuintl.h from this .in via the exact same 4 sed substitutions
@@ -1049,7 +1152,10 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // ('psignal.h' / 'trioremap.h' file not found).
     r_core_mod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
     const dll_build = "-DR_DLL_BUILD";
+    // OpenMP (ctx.openmp, slim and full) on the groups unix compiles with
+    // it: main, appl, nmath, tre, xdr, and gnuwin32 in unix's place.
     addCGroup(ctx, r_core_mod, "src/main", &rspec.main_c, .{
+        .openmp = true,
         // -I%S/src/gnuwin32: builtin.c/printutils.c (`rgui_UTF8.h`),
         // edit.c (`run.h`), platform.c/sysutils.c (`dos_wglob.h`) all pull
         // headers straight from gnuwin32's own dir (found via real compile
@@ -1074,9 +1180,10 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     addCGroup(ctx, r_core_mod, "src/main", &rspec.win_mkdtemp_c, .{
         .extra = &.{ "-I%S/src/extra", "-I%S/src/extra/xdr", "-I%S/src/nmath", "-I%S/src/gnuwin32", dll_build },
     });
-    addCGroup(ctx, r_core_mod, "src/appl", &rspec.appl_c, .{ .extra = &.{dll_build} });
-    addCGroup(ctx, r_core_mod, "src/nmath", &rspec.nmath_c, .{ .extra = &.{dll_build} });
+    addCGroup(ctx, r_core_mod, "src/appl", &rspec.appl_c, .{ .openmp = true, .extra = &.{dll_build} });
+    addCGroup(ctx, r_core_mod, "src/nmath", &rspec.nmath_c, .{ .openmp = true, .extra = &.{dll_build} });
     addCGroup(ctx, r_core_mod, "src/extra/tre", &rspec.tre_c, .{
+        .openmp = true,
         .extra = &.{ "-I%S/src/extra", dll_build },
     });
     addCGroup(ctx, r_core_mod, "src/extra/tzone", &rspec.tzone_c, .{
@@ -1090,9 +1197,11 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         .extra = &.{ "-I%S/src/extra/tzone", "-I%S/src/main", dll_build },
     });
     addCGroup(ctx, r_core_mod, "src/extra/xdr", &rspec.xdr_c, .{
+        .openmp = true,
         .extra = &.{ "-I%S/src/extra/xdr", dll_build },
     });
     addCGroup(ctx, r_core_mod, "src/gnuwin32", &rspec.win_gnuwin32_c, .{
+        .openmp = true,
         // gnuwin32's own Makefile carries `extra-CPPFLAGS = -I../library/
         // grDevices/src` specifically for extra.c's `devWindows.h` include
         // (found via a real compile error).
@@ -1285,25 +1394,33 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // so zig's dynamic-lookup naming (which tries {name}.lib, not
     // lib{name}.lib) misses it under the plain "bz2" name — found via a real
     // link error.
-    // icuin/icuuc/icudt: USE_ICU is now on in the vendored config.h (see its
-    // own comment) — platform.c/util.c/registryTZ.c's ICU collation code
-    // needs these at link time. conda-forge's Windows ICU import libs use
-    // ICU4C's short Windows component names (icuin = i18n, not icui18n like
-    // unix) with no lib-prefix quirk this time (plain icuin.lib/icuuc.lib/
-    // icudt.lib, verified present in the pixi env's Library/lib).
+    // ICU_LIBS (icuin/icuuc/icudt) where the variant has ICU (USE_ICU in
+    // the vendored config.h, see its own comment): platform.c/util.c/
+    // registryTZ.c's ICU collation code needs them at link time.
+    // conda-forge's Windows ICU import libs use ICU4C's short Windows
+    // component names (icuin = i18n, not icui18n like unix) with no
+    // lib-prefix quirk this time (plain icuin.lib/icuuc.lib/icudt.lib,
+    // verified present in the pixi env's Library/lib). LIBDEFLATE_LIBS
+    // (-ldeflate) where it has libdeflate (USE_LIBDEFLATE). Both empty for
+    // minimal.
     applyLinkFlags(ctx, r_final_mod, ctx.subst.get("WIN_R_DLL_LIBS").?);
+    applyLinkFlags(ctx, r_final_mod, ctx.subst.get("ICU_LIBS").?);
+    applyLinkFlags(ctx, r_final_mod, ctx.subst.get("LIBDEFLATE_LIBS").?);
     linkFortranRt(ctx, r_final_mod);
-    // R itself is built without OpenMP on Windows, as upstream: gnuwin32's
-    // config.h leaves HAVE_OPENMP off ("has it, but it is too slow to be
-    // usable", said of GCC's libgomp under MinGW-w64), and R's own OpenMP
-    // threads (R_num_math_threads) default to 1 on every platform anyway.
-    // So no Windows compile group sets `.openmp = true` and R.dll links no
-    // libomp (no linkOmp here). Packages get OpenMP all the same:
-    // etc/x64/Makeconf offers SHLIB_OPENMP_*FLAGS = -fopenmp, and rzig
-    // links them against conda-forge's LLVM libomp (llvm-openmp, the
-    // release unix uses): libomp.dll in the base (vendor-libs.sh), omp.h
-    // and libomp.lib in the compilers group's TC/openmp/
-    // (zigbuild/toolchain/build.zig).
+    // OpenMP inside R, as on unix (Features.openmp_r; slim and full): the
+    // groups above compile with -fopenmp and R.dll links libomp
+    // (linkOmp). Upstream's Windows R does not: its config.h leaves
+    // HAVE_OPENMP off ("has it, but it is too slow to be usable", said of
+    // GCC's libgomp under MinGW-w64; main/Makefile.win's array-CPPFLAGS
+    // likewise). r-zig's is LLVM's libomp (llvm-openmp, the zig_* build of
+    // the universe channel on win-64 and win-arm64, the release unix uses;
+    // the user, 2026-11-14). R's own OpenMP threads (R_num_math_threads)
+    // default to 1 on every platform. Packages get OpenMP where Makeconf
+    // offers SHLIB_OPENMP_*FLAGS = -fopenmp (ctx.openmp_pkgs), and rzig
+    // links them against the same libomp: libomp.dll in the base
+    // (vendor-libs.sh), omp.h and libomp.lib in the compilers group's
+    // TC/openmp/ (zigbuild/toolchain/build.zig). minimal: none of it.
+    linkOmp(ctx, r_final_mod);
     const libR = addSharedLib(ctx, "R", r_final_mod);
     ctx.libR = libR;
     ctx.rblas = rblas;
@@ -1322,11 +1439,12 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const lapmod = newCMod(ctx);
     lapmod.addIncludePath(ctx.geninc);
     lapmod.addIncludePath(ctx.path("src/include"));
-    addCGroup(ctx, lapmod, "src/modules/lapack", &rspec.win_lapack_module_c, .{});
+    addCGroup(ctx, lapmod, "src/modules/lapack", &rspec.win_lapack_module_c, .{ .openmp = true });
     lapmod.linkLibrary(rlapack);
     lapmod.linkLibrary(rblas);
     lapmod.linkLibrary(libR);
     linkFortranRt(ctx, lapmod);
+    linkOmp(ctx, lapmod);
     const mod_lapack = addSharedLib(ctx, "mod_lapack", lapmod);
 
     // modules/internet.dll (unix's mod_internet equivalent, same source
@@ -1344,6 +1462,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // compile error.
     inetmod.addIncludePath(ctx.path("src/gnuwin32/fixed/h"));
     addCGroup(ctx, inetmod, "src/modules/internet", &rspec.internet_c, .{
+        .openmp = true,
         // -DHAVE_CURL_CURL_H/-DHAVE_LIBCURL: Makefile.win's own
         // libcurl-CPPFLAGS, gating libcurl.c's real (non-stub) code path.
         .extra = &.{ "-I%S/src/extra/graphapp", "-DHAVE_CURL_CURL_H", "-DHAVE_LIBCURL" },
@@ -1353,6 +1472,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // "libcurl" not "curl": same lib-prefix naming quirk as libbz2/libpng
     // above (conda-forge's Windows import lib is libcurl.lib).
     applyLinkFlags(ctx, inetmod, ctx.subst.get("WIN_INTERNET_LIBS").?);
+    linkOmp(ctx, inetmod);
     const mod_internet = addSharedLib(ctx, "mod_internet", inetmod);
 
     // (The package-compilation contract's gcc.exe and g++.exe are rzig,
@@ -1511,43 +1631,27 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     for ([_][]const u8{ "R.exe", "Rscript.exe" }) |n| {
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(win_rfe.getEmittedBin(), ctx.rhomeInstallDir("bin"), n).step);
     }
-    // bin/config.sh (RHome/bin directly — NOT bin/x64/, unlike Rterm.exe/
-    // R.exe/Rcmd.exe themselves; rcmdfn.c's own fallback case builds this
-    // path as plain "%s/bin/config.sh" with only RHome, no BINDIR
-    // component — found via a real "No such file or directory" once it
-    // was first installed into bin_dir/x64 by mistake, confirmed against
-    // BINDIR's absence in rcmdfn.c's own snprintf call for this one case).
-    // `Rcmd config`/`R CMD config` runs `sh "$RHome/bin/config.sh"` — R
-    // packages' configure scripts routinely call this directly (`R CMD
-    // config CC`, etc.) to discover compiler settings; found via a real
-    // `install.packages("pak")` failure. Confirmed byte-identical to
-    // src/scripts/config (the same file installStaticTree's scripts_s
-    // already copies verbatim into unix's bin/config, no @VAR@
-    // substitution) against a real gnuwin32 build's own bin/config.sh —
-    // just copied under the .sh name Windows' `sh "path.sh"` invocation
-    // convention expects.
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(ctx.path("src/scripts/config"), ctx.rhomeInstallDir("bin"), "config.sh").step);
+    // No bin/config.sh: rcmdfn.c runs R_HOME/bin/toolchain/rzig.exe for
+    // `R CMD config` (patch 0010, feat-config-rzig PLAN.md), with no sh
+    // and no make. Packages' configure scripts and CMake call it
+    // (`R CMD config CC`); pak's install was the first to need it.
     // etc/Rcmd_environ: rcmdfn.c's own `process_Renviron(RHome/etc/
     // Rcmd_environ)` call (right before dispatching to a subcommand) —
     // sets R_OSTYPE=windows among other defaults (R_SHARE_DIR/R_GZIPCMD/
-    // etc). Without it, config.sh's own `if test "${R_OSTYPE}" =
-    // "windows"` check (which sets MAKE=make) silently fails, leaving
-    // MAKE empty — found via a real "eval: -s: invalid option" error
-    // (config.sh's `query="${MAKE} -s ..."` becomes just " -s ..." with
-    // MAKE unset, and `eval`ing that treats "-s" as its own first,
-    // invalid argument) that reproduced identically even when Rcmd.exe
-    // was launched from inside a real Rscript.exe session (ruling out
-    // "R's own startup sets this" as an alternative explanation — it
-    // doesn't). A real, static gnuwin32 file (src/gnuwin32/fixed/etc/
-    // Rcmd_environ) already exists for exactly this — same "vendor
-    // gnuwin32's own ready-made file" pattern as config.h/Rconsole.
-    // RHome/etc/ directly, no bin/x64 arch subdir (matches config.sh's
-    // own path convention, confirmed via rcmdfn.c's literal
-    // string-concat: RHome + "/etc/Rcmd_environ"). r-zig's lines follow
-    // R's (rcmdEnviron).
+    // etc), which R CMD's commands read (R CMD config, rzig's config.zig,
+    // takes Windows' variables and help text by it). A real, static
+    // gnuwin32 file (src/gnuwin32/fixed/etc/Rcmd_environ) already exists
+    // for exactly this — same "vendor gnuwin32's own ready-made file"
+    // pattern as config.h/Rconsole. RHome/etc/ directly, no bin/x64 arch
+    // subdir (rcmdfn.c's literal string-concat: RHome +
+    // "/etc/Rcmd_environ"). r-zig's lines follow R's (rcmdEnviron).
     const rcmd_env_wf = b.addWriteFiles();
     const rcmd_env = rcmd_env_wf.add("Rcmd_environ", try rcmdEnviron(ctx, io));
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rcmd_env, ctx.rhomeInstallDir("etc"), "Rcmd_environ").step);
+    // etc/r-zig.cmake: CMake's default toolchain file, as on unix
+    // (cmakeToolchain); etc/Rcmd_environ names it.
+    const cmake_tc = rcmd_env_wf.add("r-zig.cmake", cmakeToolchain(.windows));
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(cmake_tc, ctx.rhomeInstallDir("etc"), "r-zig.cmake").step);
 
     try installWindowsCompilerContract(ctx, io);
     // The env's runtime data, for a tree that is not the env (Tcl/Tk with
@@ -1570,6 +1674,19 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // Set inside the grDevices block below; winCairo.dll links against it
     // (gnuwin32's own cairo/Makefile.win: `PKG_LIBS = $(CAIRO_LIBS) -L.. -lgrDevices`).
     var grdevices_lib: ?*std.Build.Step.Compile = null;
+    // The bitmap formats winbitmap.c compiles, from the variant table:
+    // upstream's grDevices/src/Makefile.win passes all three always
+    // (winbitmap-CPPFLAGS); winbitmap.c does not include config.h, so these
+    // flags are its only switch, and they follow the same table config.h's
+    // HAVE_PNG/HAVE_JPEG/HAVE_TIFF do (checkVariantConfig). For a format
+    // that is off, patch 0015 (zigbuild/patches) gives a stub that warns
+    // and fails, as unix's rbitmap.c does: devWindows.c and cairoBM.c call
+    // all three unconditionally.
+    var win_grdevices_extra = std.ArrayList([]const u8).empty;
+    try win_grdevices_extra.appendSlice(b.allocator, &.{ "-I%S/src/gnuwin32", "-I%S/src/extra", "-DR_ARCH=\"x64\"" });
+    if (ctx.feat.png) try win_grdevices_extra.append(b.allocator, "-DHAVE_PNG");
+    if (ctx.feat.jpeg) try win_grdevices_extra.append(b.allocator, "-DHAVE_JPEG");
+    if (ctx.feat.tiff) try win_grdevices_extra.append(b.allocator, "-DHAVE_TIFF");
     {
         const m = newPkgMod(ctx, "src/library/tools/src", &rspec.tools_c, .{
             .extra = &.{"-I%S/src/main"},
@@ -1594,29 +1711,32 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         // (gnuwin32, extra) plus R_ARCH for its own .Platform$r_arch-style
         // path logic; winbitmap.c needs the bitmap format #defines — both
         // straight from grDevices/src/Makefile.win's own per-file
-        // CPPFLAGS. Applied to the whole module (including the 12 files
-        // shared with unix, grdevices_shared_c) rather than splitting
-        // per-file flags further — harmless on files that don't
-        // reference them, and matches this module's pre-existing,
-        // already-verified-on-kappa compile flags exactly.
-        const win_grdevices_extra = &.{ "-I%S/src/gnuwin32", "-I%S/src/extra", "-DR_ARCH=\"x64\"", "-DHAVE_PNG", "-DHAVE_JPEG", "-DHAVE_TIFF" };
+        // CPPFLAGS (the bitmap -D flags: win_grdevices_extra above).
+        // Applied to the whole module (including the 12 files shared with
+        // unix, grdevices_shared_c) rather than splitting per-file flags
+        // further — harmless on files that don't reference them.
         const m = newPkgMod(ctx, "src/library/grDevices/src", &rspec.grdevices_shared_c, .{
-            .extra = win_grdevices_extra,
+            .extra = win_grdevices_extra.items,
         });
         addCGroup(ctx, m, "src/library/grDevices/src", &rspec.win_grdevices_c, .{
-            .extra = win_grdevices_extra,
+            .extra = win_grdevices_extra.items,
         });
         m.linkLibrary(libR);
         m.linkLibrary(rgraphapp);
-        // grDevices/src/Makefile.win's own PKG_LIBS: -lpng -ltiff -ljpeg
-        // -lzstd -lz -lwebp -llzma (skipping the optional LIBLERC/
+        // BITMAP_LIBS: grDevices/src/Makefile.win's own PKG_LIBS (-lpng
+        // -ltiff -ljpeg -lzstd -lz -lwebp -llzma), per variant: full all,
+        // slim libpng only, minimal none (skipping the optional LIBLERC/
         // LIBDEFLATE/LIBSHARPYUV extras unless a real link error needs one).
         // "libpng" not "png": conda-forge's Windows import lib is named
         // libpng.lib, not png.lib (same lib{name}.lib naming quirk as
         // libbz2 earlier — found via a real link error). webp dropped
         // entirely: conda-forge's Windows env doesn't ship it at all here
         // (no webp/libwebp lib file anywhere in Library/lib).
-        applyLinkFlags(ctx, m, ctx.subst.get("WIN_BITMAP_LIBS").?);
+        applyLinkFlags(ctx, m, ctx.subst.get("BITMAP_LIBS").?);
+        // zlib on every variant: devPS.c calls compress() for PDF
+        // streams, and a PE DLL does not reach zlib through R.dll's imports
+        // (minimal's BITMAP_LIBS is empty).
+        m.linkSystemLibrary("z", .{ .use_pkg_config = .no });
         // Named grDevices, not pkg_grDevices as the other package DLLs
         // are: winCairo.dll imports it, and a PE import names the DLL by
         // the file name it was linked as; the loader then matches it
@@ -1636,24 +1756,31 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // documented "still deferred" note). Ground truth from gnuwin32's real
     // src/library/grDevices/src/cairo/Makefile.win: one source (cairoBM.c),
     // linked against grDevices.dll itself (-lgrDevices) plus cairo
-    // (CAIRO_LIBS/CAIRO_CPPFLAGS). CAIRO_LIBS now comes from this config
-    // dir's own vendored subst.txt (-lcairo -lfontconfig — hand-populated
-    // rather than captured from a config.status, since gnuwin32 has none;
-    // same values this used to hardcode directly here before Phase 4 of
-    // feat-cross-platform-standardization unified the mechanism with
-    // unix's applyLinkFlags/ctx.subst.get pattern).
-    const win_cairo = blk: {
+    // (CAIRO_LIBS/CAIRO_CPPFLAGS). cairo itself is r-zig's build
+    // (zigbuild/cairo.zig), linked in statically, as CRAN's Rtools links
+    // it: conda-forge has no cairo for win-arm64, and one cairo keeps both
+    // Windows arches alike. CAIRO_LIBS, from this config dir's vendored
+    // subst.txt (hand-populated: gnuwin32 has no config.status), names the
+    // env's libraries cairo needs (pixman, libpng, zlib); cairo.zig names
+    // the Windows ones. Not built without cairo (minimal, ctx.devcairo
+    // false): capabilities("cairo") then reads FALSE, as it stats this file
+    // (platform.c), and grDevices' cairo devices say so.
+    const win_cairo: ?*std.Build.Step.Compile = if (ctx.devcairo) blk: {
+        const built = try buildCairo(ctx, io);
         const m = newCMod(ctx);
         m.addIncludePath(ctx.geninc);
         m.addIncludePath(ctx.path("src/include"));
+        m.addIncludePath(built.generated);
+        m.addIncludePath(built.include);
         addCGroup(ctx, m, "src/library/grDevices/src/cairo", &.{"cairoBM.c"}, .{
             .extra = &.{
                 "-I%S/src/library/grDevices/src/cairo",
                 "-I%S/src/library/grDevices/src",
-                "-I%C/Library/include/cairo",
-                "-I%C/Library/include/freetype2",
+                cairo.user_define,
             },
         });
+        m.linkLibrary(built.lib);
+        for (cairo.system_libs) |l| m.linkSystemLibrary(l, .{});
         // cairoBM.c/cairoFns.c call R API + graphics-engine functions
         // (Rf_cons, R_GlobalEnv, GEcurrentDevice, ...) directly, not just
         // through grDevices.dll — gnuwin32's real Makefile.win link line
@@ -1664,7 +1791,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         m.linkLibrary(grdevices_lib.?);
         applyLinkFlags(ctx, m, ctx.subst.get("CAIRO_LIBS").?);
         break :blk addSharedLib(ctx, "winCairo", m);
-    };
+    } else null;
     {
         // grDevices' own bootstrap step (`tools:::makeLazyLoading
         // ("grDevices")`) transitively loadNamespace()s utils (a NAMESPACE
@@ -1700,13 +1827,15 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         // unix's stats_c/stats_f (stats/src/Makefile.win's own SOURCES_C/
         // SOURCES_F); needs LAPACK_LIBS/BLAS_LIBS/FLIBS, same as Rblas.dll/
         // Rlapack.dll themselves.
+        // OpenMP as unix's stats (distance.c), ctx.openmp.
         const stats_f_win = fortranGroup(ctx, "src/library/stats/src", &rspec.stats_f, &.{});
-        const m = newPkgMod(ctx, "src/library/stats/src", &rspec.stats_c, .{});
+        const m = newPkgMod(ctx, "src/library/stats/src", &rspec.stats_c, .{ .openmp = true });
         for (stats_f_win) |o| m.addObjectFile(o);
         m.linkLibrary(libR);
         m.linkLibrary(rlapack);
         m.linkLibrary(rblas);
         linkFortranRt(ctx, m);
+        linkOmp(ctx, m);
         try win_pkg_libs.append(b.allocator, .{ .pkg = "stats", .lib = addSharedLib(ctx, "pkg_stats", m) });
     }
     {
@@ -1736,7 +1865,9 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         m.linkLibrary(libR);
         try win_pkg_libs.append(b.allocator, .{ .pkg = "parallel", .lib = addSharedLib(ctx, "pkg_parallel", m) });
     }
-    try win_pkg_libs.append(b.allocator, .{ .pkg = "tcltk", .lib = winTcltkLib(ctx, libR) });
+    // tcltk.dll only where the variant has tcltk (full); elsewhere the
+    // package is the stub (stageLibraryPayload), as on unix.
+    if (ctx.feat.tcltk) try win_pkg_libs.append(b.allocator, .{ .pkg = "tcltk", .lib = winTcltkLib(ctx, libR) });
 
     // ------------------------------------------------------------------
     // library/ + share/ + doc/ + bootstrap: without this, Rscript.exe can
@@ -1755,16 +1886,16 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
 
 /// library/tcltk/libs/x64/tcltk.dll, from src/library/tcltk/src/
 /// Makefile.win: its three sources, -DWin32, Tcl/Tk 8.6 from the env
-/// (conda-forge's is the threaded build, tcl86t/tk86t: WIN_TCLTK_LIBS,
+/// (conda-forge's is the threaded build, tcl86t/tk86t: TCLTK_LIBS,
 /// which also names user32 for tcltk_win.c's foreground-window calls).
-/// Windows R is always built with tcltk (capabilities("tcltk") is TRUE)
-/// and the package's R code is installed, so without the DLL
+/// Built where the variant has tcltk (full: capabilities("tcltk") is
+/// TRUE and the package's R code is installed), so without the DLL
 /// library(tcltk) failed with "DLL 'tcltk' not found"; make check's
 /// tcltk examples found it (addCheckStepWindows).
 fn winTcltkLib(ctx: *Ctx, libR: *std.Build.Step.Compile) *std.Build.Step.Compile {
     const m = newPkgMod(ctx, "src/library/tcltk/src", &rspec.win_tcltk_c, .{ .extra = &.{"-DWin32"} });
     m.linkLibrary(libR);
-    applyLinkFlags(ctx, m, ctx.subst.get("WIN_TCLTK_LIBS").?);
+    applyLinkFlags(ctx, m, ctx.subst.get("TCLTK_LIBS").?);
     return addSharedLib(ctx, "pkg_tcltk", m);
 }
 
@@ -1867,7 +1998,7 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     // SHLIB_OPENMP_*FLAGS. vendor-libs.sh reads this line back: where it
     // offers OpenMP, the base gets libomp.dll, and rzig then counts the
     // compilers group's TC/openmp/ (feat-standalone-toolchain B40).
-    try ctx.subst.put("OPENMP", if (ctx.openmp) "-fopenmp" else "");
+    try ctx.subst.put("OPENMP", ctx.subst.get("SHLIB_OPENMP_CFLAGS").?);
     try ctx.subst.put("PTHREAD", "-pthread");
     try ctx.subst.put("SYMPAT", "'s/^.* [BCDRT] / /p'");
     // NM_FILTER: MkRules.rules' default, which gnuwin32's fixed/Makefile
@@ -1881,8 +2012,17 @@ fn installWindowsCompilerContract(ctx: *Ctx, io: std.Io) !void {
     // them too, so both paths match CRAN (PR #25 review records-REC-3,
     // the user's menu 4 a).
     try mk.put("NM_FILTER", "| $(SED) -e '/[.]refptr[.]/d' -e '/[.]weak[.]/d'");
+    // TCLTK_CPPFLAGS and TCLTK_LIBS: upstream's values where the variant
+    // has tcltk (full), else empty, as unix's slim Makeconf writes them.
+    // Upstream keeps them fixed with BUILD_TCLTK=no too; the template
+    // records this deviation.
+    try mk.put("MK_TCLTK_CPPFLAGS", if (ctx.feat.tcltk) "-I \"$(TCL_HOME)/include\" -DWin32" else "");
+    try mk.put("MK_TCLTK_LIBS", if (ctx.feat.tcltk) "-L\"$(TCL_HOME)/bin\" -ltcl$(TCL_VERSION) -ltk$(TCL_VERSION)" else "");
 
-    const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/Makeconf.win", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
+    // One template for every variant, zigbuild/config/win-common (it has
+    // no variant content but the @MK_TCLTK_*@ tokens above), as unix
+    // substitutes one etc/Makeconf.in.
+    const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, "zigbuild/config/win-common/Makeconf.win"), b.allocator, .limited(1024 * 1024));
     var mkc = try gnuwin32O3ToO2(b, try substituteWith(ctx, raw, &mk));
     // Tcl/Tk headers and libraries where the standalone tree has them
     // (installEnvRuntime installs R_HOME/Tcl: include, bin, lib); inside a
@@ -1933,6 +2073,34 @@ fn compiledBy(b: *std.Build) ![]const u8 {
     };
     const v = out[i + tag.len ..];
     return b.fmt("clang-{s}", .{v[0 .. std.mem.indexOfAny(u8, v, " \r\n") orelse v.len]});
+}
+
+/// The first line of `<compiler> --version`, as R's configure reads CC_VER
+/// and FC_VER (R_compiled_by()'s two strings): "clang version 22.1.8 (...)"
+/// from zig 0.17's `zig cc`, "flang version 23.1.5" from flang. Read from
+/// the compilers of this build on every OS: the vendored config.h names
+/// the compilers of the day it was captured, and gnuwin32's names none.
+fn versionLine(b: *std.Build, argv: []const []const u8) []const u8 {
+    const out = b.run(argv);
+    return std.mem.trim(u8, out[0 .. std.mem.indexOfAny(u8, out, "\r\n") orelse out.len], " \t");
+}
+
+/// `text` (a config.h) with its `#define <name> ...` line defining `name`
+/// as the C string `value`. An error when it has no such line: a config.h
+/// without it would keep no compiler at all.
+fn setDefine(b: *std.Build, text: []const u8, name: []const u8, value: []const u8) ![]u8 {
+    const key = b.fmt("#define {s} ", .{name});
+    const at = std.mem.indexOf(u8, text, key) orelse {
+        std.debug.print("error: no '{s}' line in config.h\n", .{key});
+        return error.NoSuchDefine;
+    };
+    const end = std.mem.indexOfScalarPos(u8, text, at, '\n') orelse text.len;
+    var quoted = std.ArrayList(u8).empty;
+    for (value) |c| {
+        if (c == '"' or c == '\\') try quoted.append(b.allocator, '\\');
+        try quoted.append(b.allocator, c);
+    }
+    return std.mem.concat(b.allocator, u8, &.{ text[0..at], key, "\"", quoted.items, "\"", text[end..] });
 }
 
 /// `text` with the line starting `key` (then spaces or `=`) replaced by
@@ -2017,7 +2185,34 @@ fn installCommonPayload(ctx: *Ctx) void {
     }).step);
 }
 
-fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win_cairo: *std.Build.Step.Compile) !*std.Build.Step.WriteFile {
+/// libcairo.a for winCairo.dll (zigbuild/cairo.zig), from -Dcairo's
+/// directory (the conda build's unpacked source), else build.zig.zon's lazy
+/// `cairo`, which zig fetches (and then runs this configure step again).
+/// pixman's, libpng's and zlib's headers are the env's.
+fn buildCairo(ctx: *Ctx, io: std.Io) !cairo.Built {
+    const b = ctx.b;
+    const src = if (ctx.cairo_dir) |d| d else blk: {
+        const dep = try b.dependencyLazy("cairo", .{});
+        break :blk dep.builder.root.root_dir.path orelse ".";
+    };
+    const real = std.Io.Dir.cwd().realPathFileAlloc(io, src, b.allocator) catch |err| {
+        std.debug.print("error: cairo: cannot resolve {s} ({t})\n", .{ src, err });
+        return error.CairoBuild;
+    };
+    const abs = std.mem.replaceOwned(u8, b.allocator, real, "\\", "/") catch @panic("OOM");
+    const built = try cairo.add(b, ctx.target, abs, &.{ ctx.condaDir("include/pixman-1"), ctx.condaDir("include") });
+    // cairo's licence texts and where it came from, in R_HOME (both
+    // channels: the conda package and the standalone tree ship the same
+    // R_HOME); winCairo.dll holds it, no file of the env
+    const dest = ctx.rhomeInstallDir("share/licenses/cairo");
+    for (cairo.license_files) |f|
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.graph.cwdRelativePath(b.fmt("{s}/{s}", .{ abs, f })), dest, f).step);
+    const record = b.addWriteFiles().add("SOURCE", cairo.record(b, ctx.target.result.cpu.arch));
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(record, dest, "SOURCE").step);
+    return built;
+}
+
+fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win_cairo: ?*std.Build.Step.Compile) !*std.Build.Step.WriteFile {
     const b = ctx.b;
     const inst = b.getInstallStep();
     const libstage = b.addWriteFiles();
@@ -2032,12 +2227,11 @@ fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win
     // winCairo.dll: NOT a package DLL (no R-level package named "winCairo"),
     // it's an extra file dropped into grDevices' own libs dir — ground
     // truth from gnuwin32's real installed tree
-    // (library/grDevices/libs/x64/winCairo.dll).
-    _ = libstage.addCopyFile(win_cairo.getEmittedBin(), "grDevices/libs/x64/winCairo.dll");
+    // (library/grDevices/libs/x64/winCairo.dll). None without cairo.
+    if (win_cairo) |wc| _ = libstage.addCopyFile(wc.getEmittedBin(), "grDevices/libs/x64/winCairo.dll");
 
-    // include/ (public headers) — not consumed by anything yet (package
-    // compilation isn't wired up on Windows), but installed alongside
-    // share/doc for parity with the unix layout.
+    // include/ (public headers), which packages compile against
+    // (Makeconf's -I"$(R_INCLUDE_DIR)").
     const inc_wf = b.addWriteFiles();
     for (rspec.public_headers) |h| {
         _ = inc_wf.addCopyFile(ctx.path(b.fmt("src/include/{s}", .{h})), h);
@@ -2045,6 +2239,15 @@ fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win
     _ = inc_wf.addCopyFile(ctx.geninc.path(b, "Rconfig.h"), "Rconfig.h");
     _ = inc_wf.addCopyFile(ctx.geninc.path(b, "Rversion.h"), "Rversion.h");
     _ = inc_wf.addCopyFile(ctx.geninc.path(b, "Rmath.h"), "Rmath.h");
+    // libintl.h with NLS (full), as upstream's src/extra/intl/Makefile.win
+    // copies it to R_HOME/include: with ENABLE_NLS in Rconfig.h, packages'
+    // `#ifdef ENABLE_NLS #include <libintl.h>` (Matrix, nlme, cluster,
+    // foreign, rpart) need it. It is R's libgnuintl.h (geninc above), whose
+    // libintl_* names R.dll exports; Makeconf's -I"$(R_INCLUDE_DIR)" puts it
+    // ahead of an environment's libintl.h, which rzig adds after
+    // (-idirafter). Without NLS, Rconfig.h has no ENABLE_NLS and nothing
+    // includes it, as upstream with NLS off.
+    if (ctx.feat.nls) _ = inc_wf.addCopyFile(ctx.geninc.path(b, "libintl.h"), "libintl.h");
     inst.dependOn(&b.addInstallDirectory(.{
         .source_dir = inc_wf.getDirectory(),
         .install_dir = ctx.rhomeInstallDir("include"),
@@ -2559,7 +2762,11 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     usr/bin is without the group; each channel has one of the two, so
 ///     one MSYS runtime. A
 ///     missing directory is harmless: a tree without the group keeps the
-///     tools already on PATH (Rtools). B25's line names R_HOME inside the
+///     tools already on PATH (Rtools). Between the two, the extras
+///     group's cmake/bin (feat-extras-group): a package's configure or
+///     makefile runs plain `cmake`; absent in a conda env, whose own
+///     cmake (r-zig-extras' dependency, Library/bin) is on PATH already.
+///     R_CUSTOM_TOOLS_PATH replaces this entry too. B25's line names R_HOME inside the
 ///     default, which would stay unexpanded, hence R_ZIG_TOOLS_PATH.
 ///   - CMAKE_GENERATOR: CMake builds of a package's bundled library
 ///     (RcppParallel's TBB, Rhdf5lib's HDF5 through biocmake) pass no -G,
@@ -2586,7 +2793,13 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     no longer a dependency (AMENDMENTS Am2, Am3 b). pkgconf derives
 ///     each package's prefix from its .pc file's place. In the standalone
 ///     tree it names <top>/Library/lib/pkgconfig, which does not exist.
-/// CMAKE_GENERATOR, RC, UserNM and PKG_CONFIG_PATH are defaults:
+///   - CMAKE_TOOLCHAIN_FILE: etc/r-zig.cmake (cmakeToolchain), as
+///     etc/Renviron sets it on unix: CMake searches R's env (<env>/Library)
+///     and R_ZIG_EXTRA_ENV's <root>/Library first. The extras group's
+///     cmake.exe does not search them by itself (chore-release-11 finding
+///     28: Rhdf5lib found no OpenSSL).
+/// CMAKE_GENERATOR, RC, UserNM, PKG_CONFIG_PATH and CMAKE_TOOLCHAIN_FILE
+/// are defaults:
 /// one set in the environment wins (`${VAR-default}`), in double quotes:
 /// unquoted, R's environ reader (Renviron.c) takes each `\` of the
 /// expanded value as an escape, and a user's `C:\x\nm.exe` or
@@ -2603,8 +2816,8 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
     for ([_][]const u8{
         "## r-zig: the build tools first on PATH (feat-standalone-toolchain B25): R's",
         "## installer line, with the build-tools group's usr/bin in Rtools' place,",
-        "## then a conda env's MSYS dir (Library/usr/bin; PHASE7 F2 b).",
-        "R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/../../usr/bin",
+        "## then the extras group's cmake, then a conda env's MSYS dir (Library/usr/bin; PHASE7 F2 b).",
+        "R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin",
         "PATH=\"${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/\"",
         "## r-zig: CMake for packages that build a bundled library with it.",
         "CMAKE_GENERATOR=\"${CMAKE_GENERATOR-MSYS Makefiles}\"",
@@ -2616,6 +2829,9 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
         "## r-zig: pkgconf's search path, unless set: R's env's .pc files.",
         "R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig",
         "PKG_CONFIG_PATH=\"${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}\"",
+        "## r-zig: CMake's default toolchain file: it searches R's env and R_ZIG_EXTRA_ENV's first.",
+        "R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake",
+        "CMAKE_TOOLCHAIN_FILE=\"${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}\"",
     }) |line| {
         try out.appendSlice(b.allocator, line);
         try out.appendSlice(b.allocator, eol);
@@ -2626,18 +2842,19 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 /// rzig into R_HOME/bin/toolchain under the names Makeconf uses
 /// (feat-no-host-paths F3): one binary, a copy per name, dispatching on
 /// the name it was started as, and beside them the object rzig adds to
-/// links (rzig_build.linkObject: linux's dso_fini.o, Windows' cfguard.o;
+/// links (rzig_build.linkObject: linux's dso_fini.o, Windows' cfguard.o
+/// on x86_64 and clear_cache.o on aarch64;
 /// feat-r-home-link-objects). They are the only files directly in that
 /// directory: the toolchain groups' files sit in its subdirectories
 /// (feat-standalone-toolchain B19, B30). The base carries them on every
 /// channel: the base archive, r-zig-slim and the r-zig wheel (B19). The
 /// groups' packages hold only subdirectories (B28, B29). The compile
-/// preflight (patch 0009, install.R) and R CMD config (patch 0010) run
-/// its check mode by the name of CC, zig-cc on unix and gcc.exe on
-/// Windows (B26 a).
+/// preflight (patch 0009, install.R) runs its check mode by the name of
+/// CC, zig-cc on unix and gcc.exe on Windows (B26 a). R CMD runs rzig
+/// itself for `R CMD config` (patch 0010, feat-config-rzig).
 ///   unix:    zig-cc, zig-cxx (CC/CXX/OBJC/OBJCXX), zig-fc (FC), zig-ar,
 ///            zig-ranlib, and rzig itself (`rzig build`, `rzig def`:
-///            feat-zig-pkg-build)
+///            feat-zig-pkg-build; `rzig config`)
 ///   Windows: gcc.exe, g++.exe (Makeconf.win's $(BINPREF)gcc.exe and
 ///            g++.exe: CMake takes R CMD config CC only when it names an
 ///            existing file, stress round 1's RcppParallel and Rhdf5lib),
@@ -2827,6 +3044,12 @@ fn filePathFlags(ctx: *const Ctx, io: std.Io) ![]const []const u8 {
 
 const CGroupOpts = struct {
     openmp: bool = false,
+    // R's makefile for this directory compiles with $(C_VISIBILITY)
+    // (-fvisibility=hidden where configure found it: unix; subst.txt):
+    // src/extra's tre, tzone and xdr, the internet module and eight base
+    // packages, whose symbols then leave libR and the package libraries
+    // only where the source says attribute_visible.
+    visibility: bool = false,
     extra: []const []const u8 = &.{}, // %S → srcdir, %C → conda
 };
 
@@ -2836,6 +3059,9 @@ fn addCGroup(ctx: *const Ctx, mod: *std.Build.Module, dir: []const u8, files: []
     flags.appendSlice(b.allocator, ctx.path_flags) catch @panic("OOM");
     flags.appendSlice(b.allocator, &.{ "-std=gnu23", "-fno-sanitize=undefined", "-O2", "-fpic", "-DHAVE_CONFIG_H" }) catch @panic("OOM");
     if (opts.openmp and ctx.openmp) flags.append(b.allocator, "-fopenmp") catch @panic("OOM");
+    if (opts.visibility) if (ctx.subst.get("C_VISIBILITY")) |v| {
+        if (v.len > 0) flags.append(b.allocator, v) catch @panic("OOM");
+    };
     for (opts.extra) |f| {
         const f1 = std.mem.replaceOwned(u8, b.allocator, f, "%S", ctx.src_abs) catch @panic("OOM");
         const f2 = std.mem.replaceOwned(u8, b.allocator, f1, "%C", ctx.conda) catch @panic("OOM");
@@ -2860,7 +3086,7 @@ fn newPkgMod(ctx: *const Ctx, dir: []const u8, files: []const []const u8, opts: 
     var extra = std.ArrayList([]const u8).empty;
     extra.append(b.allocator, "-DNDEBUG") catch @panic("OOM");
     extra.appendSlice(b.allocator, opts.extra) catch @panic("OOM");
-    addCGroup(ctx, m, dir, files, .{ .openmp = opts.openmp, .extra = extra.items });
+    addCGroup(ctx, m, dir, files, .{ .openmp = opts.openmp, .visibility = opts.visibility, .extra = extra.items });
     return m;
 }
 
@@ -2876,7 +3102,7 @@ fn linkCoreLibs(ctx: *const Ctx, mod: *std.Build.Module) void {
     // full only: src/unix/sys-std.c + sys-unix.c + src/main/platform.c
     // already compile their HAVE_LIBREADLINE branch correctly (it comes
     // from the per-variant vendored config.h); just needs -lreadline.
-    if (ctx.variant == .full) mod.linkSystemLibrary("readline", .{ .use_pkg_config = .no });
+    if (ctx.feat.readline) mod.linkSystemLibrary("readline", .{ .use_pkg_config = .no });
     // LIBINTL: empty on linux (glibc provides gettext() natively) but a
     // REAL value on macOS full (`-lintl -framework CoreFoundation` —
     // macOS's libc has no gettext at all, unlike glibc). Found the hard
@@ -2895,7 +3121,11 @@ fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {
     if (!ctx.openmp) return;
     // zig cc does -fopenmp codegen but ships no libomp — conda-forge's.
     ctx.addCondaLibPath(mod);
-    mod.linkSystemLibrary("omp", .{ .use_pkg_config = .no });
+    // Windows: llvm-openmp's import library is Library/lib/libomp.lib,
+    // which zig's -l lookup finds only by its whole name (as libpng,
+    // libbz2 and libcurl in the subst.txt link lists); win-64's and
+    // win-arm64's zig_* builds both ship it (and libomp.dll).
+    mod.linkSystemLibrary(if (ctx.os == .windows) "libomp" else "omp", .{ .use_pkg_config = .no });
 }
 
 /// Link the Fortran runtime: flang's, one runtime archive on every
@@ -3011,6 +3241,112 @@ fn checkConfigFreshness(b: *std.Build, io: std.Io, config_dir: []const u8) !void
             \\
         , .{ config_dir, generated_from, r_version, r_version, r_version, config_dir, config_dir, r_version });
         return error.StaleVendoredConfig;
+    }
+}
+
+/// The S-table's feature switches into ctx (every OS, once subst.txt is
+/// loaded), then checkVariantConfig. ctx.openmp: R's own C compiles with
+/// -fopenmp and links libomp; ctx.openmp_pkgs: Makeconf offers packages
+/// OpenMP; ctx.devcairo: grDevices' cairo device is built.
+fn applyVariantConfig(ctx: *Ctx, io: std.Io) !void {
+    ctx.openmp = (try substKey(ctx, "R_OPENMP_CFLAGS")).len > 0;
+    ctx.openmp_pkgs = (try substKey(ctx, "SHLIB_OPENMP_CFLAGS")).len > 0;
+    ctx.devcairo = (try substKey(ctx, "BUILD_DEVCAIRO_TRUE")).len == 0;
+    try checkVariantConfig(ctx, io);
+}
+
+/// A key subst.txt must have; a missing one stops the build by name
+/// (ctx.subst.get(key).? would panic with no word of which).
+fn substKey(ctx: *const Ctx, key: []const u8) ![]const u8 {
+    return ctx.subst.get(key) orelse {
+        std.debug.print("error: {s}/subst.txt has no {s}\n", .{ ctx.config_dir, key });
+        return error.MissingSubstKey;
+    };
+}
+
+/// Whether `text` (a config.h) has a `#define <name>` line; `/* #undef
+/// <name> */` and a commented-out `// #define` are not one.
+fn hasDefine(text: []const u8, name: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        const rest = if (std.mem.startsWith(u8, line, "#define ")) line["#define ".len..] else continue;
+        const end = std.mem.indexOfAny(u8, rest, " \t") orelse rest.len;
+        if (std.mem.eql(u8, rest[0..end], name)) return true;
+    }
+    return false;
+}
+
+fn hasToken(text: []const u8, tok: []const u8) bool {
+    var it = std.mem.tokenizeAny(u8, text, " \t");
+    while (it.next()) |t| if (std.mem.eql(u8, t, tok)) return true;
+    return false;
+}
+
+/// The vendored config dir against the variant table (variantFeatures),
+/// on every OS: a hand edit of a win-* dir, or a unix capture that does
+/// not match its variant, stops the build here, with one line per
+/// disagreement, instead of building something between two variants
+/// (2026-11-14, chore-release-11 PLAN.md finding 23). It only reads:
+/// nothing it checks changes what is built.
+fn checkVariantConfig(ctx: *const Ctx, io: std.Io) !void {
+    const b = ctx.b;
+    const f = ctx.feat;
+    const config_h = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/config.h", .{ctx.config_dir})), b.allocator, .limited(4 * 1024 * 1024));
+    const rconfig_h = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/Rconfig.h", .{ctx.config_dir})), b.allocator, .limited(1024 * 1024));
+    const Row = struct { file: []const u8, what: []const u8, want: bool, have: bool };
+    var rows = std.ArrayList(Row).empty;
+    const defines = [_]struct { []const u8, bool }{
+        .{ "ENABLE_NLS", f.nls },
+        .{ "HAVE_TCLTK", f.tcltk },
+        .{ "HAVE_JPEG", f.jpeg },
+        .{ "HAVE_TIFF", f.tiff },
+        .{ "HAVE_PNG", f.png },
+        .{ "USE_ICU", f.icu },
+        .{ "USE_LIBDEFLATE", f.libdeflate },
+        .{ "SUPPORT_OPENMP", f.openmp_r },
+        .{ "HAVE_OPENMP_SIMDRED", f.openmp_r },
+        .{ "HAVE_LIBREADLINE", f.readline },
+        .{ "R_MEMORY_PROFILING", f.memory_profiling },
+    };
+    for (defines) |d| try rows.append(b.allocator, .{ .file = "config.h", .what = d[0], .want = d[1], .have = hasDefine(config_h, d[0]) });
+    // unix configure defines HAVE_OPENMP whenever the compiler has it,
+    // --disable-openmp (minimal) included; Windows' fixed config.h is the
+    // switch itself
+    if (ctx.os == .windows) try rows.append(b.allocator, .{ .file = "config.h", .what = "HAVE_OPENMP", .want = f.openmp_r, .have = hasDefine(config_h, "HAVE_OPENMP") });
+    try rows.append(b.allocator, .{ .file = "Rconfig.h", .what = "ENABLE_NLS", .want = f.nls, .have = hasDefine(rconfig_h, "ENABLE_NLS") });
+    const bitmap = try substKey(ctx, "BITMAP_LIBS");
+    const keys = [_]struct { []const u8, bool, bool }{
+        .{ "R_OPENMP_CFLAGS non-empty", f.openmp_r, (try substKey(ctx, "R_OPENMP_CFLAGS")).len > 0 },
+        .{ "SHLIB_OPENMP_CFLAGS non-empty", f.openmp_pkgs, (try substKey(ctx, "SHLIB_OPENMP_CFLAGS")).len > 0 },
+        .{ "BUILD_DEVCAIRO_TRUE empty", f.cairo, (try substKey(ctx, "BUILD_DEVCAIRO_TRUE")).len == 0 },
+        .{ "TCLTK_LIBS non-empty", f.tcltk, std.mem.trim(u8, try substKey(ctx, "TCLTK_LIBS"), " ").len > 0 },
+        .{ "BITMAP_LIBS non-empty", f.png or f.jpeg or f.tiff, std.mem.trim(u8, bitmap, " ").len > 0 },
+        .{ "-ljpeg in BITMAP_LIBS", f.jpeg, hasToken(bitmap, "-ljpeg") },
+        .{ "-ltiff in BITMAP_LIBS", f.tiff, hasToken(bitmap, "-ltiff") },
+    };
+    for (keys) |k| try rows.append(b.allocator, .{ .file = "subst.txt", .what = k[0], .want = k[1], .have = k[2] });
+    if (ctx.os == .windows) {
+        // Windows-only keys (MkRules.rules' names): unix carries ICU and
+        // libdeflate inside LIBS, which config.h's USE_* already cover
+        try rows.append(b.allocator, .{ .file = "subst.txt", .what = "ICU_LIBS non-empty", .want = f.icu, .have = (try substKey(ctx, "ICU_LIBS")).len > 0 });
+        try rows.append(b.allocator, .{ .file = "subst.txt", .what = "LIBDEFLATE_LIBS non-empty", .want = f.libdeflate, .have = (try substKey(ctx, "LIBDEFLATE_LIBS")).len > 0 });
+    } else {
+        try rows.append(b.allocator, .{ .file = "subst.txt", .what = "USE_NLS yes", .want = f.nls, .have = std.mem.eql(u8, try substKey(ctx, "USE_NLS"), "yes") });
+    }
+    var bad: usize = 0;
+    for (rows.items) |r| {
+        if (r.want == r.have) continue;
+        bad += 1;
+        std.debug.print("error: {s}/{s}: {s} is {s}, but the variant table (variantFeatures, {s} on {s}) says {s}\n", .{
+            ctx.config_dir,                  r.file,                r.what,
+            if (r.have) "true" else "false", @tagName(ctx.variant), @tagName(ctx.os),
+            if (r.want) "true" else "false",
+        });
+    }
+    if (bad > 0) {
+        std.debug.print("error: {d} disagreement(s) between {s} and the variant table in build.zig; fix the config dir (or the table, for a deliberate change)\n", .{ bad, ctx.config_dir });
+        return error.VariantConfigMismatch;
     }
 }
 
@@ -3156,10 +3492,10 @@ fn pathExists(io: std.Io, p: []const u8) bool {
 ///     <prefix>/lib/{tcl8.6,tk8.6,tcl8}, beside the libtcl and libtk
 ///     vendor-libs.sh copies, the layout of a Tcl install; etc/Renviron
 ///     points TCL_LIBRARY at the first (finalRenviron).
-///   - Windows: the Tcl/Tk runtime in R_HOME/Tcl, where tcltk's .onLoad
+///   - Windows, where the variant has tcltk (full; nothing at all
+///     otherwise): the Tcl/Tk runtime in R_HOME/Tcl, where tcltk's .onLoad
 ///     loads it from (Tcl/bin as library.dynam's DLLpath, Tcl/lib as
-///     TCLLIBPATH); the build fails without it, tcltk is always built
-///     there. Also Tcl/Tk's headers in R_HOME/Tcl/include, for packages
+///     TCLLIBPATH); the build fails without it. Also Tcl/Tk's headers in R_HOME/Tcl/include, for packages
 ///     that compile against Tcl/Tk (tkrplot): compile-time files, kept
 ///     in the base by T1 (feat-standalone-toolchain PLAN.md; below).
 ///     No fontconfig configuration: R on Windows picks its fonts through
@@ -3214,7 +3550,7 @@ fn installEnvRuntime(ctx: *const Ctx, io: std.Io) !void {
         // failed. Tk's library and the modules (tcl8: msgcat, which
         // `clock` needs, http, ...) are found beside Tcl's: Tcl's auto_path
         // and module roots include [file dirname [info library]].
-        if (ctx.variant == .full) {
+        if (ctx.feat.tcltk) {
             inline for (.{ "tcl8.6", "tk8.6", "tcl8" }) |d| {
                 if (!pathExists(io, ctx.condaDir("lib/" ++ d))) {
                     std.debug.print("error: {s} is missing (tk not in the env?); the tree ships it as lib/{s}\n", .{ ctx.condaDir("lib/" ++ d), d });
@@ -3226,7 +3562,11 @@ fn installEnvRuntime(ctx: *const Ctx, io: std.Io) !void {
         return;
     }
     var site = std.ArrayList(u8).empty;
-    if (ctx.prefix_is_env) {
+    // Windows' runtime data is all Tcl/Tk's: none without tcltk (slim,
+    // minimal), whose tcltk is the stub.
+    if (!ctx.feat.tcltk) {
+        // nothing
+    } else if (ctx.prefix_is_env) {
         // R_HOME is <env>/Library/lib/R, so this is <env>/Library/bin.
         // Renviron expands a nested default only when it is a whole ${...}
         // term, hence the helper variable (as finalRenviron's R_ZIG_ ones).
@@ -3602,10 +3942,11 @@ fn stageLibraryPayload(ctx: *const Ctx, io: std.Io, libstage: *std.Build.Step.Wr
         // R code concatenation (basepkg.mk mkR1/mkR2/mkRbase)
         if (std.mem.eql(u8, pkg, "datasets")) {
             // no R code, data only
-        } else if (std.mem.eql(u8, pkg, "tcltk") and ctx.variant != .full) {
-            // slim/minimal: use_tcltk=no → stub only, none of the top-level R/*.R
-            // (dead branch on Windows: variant is always forced to .full there)
-            _ = libstage.addCopyFile(ctx.path(b.fmt("{s}/R/{s}/zzzstub.R", .{ pkg_src, os_subdir })), b.fmt("{s}/R/{s}", .{ pkg, pkg }));
+        } else if (std.mem.eql(u8, pkg, "tcltk") and !ctx.feat.tcltk) {
+            // slim/minimal: use_tcltk=no → stub only, none of the top-level
+            // R/*.R. R/unix/zzzstub.R on every OS: R has no windows/ copy,
+            // and upstream's tcltk/Makefile.win takes the unix one too.
+            _ = libstage.addCopyFile(ctx.path(b.fmt("{s}/R/unix/zzzstub.R", .{pkg_src})), b.fmt("{s}/R/{s}", .{ pkg, pkg }));
         } else if (std.mem.eql(u8, pkg, "tcltk")) {
             // full: real R/*.R + R/<os_subdir>/zzz.R (not zzzstub.R)
             const all_r = try concatRSourcesEx(ctx, io, b.fmt("{s}/R", .{pkg_src}), os_subdir, null, &.{"zzzstub.R"});
@@ -3721,7 +4062,7 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     _ = stage.add("etc/Makeconf", makeconf);
     _ = stage.add("etc/javaconf", try substFile(ctx, io, "etc/javaconf.in"));
     _ = stage.addCopyFile(ctx.path("etc/repositories"), "etc/repositories");
-    if (ctx.os == .macos) _ = stage.add("etc/r-zig.cmake", macos_cmake_toolchain);
+    _ = stage.add("etc/r-zig.cmake", cmakeToolchain(ctx.os));
 
     // --- include/ (public headers) ---
     for (rspec.public_headers) |h| {
@@ -3834,14 +4175,37 @@ fn ldpaths(ctx: *const Ctx) []const u8 {
     };
 }
 
-/// etc/r-zig.cmake on macOS, in every tree (the conda build's too): a
-/// CMake toolchain file that keeps the host's package managers out of
-/// CMake's searches. etc/Renviron makes it CMAKE_TOOLCHAIN_FILE's default
-/// (finalRenviron), which CMake (>= 3.21) reads from the environment when
-/// the command line names no toolchain file: a package's own
-/// -DCMAKE_TOOLCHAIN_FILE wins, and so does the variable when it is set
-/// already, an empty one included (CMake then uses none).
-///   - Why: CMake's Platform/Darwin.cmake puts Homebrew's prefix (`brew
+/// etc/r-zig.cmake, in every tree on every OS (the conda build's too): a
+/// CMake toolchain file that makes CMake search the environments rzig
+/// compiles packages against, and on macOS not the host's package
+/// managers. etc/Renviron (unix, finalRenviron) and etc/Rcmd_environ
+/// (Windows, rcmdEnviron) make it CMAKE_TOOLCHAIN_FILE's default, which
+/// CMake (>= 3.21) reads from the environment when the command line names
+/// no toolchain file: a package's own -DCMAKE_TOOLCHAIN_FILE wins, and so
+/// does the variable when it is set already, an empty one included (CMake
+/// then uses none).
+///   - The environments (chore-release-11 finding 28): rzig compiles
+///     against R's own environment and R_ZIG_EXTRA_ENV's
+///     (zigbuild/tools/rzig/environment.zig); the file puts both first in
+///     CMAKE_SYSTEM_PREFIX_PATH, in that order, before the prefixes the
+///     platform files append (UnixPaths.cmake: /usr/local, /usr, /, ...;
+///     WindowsPaths.cmake: Program Files, ...). R's own is <dir> for the
+///     file's <dir>/lib/R/etc: the conda env, or <env>/Library on Windows
+///     (R_HOME is <env>/Library/lib/R), or the standalone prefix.
+///     R_ZIG_EXTRA_ENV names a root, and its <root>/Library on Windows, as
+///     for rzig. Why: CMake searches a conda env's lib/ and include/ for
+///     find_library and find_path only as one of its prefixes. Conda's
+///     cmake (<env>/bin/cmake) adds its own install prefix, the env, after
+///     /usr; the extras group's Kitware cmake (R_HOME/bin/toolchain/cmake/
+///     bin, first on PATH under R CMD, feat-extras-group) adds its own
+///     directory, so the env was not searched at all: PATH's <env>/bin
+///     reaches find_package's config files only, and a find module with a
+///     pkg-config hint (FindCURL; FindOpenSSL on unix only). Stress run
+///     43773932212, tree legs: Rhdf5lib's HDF5 found no ZLIB_LIBRARY on
+///     linux and no OpenSSL on Windows. Conda's cmake, after /usr, took the
+///     runner's /usr/include/zlib.h with the env's libz.so (stress run
+///     38569895172: ZLIB "1.3"); the env first fixes that too.
+///   - macOS: CMake's Platform/Darwin.cmake puts Homebrew's prefix (`brew
 ///     --prefix`, else /opt/homebrew on arm64 and /usr/local on Intel)
 ///     first in CMAKE_SYSTEM_PREFIX_PATH, before the environment's, and
 ///     Fink's /sw and MacPorts' /opt/local last, whatever PATH says.
@@ -3851,32 +4215,60 @@ fn ldpaths(ctx: *const Ctx) []const u8 {
 ///     Darwin.cmake adds for a package manager, and $HOMEBREW_PREFIX
 ///     (`brew shellenv` sets it) is Homebrew's when it lives elsewhere
 ///     (`brew --prefix`); unset, it adds nothing.
-///   - CMAKE_SYSTEM_IGNORE_PREFIX_PATH (CMake >= 3.23; older ones skip it)
+///     CMAKE_SYSTEM_IGNORE_PREFIX_PATH (CMake >= 3.23; older ones skip it)
 ///     drops exactly these prefixes from every find_* search: the
 ///     system's, PATH's (find_package's <prefix> for each <prefix>/bin)
 ///     and CMAKE_PREFIX_PATH's. A prefix below one of them (a conda env in
 ///     /opt/homebrew/Caskroom) is kept, and so is a program found on PATH.
-///     The variable without SYSTEM stays the project's.
-///   - The environment's libraries: CMake finds them through the prefix
-///     of the cmake it runs (UnixPaths.cmake; the env's cmake), PATH's
-///     <env>/bin and CMAKE_PREFIX_PATH, none of them one of these four;
-///     the conda build's R_HOME is <env>/lib/R.
-///   - Not linux: CMake's Linux platform adds no package manager's prefix
-///     (UnixPaths.cmake: /usr/local, /usr, /, its own and the install
-///     prefix, /usr/X11R6, /usr/pkg, /opt); Linuxbrew is searched only
-///     when PATH or CMAKE_PREFIX_PATH names it. Not Windows: CMake adds
-///     Program Files and its own prefix there (WindowsPaths.cmake), and
-///     etc/Rcmd_environ sets its generator and windres (rcmdEnviron).
-const macos_cmake_toolchain =
-    \\# r-zig: CMake's default toolchain file for package builds on macOS.
-    \\# etc/Renviron sets CMAKE_TOOLCHAIN_FILE to it; a CMAKE_TOOLCHAIN_FILE
-    \\# already set (empty: none) or a package's -DCMAKE_TOOLCHAIN_FILE wins.
-    \\# CMake searches Homebrew's, Fink's and MacPorts' prefixes whatever
-    \\# PATH says. This leaves them out of every find_* search (CMake >= 3.23),
-    \\# so packages link their environment's libraries, not the host's.
-    \\set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local /opt/local /sw $ENV{HOMEBREW_PREFIX})
-    \\
-;
+///     The variable without SYSTEM stays the project's. The SDK's usr
+///     stays first (Darwin.cmake inserts it at 0): zlib from the SDK.
+///   - CMake reads a toolchain file more than once per configure; each
+///     read appends the two prefixes again, which only repeats a search.
+///   - No target (chore-release-11 finding 29): rzig names R's on every
+///     command CMake's compiler runs, so CMAKE_<LANG>_COMPILER_TARGET would
+///     only add a second one, and CMAKE_SYSTEM_NAME or
+///     CMAKE_SYSTEM_PROCESSOR would switch CMake to cross-compiling
+///     (CMAKE_CROSSCOMPILING: no try_run, find_* rerooted).
+fn cmakeToolchain(os: Os) []const u8 {
+    const head =
+        \\# r-zig: CMake's default toolchain file for package builds.
+        \\# etc/Renviron (Windows: etc/Rcmd_environ) sets CMAKE_TOOLCHAIN_FILE to
+        \\# it; a CMAKE_TOOLCHAIN_FILE already set (empty: none) or a package's
+        \\# -DCMAKE_TOOLCHAIN_FILE wins.
+        \\# CMake searches first the environments rzig compiles packages against:
+        \\# R's own (this file is in <dir>/lib/R/etc) and R_ZIG_EXTRA_ENV's.
+        \\get_filename_component(_r_zig_env "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+        \\list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}")
+        \\if(NOT "$ENV{R_ZIG_EXTRA_ENV}" STREQUAL "")
+        \\  file(TO_CMAKE_PATH "$ENV{R_ZIG_EXTRA_ENV}" _r_zig_env)
+        \\
+    ;
+    const tail =
+        \\endif()
+        \\unset(_r_zig_env)
+        \\
+    ;
+    const unix_extra =
+        \\  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}")
+        \\
+    ;
+    const windows_extra =
+        \\  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}/Library")
+        \\
+    ;
+    const macos_ignore =
+        \\# CMake searches Homebrew's, Fink's and MacPorts' prefixes whatever
+        \\# PATH says. This leaves them out of every find_* search (CMake >= 3.23),
+        \\# so packages link their environment's libraries, not the host's.
+        \\set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local /opt/local /sw $ENV{HOMEBREW_PREFIX})
+        \\
+    ;
+    return switch (os) {
+        .windows => head ++ windows_extra ++ tail,
+        .macos => head ++ unix_extra ++ tail ++ macos_ignore,
+        else => head ++ unix_extra ++ tail,
+    };
+}
 
 /// etc/Renviron as it ships (phase A4, F1.4), unix only (Windows R reads
 /// etc/Rcmd_environ, rcmdEnviron, and etc/Renviron.site,
@@ -3884,8 +4276,8 @@ const macos_cmake_toolchain =
 /// (installing a package without compiling runs no tar or unzip),
 /// printing goes to a bare `lpr`, MAKE is R's `make` in every flavor and
 /// the build-tools group's usr/bin leads PATH (feat-standalone-toolchain
-/// B25), on macOS CMake's default toolchain file is etc/r-zig.cmake
-/// (macos_cmake_toolchain), and a tree that is not the env names its CA
+/// B25), CMake's default toolchain file is etc/r-zig.cmake
+/// (cmakeToolchain), and a tree that is not the env names its CA
 /// bundle, its fontconfig configuration and, in full, Tcl's script
 /// library (installEnvRuntime).
 /// `${X-default}` keeps a value set in the environment, as upstream's
@@ -3909,17 +4301,15 @@ fn finalRenviron(ctx: *const Ctx, io: std.Io, raw: []const u8) ![]u8 {
         }
         try out.append(b.allocator, '\n');
     }
-    // macOS: CMake's default toolchain file (macos_cmake_toolchain), in the
-    // conda build too. R reads this file at startup and R CMD sources it,
-    // so package builds get it either way.
-    if (ctx.os == .macos) {
-        try out.appendSlice(b.allocator,
-            \\## r-zig: CMake leaves out Homebrew's, Fink's and MacPorts' prefixes.
-            \\R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake
-            \\CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}
-            \\
-        );
-    }
+    // CMake's default toolchain file (cmakeToolchain), in the conda build
+    // too. R reads this file at startup and R CMD sources it, so package
+    // builds get it either way.
+    try out.appendSlice(b.allocator,
+        \\## r-zig: CMake searches R's environment and R_ZIG_EXTRA_ENV's first (macOS: not Homebrew's, Fink's or MacPorts').
+        \\R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake
+        \\CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}
+        \\
+    );
     // etc/Renviron, not Renviron.site: `R --vanilla`/`Rscript --vanilla`
     // imply --no-environ, which skips Renviron.site but still reads this
     // file. Why R_ZIG_CA_BUNDLE and not CURL_CA_BUNDLE: installEnvRuntime.
@@ -3949,7 +4339,7 @@ fn finalRenviron(ctx: *const Ctx, io: std.Io, raw: []const u8) ![]u8 {
     // names only the build env's. A Tcl that R starts gets this too, and
     // skips it when its version differs (init.tcl requires its exact
     // patchlevel, and Tcl moves on to its own).
-    if (!ctx.prefix_is_env and ctx.variant == .full) {
+    if (!ctx.prefix_is_env and ctx.feat.tcltk) {
         try out.appendSlice(b.allocator,
             \\## r-zig: Tcl's script library, shipped in the tree (tcltk).
             \\R_ZIG_TCL_LIBRARY=${R_HOME}/../tcl8.6
@@ -3964,10 +4354,12 @@ fn finalRenviron(ctx: *const Ctx, io: std.Io, raw: []const u8) ![]u8 {
     // exports PATH (patch 0008), so package builds and system("make") see
     // it. A missing directory is harmless: a tree without the group, or a
     // conda env, keeps the make already on PATH. Each nested R prepends it
-    // again, also harmless.
+    // again, also harmless. After it the extras group's cmake/bin
+    // (feat-extras-group), by the same rule: a package's configure or
+    // makefile runs plain `cmake`; a conda env has its own cmake on PATH.
     try out.appendSlice(b.allocator,
-        \\## r-zig: the build-tools group's usr/bin first on PATH (feat-standalone-toolchain B25).
-        \\PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}
+        \\## r-zig: the build-tools group's usr/bin, then the extras group's cmake/bin, first on PATH (feat-standalone-toolchain B25).
+        \\PATH=${R_HOME}/bin/toolchain/usr/bin:${R_HOME}/bin/toolchain/cmake/bin:${PATH}
         \\
     );
     return out.items;
@@ -4291,7 +4683,7 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
                 "tools:::.install_package_demos('{s}/tcltk', '{s}/tcltk')",
                 .{ srclib, lib },
             ));
-            if (ctx.variant != .full) continue; // stub: no real R code to lazycomp
+            if (!ctx.feat.tcltk) continue; // stub: no real R code to lazycomp
         }
         if (std.mem.eql(u8, pkg, "datasets")) {
             _ = boot.r("datasets data db", "tools:::data2LazyLoadDB(\"datasets\", compress=3)");

@@ -12,7 +12,8 @@ compile from source; system("sh ...") and Sys.which("pkg-config") in R
 code asked the caller's PATH too. The same rule in the session, with an
 empty R_CUSTOM_TOOLS_PATH read as unset as Rcmd_environ's ":-" reads it.
 A missing directory (no build-tools group extracted; the standalone
-tree's Library/usr/bin) is harmless. The env's dir is spelled without
+tree's Library/usr/bin) is harmless. The extras group's cmake/bin comes
+after the group's usr/bin, as in Rcmd_environ (feat-extras-group). The env's dir is spelled without
 "..": R's own command search (run.c's expandcmd, Sys.which) rejects a
 match in a PATH entry whose ".." segments shorten it by more than ten
 characters (SearchPath's second call, given the first call's size plus
@@ -24,7 +25,7 @@ open point I a, amendment Am4, F2 b.
 
 --- a/src/library/profile/Rprofile.windows
 +++ b/src/library/profile/Rprofile.windows
-@@ -85,3 +85,19 @@
+@@ -85,3 +85,21 @@
          Sys.setenv(PATH = paste0(path, ";", Sys.getenv("PATH")))
      }
  })
@@ -37,10 +38,12 @@ open point I a, amendment Am4, F2 b.
 +## its tools answer whatever PATH has first (PHASE7 F2 b), spelled
 +## without "..", which R's own command search rejects; an empty
 +## R_CUSTOM_TOOLS_PATH read as unset, as Rcmd_environ's ":-" reads it. A
-+## missing directory (no build-tools group) is harmless.
++## missing directory (no build-tools group) is harmless. The extras
++## group's cmake/bin after usr/bin, as in Rcmd_environ.
 +local({
 +    path <- Sys.getenv("R_CUSTOM_TOOLS_PATH")
 +    if (!nzchar(path)) path <- paste(file.path(R.home(), "bin", "toolchain", "usr", "bin"),
++                                     file.path(R.home(), "bin", "toolchain", "cmake", "bin"),
 +                                     file.path(dirname(dirname(R.home())), "usr", "bin"), sep = ";")
 +    Sys.setenv(PATH = paste0(path, ";", Sys.getenv("PATH")))
 +})

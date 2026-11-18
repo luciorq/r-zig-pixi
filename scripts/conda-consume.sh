@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # The conda packages as a user consumes them: a fresh pixi workspace from
-# this checkout's dist/conda (then conda-forge and universe, as stress.R
+# this checkout's dist/conda (then universe and conda-forge, as stress.R
 # --conda orders them), one environment per group, and the recipe's tests
 # run through pixi's activation by bare Rscript (win-64:
 # Library/bin/Rscript.bat, which rattler-build's test phase cannot run).
 # CI runs it on every conda-package leg before the publish; each host runs
 # it after conda-package (feat-standalone-toolchain phase 4; PHASE4 Cg8).
-# One manifest, four environments: the base alone, base + compilers,
-# base + build tools, and r-zig-toolchain, the metapackage of both groups
+# One manifest, six environments: the base alone, base + compilers,
+# base + build tools, base + extras (cmake, feat-extras-group),
+# r-zig-toolchain, the metapackage of the groups
 # (test-toolchain.R through activation, as a user's `pixi add
-# r-zig-toolchain` gets it; PHASE7 open point P a). Removing a group is
+# r-zig-toolchain` gets it; PHASE7 open point P a), and base + R's
+# recommended packages (feat-recommended-packages). Removing a group is
 # the package manager's, and the files that move between packages are the
 # upgrade test's.
 . "$(dirname "$0")/env.sh"
@@ -31,7 +33,7 @@ unset PIXI_PROJECT_MANIFEST PIXI_PROJECT_ROOT PIXI_PROJECT_NAME PIXI_PROJECT_VER
 cat > "$T/pixi.toml" << EOF
 [workspace]
 name = "r-zig-consume"
-channels = ["$ch", "conda-forge", "https://prefix.dev/universe"]
+channels = ["$ch", "https://prefix.dev/universe", "conda-forge"]
 platforms = ["$PLAT"]
 
 [dependencies]
@@ -43,17 +45,25 @@ r-zig-compilers = "*"
 [feature.build-tools.dependencies]
 r-zig-build-tools = "*"
 
+[feature.extras.dependencies]
+r-zig-extras = "*"
+
 [feature.toolchain.dependencies]
 r-zig-toolchain = "*"
+
+[feature.recommended.dependencies]
+r-zig-recommended = "*"
 
 [environments]
 compilers = ["compilers"]
 build-tools = ["build-tools"]
+extras = ["extras"]
 toolchain = ["toolchain"]
+recommended = ["recommended"]
 EOF
 # the zig cache conda-package's recipe tests filled (pixi.toml)
 export R_ZIG_TEST_ZIG_CACHE="$cache"
-for t in default:test-preflight.R compilers:test-compilers.R build-tools:test-build-tools.R toolchain:test-toolchain.R; do
+for t in default:test-preflight.R compilers:test-compilers.R build-tools:test-build-tools.R extras:test-extras.R toolchain:test-toolchain.R recommended:test-recommended.R; do
   echo "== ${t%%:*}: ${t#*:}"
   "$pixi" run --manifest-path "$T/pixi.toml" -e "${t%%:*}" Rscript "$rec/${t#*:}"
 done

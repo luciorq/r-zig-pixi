@@ -1,6 +1,7 @@
 //! rzig's cache, ${XDG_CACHE_HOME:-$HOME/.cache}/r-zig (`root`), the place
 //! the shims kept the libc++ mirror in (libcxx_mirror.zig). rzig also
-//! keeps there the archives it passes under an .a name (archives.zig).
+//! keeps there the archives and objects it passes under an .a or .o name
+//! (archives.zig).
 //! Each entry is made once, in a directory named by a key of what it is
 //! made from, and is safe under parallel make: a file appears complete or
 //! not at all (written under a temporary name, then renamed into place),

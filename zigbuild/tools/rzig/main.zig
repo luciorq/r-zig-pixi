@@ -24,6 +24,8 @@
 //!   rzig build ...    one package's library with zig build alone
 //!                     (pkgbuild.zig; install.R's hook, patch 0013)
 //!   rzig def ...      a package DLL's .def from its objects (def.zig)
+//!   rzig config ...   R CMD config without make or sh (config.zig;
+//!                     R CMD's dispatch, patch 0010)
 //!
 //! gcc-ar and gcc-ranlib are the names Makeconf.win's LTO lines use
 //! (feat-standalone-toolchain B43); Windows has those copies from phase 3.
@@ -34,10 +36,9 @@
 //! zig is found by find_zig.zig: ZIG_BIN, the compilers group's zig/ in
 //! rzig's own directory, the environment's bin, PATH, python3 -m ziglang.
 //! None: rzig names the compilers group and how to install it (groups.zig)
-//! and exits 127. `<name> --rzig-check[=fortran|build-tools|package]`
+//! and exits 127. `<name> --rzig-check[=fortran|build-tools|extras|package]`
 //! checks a group's tools instead of compiling (check.zig): the install
-//! preflight calls `=package` (patch 0009), R CMD config `=build-tools`
-//! (patch 0010).
+//! preflight calls `=package` (patch 0009).
 //!
 //! build.zig installs it under those names into R_HOME/bin/toolchain, the
 //! directory Makeconf names (Windows: gcc.exe and g++.exe, Makeconf.win's
@@ -173,6 +174,7 @@ const Subcommand = enum {
     build,
     def,
     t1,
+    config,
 
     fn fromName(name: []const u8) ?Subcommand {
         return std.meta.stringToEnum(Subcommand, name);
@@ -182,11 +184,12 @@ const Subcommand = enum {
 const usage =
     \\usage: zig-cc|zig-cxx|zig-fc|zig-ar|zig-ranlib|gcc|g++|gcc-ar|gcc-ranlib|ar|ranlib [args...]
     \\       nm|objdump|strip|dlltool|windres|as [args...]   (Windows' binutils)
-    \\       <one of those names> --rzig-check[=fortran|build-tools|package]
+    \\       <one of those names> --rzig-check[=fortran|build-tools|extras|package]
     \\       rzig <one of those names> [args...]
     \\       rzig build --pkg <dir> --out <dir> [options]   (rzig build --help)
     \\       rzig build --shlib --output <lib> [options] -- <file>...
     \\       rzig def -o <file>.def <object>|@<file>...
+    \\       rzig config [options] [VAR]   (R CMD config)
     \\       rzig t1 --plan <plan.zon> --root <dir> --out <lib> [--object <o>]... [--c|--cxx <source>]... [-j N]
     \\
 ;
@@ -226,6 +229,7 @@ pub fn main(init: std.process.Init) !u8 {
                 .build => pkgbuild.run(&ctx, args[2..]),
                 .def => def.run(&ctx, args[2..]),
                 .t1 => @import("tier1.zig").run(&ctx, args[2..]),
+                .config => @import("config.zig").run(&ctx, args[2..]),
             };
         }
         tool = Tool.fromName(toolName(args[1]));
@@ -258,7 +262,7 @@ pub fn main(init: std.process.Init) !u8 {
     const caller = args[1..];
     if (caller.len == 1) {
         const kind = check.parse(caller[0], t == .fc) catch {
-            std.debug.print("{s}: {s} checks the compilers (no value), fortran, build-tools or package, not '{s}'\n", .{ ctx.name, check.flag, caller[0] });
+            std.debug.print("{s}: {s} checks the compilers (no value), fortran, build-tools, extras or package, not '{s}'\n", .{ ctx.name, check.flag, caller[0] });
             return 2;
         };
         if (kind) |k| {
@@ -666,8 +670,10 @@ test {
     _ = @import("archives.zig");
     _ = @import("dso_fini.zig");
     _ = @import("cfguard.zig");
+    _ = @import("clear_cache.zig");
     _ = @import("strip.zig");
     _ = @import("darwin.zig");
+    _ = @import("target.zig");
     _ = @import("windows.zig");
     _ = @import("environment.zig");
     _ = @import("flang_rt.zig");
@@ -677,6 +683,7 @@ test {
     _ = @import("pkgplan.zig");
     _ = pkgbuild;
     _ = @import("tier1.zig");
+    _ = @import("config.zig");
     _ = stdio;
     _ = def;
     _ = check;

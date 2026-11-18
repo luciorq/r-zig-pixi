@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const mem = std.mem;
 const Ctx = @import("Ctx.zig");
 const cmdline = @import("cmdline.zig");
-const floors = @import("floors.zig");
+const rzig_target = @import("target.zig");
 const Args = cmdline.Args;
 
 /// The deployment target and the SDK's search directories.
@@ -28,21 +28,16 @@ pub const Target = struct {
 /// LAST on link lines only, so a -lz whose headers came from a -L directory
 /// the caller passed binds that library, not the SDK's .tbd.
 /// -mmacosx-version-min and MACOSX_DEPLOYMENT_TARGET are ignored by zig.
+/// The arch is R's, rzig's own (target.zig), not the machine's: under
+/// Rosetta an x86_64 rzig compiles for x86_64, as `uname -m` said there.
 pub fn target(ctx: *Ctx) !Target {
-    const sdk = sdkPath(ctx) orelse return .{ .before = &.{ "-target", triple }, .link_last = &.{} };
+    const triple = rzig_target.zig(.macos, ctx.arch).?;
+    const sdk = sdkPath(ctx) orelse return .{ .before = try ctx.arena.dupe([]const u8, &.{ "-target", triple }), .link_last = &.{} };
     return .{
         .before = try ctx.arena.dupe([]const u8, &.{ "-target", triple, try ctx.fmt("-F{s}/System/Library/Frameworks", .{sdk}) }),
         .link_last = try ctx.arena.dupe([]const u8, &.{try ctx.fmt("-L{s}/usr/lib", .{sdk})}),
     };
 }
-
-/// zig's name for the machine (`uname -m` says arm64 or x86_64; under
-/// Rosetta an x86_64 rzig sees x86_64, as uname did).
-const arch = switch (builtin.cpu.arch) {
-    .aarch64 => "aarch64",
-    else => "x86_64",
-};
-pub const triple = arch ++ "-native." ++ floors.majorMinor(floors.macos);
 
 /// The installed SDK, asked the way zig itself asks
 /// (std.zig.system.darwin.getSdk) and build.zig asks for R: `xcrun --sdk
@@ -96,7 +91,7 @@ test "target: native.13.0, SDK frameworks before, SDK usr/lib for links" {
     try f.init(.macos);
     defer f.deinit();
     const ctx = &f.ctx;
-    try testing.expectEqualStrings(arch ++ "-native.13.0", triple);
+    const triple = @tagName(builtin.cpu.arch) ++ "-native.13.0";
     ctx.xcrun = f.path("nowhere/xcrun");
     var t = try target(ctx);
     try expectArgs(&.{ "-target", triple }, t.before);

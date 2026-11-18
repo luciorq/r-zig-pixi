@@ -1,5 +1,11 @@
 context:
-  version: "4.6.1"
+  version: "4.6.2"
+  # R's recommended packages (share/make/vars.mk's R_PKGS_RECOMMENDED),
+  # as one glob: r-zig-recommended's files, which r-zig-slim leaves out
+  # (feat-recommended-packages PLAN.md). zigbuild/recommended/ reads the
+  # list from R's source; test-recommended.R holds the package to R's own
+  # list, so a name missing here fails there.
+  recommended: "{MASS,lattice,Matrix,nlme,survival,boot,cluster,codetools,foreign,KernSmooth,rpart,class,nnet,spatial,mgcv}"
 
 recipe:
   name: r-zig
@@ -10,8 +16,12 @@ source:
   # consumer of the same scripts pixi tasks use. The compilers in
   # R_HOME/bin/toolchain are rzig (zigbuild/tools/rzig/), built by zig
   # build; the bash shims in toolchain/ only serve configure-only.sh.
-  - url: https://cran.r-project.org/src/base/R-4/R-${{ version }}.tar.gz
-    sha256: 4da6e61d2c0aac5f14a2e7e432cb5fcc269efe83da4293050ba7f03dff4e2cf4
+  # CRAN, then its CDN, as scripts/fetch-r.sh: rattler-build tries each
+  # url in turn (CRAN failed CI legs on 2026-11-11), against the one sha256.
+  - url:
+      - https://cran.r-project.org/src/base/R-4/R-${{ version }}.tar.gz
+      - https://cloud.r-project.org/src/base/R-4/R-${{ version }}.tar.gz
+    sha256: c297040f6392b1dac6e5c0eb398422cfdaedf540ae2205edb9ad0d10cb10ee00
     target_directory: R-src
   - path: ../scripts
     target_directory: scripts
@@ -35,7 +45,7 @@ source:
     target_directory: .
   - path: ../zigbuild
     target_directory: zigbuild
-  # win-64: pkgconf's source, which the toolchain build compiles into
+  # Windows: pkgconf's source, which the toolchain build compiles into
   # R_HOME/bin/toolchain/usr/bin as pkgconf.exe and pkg-config.exe
   # (zigbuild/toolchain/pkgconf.zig; recipe/build.sh passes the directory
   # as -Dpkgconf). The url and sha256 are pkgconf.zig's, as its test
@@ -43,9 +53,20 @@ source:
   # same tarball (zigbuild/toolchain/build.zig.zon).
   - if: win
     then:
-      - url: https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.10.tar.xz
-        sha256: 9371b2f6372da574d4c6dc96fe9b1463037bcf6afcb6671c1555afde7b17e2de
+      - url: https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.11.tar.xz
+        sha256: d0cd841bc8e55b9da888106c00dc256d05b7d1d8e5a46f4be4eb4c5125bd2dc4
         target_directory: pkgconf-src
+  # Windows: cairo's source, which R's build compiles and links statically
+  # into winCairo.dll (zigbuild/cairo.zig; recipe/build.sh passes the
+  # directory as -Dcairo). conda-forge has no win-arm64 cairo; one build
+  # keeps both Windows arches alike. The url and sha256 are cairo.zig's,
+  # as its test checks (pixi run toolchain-test); the standalone build
+  # fetches the same tarball (build.zig.zon).
+  - if: win
+    then:
+      - url: https://cairographics.org/releases/cairo-1.18.6.tar.xz
+        sha256: 1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4
+        target_directory: cairo-src
 
 build:
   # 2: first zig-built release (recipe/build.sh switched from configure-
@@ -184,64 +205,86 @@ build:
   # here. rzig runs tier 1 itself, with no zig build runner
   # (feat-tier1-engine, #36); R_HOME/bin/toolchain carries rzig's link
   # objects, dso_fini.o (linux) and cfguard.o (x86_64 Windows), built
-  # once with R (feat-r-home-link-objects, #37); r-zig-build's icu pin
-  # has a floor, `icu 78.*` (fix-icu-pin, #40); the unix launchers no
+  # once with R (feat-r-home-link-objects, #37); the unix launchers no
   # longer set FONTCONFIG_PATH, which conda's fontconfig never needed:
   # its default is the env's etc/fonts (feat-standalone-toolchain phase
-  # 8, #42).
+  # 8, #42). #38, #39 (verify-bundle.sh) and #40 (the icu floor, `icu
+  # 78.*`) merged in that window too but change no package.
   # 10 → 11 (2026-11-09; universe's newest is _10 on all five subdirs):
-  # win-64's pkg-config is pkgconf 3.0.10, which the toolchain build
-  # compiles from source with zig into R_HOME/bin/toolchain/usr/bin as
-  # pkgconf.exe and pkg-config.exe, on both channels (r-zig-build-tools
-  # owns it here); conda-forge's pkg-config 0.29.2, which printed
-  # Libs.private without --static (ncdf4, RPostgres), and its glib DLLs
-  # are gone, from the standalone tree and from r-zig-build-tools' run
-  # deps. etc/Rcmd_environ gives PKG_CONFIG_PATH a default, R's env's
-  # Library/lib/pkgconfig and Library/share/pkgconfig, which that
-  # package's activation used to set (feat-zig-pkgconf). Zig 0.17 on every
-  # platform (feat-zig-017): conda-forge's zig 0.17.0, flang-pixi's zig
-  # 0.17 builds (flang-zig 7, lld-zig 6, flang-rt-zig 11); r-zig-slim's
-  # run_constraints and r-zig-compilers' depends move to zig 0.17.*.
+  # win-64's pkg-config is pkgconf (3.0.10; 3.0.11 since 2026-11-15),
+  # which the toolchain build compiles from source with zig into
+  # R_HOME/bin/toolchain/usr/bin as pkgconf.exe and pkg-config.exe, on
+  # both channels (r-zig-build-tools owns it here); conda-forge's
+  # pkg-config 0.29.2, which printed Libs.private without --static
+  # (ncdf4, RPostgres), and its glib DLLs are gone, from the standalone
+  # tree and from r-zig-build-tools' run deps. etc/Rcmd_environ gives
+  # PKG_CONFIG_PATH a default, R's env's Library/lib/pkgconfig and
+  # Library/share/pkgconfig, which that package's activation used to set
+  # (feat-zig-pkgconf). Zig 0.17 on every platform (feat-zig-017):
+  # conda-forge's zig 0.17.0 (0.17.1 on conda-forge since 2026-11-12, in
+  # the lock since 2026-11-15), flang-pixi's zig 0.17 builds (flang-zig
+  # 7, lld-zig 6, flang-rt-zig 11); r-zig-slim's run_constraints and
+  # r-zig-compilers' depends move to zig 0.17.*.
   # win-64's binutils are rzig's (nm, objdump, strip, dlltool, windres,
   # as beside gcc.exe in R_HOME/bin/toolchain, owned by r-zig-slim), on
   # zig 0.17's dlltool and rc: binutils_impl_win-64 and binutils/ are
-  # gone (feat-win-zig-binutils).
+  # gone (feat-win-zig-binutils). Windows' winCairo.dll links cairo
+  # 1.18.6, built from source by R's build (zigbuild/cairo.zig), in place
+  # of conda-forge's cairo, pango and harfbuzz; the recipe renders for
+  # win-arm64 (feat-win-arm64). The same number, not yet published (one
+  # release for the whole backlog, the user's decision of 2026-11-12):
+  # R 4.6.2; flang-pixi's LLVM 23.1.5 (flang-zig 0, flang-rt-zig 1) and
+  # its libomp, llvm-openmp's zig_* build, on every platform in place of
+  # conda-forge's (whose win-arm64 libomp.dll breaks parallel regions
+  # with more than six shared variables); linux's libR and base packages
+  # hide their internal symbols as macOS's and CRAN's do (1257 exported
+  # symbols, 2541 before); R_compiled_by() names this build's compilers;
+  # R CMD config is rzig's, with no make and no sh, so it answers without
+  # the build tools (feat-config-rzig); the extras group (cmake) and R's
+  # recommended packages are packages of their own; win-arm64 is built,
+  # tested and published as the other five (chore-release-11). Windows'
+  # r-zig-slim is the slim variant, as on unix (no Tcl/Tk, JPEG, TIFF or
+  # NLS), and its R.dll uses OpenMP and links libomp, as unix's libR does
+  # (chore-release-11 finding 23, 2026-11-14). The host libraries take
+  # conda-forge's global pins (recipe/variants.yaml): pcre2 10.47 in
+  # place of 10.49, libdeflate 1.26 in place of the `<1.26` cap; glib
+  # 2.90.0 on macOS (chore-release-11 finding 25, 2026-11-15).
   number: 11
 
 outputs:
-  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), four
-  # packages (feat-standalone-toolchain B28 a). The base, r-zig-slim, owns
+  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), six
+  # packages (feat-standalone-toolchain B28 a; r-zig-extras and
+  # r-zig-recommended since build 11). The base, r-zig-slim, owns
   # R and its compiler front rzig (R_HOME/bin/toolchain's compiler names,
   # which Makeconf points at, and share/zig/rpkg), as the standalone base
   # archive does (B19). Each group package owns, or depends on,
   # third-party software only: r-zig-compilers depends on zig, flang and
-  # llvm-openmp; r-zig-build-tools on make (win-64: the MSYS2 tools), and
-  # on win-64 owns R_HOME/bin/toolchain/usr/ (pkgconf, built from source).
+  # llvm-openmp; r-zig-build-tools on make (Windows: the MSYS2 tools), and
+  # on Windows owns R_HOME/bin/toolchain/usr/ (pkgconf, built from source).
   # Windows' binutils are rzig's own names, r-zig-slim's
   # (feat-win-zig-binutils). r-zig-toolchain is the
-  # metapackage of both groups. Without a group, an install that needs it
-  # stops with rzig's text naming that package (the preflight, patch
-  # 0009).
+  # metapackage of the groups (with r-zig-extras, cmake). Without a
+  # group, an install that needs it stops with rzig's text naming that
+  # package (the preflight, patch 0009); a missing cmake is only a note.
   - staging:
       name: r-zig-build
     requirements:
       build:
         - zig 0.17.*
         # Fortran, as pixi.toml: flang-pixi's zig-built flang-zig (LLVM
-        # 23.1.1, `universe` channel — the conda-package task passes it) on
+        # 23.1.5, `universe` channel — the conda-package task passes it) on
         # every platform; its runtime (flang-rt-zig) is static-only. No
         # gfortran anywhere (consolidation/PLAN.md Phase 2; linux-64 left
         # conda-forge's flang 2026-10-03). build.zig stops without
         # $BUILD_PREFIX/bin/flang (or $CONDA/bin/flang).
-        # Pinned as in pixi.toml to flang-pixi's zig 0.17 release
-        # (flang-zig 7, lld-zig 6, flang-rt-zig 11). The build string's `_N` suffix
+        # Pinned as in pixi.toml to flang-pixi's LLVM 23.1.5 release
+        # (flang-zig 0, flang-rt-zig 1; flang-zig pins its lld-zig). The build string's `_N` suffix
         # pins it: a `[build_number="==N"]` bracket would be copied into
         # r-zig-compilers' depends (r-zig-toolchain only pins the other
         # three outputs, B28), which conda's default (libmamba) solver and
-        # micromamba cannot parse. lld-zig only for its pin.
-        - flang-zig ==23.1.1 *_7
-        - lld-zig ==23.1.1 *_6
-        - flang-rt-zig ==23.1.1 *_11
+        # micromamba cannot parse.
+        - flang-zig ==23.1.5 *_0
+        - flang-rt-zig ==23.1.5 *_1
         - make >=4.4
         - pkg-config
         - if: linux
@@ -274,9 +317,13 @@ outputs:
         # zig shim scripts) plus uutils for the coreutils build.sh itself
         # uses. m2-bash is also what runs *this* build.sh in the first place
         # (rattler-build has no bld.bat here, same as conda-build convention).
-        - if: win
+        # uutils-coreutils on win-64 only: its win-arm64 builds refuse
+        # m2-coreutils (pixi.toml's [target.win-64.dependencies])
+        - if: build_platform == "win-64"
           then:
             - uutils-coreutils
+        - if: win
+          then:
             - m2-bash
             - m2-make
             - m2-coreutils
@@ -291,48 +338,53 @@ outputs:
             - m2-gawk
             - m2-unzip
             - m2-zip
-            - m2-patch  # zigbuild/patches/; conda-forge has no win-64 `patch`
+            - m2-patch  # zigbuild/patches/; conda-forge has no Windows `patch`
       host:
         # Fortran runtime: linked into libR (statically for flang's
         # libflang_rt.runtime.a on every platform, see build.zig's
         # linkFortranRt), must be in host too; pinned as in build
-        - flang-rt-zig ==23.1.1 *_11
+        - flang-rt-zig ==23.1.5 *_1
         - zlib
         - bzip2
         - xz
         - liblzma-devel
+        # The libraries below without a version take conda-forge's global
+        # pin from recipe/variants.yaml (pcre2 10.47.*, icu 78.*,
+        # libdeflate 1.26.*, ...), as a conda-forge feedstock's do: their
+        # run exports then match the conda-forge packages r-zig-slim
+        # shares an env with. A version here would switch that off.
+        # icu, for one, was `icu 78.*` here (2026-11-05): conda-forge's
+        # zig needs libxml2-16, built against icu 78 only, and `<79` alone
+        # let the solver take the 2022 cairo/pango stack of icu 70.
         - pcre2
         - libcurl
-        # 78.* while conda-forge's zig 0.16 needs libxml2-16, which is built
-        # against icu 78 only: with icu 79 in this host (79.1, 2026-10-22)
-        # r-zig-slim's run export becomes icu >=79.1,<80, and no test env
-        # that holds r-zig-slim and zig (r-zig-toolchain's, for one) can
-        # solve. A floor too: with `<79` alone, rattler's solver took the
-        # 2022 cairo/pango/harfbuzz stack built against icu 70 (2026-11-05),
-        # whose run export clashes with zig's icu 78 the same way. Lift it,
-        # with a build-number bump, when conda-forge's libxml2-16 is built
-        # against icu 79.
-        - icu 78.*
+        - icu
         - tzdata
-        # <1.26 while conda-forge's libgdal-core needs <1.26: libdeflate's
-        # run export pins r-zig-slim to the host's minor version, and builds
-        # 2 to 6, built against 1.26 on linux and macOS (win-64's took
-        # 1.25), could not share a conda env with sf, terra or gdalraster
-        # (stress round 1, U4). Lift it, with a build-number bump, when
-        # conda-forge's libgdal-core is built against 1.26 (its libdeflate
-        # migration).
-        - libdeflate <1.26
-        # 23, as pixi.toml, so the conda build uses the libomp CI tests.
-        # Its run export (>= the host version, 23.1.2 today) is the only
-        # bound r-zig-slim's run gets (below).
-        - llvm-openmp 23.*
-        - cairo
+        - libdeflate
+        # flang-pixi's libomp, as pixi.toml: the zig_* build of the same
+        # LLVM release as flang, on every platform (conda-forge's
+        # win-arm64 libomp.dll breaks parallel regions with more than six
+        # shared variables).
+        - llvm-openmp ==23.1.5 zig_*_1
+        # cairo and pango on unix only: Windows builds its cairo
+        # (zigbuild/cairo.zig) against the env's pixman, libpng and zlib,
+        # and R's Windows device has no pango
+        - if: unix
+          then:
+            - cairo
+            - pango
+        - if: win
+          then:
+            - pixman
         - expat
-        - pango
         - fontconfig
         - freetype
         - libpng
-        - glib
+        # glib on unix only, as pixi.toml: R's Windows build uses none of
+        # it, and on Windows glib's python brings tk.
+        - if: unix
+          then:
+            - glib
         # pango/cairo only pull in libharfbuzz (the runtime .so) as their own
         # transitive run dependency, not the headers — the vendored
         # CAIRO_CPPFLAGS build.zig applies unconditionally references
@@ -344,8 +396,11 @@ outputs:
         # hit this because something else in its much larger dependency graph
         # happens to pull the headers package in transitively too. Build-time
         # only: end users don't need hb.h, and libharfbuzz.so is already
-        # pulled in at runtime via pango's own run dependency.
-        - harfbuzz
+        # pulled in at runtime via pango's own run dependency. unix only,
+        # as pango.
+        - if: unix
+          then:
+            - harfbuzz
         # conda-forge's linux cairo needs xorg proto headers even though R
         # builds --with-x=no (pkg-config chain, not an actual X11 dep)
         - if: linux
@@ -365,18 +420,10 @@ outputs:
         - if: osx
           then:
             - libiconv
-        # gnuwin32 has no capability off-switches (unlike unix's
-        # --without-jpeglib etc.), so Windows R unconditionally links the
-        # jpeg/tiff bitmap devices, the tcltk package, and NLS — these are
-        # genuinely linked-at-runtime deps here, not just build inputs.
-        # tk 8.6, as pixi.toml: tcltk.dll links tcl86t/tk86t; an unpinned
-        # solve picks tk 9.0 (tcl90.dll), and the link fails.
-        - if: win
-          then:
-            - libjpeg-turbo
-            - libtiff
-            - tk 8.6.*
-            - gettext
+        # No libjpeg-turbo, libtiff, tk or gettext, on Windows too
+        # (2026-11-14): r-zig-slim is the slim variant on every OS
+        # (build.zig's variant table, zigbuild/config/win-slim). R's
+        # Windows NLS is its own intl, and only full has it.
     build:
       # A staging output is not a package: rattler-build sets no PKG_NAME
       # or PKG_VERSION for it, so pass what build.sh and zig-build.sh read.
@@ -391,15 +438,19 @@ outputs:
     build:
       # everything but the groups' directories under R_HOME/bin/toolchain
       # (feat-standalone-toolchain B20, B28): rzig's names and its link
-      # object stay here (win-64: with the binutils, rzig's names too). Of
-      # these, the conda build makes only win-64's usr/ (pkgconf), which
+      # object stay here (Windows: with the binutils, rzig's names too). Of
+      # these, the conda build makes only Windows' usr/ (pkgconf), which
       # r-zig-build-tools owns; etc/ is the standalone tree's only on
-      # win-64 (PHASE7 Cr5); binutils/ is gone (feat-win-zig-binutils) and
-      # stays excluded so no old tree's copy can ride along
+      # Windows (PHASE7 Cr5); binutils/ is gone (feat-win-zig-binutils) and
+      # stays excluded so no old tree's copy can ride along; cmake/ is the
+      # extras' (feat-extras-group), which the conda build never makes. R's
+      # recommended packages are r-zig-recommended's.
       files:
         exclude:
-          - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
-          - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
+          - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
+          - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
+          - lib/R/library/${{ recommended }}/**
+          - Library/lib/R/library/${{ recommended }}/**
     requirements:
       run:
         # R's own shared libraries (libR, base packages like stats/utils via
@@ -416,18 +467,28 @@ outputs:
         - icu
         - tzdata
         - libdeflate
-        # unpinned: host's run export sets the floor, and a newer libomp
-        # runs code built against an older omp.h, so a ceiling would only
-        # clash with packages built against the next LLVM's llvm-openmp
-        - llvm-openmp
-        - cairo
+        # The zig_* build (flang-pixi's, `universe`) on every platform:
+        # the libomp R was built and tested with, and on win-arm64 the
+        # only one that runs R's packages. A floor and no ceiling: a newer
+        # libomp runs code built against an older omp.h.
+        - llvm-openmp >=23.1.5 zig_*
+        # Windows: pixman, which winCairo.dll's cairo (r-zig's build) needs
+        - if: unix
+          then:
+            - cairo
+            - pango
+        - if: win
+          then:
+            - pixman
         - expat
-        - pango
         - fontconfig
         - freetype
         - libpng
-        - glib
-        # E2, on every OS (staging host)
+        # unix only, as the staging host
+        - if: unix
+          then:
+            - glib
+        # E2, on every OS (staging host): R.dll links it in every variant
         - zstd
         - if: linux
           then:
@@ -442,30 +503,31 @@ outputs:
             # at load time. The group packages get it through their exact
             # pins.
             - __osx >=13.0
-        - if: win
-          then:
-            - libjpeg-turbo
-            - libtiff
-            - tk 8.6.*
-            - gettext
       run_constraints:
         # the zig that built R and rzig: rzig finds the env's zig first
         # (B34), and B32's check stops a compile with another
         # major.minor; conda-forge's main label has 0.17.0 since
-        # 2026-10-13. Constrains an installed zig, pulls none in; moved
+        # 2026-10-13 and 0.17.1 since 2026-11-12 (the dev lock's since
+        # 2026-11-15). Constrains an installed zig, pulls none in; moved
         # with r-zig-compilers' pins in the zig 0.17 wave (B18; PHASE4
         # open point K a; feat-zig-017)
         - zig 0.17.*
+        # conda-forge's r-* packages depend on r-base; without this, adding
+        # one to an env with r-zig-slim silently installs conda-forge's R
+        # over r-zig's; with it the solve fails and names the conflict
+        # (chore-release-11 finding 31). The other outputs that hold R's
+        # files (r-zig-recommended) or run it pin r-zig-slim exactly, so
+        # they get it through that pin.
+        - r-base <0a0
     tests:
       # Mirrors scripts/smoke-test.sh's actual assertions (numerics: LAPACK
       # solve/qr, BLAS matmul, fft round-trip; pcre2 regex; zlib compression;
       # the slim capability profile) rather than a stripped-down subset — a
       # conda package is a distribution artifact, and this is the one check
       # that runs in a truly isolated env (no dev pixi env masking a gap).
-      # Windows keeps smoke-test.sh's own relaxed set: gnuwin32 has no slim/
-      # full off-switches, so tcltk/jpeg/tiff/NLS are TRUE despite this being
-      # r-zig-slim — asserting them FALSE here would be a false expectation,
-      # not a real regression check.
+      # Windows asserts the same slim profile (2026-11-14), and test-win.R
+      # also checks it by what R does: png draws, jpeg() and tiff() fail
+      # cleanly, library(tcltk) gives the stub's message.
       - script:
           content:
             - if: win
@@ -502,11 +564,9 @@ outputs:
                 # cmd.exe's OWN runtime parsing stage, not YAML rendering.
                 # bin/x64: the same hardcoded R_ARCH="x64" convention
                 # build.zig's buildWindows() has throughout (bin/x64,
-                # libs/x64, modules/x64, etc/x64) — see
-                # feat-cross-platform-standardization/PLAN.md's explicit
-                # win-arm64 non-goal. Fixing just this one literal without
-                # also fixing build.zig's dozen would be cosmetic, not real
-                # readiness; revisit together if win-arm64 is ever attempted.
+                # libs/x64, modules/x64, etc/x64), on win-arm64 too: R's
+                # Windows build keeps R_ARCH /x64 on aarch64 (MkRules.rules:
+                # WIN = 64; build.zig's config_dir comment).
                 - 'echo PATHDEBUG=%PATH%'
                 - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-win.R'
                 - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-preflight.R'
@@ -545,8 +605,13 @@ outputs:
                   - Library/lib/R/bin/toolchain/dlltool.exe
                   - Library/lib/R/bin/toolchain/windres.exe
                   - Library/lib/R/bin/toolchain/as.exe
-                  - Library/lib/R/bin/toolchain/cfguard.o
                   - Library/lib/R/share/zig/rpkg/build_t2.zig
+                  # cairo, r-zig's build, linked into winCairo.dll
+                  - Library/lib/R/library/grDevices/libs/x64/winCairo.dll
+                  - Library/lib/R/share/licenses/cairo/COPYING
+                  - Library/lib/R/share/licenses/cairo/COPYING-LGPL-2.1
+                  - Library/lib/R/share/licenses/cairo/COPYING-MPL-1.1
+                  - Library/lib/R/share/licenses/cairo/SOURCE
                 else:
                   - lib/R/bin/toolchain/rzig
                   - lib/R/bin/toolchain/zig-cc
@@ -554,23 +619,32 @@ outputs:
               - if: linux
                 then:
                   - lib/R/bin/toolchain/dso_fini.o
+              # x86_64 code (cfguard.zig); win-arm64's is the cache
+              # flush (clear_cache.zig)
+              - if: target_platform == "win-64"
+                then:
+                  - Library/lib/R/bin/toolchain/cfguard.o
+              - if: target_platform == "win-arm64"
+                then:
+                  - Library/lib/R/bin/toolchain/clear_cache.o
             not_exists:
-              - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
-              - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils}/**
-    # Windows builds R with full's content, under the name slim on every
-    # channel (feat-standalone-toolchain B42 a); a Windows slim that is
-    # really slim is a later aim.
+              - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
+              - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
+              - lib/R/library/${{ recommended }}/**
+              - Library/lib/R/library/${{ recommended }}/**
     about:
-      summary: R built with the zig toolchain, with its compiler front rzig (headless slim profile; Windows slim has full's content)
+      summary: R built with the zig toolchain, with its compiler front rzig (headless slim profile)
+      # Windows: R's and, linked into winCairo.dll, cairo's (r-zig's
+      # build, zigbuild/cairo.zig; its texts in R_HOME/share/licenses/cairo)
+      license: ${{ "(GPL-2.0-only OR GPL-3.0-only) AND (LGPL-2.1-only OR MPL-1.1)" if win else "GPL-2.0-only OR GPL-3.0-only" }}
       description: |
         R built from source with the zig toolchain, in the headless slim
-        profile: no X11, Tcl/Tk, JPEG, TIFF or NLS. Windows slim has full's
-        content (tcltk, jpeg, tiff, NLS): R's Windows build has no switches
-        to leave them out.
+        profile on every OS: cairo and PNG graphics, ICU, libcurl and
+        OpenMP; no X11, Tcl/Tk, JPEG, TIFF or NLS.
 
-        To compile packages, add r-zig-toolchain (r-zig-compilers and
-        r-zig-build-tools). r-zig-compilers alone installs packages that
-        have no configure script and no make rules.
+        To compile packages, add r-zig-toolchain (r-zig-compilers,
+        r-zig-build-tools and r-zig-extras). r-zig-compilers alone installs
+        packages that have no configure script and no make rules.
 
   # The groups (feat-standalone-toolchain B28 a, B38). Each pins exactly
   # the R build whose Makeconf and rzig it serves, and comes without the
@@ -602,15 +676,14 @@ outputs:
         # another major.minor (r-zig-slim also constrains it, PHASE4 open
         # point K).
         - zig 0.17.*
-        - flang-zig ==23.1.1 *_7
         # zig links every Fortran program and library since phase 6, so
-        # nothing of ours runs lld-zig; flang-zig run-depends on it anyway,
-        # and the pin stays (feat-standalone-toolchain PHASE6 open point Q)
-        - lld-zig ==23.1.1 *_6
-        - flang-rt-zig ==23.1.1 *_11
+        # nothing of ours runs lld-zig; flang-zig depends on its own build
+        # of it (PHASE6 open point Q), so it is not named here.
+        - flang-zig ==23.1.5 *_0
+        - flang-rt-zig ==23.1.5 *_1
         # omp.h and libomp: r-zig-slim already has them (B41's
         # exception); named here as B28 lists the group
-        - llvm-openmp
+        - llvm-openmp >=23.1.5 zig_*
     tests:
       - package_contents:
           files:
@@ -639,7 +712,7 @@ outputs:
       from: r-zig-build
       run_exports: false
     build:
-      # win-64: usr/bin's pkgconf.exe and pkg-config.exe, which the
+      # Windows: usr/bin's pkgconf.exe and pkg-config.exe, which the
       # toolchain build compiles from source (zigbuild/toolchain/pkgconf.zig), with
       # usr/SOURCES and usr/LICENSES/pkgconf/. R puts usr/bin first on
       # PATH, before the env's. unix: nothing (no branch matches: an empty
@@ -651,13 +724,13 @@ outputs:
     requirements:
       run:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
-        # B28 (a): unix make. On win-64, m2-make is the make R runs (it
+        # B28 (a): unix make. On Windows, m2-make is the make R runs (it
         # comes first on PATH), so no native make there (PHASE4 Cg7;
         # PHASE7 open point B a)
         - if: unix
           then:
             - make >=4.4
-        # win-64: the build-tools group's set on both channels (B11; PHASE7
+        # Windows: the build-tools group's set on both channels (B11; PHASE7
         # open points A-C): MSYS2's userland from conda-forge's m2 packages;
         # the standalone tree copies the same packages' files into
         # R_HOME/bin/toolchain/usr/bin. pkg-config is pkgconf, built by
@@ -700,6 +773,9 @@ outputs:
             # a configure script that patches its sources (hdf5r's unix
             # configure; feat-win-link-fixes item 4)
             - m2-patch
+            # a configure script that unpacks its sources (duckdb 2.0.0:
+            # `tar xf duckdb.tar`; chore-release-11 finding 34)
+            - m2-tar
     tests:
       - package_contents:
           files:
@@ -734,14 +810,52 @@ outputs:
             - test-build-tools.R
     about:
       summary: The r-zig build tools for r-zig-slim (make; on Windows also sh, the MSYS2 tools and pkg-config)
-      # win-64 holds pkgconf (ISC), with the mingw-w64 CRT startup zig
+      # Windows holds pkgconf (ISC), with the mingw-w64 CRT startup zig
       # links into it (ZPL-2.1); unix holds no file
       license: ${{ "ISC AND ZPL-2.1" if win else "GPL-2.0-only OR GPL-3.0-only" }}
 
+  # The extras group (feat-extras-group): cmake, for packages that build
+  # a bundled library with it (nloptr, s2, RcppParallel's TBB...).
+  # conda-forge's cmake, not bundled, as r-zig-compilers depends on zig;
+  # the standalone tree's cmake/ is Kitware's release archive. An empty
+  # package.
+  - package:
+      name: r-zig-extras
+    inherit:
+      from: r-zig-build
+      run_exports: false
+    build:
+      files: []
+    requirements:
+      run:
+        - ${{ pin_subpackage("r-zig-slim", exact=True) }}
+        # <4.5: Boost <= 1.92's locale CMakeLists (chore-release-11 finding 33)
+        - cmake <4.5
+    tests:
+      - package_contents:
+          files:
+            not_exists:
+              - lib/R/**
+              - Library/lib/R/**
+      - script:
+          content:
+            - if: win
+              then:
+                - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-extras.R'
+              else:
+                - $PREFIX/bin/Rscript test-extras.R
+        files:
+          recipe:
+            - test-extras.R
+    about:
+      summary: The r-zig extras for r-zig-slim (cmake, from conda-forge)
+
   - package:
       name: r-zig-toolchain
-    # the metapackage of both groups (B28 a): `pixi add r-zig-toolchain`
-    # installs everything a package build needs, as it did up to build 8
+    # the metapackage of the groups (B28 a): `pixi add r-zig-toolchain`
+    # installs everything a package build needs, as it did up to build 8;
+    # with r-zig-extras since feat-extras-group (cmake: a 26 MB download
+    # beside the compilers' 1.9 GB)
     inherit:
       from: r-zig-build
       run_exports: false
@@ -752,6 +866,7 @@ outputs:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
         - ${{ pin_subpackage("r-zig-compilers", exact=True) }}
         - ${{ pin_subpackage("r-zig-build-tools", exact=True) }}
+        - ${{ pin_subpackage("r-zig-extras", exact=True) }}
     tests:
       - package_contents:
           files:
@@ -772,11 +887,68 @@ outputs:
           recipe:
             - test-toolchain.R
     about:
-      summary: "The r-zig toolchain for r-zig-slim: r-zig-compilers and r-zig-build-tools"
+      summary: "The r-zig toolchain for r-zig-slim: r-zig-compilers, r-zig-build-tools and r-zig-extras"
+
+  # R's 15 recommended packages (MASS, lattice, Matrix, ..., mgcv), from
+  # the tarballs R's source carries, installed by build.sh's last step
+  # (scripts/zig-recommended.sh, zigbuild/recommended/build.zig) with the
+  # R and the compilers this build made (feat-recommended-packages
+  # PLAN.md). Opt-in: no other package depends on it (the user,
+  # 2026-11-12: "Recommended packages need to ship on their own conda
+  # package"). Its binaries need libR, Rblas, Rlapack and (mgcv) libomp,
+  # all r-zig-slim's (the Fortran runtime is static), so it pins the
+  # exact r-zig-slim build and has no run export of the staging host.
+  - package:
+      name: r-zig-recommended
+    inherit:
+      from: r-zig-build
+      run_exports: false
+    build:
+      files:
+        - lib/R/library/${{ recommended }}/**
+        - Library/lib/R/library/${{ recommended }}/**
+    requirements:
+      run:
+        - ${{ pin_subpackage("r-zig-slim", exact=True) }}
+    tests:
+      - package_contents:
+          files:
+            exists:
+              - if: win
+                then:
+                  - Library/lib/R/library/Matrix/libs/x64/Matrix.dll
+                  - Library/lib/R/library/mgcv/libs/x64/mgcv.dll
+                else:
+                  - lib/R/library/Matrix/libs/Matrix.so
+                  - lib/R/library/mgcv/libs/mgcv.so
+            not_exists:
+              - lib/R/bin/**
+              - Library/lib/R/bin/**
+              - lib/R/library/{base,stats,utils,tools}/**
+              - Library/lib/R/library/{base,stats,utils,tools}/**
+      - script:
+          content:
+            - if: win
+              then:
+                - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-recommended.R'
+              else:
+                - $PREFIX/bin/Rscript test-recommended.R
+        files:
+          recipe:
+            - test-recommended.R
+    about:
+      summary: R's 15 recommended packages (MASS, lattice, Matrix, nlme, survival, mgcv, ...) for r-zig-slim
+      # each package's DESCRIPTION: GPL (>= 2) cluster, foreign, lattice,
+      # mgcv, nlme, Matrix; GPL-2 | GPL-3 class, MASS, nnet, rpart,
+      # spatial; GPL codetools; LGPL (>= 2) survival; Unlimited boot,
+      # KernSmooth; Matrix's bundled SuiteSparse (its LICENCE file):
+      # BSD-3-Clause, LGPL-2.1-or-later, GPL-2.0-or-later, and METIS,
+      # Apache-2.0. The texts are in each package's directory.
+      license: GPL-2.0-or-later AND (GPL-2.0-only OR GPL-3.0-only) AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause AND Apache-2.0 AND LicenseRef-Unlimited
 
 about:
   homepage: https://www.r-project.org
-  # R's own (PHASE4 open point E a), as the r-zig wheel says; win-64
+  # R's own (PHASE4 open point E a), as the r-zig wheel says; Windows'
   # r-zig-build-tools states its pkgconf's own
   license: GPL-2.0-only OR GPL-3.0-only
   summary: R built with the zig toolchain (headless slim profile)

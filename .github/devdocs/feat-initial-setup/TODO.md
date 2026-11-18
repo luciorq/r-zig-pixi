@@ -88,6 +88,7 @@
       flags blanked (zig has no OpenMP runtime; matches unix behavior)
 - [ ] Parity caveats to resolve: jpeg/tiff/tcltk forced on (gnuwin32 has
       no off-switches → slim==full on Windows today); NLS on
+      (2026-11-14: resolved: .github/devdocs/feat-win-variants/PLAN.md.)
 - [x] **`make check` green on Windows** (2026-07-17): complex LAPACK
       passes at gfortran -O3 on x86_64-MinGW — the arm64-darwin
       miscompilation does NOT reproduce here. Two environmental fixes:
@@ -251,6 +252,8 @@
       flang/patchelf; m2-* + uutils-coreutils build-only tooling;
       libjpeg-turbo/libtiff/tk/gettext in host+run since gnuwin32 has no
       capability off-switches, same as pixi.toml's win-64 target).
+      (2026-11-14: gone from the Windows host and run deps; r-zig-slim
+      is slim on Windows: feat-win-variants.)
       `install-r.sh`'s existing Windows branch (copies bin/etc/include/
       library/modules/share/doc into the prefix layout, since gnuwin32
       has no `make install`) meant `recipe/build.sh` needed zero changes

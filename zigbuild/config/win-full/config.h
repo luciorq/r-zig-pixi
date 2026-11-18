@@ -615,10 +615,11 @@
 #define HAVE_OFF_T 1
 
 /* Define if you have C OpenMP support. */
-#if defined(__MINGW64_VERSION_MAJOR) && __MINGW64_VERSION_MAJOR >= 2
-// has it, but it is too slow to be usable
-// #define HAVE_OPENMP 1
-#endif
+/* r-zig: on in slim and full, as on unix (build.zig's variant table, which
+   checks it). Upstream leaves it off here ("has it, but it is too slow to
+   be usable", said of MinGW's libgomp). r-zig compiles R's own C with
+   -fopenmp, as on unix, and R.dll links LLVM's libomp (llvm-openmp). */
+#define HAVE_OPENMP 1
 
 /* Define if your OpenMP 4 implementation fully supports SIMD reduction */
 #define HAVE_OPENMP_SIMDRED 1
@@ -1241,7 +1242,8 @@
 #define STDC_HEADERS 1
 
 /* Define if you have C/C++/Fortran OpenMP support for package code. */
-/* #undef SUPPORT_OPENMP */
+/* r-zig: on in slim and full, as on unix (see HAVE_OPENMP) */
+#define SUPPORT_OPENMP 1
 
 /* Define to enable provoking compile errors on write barrier violation. */
 /* #undef TESTING_WRITE_BARRIER */
@@ -1252,14 +1254,11 @@
 
 /* Define to use ICU for collation. */
 /* gnuwin32's own static fixed/h/config.h ships this commented out, but its
-   real build always links ICU (MkRules defaults USE_ICU to YES and passes
-   -DUSE_ICU on the relevant compile lines) — capabilities()$ICU is TRUE on
-   the real gnuwin32 build (verified on kappa). Since this vendored config.h
-   is included via HAVE_CONFIG_H on every compile group, defining it here
-   directly (rather than replaying per-file -D flags, which gnuwin32 has no
-   subst table to source them from) reproduces that real behavior; needs
-   icuin/icuuc/icudt linked into R.dll to match (see linkCoreLibs's Windows
-   branch / buildWindows's R.dll link list). */
+   build links ICU by default (MkRules defaults USE_ICU to YES and passes
+   -DUSE_ICU on the relevant compile lines): capabilities()$ICU is TRUE on
+   upstream's Windows R (verified on kappa). r-zig defines it here for slim
+   and full (minimal has no ICU, as on unix: build.zig's variant table);
+   R.dll then links ICU_LIBS (subst.txt). */
 #define USE_ICU 1
 
 /* Define to use Apple's ICU. */

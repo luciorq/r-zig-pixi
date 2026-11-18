@@ -6,10 +6,11 @@
 //!    zig/zig in the standalone tree);
 //! 3. zig in the bin/ of the environment R is installed in
 //!    (environment.zig): a conda env used without activation, such as an
-//!    IDE pointed at <env>/bin/R. On win-64 conda-forge installs the real
-//!    binary only as x86_64-w64-mingw32-zig (`zig` is a .bat), so that
-//!    name too, after zig;
-//! 4. zig on PATH, then x86_64-w64-mingw32-zig;
+//!    IDE pointed at <env>/bin/R. On Windows conda-forge installs the real
+//!    binary only as <arch>-w64-mingw32-zig (`zig` is a .bat; x86_64 on
+//!    win-64, aarch64 on win-arm64), so those
+//!    names too, after zig;
+//! 4. zig on PATH, then x86_64- and aarch64-w64-mingw32-zig;
 //! 5. `python3 -m ziglang`, when the python3 on PATH has ziglang (the
 //!    wheel with ziglang outside R's own site-packages).
 //! None: null, and the compile names the compilers group (groups.zig).
@@ -23,7 +24,7 @@ const environment = @import("environment.zig");
 const windows = builtin.os.tag == .windows;
 
 /// zig's names in a bin/ directory and on PATH, in this order.
-const names = [_][]const u8{ "zig", "x86_64-w64-mingw32-zig" };
+const names = [_][]const u8{ "zig", "x86_64-w64-mingw32-zig", "aarch64-w64-mingw32-zig" };
 
 pub const Zig = struct {
     /// The command that runs zig: one path, or python3 -m ziglang.
@@ -178,6 +179,22 @@ test "the environment's bin: zig, then the mingw name, before PATH; R's own only
     _ = try f.touchProgram("extra/bin/zig");
     try f.env.put("R_ZIG_EXTRA_ENV", f.path("extra"));
     try expectZig(path_zig, try find(ctx));
+}
+
+test "win-arm64: the environment's aarch64-w64-mingw32-zig, and on PATH" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const ctx = &f.ctx;
+    // conda's win-arm64 layout: <prefix>/Library/bin/aarch64-w64-mingw32-zig.exe
+    // (the first windows-11-arm CI run found no zig without this name)
+    try f.tmp.dir.createDirPath(testing.io, "env/Library/lib/R/bin/toolchain");
+    ctx.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
+    const on_path = try f.touchProgram("p/aarch64-w64-mingw32-zig");
+    try f.env.put("PATH", f.path("p"));
+    try expectZig(on_path, try find(ctx));
+    const in_env = try f.touchProgram("env/Library/bin/aarch64-w64-mingw32-zig");
+    try expectZig(in_env, try find(ctx));
 }
 
 test "python3 -m ziglang only when the python3 on PATH has ziglang" {

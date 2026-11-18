@@ -41,9 +41,10 @@ tree_files() {
 # beside CC), and the binutils Makeconf, Rcmd_environ and CMake run
 # (nm.exe, objdump.exe, strip.exe, dlltool.exe, windres.exe, as.exe:
 # binutils.zig, feat-win-zig-binutils); no extensionless zig-cc or zig-cxx, since the compile
-# preflight and R CMD config run gcc.exe's check mode (B26 a). rzig /
-# rzig.exe: the name install.R's hook runs `rzig build` and `rzig def`
-# by (patch 0013; feat-zig-pkg-build PLAN.md).
+# preflight runs gcc.exe's check mode (B26 a). rzig / rzig.exe: the name
+# install.R's hook runs `rzig build` and `rzig def` by (patch 0013;
+# feat-zig-pkg-build PLAN.md) and R CMD runs `rzig config` by (patch
+# 0010, feat-config-rzig).
 rzig_names() {
   if [ "$OS" = windows ]; then
     echo "gcc.exe g++.exe zig-fc.exe zig-ar.exe zig-ranlib.exe gcc-ar.exe gcc-ranlib.exe ar.exe ranlib.exe nm.exe objdump.exe strip.exe dlltool.exe windres.exe as.exe rzig.exe"
@@ -54,20 +55,18 @@ rzig_names() {
 
 # The object installed beside rzig in R_HOME/bin/toolchain on this OS,
 # which rzig adds to links (zigbuild/tools/rzig/build.zig's linkObject;
-# feat-r-home-link-objects): linux's dso_fini.o, Windows' cfguard.o
-# (win-64 is x86_64), none on macOS. The base's other file there.
+# feat-r-home-link-objects): linux's dso_fini.o, win-64's cfguard.o
+# (x86_64 code, cfguard.zig), win-arm64's clear_cache.o (clear_cache.zig),
+# none on macOS. The base's other file there.
 link_object() {
-  case "$OS" in linux) echo dso_fini.o ;; windows) echo cfguard.o ;; esac
+  case "$PLAT" in linux-*) echo dso_fini.o ;; win-64) echo cfguard.o ;; win-arm64) echo clear_cache.o ;; esac
 }
 
 # A configure script in package directory $1 (unix configure, Windows
 # configure.win) that leaves the file configure-ran there with a shell
 # builtin, so that it starts no program: scenario 3 (verify-bundle.sh)
 # tells from it whether the install preflight (patch 0009) stopped a
-# package before its configure ran (B26, C26). That is the one place
-# where R CMD config passes, so configure could run: without the build
-# tools R CMD config (patch 0010) fails first, wherever the preflight
-# sits.
+# package before its configure ran (B26, C26).
 configure_marker() {
   local f
   for f in configure configure.win; do
@@ -213,8 +212,9 @@ vendored_files() {
 needed_of() {
   case "$OS" in
     linux) patchelf --print-needed "$1" 2>/dev/null || true ;;
-    macos) otool -L "$1" 2>/dev/null | tail -n +2 | awk '{print $1}' || true ;;
-    windows) x86_64-w64-mingw32-objdump -p "$1" 2>/dev/null | awk '/DLL Name:/ {print $3}' || true ;;
+    # every header line ends in ':', a universal file's one per slice
+    macos) otool -L "$1" 2>/dev/null | awk '!/:$/ {print $1}' || true ;;
+    windows) llvm-objdump -p "$1" 2>/dev/null | awk '/DLL Name:/ {print $3}' || true ;;
   esac
 }
 

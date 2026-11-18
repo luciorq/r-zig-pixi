@@ -156,7 +156,8 @@ pub fn modulesDir(ctx: *Ctx, fc: []const u8) !?[]const u8 {
     return first;
 }
 
-/// The names a module directory for rzig's own CPU starts with.
+/// The names a module directory for rzig's own CPU starts with (rzig's
+/// arch is R's: Ctx.arch's default, target.zig).
 const cpu_prefixes: []const []const u8 = switch (@import("builtin").cpu.arch) {
     .x86_64 => &.{"x86_64-"},
     .aarch64 => &.{ "aarch64-", "arm64-" },

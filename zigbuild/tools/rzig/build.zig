@@ -90,29 +90,40 @@ pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTar
 /// The object rzig adds to every link of its kind, for `target`, which
 /// rzig finds in its own directory (compiler.zig's linkObject), so both
 /// build.zigs install it beside rzig: on linux dso_fini.o, the
-/// finalization object of shared libraries (dso_fini.zig), and on x86_64
-/// Windows cfguard.o, the Control Flow Guard stub (cfguard.zig). None
-/// elsewhere: macOS needs none, and the stub is x86_64 code. The command
-/// is the one rzig ran into its cache before feat-r-home-link-objects,
-/// with the zig that runs this build. The object does not depend on that
-/// zig: conda-forge's and upstream's 0.16.0 compile the same bytes but
-/// .comment's clang version, and each links the other's (linux-64 and
-/// cross-built win-64, feat-r-home-link-objects).
+/// finalization object of shared libraries (dso_fini.zig), on x86_64
+/// Windows cfguard.o, the Control Flow Guard stub (cfguard.zig), and on
+/// aarch64 Windows clear_cache.o, the instruction-cache flush
+/// (clear_cache.zig). None on macOS, which needs none. Each is compiled
+/// from objects/<name>.zig with the zig that runs this build, for the
+/// baseline CPU, ReleaseSmall and stripped: no debug information, so no
+/// build path (C compiled for Windows carries CodeView's object-name
+/// record, the build machine's path, even at -g0; chore-release-11).
 pub fn linkObject(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTarget) ?LinkObject {
     const t = target.result;
-    const src: []const u8, const triple: []const u8 = switch (t.os.tag) {
+    const stem: []const u8, const triple: []const u8 = switch (t.os.tag) {
         // compiler.zig's linux_target: the glibc floor packages link for
-        .linux => .{ "dso_fini.c", b.fmt("{t}-linux-gnu." ++ floors.majorMinor(floors.glibc), .{t.cpu.arch}) },
-        .windows => if (t.cpu.arch == .x86_64) .{ "cfguard.S", "x86_64-windows-gnu" } else return null,
+        .linux => .{ "dso_fini", b.fmt("{t}-linux-gnu." ++ floors.majorMinor(floors.glibc), .{t.cpu.arch}) },
+        .windows => switch (t.cpu.arch) {
+            .x86_64 => .{ "cfguard", "x86_64-windows-gnu" },
+            .aarch64 => .{ "clear_cache", "aarch64-windows-gnu" },
+            else => return null,
+        },
         else => return null,
     };
-    const cc = b.addSystemCommand(&.{ b.graph.zig_exe, "cc", "-target", triple, "-mcpu=baseline", "-fno-sanitize=undefined", "-O2", "-g0" });
-    if (t.os.tag == .linux) cc.addArg("-fPIC");
-    cc.addArg("-c");
-    cc.addFileArg(dir.path(b, src));
-    cc.addArg("-o");
-    const name = b.fmt("{s}.o", .{std.fs.path.stem(src)});
-    return .{ .name = name, .file = cc.addOutputFileArg(name) };
+    const query = std.Target.Query.parse(.{ .arch_os_abi = triple, .cpu_features = "baseline" }) catch |e|
+        std.debug.panic("rzig: link object target {s}: {t}", .{ triple, e });
+    const obj = b.addObject(.{
+        .name = stem,
+        .root_module = b.createModule(.{
+            .root_source_file = dir.path(b, b.fmt("objects/{s}.zig", .{stem})),
+            .target = b.resolveTargetQuery(query),
+            .optimize = .ReleaseSmall,
+            .strip = true,
+            // linux: the object goes into shared libraries
+            .pic = if (t.os.tag == .linux) true else null,
+        }),
+    });
+    return .{ .name = b.fmt("{s}.o", .{stem}), .file = obj.getEmittedBin() };
 }
 
 /// rzig's unit tests for `target`: the host's, to run here (`add`), or

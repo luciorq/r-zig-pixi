@@ -477,6 +477,8 @@ run_to <- function(cmd, args) {
   - about:
     - summary: "R built with the zig toolchain, with its compiler front
       rzig (headless slim profile; Windows slim has full's content)".
+      (2026-11-14: the Windows clause is gone. Windows slim is slim:
+      .github/devdocs/feat-win-variants/PLAN.md.)
     - The description adds the one recommendation used everywhere
       (Cg16): "To compile packages, add r-zig-toolchain (r-zig-compilers
       and r-zig-build-tools). r-zig-compilers alone installs packages

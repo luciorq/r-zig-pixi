@@ -4,7 +4,7 @@
 # B36), so that they extract into one directory. Only archives: every
 # file is one an installed tree has, which the checks saw there.
 #
-# Usage: package-standalone.sh [base|toolchain]
+# Usage: package-standalone.sh [base|toolchain|recommended]
 #   base (default; pixi run package): the installed R tree in $PREFIX,
 #     the tree that ships (feat-no-host-paths PLAN.md, F1 and F1.7), as
 #     dist/R-<ver>-<flavor>-<platform>.tar.gz (Windows: .zip).
@@ -13,8 +13,15 @@
 #     dist/R-<ver>-<platform>-<group>.<ext>, with the group's directories
 #     under R_HOME/bin/toolchain (env.sh's group_dirs). <ext> is env.sh's
 #     group_ext: .tar.xz for the compilers on every platform (PHASE6 open
-#     point L), .tar.gz (Windows: .zip) for build-tools. No flavor in the
-#     name: one toolchain serves every flavor of the platform.
+#     point L), .tar.gz (Windows: .zip) for build-tools and extras. No
+#     flavor in the name: one toolchain serves every flavor of the
+#     platform.
+#   recommended (pixi run package-recommended): R's recommended packages
+#     in $RECOMMENDED_PREFIX (zig-recommended.sh), which
+#     verify-recommended.sh checks, as
+#     dist/R-<ver>-<flavor>-<platform>-recommended.tar.gz (Windows: .zip),
+#     extracted over the base archive. The flavor is in the name: mgcv
+#     links OpenMP, which minimal's base has not (the user, 2026-11-13).
 # Nothing is added to the R tree here, on any OS: zig build installs it
 # with the runtime data it needs from the env (build.zig's
 # installEnvRuntime: the CA bundle, fontconfig's configuration, Windows'
@@ -34,7 +41,8 @@ mode="${1:-base}"
 case "$mode" in
   base) tree="$PREFIX"; what="R tree"; build_task=build ;;
   toolchain) tree="$TOOLCHAIN_PREFIX"; what="toolchain tree"; build_task=toolchain ;;
-  *) echo "usage: package-standalone.sh [base|toolchain]" >&2; exit 2 ;;
+  recommended) tree="$RECOMMENDED_PREFIX"; what="recommended packages' tree"; build_task=recommended ;;
+  *) echo "usage: package-standalone.sh [base|toolchain|recommended]" >&2; exit 2 ;;
 esac
 # Windows: an override may be C:\...; basename and dirname want /c/... form.
 command -v cygpath > /dev/null 2>&1 && tree="$(cygpath -u "$tree")"
@@ -74,6 +82,10 @@ archive() {
 
 if [ "$mode" = base ]; then
   archive "$ROOT/dist/R-$R_VERSION-$FLAVOR-$PLAT.$ARCHIVE_EXT" "$TOP"
+  exit 0
+fi
+if [ "$mode" = recommended ]; then
+  archive "$ROOT/dist/R-$R_VERSION-$FLAVOR-$PLAT-recommended.$ARCHIVE_EXT" "$TOP"
   exit 0
 fi
 

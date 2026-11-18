@@ -12,4 +12,7 @@ if [ "$OS" = windows ]; then
 else
   export R_TEST_R_BIN="$COMPILE_TREE/$RH/bin/Rscript"
 fi
+# R CMD config (rzig, patch 0010) against R's script with the compile
+# tree's make first (feat-config-rzig)
+bash "$(dirname "$0")/config-parity.sh" "$COMPILE_TREE"
 exec bash "$(dirname "$0")/contract-test.sh"

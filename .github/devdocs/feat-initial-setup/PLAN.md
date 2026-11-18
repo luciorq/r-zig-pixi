@@ -282,6 +282,9 @@ stays pristine and a reconfigure is just deleting the objdir.
    The zig shims carry a GNU-ld emulation layer for Windows (lib*.dll.a
    / lib*.lib search, -mwindows implied libs, gfortran libdir). Known
    gap: slim==full on Windows (gnuwin32 has no capability off-switches).
+   (2026-11-14: superseded. Windows builds slim, full and minimal from
+   one variant table, as unix does, and Windows slim is really slim:
+   .github/devdocs/feat-win-variants/PLAN.md.)
 4. **[DONE]** R regression suite (`pixi run check`) green on all three
    platforms; OpenMP working everywhere via conda-forge `llvm-openmp`;
    `openblas` pixi feature for external BLAS/LAPACK (linux validated).

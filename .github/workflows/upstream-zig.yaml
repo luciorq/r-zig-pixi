@@ -69,7 +69,13 @@ jobs:
         include:
           - os: ubuntu-latest
           - os: macos-latest
-          # as build.yaml's Windows leg (--verbose, 90 minutes)
+          # as build.yaml's Windows leg (--verbose, 90 minutes). Windows
+          # default is slim since 2026-11-14 (feat-win-variants): no tcltk,
+          # jpeg(), tiff() or NLS. No full leg here, by choice: the
+          # variant changes which defines and libraries R gets, not how
+          # zig compiles them, and build.yaml's full tier builds Windows
+          # full with conda-forge's zig. Add one if a zig difference ever
+          # shows only in full's code (tcltk.dll, libintl.h).
           - os: windows-latest
             build_args: "-- --verbose"
             timeout: 90

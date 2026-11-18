@@ -5,7 +5,7 @@
 #define R_CONFIG_H
 
 /* Version of C Compiler */
-#define CC_VER "clang version 21.1.8 (https://github.com/conda-forge/clangdev-feedstock 334cf9a5e6c0331e9f261eaf01fc3568724fcce9)"
+#define CC_VER "clang version 22.1.8 (https://github.com/conda-forge/clangdev-feedstock fb53dd81989499cc67dae1f1f8965d8e5db7af47)"
 
 /* Define to 1 if using 'alloca.c'. */
 /* #undef C_ALLOCA */
@@ -35,7 +35,7 @@
 #define FC_LEN_T size_t
 
 /* Version of Fortran Compiler */
-#define FC_VER "flang version 23.1.1"
+#define FC_VER "flang version 23.1.5"
 
 /* Define to 1 if you have the `access' function. */
 #define HAVE_ACCESS 1
@@ -912,7 +912,7 @@
 /* #undef HAVE_VISIBILITY */
 
 /* Define to 1 if __attribute__((visibility())) is supported */
-/* #undef HAVE_VISIBILITY_ATTRIBUTE */
+#define HAVE_VISIBILITY_ATTRIBUTE 1
 
 /* Define to 1 if you have the <wchar.h> header file. */
 #define HAVE_WCHAR_H 1
@@ -1060,7 +1060,7 @@
 #define PACKAGE_NAME "R"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "R 4.6.1"
+#define PACKAGE_STRING "R 4.6.2"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "R"
@@ -1069,7 +1069,7 @@
 #define PACKAGE_URL "https://www.r-project.org"
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "4.6.1"
+#define PACKAGE_VERSION "4.6.2"
 
 /* PCRE2 code unit width wanted. */
 #define PCRE2_CODE_UNIT_WIDTH 8
@@ -1304,7 +1304,7 @@
 #define VALGRIND_LEVEL 0
 
 /* Version number of package */
-#define VERSION "4.6.1"
+#define VERSION "4.6.2"
 
 /* Define to 1 if your processor stores words with the most significant byte
    first (like Motorola and SPARC, unlike Intel and VAX). */

@@ -146,6 +146,10 @@ D5 (a), D8-D11 (a), D13 (a), E3 (a), E4 (a).
 
 ## Outside this plan (continue as planned)
 
+(2026-11-12: all of these are done, and the boxes below are kept as they
+were: the re-lock merged as #16, #14 and #15 merged, the stress suite
+merged as #21, and feat-tier1-engine as #36.)
+
 - [ ] The re-lock (chore-relock-flang-rt-10) merged as its own PR (R1 =
       a), before #14's bump publishes, so that build 5 carries the exact
       flang pins
@@ -191,7 +195,8 @@ D5 (a), D8-D11 (a), D13 (a), E3 (a), E4 (a).
       `-Dprefix` beside --prefix; fetch-zig.sh pins ziglang 0.17.1, which
       has all five wheels and win_arm64. Record:
       .github/devdocs/feat-zig-017/PLAN.md. The re-lock awaits the
-      user's approval
+      user's approval (2026-11-12: approved 2026-11-10; #46 merged into
+      main on 2026-11-12)
 
 ## Phase 2 — rzig knows the groups
 
@@ -580,7 +585,9 @@ phase4/ beside these files.
       read through universe's `channel_relations`, lacked): a solve-only
       probe on gamma at 17:54 UTC with kappa's packages solved in both
       channel orders once the mirror had it; pixi.toml's and stress.R's
-      comments give the reason for conda-forge first
+      comments give the reason for conda-forge first (2026-11-12:
+      superseded: universe is listed first everywhere and has no base
+      relation any more; see chore-release-11/PLAN.md, findings 13 and 14)
 - [x] Tested: conda-package on linux-64, omicron (osx-arm64), kappa;
       wheel-test on linux-64 and omicron (2026-10-14, both rounds)
 - [ ] Tested by CI (the PR's run): the core tier with the five
@@ -805,7 +812,8 @@ a); the record is PLAN.md's "Phase 7 record".
       `R-<ver>-win-64-build-tools.zip` alone (open point K a)
 - [x] `R CMD config` without the build tools fails with one clear message
       (patch 0010's rcmdfn.c hunk, open point J a: 127 and rzig's text,
-      no "is not recognized")
+      no "is not recognized"). Superseded 2026-11-13 by feat-config-rzig:
+      R CMD config is rzig's and answers without the build tools
 - [x] Re-scope from feat-zig-pkg-build's stress table: B39's list stays
       (open point G a). The suite's Windows rows (runs 38317654371,
       38467907779, 38569895172): nm and sed in 25 rows, basename in 27,
@@ -852,7 +860,8 @@ a); the record is PLAN.md's "Phase 7 record".
       with the new number; then delete the variable (a release switch,
       the user's option c of 2026-10-27). Done: published as `_9` on 2026-11-05 (build.yaml dispatch 41942729382 on main, CONDA_PUBLISH set for it and deleted after the check)
       from #35's merge (1e5c7bf): #36 and #37 merged after the dispatch
-      and publish with `_10` (phase 9)
+      and publish with `_10` (phase 9) (2026-11-13: #38, #39 and #40
+      merged after it too and change no package)
 
 ## After `_9`: follow-ups (from the final test, 2026-10-31)
 
@@ -861,31 +870,43 @@ None blocks phase 8. Each is its own small PR unless it says otherwise.
 - [ ] The icu pin's lift: when conda-forge's libxml2-16 is built against
       icu 79, drop both bounds of r-zig-build's `icu 78.*`, with a
       build-number bump (fix-icu-pin/PLAN.md, "Lifting it")
-- [ ] evex512 (X1, F2): `-mcpu=baseline+evex512` in rzig's x86_64
+- [x] evex512 (X1, F2): `-mcpu=baseline+evex512` in rzig's x86_64
       target flags. It fixes arrow and arrow:source on the x86_64
-      runners, and RcppSimdJson, which `_9` ships with
+      runners, and RcppSimdJson, which `_9` ships with. Not needed since
+      the zig 0.17 port: zig 0.17 (LLVM 22) has no evex512 feature
+      (`-mcpu=baseline+evex512`: "unknown CPU feature"), and a function
+      with `__attribute__((target("avx512f")))` that uses 512-bit
+      intrinsics compiles at `-mcpu=baseline` for the linux, Windows
+      and macOS x86_64 targets (gamma, 2026-11-12; chore-release-11).
+      The stress rows confirm it on the runners
 - [ ] K1: packages.tsv's RPostgres sysdeps `libpq
       libboost-headers@windows lz4-c@windows` (tested on kappa); the
       Windows conda stress row's `RPostgres (!) install-failed sysdep`
       (`boost/noncopyable.hpp`) goes with it
-- [ ] K2: stress.R `--conda` unsets every variable that names the
+- [x] K2: stress.R `--conda` unsets every variable that names the
       tree's CONDA_PREFIX, PATH excepted (tested on win-64 only); s2's
       configure line then stops naming the tree's stress env
-- [ ] COFF bigobj objects: def.zig still rejects them (BadObject). K3
-      and K4 were fixed in feat-tier1-engine (#36)
+      (chore-release-11)
+- [x] COFF bigobj objects: def.zig still rejects them (BadObject). K3
+      and K4 were fixed in feat-tier1-engine (#36). def.zig reads them
+      since feat-win-zig-binutils (#47; its test "exports: a bigobj
+      object")
 - [ ] N6: correct stress.R:337-338's comment, or set ZIG_LOCAL_CACHE_DIR
       to the run directory (a `.zig-cache` appears in the checkout root)
 - [ ] N7: check that a user's runtime zig cache does not mix
-      conda-forge's and upstream zig 0.16.0 objects (the cache key has
-      only the version)
+      conda-forge's and upstream zig objects of one version (0.17.0 and
+      0.17.1 today, so the keys differ; the case returns when both have
+      the same version: the cache key has only the version)
 - [ ] N8: never delete a universe `_8` file before the next number is
       out (a rebuilt `_8` differs from universe's); a rule for every
       release, recorded here
-- [ ] N9: test-preflight.R:75 (no link object on macOS), wheel-test.sh:71
-      (`mktemp -d "${TMPDIR:-/tmp}/wheel-test.XXXXXX"`),
-      package-standalone.sh's tar (not reproducible), and
-      chore-lock-and-ci-refresh PLAN.md:305-306, :313-318, :322-327
-      (stale wording)
+- [ ] N9: test-preflight.R:75 (no link object on macOS) and
+      wheel-test.sh:71 (`mktemp -d "${TMPDIR:-/tmp}/wheel-test.XXXXXX"`):
+      done (chore-release-11). Left: package-standalone.sh's tar (not
+      reproducible; more shell there is the wrong direction, so it waits
+      for the standalone release, which the user put after the conda
+      one, 2026-11-12), and chore-lock-and-ci-refresh PLAN.md:305-306,
+      :313-318, :322-327 (stale wording)
 
 Next: phase 8, then phase 9, pkgconf from source, the zig 0.17 port,
 Windows on ARM (the user's order, 2026-10-22).
@@ -924,7 +945,9 @@ Record: pkgconf/PKGCONF.md (branch feat-zig-pkgconf, build 11).
       confirms it
 - [x] verify-tree.sh's conda exception, if conda's TC gains usr/ (kappa's
       F1 of 2026-10-20): it does (usr/, pkgconf)
-- [ ] CI on the PR (`full-ci`, `upstream-zig`), then the `_11` publish
+- [x] CI on the PR (`full-ci`, `upstream-zig`): #45, 31 checks green,
+      merged 2026-11-12. No `_11` publish of its own: one release for
+      the whole backlog (the user, 2026-11-12; chore-release-11)
 
 ## Phase 8 — the base's runtime files
 
@@ -985,7 +1008,8 @@ Needs (answered): B14 (a), with B37 (a).
 
 ## Later / future checks
 
-- [ ] build.zig fills CC_VER/FC_VER from the zig and flang that build R,
+- [x] (chore-release-11: versionLine and setDefine in build.zig)
+      build.zig fills CC_VER/FC_VER from the zig and flang that build R,
       on every OS, as it fills Windows' COMPILED_BY (compiledBy): the
       vendored strings in zigbuild/config drift with every rebuild of
       conda-forge's zig or of the libclang-cpp21.1 it loads, and phase
@@ -994,23 +1018,23 @@ Needs (answered): B14 (a), with B37 (a).
 - [ ] Which full-only features can become add-on R components (tcltk
       first); drop the separate full build only if readline/NLS can be
       settled
-- [ ] Make Windows slim really slim (B42, the user's note of 2026-10-08;
+- [x] Make Windows slim really slim (B42, the user's note of 2026-10-08;
       relates to C1, Windows minimal); until then it has full's content
+      (2026-11-14: done in release 11, with Windows full and minimal:
+      .github/devdocs/feat-win-variants/PLAN.md.)
 - [ ] Depend less on make for package installs (Windows needs sh/make
       for now): done for `R CMD INSTALL` of tier 0 to 2 packages by
       feat-zig-pkg-build (rzig build; its PLAN.md, "What the build-tools
       group is for"). R CMD SHLIB is done by feat-shlib-rzig-build
       (its PLAN.md; it publishes with phase 7's bump): run-time
       compiles, pkgbuild's has_compiler probe and so pak need no make
-      where the code needs none. Left:
-      `R CMD config` through rzig (unix src/scripts/config; Windows with
-      phase 7's rcmdfn.c). That would serve rstan on macOS, which runs
-      `R CMD config CXX17` after each `stan_model()` compile, and
-      pkgbuild's Windows `has_rtools()`, which warns "Rtools is
-      required" on base + compilers (feat-shlib-rzig-build's open point
-      H), and would also free the `R CMD config` run before a configure
-      script for tier 0 and 2 packages on unix (feat-zig-pkg-build fact
-      3). The shared
+      where the code needs none. `R CMD config` through rzig is done by
+      feat-config-rzig (its PLAN.md, 2026-11-13): R CMD runs `rzig
+      config` on every OS (patch 0010), no make and no sh, for rstan's
+      `R CMD config CXX17` after each `stan_model()` compile, pkgbuild's
+      Windows `has_rtools()` (feat-shlib-rzig-build's open point H) and
+      the `R CMD config` run before a configure script (feat-zig-pkg-build
+      fact 3); omicron and kappa runs are listed there. The shared
       tier-1 build runner is done by feat-shared-build-runner's PR (its
       PLAN.md) [stress-S1, records-REC-4, phase3-P3-8]: stress dispatch
       38467907779 (`shared_cache = false`, main ea7e6ee) measured the
@@ -1063,7 +1087,9 @@ Needs (answered): B14 (a), with B37 (a).
       `cc_path` is empty; `has_rtools()` answered TRUE there only from
       stale registry entries for Rtools 4.4 and 4.5, while
       `has_compiler()` and `check_build_tools()` were TRUE through rzig
-      build. Clears with `R CMD config` through rzig (the item above).
+      build. Clears with `R CMD config` through rzig (the item above,
+      feat-config-rzig, 2026-11-13: to be confirmed on kappa with base +
+      compilers, `pkgbuild::has_rtools(debug = TRUE)`).
       Phase 7 (kappa, 2026-10-20): without the build tools R CMD config
       now exits 127 with rzig's text (no "is not recognized"); with the
       build-tools group `R CMD config CC` answers gcc.exe,
@@ -1078,7 +1104,8 @@ Needs (answered): B14 (a), with B37 (a).
       `R_SESSION_TMPDIR` too, as SHLIB mode's (feat-shlib-rzig-build's
       open point M c), if a killed install's `src/.rzig` is seen
 - [ ] macOS `zig cc --version` writes an empty `a.o` in the working
-      directory (conda-forge's zig and upstream 0.16.0): rzig's driver
+      directory (conda-forge's zig and upstream 0.16.0; not re-checked
+      with 0.17, 2026-11-12: compiler.zig still adds `-c`): rzig's driver
       adds `-c` to a version query (compiler.zig; feat-shlib-rzig-build's
       "Host fixes, round 1"). Drop it when a zig writes none; no upstream
       report (L)
@@ -1086,8 +1113,11 @@ Needs (answered): B14 (a), with B37 (a).
       LibraryOptions, appended to each C/C++ source's flags, when a zig
       package needs its own include paths or defines (tier 2 does not
       read src/Makevars; fix-zig-pkg-build-review's PLAN.md, code-4)
-- [ ] Optional extras group, only when the stress suite shows a need
-      (the suite starts now, D15 a)
+- [x] Optional extras group: cmake on every OS (stress round 1's
+      decision 16, 2026-10-08), built 2026-11-13 (feat-extras-group
+      PLAN.md: TC/cmake/ from Kitware's release archives (first PyPI's
+      wheel; switched the same day), r-zig-extras on conda,
+      in r-zig-toolchain; macOS and Windows runs still to do there)
 - [ ] After the stress suite: reassess B39's list and B43's pkg-config
       and objdump, and whether a gcc-nm from conda-forge is really
       needed (B43-2) (what is really needed, what zig cc/rzig
@@ -1160,7 +1190,9 @@ are the old ones (PLAN.md, "Old decisions and their status"). Phase 1's
 open boxes are still open: omicron and kappa have not run
 conda-package, and on #15 CI's osx-64 and win-64 conda-package jobs and
 the seven macOS and Windows build legs failed at `pixi install` (a 404
-on deleted flang builds, confirmed in the job logs).
+on deleted flang builds, confirmed in the job logs). (2026-11-12: closed
+by later builds: CI has since built and published the packages up to
+`_10` on all five subdirs; universe holds `_10`.)
 
 ## Phase 0 — measurements (no code changes)
 

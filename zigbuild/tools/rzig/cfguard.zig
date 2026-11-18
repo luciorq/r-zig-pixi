@@ -11,7 +11,9 @@
 //! (its clang-x86_64 r-windows bundle: librsvg-2.a holds Rust's std,
 //! compiled with CFG) and a one-file repro (`zig cc -mguard=cf`) fail so.
 //!
-//! The fix is guard_dispatch.S's part, cfguard.S. R's build assembles it
+//! The fix is guard_dispatch.S's part, objects/cfguard.zig (a naked
+//! function around the one instruction; cfguard.S until
+//! chore-release-11). R's build compiles it
 //! into R_HOME/bin/toolchain/cfguard.o, beside rzig (build.zig's
 //! linkObject), as dso_fini.zig's object; rzig assembled it into its cache
 //! at link time before (feat-r-home-link-objects). compiler.zig passes it
@@ -19,10 +21,10 @@
 //! link makes no image, and zig's COFF -r takes one object). Nothing uses it
 //! unless libmingw32's mingw_cfguard_support.obj is pulled in; other links
 //! carry its 16 bytes of code. A zig whose libmingw32 has guard_dispatch.S's
-//! member never pulls that member, as the symbol is already defined. R on
-//! Windows is x86_64 here (win-64), and the code is x86_64's: R's build
-//! makes no cfguard.o for another architecture, and an rzig built for one
-//! (Windows on ARM, cross-built only) adds none (compiler.zig).
+//! member never pulls that member, as the symbol is already defined. The
+//! code is x86_64's: R's build makes no cfguard.o for another
+//! architecture, and on Windows on ARM rzig adds clear_cache.o in its
+//! place (clear_cache.zig, compiler.zig).
 //!
 //! The symbol is excluded from lld's MinGW auto-export (a DLL with no .def
 //! file and no dllexport exports every global symbol), with the

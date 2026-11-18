@@ -214,7 +214,7 @@ def platform_tags(files: list[tuple[str, bytes]]) -> list[str]:
         if major >= 11 and minor > 0:
             major, minor = major + 1, 0
         return [f"macosx_{major}_{minor}_{arch}"]
-    die(f"no wheel platform tag for {system} (the minimal build is linux/macOS only)")
+    die(f"no wheel platform tag for {system} (no Windows wheel yet: the wheel is linux/macOS only, although the minimal build also runs on Windows)")
     return []
 
 
@@ -314,8 +314,8 @@ package as the C/C++ compiler, so no system compiler is needed; alone, it
 installs packages that have no configure script and no make rules, and
 compiles such code at run time (`R CMD SHLIB`: Rcpp's `sourceCpp()`,
 inline, TMB) with no make. r-zig-build-tools brings GNU make, for the
-rest: configure scripts, Makevars rules, Objective-C, `R CMD config`, and
-installing pkgbuild, pak or devtools from source once.
+rest: configure scripts, Makevars rules, Objective-C, and installing
+pkgbuild, pak or devtools from source once.
 Without a group, an install that needs it stops and names the wheel to
 add. PyPI has no Fortran compiler: packages with Fortran sources need
 LLVM flang on PATH.
@@ -353,7 +353,7 @@ flang on PATH.
 
 The build tools for the [`r-zig`](https://pypi.org/project/r-zig/) wheel
 (R {r_version}): GNU make, which R runs for configure scripts, Makevars
-rules, Objective-C and `R CMD config`. Installing pkgbuild, pak or
+rules and Objective-C. Installing pkgbuild, pak or
 devtools from source needs it once: processx has Makevars rules, and ps
 and pak have configure scripts. It requires exactly the `r-zig` it was
 built with. To compile packages, add r-zig-toolchain (r-zig-compilers

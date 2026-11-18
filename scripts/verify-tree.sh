@@ -42,15 +42,23 @@
 #     lib/libomp; Windows R_HOME/bin/x64/libomp.dll), which makes rzig
 #     count the group's openmp/ (B40); where it does not (minimal), no
 #     runtime, so rzig leaves openmp/ alone;
-#   - Windows (a tree that is not a conda env): the Tcl/Tk runtime is in
-#     R_HOME/Tcl (with Tcl's modules), Makeconf's TCL_VERSION names its
-#     DLLs (tcl86t, tk86t), Tcl/Tk's headers (tcl.h, tk.h) are in
-#     R_HOME/Tcl/include, and every DLL a PE file in the tree imports is
+#   - OpenMP inside R (every tree): libR (Windows: R.dll) links libomp
+#     in slim and full, and not in minimal (build.zig's variant table);
+#   - Windows (every tree): grDevices.dll imports the bitmap libraries of
+#     its variant (full png, jpeg, tiff; slim png; minimal none); without
+#     tcltk (slim, minimal) there is no tcltk.dll, no R_HOME/Tcl and
+#     Makeconf's TCLTK_LIBS is empty;
+#   - Windows (a tree that is not a conda env): with tcltk (full), the
+#     Tcl/Tk runtime is in R_HOME/Tcl (with Tcl's modules), Makeconf's
+#     TCL_VERSION names its DLLs (tcl86t, tk86t), Tcl/Tk's headers (tcl.h,
+#     tk.h) are in R_HOME/Tcl/include; and every DLL a PE file in the tree imports is
 #     in the tree (its own directory, R_HOME/bin/x64, or R_HOME/Tcl/bin
 #     for the Tcl/Tk DLLs) or the system's;
-#   - macOS (every tree): etc/r-zig.cmake, a CMake toolchain file that
-#     leaves out Homebrew's, Fink's and MacPorts' prefixes, and
-#     etc/Renviron makes it CMAKE_TOOLCHAIN_FILE's default;
+#   - every OS (every tree): etc/r-zig.cmake, a CMake toolchain file that
+#     puts R's env and R_ZIG_EXTRA_ENV's first in CMake's searches (on
+#     macOS it also leaves out Homebrew's, Fink's and MacPorts'
+#     prefixes), and etc/Renviron (Windows: etc/Rcmd_environ) makes it
+#     CMAKE_TOOLCHAIN_FILE's default;
 #   - every OS (a tree that is not a conda env): share/licenses/SOURCES
 #     (Windows: Library/share/licenses) records every file the tree has
 #     from the env, with its package and sha256, and each package's
@@ -64,7 +72,9 @@
 #   - x86_64 (every OS): no binary of R's own has a VEX or EVEX
 #     instruction (AVX, AVX2, FMA, AVX-512, on any register width): R is
 #     compiled for the baseline CPU, not the build machine's;
-#   - minimal: no binary of R's own links a library the profile excludes;
+#   - minimal: no binary of R's own links a library the profile excludes
+#     (Windows: R's own PE files by name, as bin/x64 also holds conda's
+#     DLLs; no winCairo.dll and no tcltk.dll);
 #   - linux: no ELF needs a glibc above the floor, 2.17;
 #   - unix: every rpath is relative to its file; none of R's own binaries
 #     needs a shared C++ runtime; linux: every DT_NEEDED is a bare name;
@@ -76,8 +86,9 @@
 #     env's other packages are conda-forge's.
 # verify-bundle.sh (pixi task verify-package, after package) keeps what
 # only a moved, environment-free copy can show, with this tree's archive
-# and the two group archives extracted into one directory, a scenario
-# after each (the base alone, with the compilers, with the build tools):
+# and the three group archives extracted into one directory, a scenario
+# after each (the base alone, with the compilers, with the build tools,
+# with the extras):
 # R runs from the new place under env -i, TLS trust with the shipped CA
 # bundle, the CPU its C compiler compiles for (the arch's baseline, every
 # OS), and packages compiled with the relocated tree build and load
@@ -178,18 +189,58 @@ fi
 # rzig's link object (zigbuild/tools/rzig/build.zig's linkObject): a
 # relocatable object for R's target, which rzig finds beside itself and
 # adds to links. Without it rzig warns at each such link and links
-# without it (dso_fini.zig, cfguard.zig).
+# without it (dso_fini.zig, cfguard.zig, clear_cache.zig).
 if [ -n "$lo" ]; then
   f="$TREE/$tc_dir/$lo"
-  # its first bytes: ELF's magic, or an x86-64 COFF object's machine
-  # (IMAGE_FILE_MACHINE_AMD64, little-endian)
-  case "$OS" in linux) magic=7f454c46 ;; windows) magic=6486 ;; esac
+  # its first bytes: ELF's magic, or a COFF object's machine for R's arch
+  # (IMAGE_FILE_MACHINE_AMD64 or _ARM64, little-endian)
+  case "$PLAT" in linux-*) magic=7f454c46 ;; win-64) magic=6486 ;; win-arm64) magic=64aa ;; esac
   if [ ! -f "$f" ] || [ "$(od -An -tx1 -N$((${#magic} / 2)) "$f" | tr -d ' \n')" != "$magic" ]; then
     echo "error: $tc_dir/$lo is missing or not an object for R's target (feat-r-home-link-objects)" >&2
     exit 1
   fi
 fi
 echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig${lo:+, $tc_dir/$lo is its link object}, and nothing else is there"
+
+# R's target, named on every command rzig runs, every OS
+# (zigbuild/tools/rzig/target.zig; chore-release-11 finding 29): rzig
+# never leaves the target to the zig or the flang it finds, whose native
+# one is the platform its binary was built for (an x64 zig from an
+# emulated win-64 env compiled for x64 against an arm64 R). The dry runs
+# (RZIG_PRINT_ARGV: nothing runs) of a C compile, a C++ link and, on
+# Windows, as.exe give zig `-target <R's>`, and a Fortran compile gives
+# flang `--target=<flang-zig's default triple for R's platform>`. Each
+# runs the tree's own copy; zig-fc's needs a flang (the env's).
+case "$PLAT" in
+  linux-64) want_t=x86_64-linux-gnu.2.17; want_ft=x86_64-conda-linux-gnu ;;
+  linux-aarch64) want_t=aarch64-linux-gnu.2.17; want_ft=aarch64-conda-linux-gnu ;;
+  osx-64) want_t="x86_64-native.$MACOS_MIN"; want_ft=x86_64-apple-darwin13.4.0 ;;
+  osx-arm64) want_t="aarch64-native.$MACOS_MIN"; want_ft=arm64-apple-darwin20.0.0 ;;
+  win-64) want_t=x86_64-windows-gnu; want_ft=x86_64-w64-windows-gnu ;;
+  win-arm64) want_t=aarch64-windows-gnu; want_ft=aarch64-w64-windows-gnu ;;
+  *) echo "error: no target known for platform $PLAT" >&2; exit 1 ;;
+esac
+# dry_argv <tool> <args...>: the command's words, one per line
+# (less the ZIG_LIB_DIR= line rzig prints before zig's on macOS)
+dry_argv() { (cd "$WORK" && RZIG_PRINT_ARGV=1 "$TREE/$tc_dir/$1" "${@:2}") | tr -d '\r' | grep -v '^ZIG_LIB_DIR='; }
+# has_target <words>: `-target` then $want_t, once, before any other -target
+has_target() { printf '%s\n' "$1" | awk -v t="$want_t" '$0 == "-target" { n++; if (n == 1) { getline v; ok = (v == t) } } END { exit !(ok && n == 1) }'; }
+if [ "$OS" = windows ]; then
+  t_fc=zig-fc.exe
+  calls=("gcc.exe -O2 -c a.c -o a.o" "g++.exe -shared -o p.dll a.o" "as.exe -o a.o a.s")
+else
+  t_fc=zig-fc
+  calls=("zig-cc -O2 -c a.c -o a.o" "zig-cxx -shared -o p.so a.o")
+fi
+for c in "${calls[@]}"; do
+  # shellcheck disable=SC2086
+  argv="$(dry_argv $c)" || { echo "error: the dry run of $c failed" >&2; exit 1; }
+  has_target "$argv" || { printf '%s\n' "$argv" >&2; echo "error: $c does not give zig -target $want_t, R's target, once (target.zig; finding 29)" >&2; exit 1; }
+done
+argv="$(dry_argv "$t_fc" -O2 -c a.f90 -o a.o)" || { echo "error: the dry run of $t_fc -c a.f90 failed (no flang on PATH?)" >&2; exit 1; }
+printf '%s\n' "$argv" | sed -n 2p | grep -qxF -- "--target=$want_ft" ||
+  { printf '%s\n' "$argv" >&2; echo "error: $t_fc -c a.f90 does not give flang --target=$want_ft, R's target, first (target.zig; finding 29)" >&2; exit 1; }
+echo "== R's target verified: zig -target $want_t (${calls[*]%% *}), flang --target=$want_ft ($t_fc)"
 
 # rzig build's zig build roots for tier 2 (feat-zig-pkg-build; tier 1
 # runs no zig build, feat-tier1-engine), beside the compilers
@@ -317,18 +368,25 @@ if [ "$OS" = windows ]; then
     bad="$bad
   ${mk#$TREE/} names a tool through LLVMPREF: $l"
   done < "$WORK/llvmpref.txt"
-  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/../../usr/bin' \
+  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin' \
     'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"' \
     'R_ZIG_RC=${R_HOME}/bin/toolchain/windres.exe' \
     'R_ZIG_NM=${R_HOME}/bin/toolchain/nm.exe' \
     'R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig' \
     'PKG_CONFIG_PATH="${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}"' \
-    'UserNM="${UserNM-${R_ZIG_NM}}"' 'RC="${RC-${R_ZIG_RC}}"'; do
+    'UserNM="${UserNM-${R_ZIG_NM}}"' 'RC="${RC-${R_ZIG_RC}}"' \
+    'R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake' \
+    'CMAKE_TOOLCHAIN_FILE="${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}"'; do
     has_line "$TREE/$rh/etc/Rcmd_environ" "$l" || bad="$bad
   $rh/etc/Rcmd_environ lacks: $l"
   done
+  # CMake's toolchain file (build.zig's cmakeToolchain, chore-release-11
+  # finding 28): R_ZIG_EXTRA_ENV's Library first in CMake's searches
+  has_line "$TREE/$rh/etc/r-zig.cmake" '  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}/Library")' ||
+    bad="$bad
+  $rh/etc/r-zig.cmake is missing or does not add R_ZIG_EXTRA_ENV's Library"
 else
-  for l in 'PATH=${R_HOME}/bin/toolchain/usr/bin:${PATH}' "MAKE=\${MAKE-'make'}"; do
+  for l in 'PATH=${R_HOME}/bin/toolchain/usr/bin:${R_HOME}/bin/toolchain/cmake/bin:${PATH}' "MAKE=\${MAKE-'make'}"; do
     has_line "$TREE/$rh/etc/Renviron" "$l" || bad="$bad
   $rh/etc/Renviron lacks: $l"
   done
@@ -338,9 +396,9 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 if [ "$OS" = windows ]; then
-  echo "== build tools verified: Makeconf's AR, RANLIB and binutils are rzig's names in \$(BINPREF), each a file there, PKG_CONFIG = pkg-config; etc/Rcmd_environ puts bin/toolchain/usr/bin first on PATH and gives PKG_CONFIG_PATH R's env's .pc directories as its default"
+  echo "== build tools verified: Makeconf's AR, RANLIB and binutils are rzig's names in \$(BINPREF), each a file there, PKG_CONFIG = pkg-config; etc/Rcmd_environ puts bin/toolchain/usr/bin and cmake/bin first on PATH and gives PKG_CONFIG_PATH R's env's .pc directories as its default"
 else
-  echo "== build tools verified: etc/Renviron puts bin/toolchain/usr/bin first on PATH, MAKE=\${MAKE-'make'}"
+  echo "== build tools verified: etc/Renviron puts bin/toolchain/usr/bin and cmake/bin first on PATH, MAKE=\${MAKE-'make'}"
 fi
 
 # No path of the build machine in any file of R's own (feat-no-host-paths
@@ -556,9 +614,7 @@ fi
 # rzig count the group's openmp/ (B40): unix, libR links libomp, which
 # vendor-libs.sh copies into lib/; Windows, libomp.dll in R_HOME/bin/x64
 # beside R's executables, which vendor-libs.sh copies there because
-# Makeconf offers OpenMP. R itself has no OpenMP on Windows (upstream's
-# choice), so nothing in the tree imports it and the DLL closure check
-# below would not notice it missing. Where Makeconf offers none
+# Makeconf offers OpenMP (and R.dll imports it: below). Where Makeconf offers none
 # (minimal), the base has no runtime, so rzig leaves openmp/ alone and a
 # configure script's flagless omp.h probe finds no header. (That a package
 # builds with the base and the group, and loads: verify-bundle.sh.)
@@ -586,6 +642,27 @@ if [ -z "$conda_tree" ]; then
   echo "== OpenMP for packages verified: $omp_ok; no omp.h or libomp.lib (the compilers group's openmp/)"
 fi
 
+# OpenMP inside R (build.zig's variant table, openmp_r), every tree: on
+# every OS, slim and full compile R's own C with -fopenmp and libR links
+# libomp, so libR (Windows: R.dll) names it; minimal compiles none and
+# names none. On Windows this differs from upstream R, which leaves it off
+# (2026-11-14, chore-release-11 PLAN.md finding 23). The variant follows
+# Makeconf's SHLIB_OPENMP_CFLAGS, which the table sets alike.
+case "$OS" in
+  windows) libr_file="$rh/bin/x64/R.dll"; omp_re='^libomp\.dll$' ;;
+  linux) libr_file="$rh/lib/libR.so"; omp_re='^libomp\.so' ;;
+  macos) libr_file="$rh/lib/libR.dylib"; omp_re='(^|/)libomp\.dylib$' ;;
+esac
+[ -f "$TREE/$libr_file" ] || { echo "error: $libr_file is missing" >&2; exit 1; }
+libr_omp="$(needed_of "$TREE/$libr_file" | grep -iE "$omp_re" || true)"
+if grep -Eq '^SHLIB_OPENMP_CFLAGS = *-' "$mk"; then
+  [ -n "$libr_omp" ] || { echo "error: $libr_file does not link libomp, but this variant has OpenMP inside R (build.zig's Features.openmp_r)" >&2; exit 1; }
+  echo "== OpenMP inside R verified: $libr_file links $(echo $libr_omp)"
+else
+  [ -z "$libr_omp" ] || { echo "error: $libr_file links $libr_omp, but this variant has no OpenMP (minimal)" >&2; exit 1; }
+  echo "== OpenMP inside R verified: $libr_file links no libomp (no OpenMP in this variant)"
+fi
+
 # The baseline CPU (x86_64): R's own binaries are compiled for their
 # arch's baseline (build.zig's cpu_model = .baseline), so they run on any
 # CPU of the arch, not only on ones like the build machine's. The x86-64
@@ -607,14 +684,22 @@ fi
 # there, rzig's link object included). conda-forge's binaries are built
 # for its own baseline, and some carry AVX2 code behind a run-time CPU
 # check (libdeflate, libcrypto), so they are not counted. objdump: on
-# Windows the env's x86_64-w64-mingw32-objdump; on macOS
+# Windows the env's llvm-objdump (llvm-tools, pixi.toml); on macOS
 # /usr/bin/objdump, which is llvm-objdump, from the Command Line Tools
 # the SDK needs anyway; on linux the env's, conda-forge's binutils
 # (pixi.toml). Without one the check fails, everywhere, saying so.
-# aarch64: the check does not apply.
-case "$(uname -m)" in
-  x86_64|amd64)
-    if [ "$OS" = windows ]; then objdump_cmd=x86_64-w64-mingw32-objdump; else objdump_cmd=objdump; fi
+# macOS: `objdump --macho -d`, which reads LC_DATA_IN_CODE and prints
+# the jump tables clang keeps inside __text as `.long` data; plain -d
+# decodes them as instructions (run 43437326154: one entry of
+# _bcEval_loop's table, bytes c5 d1 fe ff, read as vpaddd). ELF and PE
+# keep jump tables out of the code section.
+# aarch64: the check does not apply. By PLAT (env.sh), not uname: on
+# Windows on ARM the MSYS2 tools' uname says x86_64.
+case "$PLAT" in
+  linux-64|osx-64|win-64)
+    if [ "$OS" = windows ]; then objdump_cmd=llvm-objdump; else objdump_cmd=objdump; fi
+    objdump_d=(-d --no-show-raw-insn)
+    if [ "$OS" = macos ]; then objdump_d=(--macho -d --no-show-raw-insn); fi
     if ! command -v "$objdump_cmd" > /dev/null 2>&1; then
       echo "error: no $objdump_cmd on PATH for the baseline CPU check" >&2
       exit 1
@@ -642,7 +727,7 @@ case "$(uname -m)" in
     # or {evex} pseudo-prefix first). Counts: VEX/EVEX instructions, and
     # instructions naming a %ymm, a %zmm register.
     vex_counts() {
-      "$objdump_cmd" -d --no-show-raw-insn "$1" | awk '
+      "$objdump_cmd" "${objdump_d[@]}" "$1" | awk '
         !sub(/^[[:space:]]*[0-9a-f]+:[[:space:]]+/, "") { next }
         { sub(/^[{][a-z0-9]+[}][[:space:]]+/, "") }
         /^v[a-z]/ && !/^ver[rw][[:space:]]/ { v++ }
@@ -660,18 +745,117 @@ case "$(uname -m)" in
     done < "$WORK/r-bins.txt"
     if [ -n "$bad" ]; then
       echo "error: R's own binaries use AVX-class instructions, beyond the x86-64 baseline (an object compiled for the build machine's CPU):$bad" >&2
+      # name the functions: the first 10 offending instructions per binary
+      while IFS= read -r f; do
+        "$objdump_cmd" "${objdump_d[@]}" "$f" | awk -v F="${f#$TREE/}" '
+          /^[0-9a-f]+ <.*>:$/ { fn = $2; sub(/:$/, "", fn); next }
+          /^[^[:space:]]+:$/ { fn = "<" $1; sub(/:$/, ">", fn); next }
+          !sub(/^[[:space:]]*[0-9a-f]+:[[:space:]]+/, "") { next }
+          { sub(/^[{][a-z0-9]+[}][[:space:]]+/, "") }
+          ((/^v[a-z]/ && !/^ver[rw][[:space:]]/) || /%[yz]mm/) && n++ < 10 { print "  " F " " fn ": " $0 }' >&2
+      done < "$WORK/r-bins.txt"
       exit 1
     fi
     n_conda=$(($(wc -l < "$WORK/r-bins-all.txt") - n_rb))
-    echo "== baseline CPU verified: $n_rb binaries of R's own under R_HOME, $n_vex VEX/EVEX instructions (AVX, FMA, AVX-512), $n_ymm on %ymm, $n_zmm on %zmm ($objdump_cmd -d; $n_conda conda binaries there not counted)"
+    echo "== baseline CPU verified: $n_rb binaries of R's own under R_HOME, $n_vex VEX/EVEX instructions (AVX, FMA, AVX-512), $n_ymm on %ymm, $n_zmm on %zmm ($objdump_cmd ${objdump_d[*]}; $n_conda conda binaries there not counted)"
     ;;
-  *) echo "== baseline CPU: the VEX/EVEX check is x86_64's; on $(uname -m) it does not apply" ;;
+  *) echo "== baseline CPU: the VEX/EVEX check is x86_64's; on $PLAT it does not apply" ;;
 esac
 
 # Windows has no rpaths, glibc or Mach-O: the binary checks further down
 # are unix. Its own: the Tcl/Tk runtime and the DLL closure.
 if [ "$OS" = windows ]; then
-  if [ -z "$conda_tree" ]; then
+  # tcltk: the package's DLL where the variant has tcltk (full), and with
+  # it the Tcl/Tk runtime (below); elsewhere the stub, no DLL, no R_HOME/Tcl,
+  # and Makeconf's TCLTK_* empty (build.zig; unix's slim does the same).
+  win_tcltk=""
+  [ -f "$TREE/$rh/library/tcltk/libs/x64/tcltk.dll" ] && win_tcltk=1
+  tcltk_libs="$(sed -n 's/^TCLTK_LIBS = *//p' "$mk" | tr -d '\r')"
+  if [ -n "$win_tcltk" ] && [ -z "$tcltk_libs" ]; then
+    echo "error: library/tcltk/libs/x64/tcltk.dll is there, but Makeconf's TCLTK_LIBS is empty" >&2
+    exit 1
+  fi
+  if [ -z "$win_tcltk" ]; then
+    bad=""
+    [ -z "$tcltk_libs" ] || bad="$bad Makeconf's TCLTK_LIBS=$tcltk_libs"
+    [ ! -e "$TREE/$rh/Tcl" ] || bad="$bad $rh/Tcl"
+    grep -qs MY_TCLTK "$TREE/$rh/etc/Renviron.site" && bad="$bad etc/Renviron.site's MY_TCLTK"
+    if [ -n "$bad" ]; then
+      echo "error: no tcltk.dll (a variant without tcltk), yet:$bad (zig's install removes no file: build into a clean prefix)" >&2
+      exit 1
+    fi
+    echo "== tcltk verified: none in this variant (no tcltk.dll, no R_HOME/Tcl, TCLTK_LIBS empty)"
+  fi
+
+  # R's own PE files, by name: the core DLLs, the front-ends, the modules
+  # and the base packages' DLLs. bin/x64 also holds the conda DLLs
+  # vendor-libs.sh copies, which are not R's.
+  r_pe="$WORK/r-pe.txt"
+  {
+    for f in R Rblas Rlapack Rgraphapp Riconv; do echo "$TREE/$rh/bin/x64/$f.dll"; done
+    find "$TREE/$rh/bin" -maxdepth 2 -type f -name '*.exe' ! -path "$TREE/$tc_dir/*"
+    find "$TREE/$rh/modules/x64" -type f -name '*.dll'
+    find "$TREE/$rh/library" -type f -path '*/libs/x64/*.dll'
+  } > "$r_pe"
+  while IFS= read -r f; do
+    [ -f "$f" ] || { echo "error: ${f#$TREE/} is missing" >&2; exit 1; }
+  done < "$r_pe"
+
+  # The bitmap formats grDevices.dll links (the variant table: full png,
+  # jpeg, tiff; slim png; minimal none), by the DLLs it imports: the -D
+  # flags build.zig passes winbitmap.c follow the table, not only
+  # config.h's capabilities().
+  gd="$rh/library/grDevices/libs/x64/grDevices.dll"
+  gd_deps="$(needed_of "$TREE/$gd")"
+  [ -n "$gd_deps" ] || { echo "error: cannot read the imports of $gd (llvm-objdump -p)" >&2; exit 1; }
+  case "$VARIANT" in
+    full) want_fmt="png jpeg tiff" ;;
+    slim) want_fmt="png" ;;
+    *) want_fmt="" ;;
+  esac
+  bad=""
+  for fmt in png jpeg tiff; do
+    case "$fmt" in
+      png) re='^libpng[0-9]*\.dll$' ;;
+      jpeg) re='^(lib)?jpeg[0-9]*\.dll$' ;;
+      tiff) re='^(lib)?tiff[0-9]*\.dll$' ;;
+    esac
+    hit="$(printf '%s\n' "$gd_deps" | grep -iE "$re" || true)"
+    case " $want_fmt " in
+      *" $fmt "*) [ -n "$hit" ] || bad="$bad $fmt(not imported)" ;;
+      *) [ -z "$hit" ] || bad="$bad $fmt($hit imported)" ;;
+    esac
+  done
+  if [ -n "$bad" ]; then
+    echo "error: $gd for variant $VARIANT (wants:${want_fmt:+ }${want_fmt:-none}):$bad" >&2
+    exit 1
+  fi
+  echo "== grDevices.dll verified: imports the bitmap libraries of $VARIANT (${want_fmt:-none})"
+
+  # minimal: none of R's own PE files imports a library the profile
+  # excludes, and winCairo.dll and tcltk.dll are not built. The conda DLLs
+  # in bin/x64 are reported, not failed: libcurl -> libpsl -> ICU brings
+  # ICU in (as on unix).
+  if [ "$VARIANT" = minimal ]; then
+    win_excluded_re='^(lib)?(cairo|pango|harfbuzz|fontconfig|freetype|glib|gobject|gio|pixman|png|jpeg|tiff|tcl|tk|icu|omp|iomp|gomp|deflate)'
+    bad=""
+    for f in "$rh/library/grDevices/libs/x64/winCairo.dll" "$rh/library/tcltk/libs/x64/tcltk.dll"; do
+      [ ! -e "$TREE/$f" ] || bad="$bad $f(built)"
+    done
+    while IFS= read -r f; do
+      hit="$(needed_of "$f" | grep -iE "$win_excluded_re" || true)"
+      [ -z "$hit" ] || bad="$bad ${f#$TREE/}->$(echo $hit | tr ' ' ',')"
+    done < "$r_pe"
+    if [ -n "$bad" ]; then
+      echo "error: minimal R links libraries its profile excludes:$bad" >&2
+      exit 1
+    fi
+    echo "== minimal profile verified: $(wc -l < "$r_pe" | tr -d ' ') PE files of R's own, none links graphics/ICU/OpenMP/libdeflate/Tcl; no winCairo.dll, no tcltk.dll"
+    transitive="$(ls "$TREE/$rh/bin/x64" | grep -iE "$win_excluded_re" | tr '\n' ' ' || true)"
+    [ -z "$transitive" ] || echo "   note: vendored as dependencies of third-party libs (not of R): $transitive"
+  fi
+
+  if [ -z "$conda_tree" ] && [ -n "$win_tcltk" ]; then
     # Tcl/Tk where tcltk's .onLoad loads it (CRAN's layout): the DLLs in
     # Tcl/bin, through library.dynam's DLLpath, and only there (a copy in
     # bin/x64 wins the search order, then looks for init.tcl relative to
@@ -704,6 +888,8 @@ if [ "$OS" = windows ]; then
       exit 1
     fi
     echo "== Tcl/Tk verified: $rh/Tcl/bin/{tcl86t,tk86t}.dll (none in bin/x64), Makeconf's TCL_VERSION = $tclv, $(find "$TREE/$rh/Tcl/lib" -type f | wc -l | tr -d ' ') files in Tcl/lib, $(find "$TREE/$rh/Tcl/include" -type f | wc -l | tr -d ' ') headers in Tcl/include"
+  fi
+  if [ -z "$conda_tree" ]; then
 
     # No fontconfig configuration (PHASE8 open point D a): R on Windows
     # picks its fonts through Win32 and never loads one.
@@ -753,15 +939,21 @@ if [ "$OS" = windows ]; then
   exit 0
 fi
 
-# macOS, every tree (the conda build's too): CMake's toolchain file
-# (build.zig's macos_cmake_toolchain). Without it CMake searches Homebrew's
-# prefix before the environment's whatever PATH says, and packages link
-# the host's libraries (stress round 2, H2). etc/Renviron makes it
-# CMAKE_TOOLCHAIN_FILE's default.
-if [ "$OS" = macos ]; then
+# unix, every tree (the conda build's too; Windows: the build tools'
+# check above): CMake's toolchain file (build.zig's cmakeToolchain). It puts
+# R's env and R_ZIG_EXTRA_ENV's first in CMake's searches: the extras
+# group's cmake searches neither by itself (chore-release-11 finding 28).
+# On macOS it also leaves out Homebrew's prefix, which CMake otherwise
+# searches before the environment's whatever PATH says (stress round 2,
+# H2). etc/Renviron makes it CMAKE_TOOLCHAIN_FILE's default.
+if [ "$OS" != windows ]; then
   bad=""
-  grep -q '^set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH .*/opt/homebrew' "$TREE/$rh/etc/r-zig.cmake" 2>/dev/null ||
-    bad="$bad etc/r-zig.cmake(missing, or no CMAKE_SYSTEM_IGNORE_PREFIX_PATH)"
+  grep -qxF '  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}")' "$TREE/$rh/etc/r-zig.cmake" 2>/dev/null ||
+    bad="$bad etc/r-zig.cmake(missing, or does not add R_ZIG_EXTRA_ENV)"
+  if [ "$OS" = macos ]; then
+    grep -q '^set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH .*/opt/homebrew' "$TREE/$rh/etc/r-zig.cmake" 2>/dev/null ||
+      bad="$bad etc/r-zig.cmake(no CMAKE_SYSTEM_IGNORE_PREFIX_PATH)"
+  fi
   grep -qxF 'R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake' "$TREE/$rh/etc/Renviron" &&
     grep -qxF 'CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}' "$TREE/$rh/etc/Renviron" ||
     bad="$bad etc/Renviron(no CMAKE_TOOLCHAIN_FILE)"

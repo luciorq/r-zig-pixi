@@ -12,17 +12,17 @@
 #   - the install preflight (patch 0009): a package with C code stops
 #     in it with rzig's text for the compilers group, since the tree is
 #     the base alone (rzig, no zig and no build tools;
-#     feat-standalone-toolchain B26, B35); R CMD config CC fails with
-#     rzig's text for the build tools and its status, 127 (patch 0010;
-#     Windows: rcmdfn.c's check, before config.sh's sh, PHASE7 open point
-#     J a), and no "is not recognized" line from cmd.exe,
+#     feat-standalone-toolchain B26, B35); R CMD config CC answers with
+#     no make and no sh, rzig's config mode (patch 0010,
+#     feat-config-rzig), exit 0 and the path of R's own CC,
 #   - installs R6 from CRAN when it is reachable (download, TLS, R's
 #     internal untar),
-#   - Windows: loads tcltk, whose Tcl/Tk must then come from the tree's
-#     own R_HOME/Tcl,
+#   - Windows, where the variant has tcltk (full): loads tcltk, whose
+#     Tcl/Tk must then come from the tree's own R_HOME/Tcl,
 #   - requires R to have removed its session temp directories.
 # On linux, where strace can trace, every program started must be
-# /bin/sh, one of R's own launchers or rzig (the preflight's check mode):
+# /bin/sh, one of R's own launchers or rzig (the preflight's check mode,
+# R CMD config):
 # an undeclared tool fails the job even when R swallows the error
 # (Sys.which() returning "", a temp directory left behind). strace comes
 # from the env (pixi.toml); in CI a missing or blocked strace fails the
@@ -32,7 +32,10 @@
 # no /bin/sh to allow. The environment keeps only what Windows itself
 # needs (SYSTEMROOT, WINDIR) and PATH is R's bin\x64 plus System32. The
 # binary package comes from CRAN (win.binary), since --build needs an
-# external zip there. No execve trace: the empty PATH is the check, as on
+# external zip there; CRAN has no aarch64 Windows binaries (R-admin, "At
+# present binary packages are not distributed for aarch64 Windows"), so
+# win-arm64 skips that step (its x86_64 DLL does not load: "%1 is not a
+# valid Win32 application", run 43487408414). No execve trace: the empty PATH is the check, as on
 # macOS.
 #
 # The installed tree, not the archive (F1.6, F1.7): it is the tree that
@@ -108,10 +111,8 @@ done
 mkdir -p "$WORK/pk/hermeticSrc/src"
 echo 'int hermetic_one(void) { return 1; }' > "$WORK/pk/hermeticSrc/src/one.c"
 # No configure script with a marker (configure_marker,
-# verify-helpers.sh): with the base alone the install's R CMD config
-# (patch 0010) fails before a configure would run, wherever the
-# preflight sits, so the marker could not tell. verify-bundle.sh's
-# scenario 3 tells the order (B26, C26).
+# verify-helpers.sh): verify-bundle.sh's scenario 3 tells the order of
+# the preflight and a configure (B26, C26).
 
 cat > "$WORK/check.R" <<'RCODE'
 stopifnot(!is.null(utils::osVersion), nzchar(utils::osVersion))
@@ -131,6 +132,8 @@ if (!windows) {
     install.packages(bin, repos = NULL, lib = lib)            # binary package
     stopifnot(hermeticA::hi() == "hi")
     remove.packages("hermeticA", lib = lib)
+} else if (R.version$arch == "aarch64") {
+    cat("CRAN: no aarch64 Windows binaries, binary step skipped\n")
 } else if (online) {
     ## binary package: CRAN's Windows build (it has a DLL; loads with our R.dll)
     install.packages("jsonlite", repos = repo, lib = lib, type = "win.binary")
@@ -151,8 +154,8 @@ left <- list.files(lib)
 if (length(left)) stop("left in the library after removal: ", paste(left, collapse = ", "))
 ## Negative test (phase T; feat-standalone-toolchain B26, B35): compiled
 ## code with the base alone stops in the preflight with rzig's text for
-## the compilers group (no zig: nothing names one here), and R CMD config
-## with its text for the build tools (no make).
+## the compilers group (no zig: nothing names one here); R CMD config
+## still answers (rzig, no make, no sh).
 out <- suppressWarnings(system2(file.path(R.home("bin"), "R"),
                                 c("CMD", "INSTALL", "-l", shQuote(lib), "pk/hermeticSrc"),
                                 stdout = TRUE, stderr = TRUE))
@@ -161,25 +164,24 @@ if (is.null(attr(out, "status")) ||
     dir.exists(file.path(lib, "hermeticSrc")))
     stop("no compile preflight with rzig's compilers text:\n", paste(out, collapse = "\n"))
 cat("preflight: compiled package stopped:", grep("^Compiling needs", out, value = TRUE), "\n")
-## Its exit status is rzig's, 127, which system2(stdout = TRUE) would
-## turn into an R error: into a file instead. Windows: rcmdfn.c's check
-## runs before config.sh's sh, so cmd.exe has no sh to miss (PHASE7 open
-## point J a).
+## R CMD config without make and sh (patch 0010, feat-config-rzig): rzig
+## reads Makeconf; one line, R's own CC (Windows: through rcmdfn.c, no sh
+## for cmd.exe to miss). Into a file, so a failure's status and text show.
 log <- file.path(tempdir(), "config.log")
 st <- suppressWarnings(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "CC"),
                                stdout = log, stderr = log))
 cfg <- readLines(log)
-if (st != 127L || !any(startsWith(cfg, "Building packages needs the r-zig build tools for R ")) ||
-    any(grepl("is not recognized", cfg, fixed = TRUE)))
-    stop("R CMD config without the build tools: exit ", st, ", not rzig's 127 and build-tools text alone:\n", paste(cfg, collapse = "\n"))
-cat("R CMD config: exit", st, "with rzig's build-tools text:", grep("^Building packages", cfg, value = TRUE), "\n")
+if (st != 0L || length(cfg) != 1L || !grepl("/bin/toolchain/(zig-cc|gcc[.]exe)( |$)", cfg))
+    stop("R CMD config CC without make and sh: exit ", st, ", not R's CC alone:\n", paste(cfg, collapse = "\n"))
+cat("R CMD config CC without make and sh:", cfg, "\n")
 if (online) {
     install.packages("R6", repos = repo, lib = lib, type = "source")
     stopifnot(requireNamespace("R6", lib.loc = lib))
     remove.packages("R6", lib = lib)
     cat("CRAN: R6 installed from source and removed\n")
 } else cat("CRAN: offline, skipped\n")
-if (windows) {
+if (windows && capabilities("tcltk")) {
+    ## (full only: slim and minimal have the stub, and no R_HOME/Tcl)
     ## tcltk as the shipped tree loads it: MY_TCLTK is unset here, so
     ## .onLoad takes the Tcl/Tk DLLs from R_HOME/Tcl/bin, and Tcl finds its
     ## scripts beside them; with nothing on PATH but bin\x64 and System32,
@@ -217,9 +219,10 @@ if [ -n "$strace_bin" ]; then
   while IFS= read -r prog; do
     case "$prog" in
       /bin/sh|"$T/bin/R"|"$T/bin/Rscript"|"$T/bin/../lib/R/bin/R"|"$T/lib/R/bin/R"|"$T/lib/R/bin/Rscript"|"$T/lib/R/bin/exec/R") ;;
-      # rzig's check mode, which the preflight and R CMD config run as
-      # R_HOME/bin/toolchain/zig-cc (bin/R resolves R_HOME, cd -P)
-      "$T/lib/R/bin/toolchain/zig-cc") ;;
+      # rzig: its check mode, which the preflight runs as
+      # R_HOME/bin/toolchain/zig-cc (bin/R resolves R_HOME, cd -P), and R
+      # CMD config, which bin/Rcmd runs as rzig (patch 0010)
+      "$T/lib/R/bin/toolchain/zig-cc"|"$T/lib/R/bin/toolchain/rzig") ;;
       "$(command -v env)"|/usr/bin/env|/bin/env) ;;   # the harness's own env -i
       *) bad="$bad $prog" ;;
     esac

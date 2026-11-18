@@ -1060,7 +1060,7 @@
 #define PACKAGE_NAME "R"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "R 4.6.1"
+#define PACKAGE_STRING "R 4.6.2"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "R"
@@ -1069,7 +1069,7 @@
 #define PACKAGE_URL "https://www.r-project.org"
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "4.6.1"
+#define PACKAGE_VERSION "4.6.2"
 
 /* PCRE2 code unit width wanted. */
 #define PCRE2_CODE_UNIT_WIDTH 8
@@ -1304,7 +1304,7 @@
 #define VALGRIND_LEVEL 0
 
 /* Version number of package */
-#define VERSION "4.6.1"
+#define VERSION "4.6.2"
 
 /* Define to 1 if your processor stores words with the most significant byte
    first (like Motorola and SPARC, unlike Intel and VAX). */

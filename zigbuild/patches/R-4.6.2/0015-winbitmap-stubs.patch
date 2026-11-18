@@ -1,0 +1,66 @@
+winbitmap.c: stubs when a bitmap format is not compiled in
+
+r-zig builds Windows R in three variants, as on unix (slim, full,
+minimal). Upstream's grDevices/src/Makefile.win always passes
+-DHAVE_PNG -DHAVE_JPEG -DHAVE_TIFF, so winbitmap.c defines
+R_SaveAsPng, R_SaveAsJpeg and R_SaveAsTIFF only inside those #ifdefs.
+devWindows.c and cairo/cairoBM.c call all three with no guard. build.zig
+now passes the -D flags from the variant table (slim: png only; minimal:
+none), and without these stubs grDevices.dll and winCairo.dll do not
+link. Each stub gives the warning of unix's src/modules/X11/rbitmap.c
+and returns 0 (failure), so jpeg() and tiff() on slim, and png(type =
+"windows") on minimal, fail at run time as on unix. The full variant
+compiles the real code, unchanged. Upstreamable: no other change.
+
+--- a/src/library/grDevices/src/winbitmap.c
++++ b/src/library/grDevices/src/winbitmap.c
+@@ -287,6 +287,17 @@
+     return 1;
+ }
+ 
++#else
++/* r-zig: no libpng in this variant (Windows minimal). The callers in
++   devWindows.c and cairo/cairoBM.c are not conditional, so a stub, as
++   unix's src/modules/X11/rbitmap.c has. */
++int R_SaveAsPng(void  *d, int width, int height,
++		unsigned int (*gp)(void *, int, int),
++		int bgr, FILE *fp, unsigned int transparent, int res)
++{
++    warning("No png support in this version of R");
++    return 0;
++}
+ #endif /* HAVE_PNG */
+ 
+ 
+@@ -429,6 +440,15 @@
+     return 1;
+ }
+ 
++#else
++/* r-zig: no libjpeg in this variant (Windows slim and minimal) */
++int R_SaveAsJpeg(void  *d, int width, int height,
++		unsigned int (*gp)(void *, int, int),
++		int bgr, int quality, FILE *outfile, int res)
++{
++    warning("No jpeg support in this version of R");
++    return 0;
++}
+ #endif /* HAVE_JPEG */
+ 
+ #ifdef HAVE_TIFF
+@@ -541,6 +561,15 @@
+     _TIFFfree(buf);
+     return 1;
+ }
++#else
++/* r-zig: no libtiff in this variant (Windows slim and minimal) */
++int R_SaveAsTIFF(void  *d, int width, int height,
++		unsigned int (*gp)(void *, int, int),
++		int bgr, const char *outfile, int res, int compression)
++{
++    warning("No TIFF support in this version of R");
++    return 0;
++}
+ #endif  /* HAVE_TIFF */
+ 
+ 

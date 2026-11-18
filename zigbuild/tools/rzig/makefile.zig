@@ -12,6 +12,13 @@
 //! a rule, a recipe, a conditional, an include or a `define` makes the
 //! package one that needs make (tier 3, pkgplan.zig), as does `$(shell)`
 //! or any other function this file does not implement, when expanded.
+//!
+//! `R CMD config` (config.zig) reads etc/Makeconf and the user's and
+//! site's Makevars in the `makeconf` mode, with GNU make's built-in
+//! variables seeded first (seedDefaults) and the ones make sets itself
+//! (seedMakeVariables), and it asks which variables make exports to the
+//! recipe's sh (`exported`). Every error.Unsupported records where it
+//! comes from in `where` (file:line), for its message.
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
@@ -19,13 +26,17 @@ const Allocator = mem.Allocator;
 
 pub const Mode = enum { makeconf, makevars };
 
-pub const Origin = enum { environment, file, command_line, override };
+/// `automatic`: a variable make sets from its own state (MAKEFLAGS,
+/// MAKEFILE_LIST, ...), which this file cannot know: reading it fails.
+pub const Origin = enum { default, environment, file, command_line, override, automatic };
 pub const Flavor = enum { recursive, simple };
 
 pub const Var = struct {
     value: []const u8,
     flavor: Flavor,
     origin: Origin,
+    /// Where it was last assigned (`file:line`), "" when not by a file.
+    where: []const u8 = "",
 };
 
 pub const Error = error{ Unsupported, OutOfMemory };
@@ -38,10 +49,88 @@ pub const Evaluator = struct {
     vars: std.StringHashMapUnmanaged(Var) = .empty,
     /// Why the last error.Unsupported happened, for the message.
     reason: []const u8 = "",
+    /// Where it happened: the file and line being read, or the assignment
+    /// of the variable whose value held it (`file:line`); "" when unknown.
+    where: []const u8 = "",
     depth: u32 = 0,
+    /// The file being read and its current line, for `where`.
+    file: []const u8 = "",
+    line: u32 = 0,
+    /// `export NAME` (true) and `unexport NAME` (false), and the
+    /// environment's names (exported from the start, as make does).
+    exports: std.StringHashMapUnmanaged(bool) = .empty,
+    /// `export` alone or `.EXPORT_ALL_VARIABLES:`; `unexport` alone clears it.
+    export_all: bool = false,
+    /// Only variable values are asked for (R CMD config): `vpath`, which
+    /// steers rules only, is skipped instead of refused.
+    vars_only: bool = false,
 
     pub fn init(arena: Allocator, io: Io, cwd: []const u8) Evaluator {
         return .{ .arena = arena, .io = io, .cwd = cwd };
+    }
+
+    /// GNU make's built-in variables (`make -p -f /dev/null`, GNU make
+    /// 4.4), origin `default`: what a file that names them without setting
+    /// them sees, before the environment (which beats them). MAKE is
+    /// `$(MAKE_COMMAND)`, the name make was started as; the caller says it.
+    pub fn seedDefaults(e: *Evaluator, make_command: []const u8) Allocator.Error!void {
+        const defaults = [_][2][]const u8{
+            .{ "AR", "ar" },           .{ "ARFLAGS", "-rv" },       .{ "AS", "as" },
+            .{ "CC", "cc" },           .{ "CO", "co" },             .{ "CPP", "$(CC) -E" },
+            .{ "CTANGLE", "ctangle" }, .{ "CWEAVE", "cweave" },     .{ "CXX", "g++" },
+            .{ "F77", "$(FC)" },       .{ "FC", "f77" },            .{ "GET", "get" },
+            .{ "LD", "ld" },           .{ "LEX", "lex" },           .{ "LINT", "lint" },
+            .{ "M2C", "m2c" },         .{ "MAKEINFO", "makeinfo" }, .{ "OBJC", "cc" },
+            .{ "PC", "pc" },           .{ "RM", "rm -f" },          .{ "TANGLE", "tangle" },
+            .{ "TEX", "tex" },         .{ "TEXI2DVI", "texi2dvi" }, .{ "WEAVE", "weave" },
+            .{ "YACC", "yacc" },
+        };
+        for (defaults) |d| try e.vars.put(e.arena, d[0], .{ .value = d[1], .flavor = .recursive, .origin = .default });
+        try e.vars.put(e.arena, "MAKE_COMMAND", .{ .value = make_command, .flavor = .recursive, .origin = .default });
+        try e.vars.put(e.arena, "MAKE", .{ .value = "$(MAKE_COMMAND)", .flavor = .recursive, .origin = .default });
+    }
+
+    /// The variables GNU make sets itself, after the environment: CURDIR
+    /// (`cwd`, absolute), MAKELEVEL (the environment's, else 0), SHELL
+    /// (/bin/sh: make does not take it from the environment),
+    /// .SHELLFLAGS and MAKECMDGOALS (`goal`); the rest of make's own
+    /// (MAKEFLAGS, MAKEFILE_LIST, MAKE_VERSION, ...) as `automatic`, so a
+    /// value that reads one fails instead of printing it empty.
+    pub fn seedMakeVariables(e: *Evaluator, cwd: []const u8, goal: []const u8) Allocator.Error!void {
+        try e.vars.put(e.arena, "CURDIR", .{ .value = cwd, .flavor = .simple, .origin = .file });
+        if (e.vars.get("MAKELEVEL") == null) try e.setEnvironment("MAKELEVEL", "0");
+        try e.exports.put(e.arena, "MAKELEVEL", true); // always, one more (config.zig)
+        try e.vars.put(e.arena, "SHELL", .{ .value = "/bin/sh", .flavor = .recursive, .origin = .default });
+        _ = e.exports.remove("SHELL");
+        try e.vars.put(e.arena, ".SHELLFLAGS", .{ .value = "-c", .flavor = .recursive, .origin = .default });
+        try e.vars.put(e.arena, "MAKECMDGOALS", .{ .value = goal, .flavor = .recursive, .origin = .default });
+        for (make_only) |n| {
+            try e.vars.put(e.arena, n, .{ .value = "", .flavor = .recursive, .origin = .automatic });
+            _ = e.exports.remove(n);
+        }
+    }
+
+    /// What make knows and this file does not.
+    pub const make_only = [_][]const u8{
+        "MAKEFLAGS",     "MFLAGS",       "GNUMAKEFLAGS", "MAKEOVERRIDES",  "-*-command-variables-*-",
+        "MAKEFILE_LIST", "MAKEFILES",    "MAKE_VERSION", "MAKE_HOST",      "MAKE_RESTARTS",
+        "MAKE_TERMOUT",  "MAKE_TERMERR", ".DEFAULT_GOAL", ".VARIABLES",    ".FEATURES",
+        ".INCLUDE_DIRS", ".LOADED",      ".RECIPEPREFIX", ".LIBPATTERNS",  ".EXTRA_PREREQS",
+        "SUFFIXES",
+    };
+
+    /// Whether make puts `name` in its recipes' environment (GNU make's
+    /// target_environment): as `export`/`unexport` say; else a variable
+    /// from the environment or the command line; else, after `export`
+    /// alone, every variable but make's built-in and automatic ones.
+    pub fn exported(e: *const Evaluator, name: []const u8) bool {
+        if (e.exports.get(name)) |x| return x;
+        const v = e.vars.get(name) orelse return false;
+        return switch (v.origin) {
+            .default, .automatic => false,
+            .command_line => true,
+            .environment, .file, .override => e.export_all and isName(name),
+        };
     }
 
     /// Every variable of the environment, as make imports them (recursive
@@ -51,6 +140,7 @@ pub const Evaluator = struct {
         while (it.next()) |kv| {
             if (kv.key_ptr.len == 0 or mem.findAny(u8, kv.key_ptr.*, " \t#:=") != null) continue;
             try e.vars.put(e.arena, kv.key_ptr.*, .{ .value = kv.value_ptr.*, .flavor = .recursive, .origin = .environment });
+            try e.exports.put(e.arena, kv.key_ptr.*, true);
         }
     }
 
@@ -72,12 +162,18 @@ pub const Evaluator = struct {
         return e.vars.get(name);
     }
 
-    /// The variable's expanded value; "" when unset.
+    /// The variable's expanded value; "" when unset. An error inside it
+    /// names the variable's assignment in `where`, unless a variable it
+    /// refers to already did.
     pub fn value(e: *Evaluator, name: []const u8) Error![]const u8 {
         const v = e.vars.get(name) orelse return "";
+        if (v.origin == .automatic) return e.fail("$({s}), which only make sets", .{name});
         return switch (v.flavor) {
             .simple => v.value,
-            .recursive => e.expand(v.value),
+            .recursive => e.expand(v.value) catch |err| {
+                if (err == error.Unsupported and e.where.len == 0) e.where = v.where;
+                return err;
+            },
         };
     }
 
@@ -93,7 +189,19 @@ pub const Evaluator = struct {
     pub fn loadFile(e: *Evaluator, path: []const u8, mode: Mode) Error!void {
         const text = Io.Dir.cwd().readFileAlloc(e.io, path, e.arena, .limited(16 * 1024 * 1024)) catch |err|
             return e.fail("cannot read {s}: {t}", .{ path, err });
-        return e.load(text, mode, std.fs.path.dirname(path) orelse ".");
+        return e.loadNamed(text, mode, std.fs.path.dirname(path) orelse ".", path);
+    }
+
+    /// `load`, with `name` as the file in `where`.
+    pub fn loadNamed(e: *Evaluator, text: []const u8, mode: Mode, dir: []const u8, name: []const u8) Error!void {
+        const outer_file = e.file;
+        const outer_line = e.line;
+        e.file = name;
+        defer {
+            e.file = outer_file;
+            e.line = outer_line;
+        }
+        return e.load(text, mode, dir);
     }
 
     const Cond = struct {
@@ -112,94 +220,139 @@ pub const Evaluator = struct {
         var in_rule = false;
         var lines = LogicalLines{ .text = text, .arena = e.arena };
         while (lines.next()) |line| {
-            // a recipe line: belongs to the rule before it
-            if (line.len > 0 and line[0] == '\t') {
-                if (in_rule) continue;
-                if (mem.trim(u8, line, " \t").len == 0) continue;
-                if (mode == .makevars) return e.fail("a recipe line (starts with a tab)", .{});
-                continue;
-            }
-            const stripped = mem.trim(u8, try stripComment(e.arena, line), " \t");
-            if (stripped.len == 0) continue;
-
-            const active = conds.items.len == 0 or conds.items[conds.items.len - 1].active;
-            const word = firstWord(stripped);
-
-            // conditionals, whatever branch is active (they nest)
-            if (mem.eql(u8, word, "ifdef") or mem.eql(u8, word, "ifndef") or mem.eql(u8, word, "ifeq") or mem.eql(u8, word, "ifneq")) {
-                if (mode == .makevars) return e.fail("a conditional ({s})", .{word});
-                const result = if (active) try e.condition(word, stripped[word.len..]) else false;
-                try conds.append(e.arena, .{ .active = active and result, .taken = result, .parent = active });
-                in_rule = false;
-                continue;
-            }
-            if (mem.eql(u8, word, "else")) {
-                if (mode == .makevars) return e.fail("a conditional (else)", .{});
-                if (conds.items.len == 0) return e.fail("else without if", .{});
-                const c = &conds.items[conds.items.len - 1];
-                const rest = mem.trim(u8, stripped[word.len..], " \t");
-                if (rest.len == 0) {
-                    c.active = c.parent and !c.taken;
-                    c.taken = true;
-                } else {
-                    const w2 = firstWord(rest);
-                    if (!(mem.eql(u8, w2, "ifdef") or mem.eql(u8, w2, "ifndef") or mem.eql(u8, w2, "ifeq") or mem.eql(u8, w2, "ifneq")))
-                        return e.fail("else followed by '{s}'", .{w2});
-                    const result = if (c.parent and !c.taken) try e.condition(w2, rest[w2.len..]) else false;
-                    c.active = c.parent and !c.taken and result;
-                    if (result) c.taken = true;
-                }
-                in_rule = false;
-                continue;
-            }
-            if (mem.eql(u8, word, "endif")) {
-                if (mode == .makevars) return e.fail("a conditional (endif)", .{});
-                if (conds.items.len == 0) return e.fail("endif without if", .{});
-                _ = conds.pop();
-                in_rule = false;
-                continue;
-            }
-            if (!active) continue;
-
-            // directives
-            if (mem.eql(u8, word, "include") or mem.eql(u8, word, "-include") or mem.eql(u8, word, "sinclude")) {
-                if (mode == .makevars) return e.fail("an include", .{});
-                const optional = word[0] == '-' or word[0] == 's';
-                const names = try e.expand(stripped[word.len..]);
-                var it = mem.tokenizeAny(u8, names, " \t");
-                while (it.next()) |n| try e.include(n, dir, optional);
-                in_rule = false;
-                continue;
-            }
-            if (mem.eql(u8, word, "define")) return e.fail("a define", .{});
-            if (mem.eql(u8, word, "undefine") or mem.eql(u8, word, "vpath") or mem.eql(u8, word, "unexport") or mem.eql(u8, word, "load") or mem.eql(u8, word, "private"))
-                return e.fail("a {s} directive", .{word});
-
-            var rest = stripped;
-            var origin: Origin = .file;
-            while (true) {
-                const w = firstWord(rest);
-                if (mem.eql(u8, w, "override")) {
-                    origin = .override;
-                    rest = mem.trimStart(u8, rest[w.len..], " \t");
-                } else if (mem.eql(u8, w, "export")) {
-                    rest = mem.trimStart(u8, rest[w.len..], " \t");
-                    if (rest.len == 0) break; // `export` alone: every variable; nothing to do
-                } else break;
-            }
-            if (rest.len == 0) continue;
-
-            const asg = findAssignment(rest) orelse {
-                // a rule (`target: deps`) or something else
-                if (mem.eql(u8, firstWord(rest), "export")) continue; // `export NAME`
-                if (mode == .makevars) return e.fail("a rule or target line: '{s}'", .{rest});
-                in_rule = true;
-                continue;
+            e.line = lines.line;
+            e.loadLine(line, mode, dir, &conds, &in_rule) catch |err| {
+                if (err == error.Unsupported and e.where.len == 0) e.where = try e.here();
+                return err;
             };
-            in_rule = false;
-            try e.assign(asg, origin);
         }
-        if (conds.items.len != 0) return e.fail("missing endif", .{});
+        if (conds.items.len != 0) {
+            e.where = try e.here();
+            return e.fail("missing endif", .{});
+        }
+    }
+
+    /// `file:line` of the line being read ("line N" for text without a
+    /// file name).
+    fn here(e: *Evaluator) Allocator.Error![]const u8 {
+        if (e.file.len == 0) return std.fmt.allocPrint(e.arena, "line {d}", .{e.line});
+        return std.fmt.allocPrint(e.arena, "{s}:{d}", .{ e.file, e.line });
+    }
+
+    /// One logical line of `load`.
+    fn loadLine(e: *Evaluator, line: []const u8, mode: Mode, dir: []const u8, conds: *std.ArrayList(Cond), in_rule_ptr: *bool) Error!void {
+        var in_rule = in_rule_ptr.*;
+        defer in_rule_ptr.* = in_rule;
+        // a recipe line: belongs to the rule before it
+        if (line.len > 0 and line[0] == '\t') {
+            if (in_rule) return;
+            if (mem.trim(u8, line, " \t").len == 0) return;
+            if (mode == .makevars) return e.fail("a recipe line (starts with a tab)", .{});
+            return;
+        }
+        const stripped = mem.trim(u8, try stripComment(e.arena, line), " \t");
+        if (stripped.len == 0) return;
+
+        const active = conds.items.len == 0 or conds.items[conds.items.len - 1].active;
+        const word = firstWord(stripped);
+
+        // conditionals, whatever branch is active (they nest)
+        if (mem.eql(u8, word, "ifdef") or mem.eql(u8, word, "ifndef") or mem.eql(u8, word, "ifeq") or mem.eql(u8, word, "ifneq")) {
+            if (mode == .makevars) return e.fail("a conditional ({s})", .{word});
+            const result = if (active) try e.condition(word, stripped[word.len..]) else false;
+            try conds.append(e.arena, .{ .active = active and result, .taken = result, .parent = active });
+            in_rule = false;
+            return;
+        }
+        if (mem.eql(u8, word, "else")) {
+            if (mode == .makevars) return e.fail("a conditional (else)", .{});
+            if (conds.items.len == 0) return e.fail("else without if", .{});
+            const c = &conds.items[conds.items.len - 1];
+            const rest = mem.trim(u8, stripped[word.len..], " \t");
+            if (rest.len == 0) {
+                c.active = c.parent and !c.taken;
+                c.taken = true;
+            } else {
+                const w2 = firstWord(rest);
+                if (!(mem.eql(u8, w2, "ifdef") or mem.eql(u8, w2, "ifndef") or mem.eql(u8, w2, "ifeq") or mem.eql(u8, w2, "ifneq")))
+                    return e.fail("else followed by '{s}'", .{w2});
+                const result = if (c.parent and !c.taken) try e.condition(w2, rest[w2.len..]) else false;
+                c.active = c.parent and !c.taken and result;
+                if (result) c.taken = true;
+            }
+            in_rule = false;
+            return;
+        }
+        if (mem.eql(u8, word, "endif")) {
+            if (mode == .makevars) return e.fail("a conditional (endif)", .{});
+            if (conds.items.len == 0) return e.fail("endif without if", .{});
+            _ = conds.pop();
+            in_rule = false;
+            return;
+        }
+        if (!active) return;
+
+        // directives
+        if (mem.eql(u8, word, "include") or mem.eql(u8, word, "-include") or mem.eql(u8, word, "sinclude")) {
+            if (mode == .makevars) return e.fail("an include", .{});
+            const optional = word[0] == '-' or word[0] == 's';
+            const names = try e.expand(stripped[word.len..]);
+            var it = mem.tokenizeAny(u8, names, " \t");
+            while (it.next()) |n| try e.include(n, dir, optional);
+            in_rule = false;
+            return;
+        }
+        if (mem.eql(u8, word, "define")) return e.fail("a define", .{});
+        if (mem.eql(u8, word, "vpath") and e.vars_only and mode == .makeconf) return;
+        if (mem.eql(u8, word, "unexport") and mode == .makeconf and findAssignment(stripped) == null) {
+            const names = mem.trim(u8, try e.expand(stripped[word.len..]), " \t");
+            if (names.len == 0) e.export_all = false;
+            var it = mem.tokenizeAny(u8, names, " \t");
+            while (it.next()) |n| try e.exports.put(e.arena, n, false);
+            in_rule = false;
+            return;
+        }
+        if (mem.eql(u8, word, "undefine") or mem.eql(u8, word, "vpath") or mem.eql(u8, word, "unexport") or mem.eql(u8, word, "load") or mem.eql(u8, word, "private"))
+            return e.fail("a {s} directive", .{word});
+
+        var rest = stripped;
+        var origin: Origin = .file;
+        var exporting = false;
+        while (true) {
+            const w = firstWord(rest);
+            if (mem.eql(u8, w, "override")) {
+                origin = .override;
+                rest = mem.trimStart(u8, rest[w.len..], " \t");
+            } else if (mem.eql(u8, w, "export")) {
+                exporting = true;
+                rest = mem.trimStart(u8, rest[w.len..], " \t");
+            } else break;
+        }
+        if (rest.len == 0) {
+            if (exporting) e.export_all = true; // `export` alone: every variable
+            return;
+        }
+
+        const asg = findAssignment(rest) orelse {
+            if (exporting) {
+                // `export NAME...`: a package's Makevars that exports needs make
+                if (mode == .makevars) return e.fail("an export directive", .{});
+                var it = mem.tokenizeAny(u8, try e.expand(rest), " \t");
+                while (it.next()) |n| try e.exports.put(e.arena, n, true);
+                in_rule = false;
+                return;
+            }
+            // a rule (`target: deps`) or something else
+            if (mode == .makevars) return e.fail("a rule or target line: '{s}'", .{rest});
+            if (mem.findScalar(u8, rest, ':')) |colon| {
+                if (mem.eql(u8, mem.trim(u8, rest[0..colon], " \t"), ".EXPORT_ALL_VARIABLES")) e.export_all = true;
+            }
+            in_rule = true;
+            return;
+        };
+        in_rule = false;
+        const name = try e.assign(asg, origin);
+        if (exporting) try e.exports.put(e.arena, name, true);
     }
 
     fn include(e: *Evaluator, name: []const u8, dir: []const u8, optional: bool) Error!void {
@@ -209,7 +362,7 @@ pub const Evaluator = struct {
             .{ try std.fs.path.join(e.arena, &.{ e.cwd, name }), try std.fs.path.join(e.arena, &.{ dir, name }) };
         for (candidates) |p| {
             const text = Io.Dir.cwd().readFileAlloc(e.io, p, e.arena, .limited(16 * 1024 * 1024)) catch continue;
-            return e.load(text, .makeconf, std.fs.path.dirname(p) orelse ".");
+            return e.loadNamed(text, .makeconf, std.fs.path.dirname(p) orelse ".", p);
         }
         if (!optional) return e.fail("cannot include {s}", .{name});
     }
@@ -280,28 +433,31 @@ pub const Evaluator = struct {
         return null;
     }
 
-    fn assign(e: *Evaluator, a: Assignment, origin: Origin) Error!void {
+    /// The assignment `a`; returns the variable's name.
+    fn assign(e: *Evaluator, a: Assignment, origin: Origin) Error![]const u8 {
         if (a.op == .shell) return e.fail("a shell assignment (!=) of {s}", .{a.name});
         const name = try e.expand(a.name);
         if (name.len == 0 or mem.findAny(u8, name, " \t") != null) return e.fail("bad variable name '{s}'", .{name});
         const old = e.vars.get(name);
         // the command line wins over every file assignment but `override`
-        if (old) |o| if (o.origin == .command_line and origin != .override) return;
+        if (old) |o| if (o.origin == .command_line and origin != .override) return name;
+        const where = try e.here();
         switch (a.op) {
-            .recursive => try e.vars.put(e.arena, name, .{ .value = a.value, .flavor = .recursive, .origin = origin }),
-            .simple => try e.vars.put(e.arena, name, .{ .value = try e.expand(a.value), .flavor = .simple, .origin = origin }),
+            .recursive => try e.vars.put(e.arena, name, .{ .value = a.value, .flavor = .recursive, .origin = origin, .where = where }),
+            .simple => try e.vars.put(e.arena, name, .{ .value = try e.expand(a.value), .flavor = .simple, .origin = origin, .where = where }),
             .conditional => {
-                if (old == null) try e.vars.put(e.arena, name, .{ .value = a.value, .flavor = .recursive, .origin = origin });
+                if (old == null) try e.vars.put(e.arena, name, .{ .value = a.value, .flavor = .recursive, .origin = origin, .where = where });
             },
             .append => {
                 if (old) |o| {
                     const add = if (o.flavor == .simple) try e.expand(a.value) else a.value;
                     const joined = if (o.value.len == 0) add else try std.fmt.allocPrint(e.arena, "{s} {s}", .{ o.value, add });
-                    try e.vars.put(e.arena, name, .{ .value = joined, .flavor = o.flavor, .origin = origin });
-                } else try e.vars.put(e.arena, name, .{ .value = a.value, .flavor = .recursive, .origin = origin });
+                    try e.vars.put(e.arena, name, .{ .value = joined, .flavor = o.flavor, .origin = origin, .where = where });
+                } else try e.vars.put(e.arena, name, .{ .value = a.value, .flavor = .recursive, .origin = origin, .where = where });
             },
             .shell => unreachable,
         }
+        return name;
     }
 
     /// `ifdef NAME`, `ifeq (a,b)`, `ifeq "a" "b"`, `ifeq 'a' 'b'`.
@@ -310,7 +466,9 @@ pub const Evaluator = struct {
         if (mem.eql(u8, word, "ifdef") or mem.eql(u8, word, "ifndef")) {
             const name = mem.trim(u8, try e.expand(rest), " \t");
             // defined with a non-empty (unexpanded) value
-            const defined = if (e.vars.get(name)) |v| v.value.len > 0 else false;
+            const v = e.vars.get(name);
+            if (v != null and v.?.origin == .automatic) return e.fail("{s} {s}, which only make sets", .{ word, name });
+            const defined = if (v) |x| x.value.len > 0 else false;
             return if (word[2] == 'n') !defined else defined;
         }
         var a: []const u8 = undefined;
@@ -478,21 +636,26 @@ pub const Evaluator = struct {
             },
             .value => {
                 const name = try e.expand(args[0]);
-                return if (e.vars.get(name)) |v| v.value else "";
+                const v = e.vars.get(name) orelse return "";
+                if (v.origin == .automatic) return e.fail("$(value {s}), which only make sets", .{name});
+                return v.value;
             },
             .origin => {
                 const name = try e.expand(args[0]);
                 const v = e.vars.get(name) orelse return "undefined";
                 return switch (v.origin) {
+                    .default => "default",
                     .environment => "environment",
                     .file => "file",
                     .command_line => "command line",
                     .override => "override",
+                    .automatic => return e.fail("$(origin {s}), which only make sets", .{name}),
                 };
             },
             .flavor => {
                 const name = try e.expand(args[0]);
                 const v = e.vars.get(name) orelse return "undefined";
+                if (v.origin == .automatic) return e.fail("$(flavor {s}), which only make sets", .{name});
                 return @tagName(v.flavor);
             },
             else => {},
@@ -634,11 +797,17 @@ const LogicalLines = struct {
     text: []const u8,
     arena: Allocator,
     pos: usize = 0,
+    /// The first physical line (from 1) of the line `next` returned.
+    line: u32 = 0,
+    /// Physical lines read so far.
+    read: u32 = 0,
 
     fn next(it: *LogicalLines) ?[]const u8 {
         if (it.pos >= it.text.len) return null;
+        it.line = it.read + 1;
         var out: ?std.ArrayList(u8) = null;
         while (true) {
+            it.read += 1;
             const end = mem.findScalarPos(u8, it.text, it.pos, '\n') orelse it.text.len;
             var line = it.text[it.pos..end];
             it.pos = @min(end + 1, it.text.len);
@@ -674,6 +843,13 @@ fn stripComment(a: Allocator, line: []const u8) Allocator.Error![]const u8 {
         try out.append(a, line[i]);
     }
     return out.items;
+}
+
+/// A name sh can hold (make exports only those after `export` alone).
+fn isName(s: []const u8) bool {
+    if (s.len == 0 or std.ascii.isDigit(s[0])) return false;
+    for (s) |c| if (!(c == '_' or std.ascii.isAlphanumeric(c))) return false;
+    return true;
 }
 
 fn firstWord(s: []const u8) []const u8 {
@@ -1061,6 +1237,70 @@ test "unsupported: shell, foreach, loops, define, != and the makevars mode" {
     try testing.expectEqualStrings("after", try r.value("X"));
 }
 
+test "make's built-in variables: below the environment and the files" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var e = testEvaluator(arena.allocator());
+    try e.seedDefaults("make");
+    try e.setEnvironment("FC", "flang");
+    try e.load(
+        \\CC ?= never
+        \\CXX = c++
+        \\O = $(origin CC) $(origin FC) $(origin CXX) $(origin MAKE)
+        \\
+    , .makeconf, ".");
+    try testing.expectEqualStrings("cc", try e.value("CC"));
+    try testing.expectEqualStrings("cc -E", try e.value("CPP"));
+    try testing.expectEqualStrings("flang", try e.value("F77"));
+    try testing.expectEqualStrings("make", try e.value("MAKE"));
+    try testing.expectEqualStrings("default environment file default", try e.value("O"));
+}
+
+test "where: the file and line of what cannot be answered" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", a);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "inc.mk", .data = "\nLATER = $(shell date)\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Makevars", .data = "# user\nA = 1 \\\n  2\nB = $(LATER)\ninclude inc.mk\nC := x\nD := $(shell uname)\n" });
+    const mv = try std.fs.path.join(a, &.{ root, "Makevars" });
+    const inc = try std.fs.path.join(a, &.{ root, "inc.mk" });
+    // D := runs the shell while the file is read: its line
+    var e = Evaluator.init(a, testing.io, root);
+    try testing.expectError(error.Unsupported, e.loadFile(mv, .makeconf));
+    try testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s}:7", .{mv}), e.where);
+    try testing.expectEqualStrings("$(shell ...) is not supported", e.reason);
+    // without it, reading is fine (lazy); B's value names LATER's line
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Makevars", .data = "# user\nA = 1 \\\n  2\nB = $(LATER)\ninclude inc.mk\nC := x\n" });
+    var f = Evaluator.init(a, testing.io, root);
+    try f.loadFile(mv, .makeconf);
+    try testing.expectEqualStrings("1 2", try f.value("A"));
+    try testing.expectError(error.Unsupported, f.value("B"));
+    try testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s}:2", .{inc}), f.where);
+}
+
+test "where: lazy values, define and != " {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var e = testEvaluator(a);
+    try e.loadNamed("A = 1 \\\n  2\nB = $(LATER)\nLATER = $(shell date)\nOK = $(A)\n", .makeconf, ".", "u.mk");
+    try testing.expectEqualStrings("1 2", try e.value("OK"));
+    try testing.expectError(error.Unsupported, e.value("B"));
+    try testing.expectEqualStrings("u.mk:4", e.where);
+    for ([_]struct { text: []const u8, where: []const u8 }{
+        .{ .text = "X = 1\n\ndefine F\nendef\n", .where = "u.mk:3" },
+        .{ .text = "X = 1\nY != uname\n", .where = "u.mk:2" },
+        .{ .text = "ifdef X\n", .where = "u.mk:1" },
+    }) |c| {
+        var f = testEvaluator(a);
+        try testing.expectError(error.Unsupported, f.loadNamed(c.text, .makeconf, ".", "u.mk"));
+        try testing.expectEqualStrings(c.where, f.where);
+    }
+}
+
 test "include and wildcard against the file system" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1100,4 +1340,40 @@ test fnmatch {
     try testing.expect(fnmatch("*", "anything"));
     try testing.expect(fnmatch("a*b*c", "aXXbYYc"));
     try testing.expect(!fnmatch("a*b*c", "aXXbYY"));
+}
+
+test "export, unexport and the variables make sets itself" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var env: std.process.Environ.Map = .init(arena.allocator());
+    try env.put("HOME", "/h");
+    try env.put("MAKEFLAGS", "-j8");
+    var e = testEvaluator(arena.allocator());
+    try e.seedDefaults("make");
+    try e.importEnvironment(&env);
+    try e.seedMakeVariables("/w", "print");
+    try e.setCommandLine("VAR", "CC");
+    try e.load(
+        \\export A = 1
+        \\B = 2
+        \\C = 3
+        \\export B
+        \\unexport HOME
+        \\
+    , .makeconf, ".");
+    try testing.expect(e.exported("A") and e.exported("B") and !e.exported("C"));
+    try testing.expect(!e.exported("HOME") and e.exported("VAR") and !e.exported("CC") and !e.exported("CURDIR"));
+    try testing.expectEqualStrings("/w 0", try e.expand("$(CURDIR) $(MAKELEVEL)"));
+    try testing.expectError(error.Unsupported, e.value("MAKEFLAGS"));
+    try e.load("export\n", .makeconf, ".");
+    try testing.expect(e.exported("C") and e.exported("CURDIR") and !e.exported("CC") and !e.exported("MAKEFLAGS"));
+    try e.load("unexport\n", .makeconf, ".");
+    try testing.expect(!e.exported("C") and e.exported("A"));
+    // vpath: refused unless only values are asked for
+    try testing.expectError(error.Unsupported, e.load("vpath %.c src\n", .makeconf, "."));
+    e.vars_only = true;
+    try e.load("vpath %.c src\n", .makeconf, ".");
+    // a package's Makevars that exports a name needs make
+    var p = testEvaluator(arena.allocator());
+    try testing.expectError(error.Unsupported, p.load("export FOO\n", .makevars, "."));
 }
