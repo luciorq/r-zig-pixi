@@ -4,7 +4,64 @@ Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
 #46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
 published.
 
-Status (2026-11-17, night): a4634e2 has the test fix. build-r
+Status (2026-11-18): 75487f0 has the verify fix. build-r 44193722299
+on it: default, full and minimal on windows-11-arm fail verify-tree,
+"Library/lib/R/bin/toolchain/clear_cache.o: C:\a\r-zig-pixi\...\
+zig-cache\...-clear_cache.obj": zig compiles C for Windows with
+CodeView, and its .debug$S object-name record (S_OBJNAME) holds the
+temporary object's path even at -g0 (no clang flag drops it; x86_64 C
+has it too; cfguard.S has none). All three link objects are now Zig
+(user, 2026-11-18: Zig over a hand-written assembly version of
+clear_cache, which was also tried, and cfguard.S and dso_fini.c
+converted too, before the release): zigbuild/tools/rzig/objects/
+{dso_fini,cfguard,clear_cache}.zig, which rzig's build.zig (linkObject)
+compiles with b.addObject for the baseline CPU, ReleaseSmall, stripped,
+position independent on linux; no object goes through zig cc now.
+- clear_cache.zig: an extern kernel32 FlushInstructionCache, a weak
+  @export, the -exclude-symbols directive in module-level asm.
+- cfguard.zig: a naked function around the one `jmp *%rax` (the jump
+  target is in a register no calling convention passes), a strong
+  export and the directive; the same 2 bytes of code and sections as
+  cfguard.S's object.
+- dso_fini.zig: __dso_handle a weak hidden export of a variable holding
+  its own address, read through an @extern of its symbol (so a
+  crtbeginS.o a link names wins, as in the C version); __cxa_finalize
+  a weak @extern held in a variable, so its null test stays at run time
+  (zig folds an @extern's address as non-null); the .fini_array entry a
+  weak hidden export (zig 0.17 has no internal linkage for @export;
+  hidden symbols are local in the library; weak, so a link that has the
+  object twice keeps one symbol: the review below found that a strong
+  one stops such a link at a duplicate r_zig_fini_p, where the C
+  version's static symbol did not). Code and relocations match the C
+  object's on x86_64 (GOTPCREL test, PC32 __dso_handle, PLT32 call);
+  aarch64 the same logic (adrp/add/ldr where C has adrp/ldr). The one
+  difference: the variable's initial value points at its own storage
+  (R_X86_64_64 .data), not at the __dso_handle symbol, which differs
+  only when a crtbeginS.o wins, and then nothing reads it.
+Tests (gamma, conda-forge and upstream zig 0.17.1): rzig's build.zig for
+x86_64/aarch64 linux, windows and macOS installs dso_fini.o, cfguard.o,
+clear_cache.o or none as before, none with a path, a debug or a
+.comment section; the dlopen/dlclose repro (a C++ library with a static
+destructor) segfaults at exit with no object and exits 0 with the C
+object and with the Zig object, built alone and as installed; a
+-mguard=cf program fails to link without cfguard.o and links with it;
+an auto-export DLL exports neither stub symbol; clear_cache.o's link
+tests as above; rzig unit tests 213/213 with both zigs; linux-64 R
+build, verify-tree, rzig-test with smoke-test.sh (C, C++, Fortran
+packages linked with the installed dso_fini.o), parity 0 failed (116
+identical). Run time on Windows (magick on both runners) and the other
+linux arch: the targeted stress run.
+Review (two independent reviewers, gamma): byte-identical objects from
+both zigs, and the root build.zig installs the same bytes as rzig's;
+no path, no debug or .comment section; nothing in the recipe, scripts
+or workflows names the old sources; clear_cache.o's code is mov, sub,
+mov #-1, mov, b FlushInstructionCache, with no .pdata, which Windows
+ARM64 unwinds as a leaf (it touches neither SP nor LR); the repro
+passes with -Wl,--gc-sections, -z defs and -flto, and with a strong
+__dso_handle in the link. Fixed from it: r_zig_fini_p weak (above);
+the object named twice then links and the destructor runs.
+
+Status (2026-11-17, night; superseded): a4634e2 has the test fix. build-r
 44166873842 on it: default, full and minimal on windows-11-arm fail
 verify-tree, "bin/toolchain holds more than rzig and its link object:
 clear_cache.o": scripts/verify-helpers.sh's link_object named no object
@@ -1183,10 +1240,10 @@ flang-pixi), README sections for the three items, and findings 19-21.
     __clear_cache"** (runs 43879895297, 43947228208; both zigs). The
     clang-aarch64 bundle's libffi calls it for its closures; LLVM's
     compiler-rt defines it on Windows with FlushInstructionCache
-    (clear_cache.c, `_WIN32`), zig's compiler_rt/clear_cache.zig leaves
+    (compiler-rt clear_cache.c, `_WIN32`), zig's compiler_rt/clear_cache.zig leaves
     that branch as a TODO (0.17.1). Fixed in rzig as the CFG
-    stub: zigbuild/tools/rzig/clear_cache.c, compiler-rt's function,
-    weak and excluded from MinGW auto-export, which R's build compiles
+    stub: zigbuild/tools/rzig/objects/clear_cache.zig, compiler-rt's
+    function in Zig, weak and excluded from MinGW auto-export, which R's build compiles
     for aarch64 Windows into R_HOME/bin/toolchain/clear_cache.o; rzig
     passes it on the links that get cfguard.o on x86_64
     (clear_cache.zig; compiler.zig). Weak: a link that defines the

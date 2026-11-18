@@ -11,7 +11,9 @@
 //! (its clang-x86_64 r-windows bundle: librsvg-2.a holds Rust's std,
 //! compiled with CFG) and a one-file repro (`zig cc -mguard=cf`) fail so.
 //!
-//! The fix is guard_dispatch.S's part, cfguard.S. R's build assembles it
+//! The fix is guard_dispatch.S's part, objects/cfguard.zig (a naked
+//! function around the one instruction; cfguard.S until
+//! chore-release-11). R's build compiles it
 //! into R_HOME/bin/toolchain/cfguard.o, beside rzig (build.zig's
 //! linkObject), as dso_fini.zig's object; rzig assembled it into its cache
 //! at link time before (feat-r-home-link-objects). compiler.zig passes it

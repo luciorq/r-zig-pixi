@@ -9,7 +9,8 @@
 //! repro (lib.cpp, main.c) crashes with a zig library and not with a gcc
 //! one.
 //!
-//! The fix is crtbeginS.o's part, dso_fini.c. R's build compiles it for
+//! The fix is crtbeginS.o's part, objects/dso_fini.zig (dso_fini.c until
+//! chore-release-11). R's build compiles it for
 //! R's target into R_HOME/bin/toolchain/dso_fini.o, beside rzig
 //! (build.zig's linkObject), and compiler.zig passes that file on every
 //! linux shared link, first among the inputs, where gcc puts crtbeginS.o:
