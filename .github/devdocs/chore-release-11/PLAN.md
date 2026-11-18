@@ -4,7 +4,32 @@ Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
 #46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
 published.
 
-Status (2026-11-18): 75487f0 has the verify fix. build-r 44193722299
+Status (2026-11-18, later): 63677c3 has the Zig link objects. CI on
+it green: build-r 44218961580 (32 jobs, packaging skipped),
+upstream-zig 44218961466. Stress 44218953443 (magick, lme4, fst, rstan,
+Rcpp, stringi; six runners, tree and conda):
+- Rcpp, stringi, fst, lme4 ok on every leg that ran, each unloaded
+  before R exits (dso_fini.o on both linux arches); magick ok on macOS
+  and windows-latest (cfguard.o), fail-abi on linux as expected; rstan
+  fail-package on windows-latest as expected.
+- windows-11-arm did not run: its toolchain job's download of the
+  upstream zig wheel was cut short (curl: (18)), so neither leg had
+  archives. macos-15-intel tree: 5 dependency downloads failed and the
+  artifact upload failed (ENOTFOUND); network.
+- rstan skipped on every linux and macOS leg: its dependency ps failed,
+  "make: *** No rule to make target 'magick', needed by 'all'". The
+  stress workflow passed the package list to its step as TARGETS, and
+  ps 1.9.3's configure sets TARGETS on some systems only, otherwise
+  writing the inherited value into its Makevars (`all: px @TARGETS@
+  $(SHLIB)`); checked on gamma: with TARGETS="magick lme4" the line is
+  `all: px magick lme4 $(SHLIB)`. A stress harness bug, not r-zig's:
+  the step's variables are now STRESS_-prefixed (STRESS_TARGETS,
+  STRESS_SKIP, STRESS_CHANNEL, STRESS_TRACE, STRESS_MSYS_FROM_TREE).
+Next: that commit, then the targeted stress again (windows-11-arm for
+magick and clear_cache.o; rstan everywhere), the publish preflight, the
+release of build 11.
+
+Status (2026-11-18; superseded): 75487f0 has the verify fix. build-r 44193722299
 on it: default, full and minimal on windows-11-arm fail verify-tree,
 "Library/lib/R/bin/toolchain/clear_cache.o: C:\a\r-zig-pixi\...\
 zig-cache\...-clear_cache.obj": zig compiles C for Windows with

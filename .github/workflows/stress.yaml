@@ -127,24 +127,27 @@ jobs:
         run: pixi run -e pkg conda-package
       - name: Stress
         shell: bash
+        # STRESS_-prefixed: the step's environment reaches every package's
+        # configure and make, and a plain name leaks into them (ps's
+        # configure puts an inherited TARGETS into its Makefile's `all:`)
         env:
-          TARGETS: ${{ inputs.packages }}
-          SKIP: ${{ inputs.skip }}
+          STRESS_TARGETS: ${{ inputs.packages }}
+          STRESS_SKIP: ${{ inputs.skip }}
           STRESS_JOBS: ${{ inputs.jobs }}
-          CHANNEL: ${{ matrix.dist == 'conda' && inputs.channel || '' }}
-          TRACE: ${{ inputs.trace }}
-          MSYS_FROM_TREE: ${{ inputs.msys_from_tree }}
+          STRESS_CHANNEL: ${{ matrix.dist == 'conda' && inputs.channel || '' }}
+          STRESS_TRACE: ${{ inputs.trace }}
+          STRESS_MSYS_FROM_TREE: ${{ inputs.msys_from_tree }}
           R_ZIG_PKG_BUILDER: ${{ inputs.builder }}
         run: |
           set -euo pipefail
           args=("--out=$STRESS_OUT")
-          if [ -n "$CHANNEL" ]; then args+=("--conda=$CHANNEL"); fi
-          if [ -n "$SKIP" ]; then args+=("--skip=$SKIP"); fi
-          if [ "$TRACE" = true ]; then args+=("--trace"); fi
-          if [ "$MSYS_FROM_TREE" = true ] && [ "$RUNNER_OS" = Windows ]; then args+=("--msys-from-tree"); fi
+          if [ -n "$STRESS_CHANNEL" ]; then args+=("--conda=$STRESS_CHANNEL"); fi
+          if [ -n "$STRESS_SKIP" ]; then args+=("--skip=$STRESS_SKIP"); fi
+          if [ "$STRESS_TRACE" = true ]; then args+=("--trace"); fi
+          if [ "$STRESS_MSYS_FROM_TREE" = true ] && [ "$RUNNER_OS" = Windows ]; then args+=("--msys-from-tree"); fi
           # one target per word
           # shellcheck disable=SC2086
-          pixi run -e stress stress "${args[@]}" $TARGETS
+          pixi run -e stress stress "${args[@]}" $STRESS_TARGETS
       # The report is in the job summary already (stress.R appends it to
       # $GITHUB_STEP_SUMMARY); the logs, the smoke files and the conda
       # env's manifest and lock are here.
