@@ -4,7 +4,25 @@ Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
 #46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
 published.
 
-Status (2026-11-18, later): 63677c3 has the Zig link objects. CI on
+Status (2026-11-18, evening): 46104ae has the STRESS_ variables. CI on
+it green: build-r 44259194679 (32 jobs, packaging skipped; full-ci
+label on #48), upstream-zig 44259194748 (6 jobs). Stress 44259183592
+(same six targets; six runners, tree and conda; 0 unexpected rows on
+all 12 legs, 57 dependencies ok except nloptr on windows-11-arm):
+- Rcpp, stringi, fst ok on every leg.
+- magick ok on macOS, windows-latest (cfguard.o) and windows-11-arm
+  (clear_cache.o from objects/clear_cache.zig); fail-abi on both linux
+  arches, as expected (finding 31).
+- lme4 ok on linux, macOS (macos-15-intel tree too) and windows-latest;
+  fail-dependency on windows-11-arm, as expected (nloptr: no nlopt.h,
+  conda-forge has no win-arm64 nlopt; finding 26).
+- rstan ok on linux and macOS (both arches, both legs; the model
+  compiles, samples, unloads, R exits 0); smoke fail-package on both
+  Windows runners, as expected (rstan's plugin.R -std=c++1y).
+- ps installs everywhere: the TARGETS leak is gone.
+Next: the publish preflight, the merge of #48, the release of build 11.
+
+Status (2026-11-18, later; superseded): 63677c3 has the Zig link objects. CI on
 it green: build-r 44218961580 (32 jobs, packaging skipped),
 upstream-zig 44218961466. Stress 44218953443 (magick, lme4, fst, rstan,
 Rcpp, stringi; six runners, tree and conda):
