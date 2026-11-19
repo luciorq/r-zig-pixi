@@ -52,6 +52,8 @@ run_to <- function(cmd, args) {
     list(status = st, out = readLines(f, warn = FALSE))
 }
 
+## the host's readelf, which only inspects what was built, found first
+readelf <- Sys.which("readelf")
 narrow()
 ## the group's boundary: a run dependency that brought make would show
 ## here (Sys.which scans PATH in R, patch 0002). On Windows m2's make and
@@ -110,6 +112,33 @@ tier1(mkpkg("rzigc", list(file = "one.c",
     R = 'f <- function() .Call("rzig_one")')), "rzigc")
 stopifnot(getExportedValue(loadNamespace("rzigc", lib.loc = lib), "f")() == 1L)
 cat("compilers: a C package through rzig build (tier 1), no make: OK\n")
+## C++: a std::runtime_error thrown and caught (the C++ runtime's
+## unwinder), its message an R error. Rf_error longjmps, so it runs with
+## no C++ object alive (the message is copied to a char buffer). linux: gcc's libstdc++, the env's
+## libstdcxx-devel headers (this package's run dependency) and R's
+## runtime, so the library (it throws, so it calls into the runtime)
+## needs libstdc++.so.6 and leaves no std::__1
+## (libc++) symbol undefined (feat-linux-libstdcxx); elsewhere zig's
+## libc++, static
+tier1(mkpkg("rzigcx", list(file = "t.cpp",
+    code = c("#include <cstdio>", "#include <stdexcept>", "#include <string>", "#include <Rinternals.h>",
+             'extern "C" SEXP rzig_throw(SEXP x) {',
+             '    char m[256] = "";',
+             '    try { throw std::runtime_error(std::string("cxx: ") + CHAR(STRING_ELT(x, 0))); }',
+             '    catch (const std::exception &e) { std::snprintf(m, sizeof m, "%s", e.what()); }',
+             '    Rf_error("%s", m); return R_NilValue; }'),
+    R = 'f <- function(x) .Call("rzig_throw", as.character(x))')), "rzigcx")
+e <- tryCatch(getExportedValue(loadNamespace("rzigcx", lib.loc = lib), "f")("boom"), error = conditionMessage)
+stopifnot(identical(e, "cxx: boom"))
+if (Sys.info()[["sysname"]] == "Linux" && nzchar(readelf)) {
+    so <- file.path(lib, "rzigcx", "libs", "rzigcx.so")
+    dyn <- system2(readelf, c("-d", shQuote(so)), stdout = TRUE)
+    und <- system2(readelf, c("-W", "--dyn-syms", shQuote(so)), stdout = TRUE)
+    stopifnot(any(grepl("NEEDED.*\\[libstdc\\+\\+\\.so\\.6\\]", dyn)), !any(grepl("libc\\+\\+", dyn)),
+              !any(grepl("UND.*St3__1", und)))
+    cat("compilers: the C++ package needs libstdc++.so.6, no libc++\n")
+}
+cat("compilers: a C++ package through rzig build (tier 1): an exception caught: OK\n")
 ## internal formatted I/O needs the runtime (_FortranAio*): a dropped
 ## -lflang_rt.runtime fails the package's load
 tier1(mkpkg("rzigf", list(file = "s.f",

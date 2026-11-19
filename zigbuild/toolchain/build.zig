@@ -32,6 +32,15 @@
 //!                           ISO_Fortran_binding.h (PHASE6 open point V)
 //!   openmp/    compilers    llvm-openmp's omp.h and the headers beside it
 //!                           (B22); Windows also libomp.lib
+//!   libstdcxx/ compilers    linux: libstdcxx-devel_linux-64's (or
+//!                           _linux-aarch64's) C++ headers, every file of
+//!                           its record under lib/gcc/<triple>/<version>/
+//!                           include/c++/, at the same path (rzig's
+//!                           libstdcxx.zig takes the highest version
+//!                           there; feat-linux-libstdcxx). Not its
+//!                           runtime or archives: packages link the
+//!                           runtime R loads, the base's lib/. macOS and
+//!                           Windows have none (libc++)
 //!   usr/       build-tools  unix: conda-forge's GNU make as usr/bin/make
 //!                           (B7, B23); Windows: B39's tools in usr/bin/,
 //!                           every file of conda-forge's m2 packages'
@@ -124,6 +133,10 @@ const Tree = struct {
     from: []const u8,
     /// Only the files of this base name.
     name: ?[]const u8 = null,
+    /// Only the files whose path has this directory in it, below `from`:
+    /// libstdcxx-devel's include/c++/ under lib/gcc/<triple>/<version>/,
+    /// whose version the record gives, not a constant here.
+    within: ?[]const u8 = null,
     /// What the copy's path loses: win-64's `Library/` (flang/'s trees),
     /// or `Library/usr/` (usr/'s: their files sit in bin/).
     strip: []const u8 = "Library/",
@@ -178,6 +191,21 @@ const unix_dirs = [_]Dir{
     .{ .name = "openmp", .copies = &ompHeaders("include/") },
     .{ .name = "usr", .copies = &.{.{ .from = "bin/make", .to = "bin/make" }} },
 };
+
+/// linux: libstdc++'s C++ headers (the compilers group), from the
+/// libstdcxx-devel package of the build machine's arch: every file under
+/// lib/gcc/<triple>/<version>/include/c++/, at its path in the env.
+fn libstdcxxDir(comptime arch: []const u8) Dir {
+    return .{ .name = "libstdcxx", .copies = &.{}, .trees = &.{.{
+        .package = "libstdcxx-devel_linux-" ++ (if (mem.eql(u8, arch, "x86_64")) "64" else arch),
+        .from = "lib/gcc/" ++ arch ++ "-conda-linux-gnu/",
+        .within = "/include/c++/",
+        .strip = "",
+    }} };
+}
+
+const linux_x86_64_dirs = unix_dirs ++ [_]Dir{libstdcxxDir("x86_64")};
+const linux_aarch64_dirs = unix_dirs ++ [_]Dir{libstdcxxDir("aarch64")};
 
 /// A file of the env's Library/usr/bin/ or Library/bin/ in usr/bin/.
 fn usrBin(comptime from: []const u8) Copy {
@@ -301,7 +329,14 @@ pub fn build(b: *std.Build) !void {
     const prefix_is_env = samePhysicalDir(io, arena, prefix, env);
     if (base) return installBase(b, io, env, prefix, prefix_is_env, os);
     const tc = if (os == .windows) "Library/lib/R/bin/toolchain" else "lib/R/bin/toolchain";
-    const dirs: []const Dir = if (os == .windows) &windows_dirs else &unix_dirs;
+    const dirs: []const Dir = switch (os) {
+        .windows => &windows_dirs,
+        .linux => switch (b.graph.host.result.cpu.arch) {
+            .aarch64 => &linux_aarch64_dirs,
+            else => &linux_x86_64_dirs,
+        },
+        else => &unix_dirs,
+    };
 
     const records = try readRecords(b, io, env, try dirNeedles(b, dirs));
     var summary: std.ArrayList(u8) = .empty;
@@ -339,6 +374,9 @@ pub fn build(b: *std.Build) !void {
             for (try conda.under(arena, records, t.package, t.from)) |from| {
                 if (t.name) |name| {
                     if (!mem.eql(u8, from[mem.lastIndexOfScalar(u8, from, '/').? + 1 ..], name)) continue;
+                }
+                if (t.within) |w| {
+                    if (mem.indexOf(u8, from[t.from.len..], w) == null) continue;
                 }
                 const src = b.fmt("{s}/{s}", .{ env, from });
                 if (!pathExists(io, src))

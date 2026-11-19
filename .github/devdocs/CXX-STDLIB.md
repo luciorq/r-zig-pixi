@@ -48,10 +48,16 @@ toolchain links in any configuration.
    gives 'double free' on the first C++ exception; the reverse gives
    'irrecoverable exception'. A per-package choice would make results
    depend on install order.
-3. **Planned after release 11**, on its own branch. Release 11 keeps the
-   six rows as linux fail-abi in stress/packages.tsv. The branch reruns
-   the cpp11 rows (RPostgres, systemfonts, textshaping, ragg) and the
-   Bioconductor rows (DESeq2, scran, Rsamtools) under libstdc++.
+3. **Implemented on feat-linux-libstdcxx** (user, 2026-11-18: "Fix and
+   implement all of it!"; that branch's PLAN.md has the decisions L1-L26,
+   the findings and the evidence), on its own branch after release 11,
+   with recipe build number 12. The branch flips the six rows from
+   linux fail-abi to ok in stress/packages.tsv. The cpp11 rows
+   (RPostgres, systemfonts, textshaping, ragg) and the Bioconductor rows
+   (DESeq2, scran, Rsamtools) passed under libstdc++ in a linux-64
+   stress tree leg (17 ok, 0 unexpected; that PLAN's finding 33). The
+   run used conda-forge zig, before the review fixes. linux-aarch64 and
+   the conda leg were not run.
 4. **r-zig-slim has the run constraint `r-base <0a0`** (release 11).
    conda-forge's r-* packages depend on r-base; without the constraint,
    adding one to an env silently installs conda-forge's R over r-zig's.
@@ -59,25 +65,85 @@ toolchain links in any configuration.
    conda-forge r-* package, none of which can work beside r-zig's R
    today (R 4.4 and 4.5 builds; no R 4.6 builds on 2026-11-16).
 
-## How libstdc++ on linux works (probe, linux-64)
+## How libstdc++ on linux works
 
-T/abi-libstdcxx: zig c++ against the env's `libstdcxx-devel` 15.3.0.
-- Compile: `-nostdinc++`, `-I` to the headers (`lib/gcc/<triple>/15.3.0/
-  include/c++` and its `<triple>` directory), `--system-header-prefix=`
-  for the header names, and two shim headers: `sys/single_threaded.h`,
-  and a `c++config.h` that undefines `_GLIBCXX_HAVE_OBSOLETE_ISINF` and
-  `_ISNAN` (zig's glibc 2.17 headers).
-- Link: `-nostdlib++ -l:libstdc++.so.6 -l:libgcc_s.so.1`.
+rzig does it, in `zigbuild/tools/rzig/libstdcxx.zig`, for every C++
+command on linux (zig-cxx, and zig-cc with `-x c++`). The first probe
+was T/abi-libstdcxx: zig c++ against the env's `libstdcxx-devel` 15.3.0.
+- Compile: `-nostdinc++` before the caller's arguments. After them, and
+  after the environments' `-I`, as gcc searches `-I` before its own C++
+  headers: `-I` to rzig's two shim headers (`R_HOME/bin/toolchain/
+  libstdcxx-shim`: `sys/single_threaded.h`, and a `bits/c++config.h`
+  that undefines `_GLIBCXX_HAVE_OBSOLETE_ISINF` and `_ISNAN` for zig's
+  glibc 2.17 headers), then `-I` to the headers
+  (`lib/gcc/<triple>/<version>/include/c++`, its `<triple>` and
+  `backward` directories), then `-D_GLIBCXX_SYSHDR`. libstdc++ 15 marks
+  its headers as system headers only with that macro; it replaces the
+  first probe's 131 `--system-header-prefix=` flags (warnings in a
+  `-Wall -Wextra -pedantic` file: 146 without it, 0 with it).
+- Where the headers are (first found): R's env (conda:
+  `libstdcxx-devel_linux-*`, a run dependency of r-zig-compilers), the
+  compilers group's `R_HOME/bin/toolchain/libstdcxx` (the standalone
+  tree and the wheel), then `R_ZIG_EXTRA_ENV`; the highest version
+  there. None: a compile stops with the compilers group's text, never a
+  silent libc++ fallback. A command with no input (`--version`,
+  `-dumpversion`, `-print-*`) gets no flags and needs no headers.
+- Link: `-nostdlib++`, then R's runtime by path: `lib/libstdc++.so.6`
+  and `lib/libgcc_s.so.1` of the first env that has both (R's own, then
+  `R_ZIG_EXTRA_ENV`). DT_NEEDED is the soname. A caller's `-lstdc++`
+  (and `-l:libstdc++.so*`) becomes those two paths on every linux link,
+  C links too (cc-rs, cgo, a Makefile that links C++ objects with
+  `$(CC)`): without libgcc_s zig links its own `libunwind.a`, and a throw
+  aborts. `-lgcc_s` becomes its path; `-lstdc++fs` and `-lstdc++exp`
+  gcc's archives beside the headers when they are there, else nothing;
+  `-static-libstdc++` is dropped (a note under `RZIG_TRACE`; silent
+  otherwise, on purpose (feat-linux-libstdcxx/PLAN.md decision L15): zig
+  ignores it too, and a note on every link would reach configure and CMake checks that read stderr). The
+  two-argument `-l stdc++` is rewritten too. `-Wl,-lstdc++` is not: lld
+  then searches -L for `libstdc++.so` (a known gap).
+- libR needs `libstdc++.so.6` and `libgcc_s.so.1` (build.zig's
+  `linkCxxRuntime`; a reference from `zigbuild/cxx_runtime.zig` keeps
+  zig's `--as-needed` from dropping them). Its RUNPATH then loads the
+  tree's (or the env's) runtime before any package, in every variant:
+  minimal too, whose libR loads no ICU. Without it a minimal or
+  standalone R's packages bound the host's libstdc++, which is older
+  than the headers on gcc < 13 hosts (the probe's F8).
+- arrow: its `nixlibs.R` no longer refuses its prebuilt libstdc++
+  libarrow, so on an allowlisted distro (or with `NOT_CRAN=true`) it
+  downloads it instead of building from source. `LIBARROW_BINARY=false`
+  keeps the source build.
 - What does not work: zig ignores `-stdlib=libstdc++`; it maps
   `-lstdc++` to its own libc++ and drops `-lgcc_s` (without libgcc_s an
   exception thrown in libstdc++ code aborts); `-isystem` breaks
   libstdc++'s `#include_next <stdlib.h>`. So the flags go inside rzig,
   not in user flags (terra's configure needs them in the driver).
-- R already loads `libstdc++.so.6` through ICU (the tree's lib/,
-  GLIBCXX_3.4.36); packages built with these headers need
-  GLIBCXX_3.4.32.
-- Not tested yet: linux-aarch64, the minimal variant (no ICU), the wheel,
-  arrow (it would take its libstdc++ prebuilt instead of building).
+- R loads the tree's `libstdc++.so.6` (GLIBCXX_3.4.36, the env's
+  libstdcxx 16); packages built with the 15.3 headers need at most
+  GLIBCXX_3.4.32 (symbol versions follow what the headers reference).
+- Not tested yet (full list: feat-linux-libstdcxx/PLAN.md "Not
+  verified"): linux-aarch64 (cross-compiled only); macOS and Windows (no
+  CI on the branch); hosts with a libstdc++ older than GLIBCXX_3.4.32;
+  Rust (cc-rs) and Go packages; a CMake mixed C/C++ target linked
+  through the C compiler; `-Wl,-lstdc++`; a prebuilt libc++ static
+  archive inside a package; arrow:source; the stress conda leg; the
+  conda packages and wheel after the review fixes.
+
+Known differences from gcc:
+- **`-isystem` order.** rzig passes libstdc++'s directories as `-I`
+  (`-isystem` breaks its `#include_next <stdlib.h>`), and clang searches
+  every `-I` before any `-isystem`. gcc searches a caller's `-isystem`
+  before its own C++ headers. So a package's `-isystem` copy of a
+  standard C++ header does not override libstdc++'s with rzig, as it
+  would with gcc. Not a regression: the review found the released rzig
+  (zig's libc++ headers) behaves the same.
+- **The process's libstdc++ is R's.** libR loads the tree's (or env's)
+  runtime first, and the soname then wins for the whole process. An
+  `R_ZIG_EXTRA_ENV` whose libraries were built with a newer libstdcxx
+  (17.x later) than R's runtime gives "GLIBCXX_3.4.3x not found" when
+  they load. This already happened for slim through ICU; it is new for
+  minimal and the wheel. Not probed: rpy2 or other embedded R, where
+  Python may have loaded the host's older libstdc++ first; then
+  packages that need GLIBCXX_3.4.32 fail to load.
 
 ## Ruled out, and why
 
@@ -112,12 +178,37 @@ T/abi-libstdcxx: zig c++ against the env's `libstdcxx-devel` 15.3.0.
   installs the same files as conda-forge's r-mass, r-class,
   r-kernsmooth.
 
-## Open: standalone and wheel on linux
+## Standalone and wheel on linux: option (a), default chosen by Claude
 
-Neither has a conda env, so neither has libstdc++ headers. Options:
-(a) ship the headers and the newest `libstdc++.so.6` in the tree;
-(b) keep libc++ there (a second mode); (c) use the host's or an env's
-headers when present.
+Chosen 2026-11-18 on feat-linux-libstdcxx, as a default by Claude; the
+user may revisit it (that branch's PLAN.md, decisions L4 and L5). The
+user had not answered the 2026-11-16 menu.
+
+- L4, one mode: option (a) below. The standalone tree and the wheel
+  ship libstdc++'s headers, and the runtime is the one in R's tree.
+- L5, which group holds the headers. Options: (a) the compilers group
+  (implemented); (b) the base, the r-zig wheel and r-zig-slim (+ about
+  3 MiB compressed), so C++ works with ziglang alone; (c) another
+  layout. Choice (a): the headers are only needed to compile, like zig
+  and flang.
+
+Layout: the standalone compilers archive's and the pip r-zig-compilers
+wheel's `R_HOME/bin/toolchain/libstdcxx/lib/gcc/<triple>/<version>/include/c++`
+(copied from `libstdcxx-devel_linux-*` by its conda-meta record,
+zigbuild/toolchain/build.zig; include/c++ is 5.6 MB by du, 131
+entries, the same in the conda package and the toolchain tree; the
+toolchain tree's whole libstdcxx/ is 5.7 MB), and conda's r-zig-compilers
+depends on `libstdcxx-devel_linux-*` 15.* and `libstdcxx >=15`. The
+two shims are the base's, beside rzig. The runtime is the base's `lib/`
+(`libstdc++.so.6`, `libgcc_s.so.1`, which libR needs). Consequence: r-zig
+with ziglang alone, without r-zig-compilers, compiles C but no longer
+C++ on linux; the preflight stops a C++ package with the compilers
+group's text.
+
+The record of the options, kept: neither has a conda env, so neither
+had libstdc++ headers. Options: (a) ship the headers and the newest
+`libstdc++.so.6` in the tree; (b) keep libc++ there (a second mode);
+(c) use the host's or an env's headers when present.
 
 - **Standalone**: users would reuse distro libraries (libgdal-dev,
   libmagick++-dev), gcc and libstdc++ builds with the same new ABI as

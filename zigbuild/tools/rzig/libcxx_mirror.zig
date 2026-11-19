@@ -1,4 +1,9 @@
-//! libc++ is linked statically, everywhere (decided 2026-09-30). Upstream
+//! libc++ is linked statically wherever zig links it (decided
+//! 2026-09-30): macOS, Windows, and zig's own builds. linux packages'
+//! C++ no longer links libc++: it is gcc's libstdc++ (libstdcxx.zig;
+//! feat-linux-libstdcxx), so on linux rzig's mirror is kept for a link
+//! zig still adds libc++ to (none in rzig's own commands) and R's build
+//! (R has no C++). Upstream
 //! zig always does; conda-forge's zig (feedstock patch Lld.zig-prefer-
 //! shared-libcxx) links a shared libc++ instead whenever one sits in
 //! <zig lib dir>/../../lib, which is always the case in a macOS conda env

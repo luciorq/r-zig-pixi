@@ -1,8 +1,19 @@
 # chore-release-11 — one pull request for the whole backlog
 
 Branch: feat-win-arm64 (pull request #48, retargeted to main after #45,
-#46 and #47 merged on 2026-11-12). Recipe build number: 11, not yet
-published.
+#46 and #47 merged on 2026-11-12). Recipe build number: 11.
+
+Released (2026-11-18): #48 merged (d65f1db). Build 11 published by the
+dispatch of build.yaml on main, run 44336177906, with CONDA_PUBLISH set
+for that run and deleted after it. universe has six packages at _11 in
+each of the six subdirs (r-zig-slim, -toolchain, -compilers,
+-build-tools, -extras, -recommended; win-arm64 for the first time). The
+linux-64 r-zig-slim h3e03716_11 and r-zig-toolchain hf3b0124_11 are the
+builds stress 44259183592 tested. A fresh linux-64 env from universe
+(slim + toolchain) runs R 4.6.2, R CMD config CC gives zig-cc, and a C
+library builds with R CMD SHLIB, loads and returns the right value.
+Follow-ups: feat-linux-libstdcxx (finding 31) and feat-winarm-gaps
+(findings 26 and 35, ARM64 Control Flow Guard).
 
 Status (2026-11-18, evening): 46104ae has the STRESS_ variables. CI on
 it green: build-r 44259194679 (32 jobs, packaging skipped; full-ci

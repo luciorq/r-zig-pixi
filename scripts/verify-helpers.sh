@@ -62,6 +62,24 @@ link_object() {
   case "$PLAT" in linux-*) echo dso_fini.o ;; win-64) echo cfguard.o ;; win-arm64) echo clear_cache.o ;; esac
 }
 
+# The base's files in R_HOME/bin/toolchain besides rzig and its link
+# object, as paths below it: on linux libstdc++'s two shim headers in
+# libstdcxx-shim/, which every C++ compile there takes (rzig's
+# libstdcxx.zig; feat-linux-libstdcxx); none elsewhere. The checks that
+# the base holds nothing more (verify-tree.sh, verify-bundle.sh,
+# wheel-test.sh, the recipe's package_contents and test-preflight.R)
+# allow these and no other.
+base_extra_files() {
+  case "$PLAT" in linux-*) echo "libstdcxx-shim/bits/c++config.h libstdcxx-shim/sys/single_threaded.h" ;; esac
+}
+
+# The top-level directories of base_extra_files: what the base may hold
+# in R_HOME/bin/toolchain beside its files.
+base_extra_dirs() {
+  local f
+  for f in $(base_extra_files); do echo "${f%%/*}"; done | sort -u | tr '\n' ' '
+}
+
 # A configure script in package directory $1 (unix configure, Windows
 # configure.win) that leaves the file configure-ran there with a shell
 # builtin, so that it starts no program: scenario 3 (verify-bundle.sh)
@@ -239,15 +257,87 @@ rpaths_of() {
   fi
 }
 
-# A shared C++ runtime among the libraries it names (libc++, libstdc++);
-# empty when there is none. libc++ is static everywhere (decided
-# 2026-09-30), in R's own binaries and in packages compiled with rzig.
+# A shared C++ runtime this OS must not need, among the libraries $1
+# names; empty when there is none. linux: libc++ (C++ there is gcc's
+# libstdc++.so.6, the runtime libR needs; feat-linux-libstdcxx). macOS
+# and Windows: any shared one, libc++ or libstdc++ (libc++ is static
+# there, decided 2026-09-30, in R's own binaries and in packages compiled
+# with rzig).
 cxx_deps() {
   if [ "$OS" = linux ]; then
-    needed_of "$1" | grep -E '^lib(c\+\+|stdc\+\+)\.so' || true
+    libcxx_deps "$1"
   else
     needed_of "$1" | grep -E '(^|/)lib(c\+\+|stdc\+\+)[.0-9]*\.dylib$' || true
   fi
+}
+
+# linux: the libraries ELF file $1 names (DT_NEEDED), by readelf, which
+# the wheel env has (binutils) where needed_of's patchelf may be missing.
+elf_needed() {
+  readelf -d "$1" 2> /dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p'
+}
+
+# A shared libc++ among the libraries it names; empty when there is none.
+# Wrong on every OS: static on macOS and Windows, never used on linux.
+libcxx_deps() {
+  if [ "$OS" = linux ]; then
+    elf_needed "$1" | grep -E '^libc\+\+(abi)?\.so' || true
+  else
+    needed_of "$1" | grep -E '(^|/)libc\+\+(abi)?[.0-9]*\.dylib$' || true
+  fi
+}
+
+# linux: the undefined dynamic symbols of ELF file $1, one per line, with
+# their version (name@GLIBCXX_3.4) when they have one.
+elf_undefined() {
+  readelf -W --dyn-syms "$1" 2> /dev/null | awk '$7 == "UND" {print $8}'
+}
+
+# linux: what is wrong with $1, a shared object R's compilers built, one
+# line, or nothing (feat-linux-libstdcxx): it needs no shared libc++,
+# leaves no std::__1 symbol undefined (libc++'s namespace: an object
+# compiled against zig's libc++ headers), and, when it calls into the C++
+# runtime (an undefined std:: or C++ ABI symbol, or one versioned
+# GLIBCXX_ or CXXABI_), needs libstdc++.so.6 (rzig links R's runtime by
+# path; the DT_NEEDED is its soname). zig links with --as-needed, so C++
+# code that never calls the runtime (extern "C" int k() { return 3; })
+# needs nothing, and that is right.
+stdcxx_wrong() {
+  local h und
+  h="$(libcxx_deps "$1")"
+  [ -z "$h" ] || { echo "needs $(echo $h | tr ' ' ',')"; return 0; }
+  und="$(elf_undefined "$1")"
+  if printf '%s\n' "$und" | grep -q 'St3__1'; then
+    echo "has undefined std::__1 (libc++) symbols"
+    return 0
+  fi
+  # (glibc's own symbols are not the C++ runtime: anything versioned
+  # GLIBC_, and __cxa_finalize, __cxa_atexit and __cxa_thread_atexit_impl,
+  # which every shared object may name, C ones too; rzig's dso_fini.o
+  # names __cxa_finalize weakly, with no version)
+  if printf '%s\n' "$und" | grep -v '@GLIBC_' | grep -Ev '^__cxa_(finalize|atexit|thread_atexit_impl)(@|$)' | grep -Eq '^(_ZN?K?St|_ZTVN10__cxxabiv|__cxa_|__gxx_personality|_Zn[wa]|_Zd[la])|@(GLIBCXX|CXXABI)_'; then
+    elf_needed "$1" | grep -qx 'libstdc++\.so\.6' || echo "calls into the C++ runtime but does not need libstdc++.so.6"
+  fi
+  return 0
+}
+
+# What is wrong with $1, a C++ library R's compilers built, on this OS,
+# one line, or nothing: linux, stdcxx_wrong; macOS and Windows, a shared
+# C++ runtime it needs (libc++ is static there).
+cxx_runtime_wrong() {
+  local h
+  if [ "$OS" = linux ]; then
+    stdcxx_wrong "$1"
+  else
+    h="$(cxx_deps "$1")"
+    [ -z "$h" ] || echo "needs a shared C++ runtime: $(echo $h | tr ' ' ',')"
+  fi
+}
+
+# How a C++ library R's compilers built links its C++ runtime on this OS,
+# for the scripts' "verified" lines.
+cxx_runtime_word() {
+  if [ "$OS" = linux ]; then echo "libstdc++.so.6"; else echo "static libc++"; fi
 }
 
 # macOS: succeeds, printing the file's minos ("none" when it has none),

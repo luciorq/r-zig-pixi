@@ -234,6 +234,7 @@ const Ctx = struct {
     // rzig for R's target: the compilers Makeconf names (installRzig)
     rzig: std.Build.LazyPath, // rzig_build.Artifacts.bin
     rzig_object: ?rzig_build.LinkObject, // installed beside it (installRzig)
+    rzig_shim: ?std.Build.LazyPath, // linux: libstdcxx-shim/ beside it (installRzig)
 
     /// Link a library this build makes (libR, libRblas, libRlapack). Off
     /// Windows by its file: `linkLibrary` would also add the library's
@@ -604,6 +605,7 @@ pub fn build(b: *std.Build) !void {
         .rlapack = undefined,
         .rzig = undefined,
         .rzig_object = null,
+        .rzig_shim = null,
     };
     ctx.path_flags = try filePathFlags(&ctx, io);
 
@@ -618,6 +620,7 @@ pub fn build(b: *std.Build) !void {
         ctx.addSdkPaths(rz.exe.root_module);
         ctx.rzig = rz.bin;
         ctx.rzig_object = rz.object;
+        ctx.rzig_shim = rz.shim;
         const inst = installRzig(&ctx);
         b.getInstallStep().dependOn(inst);
         b.step("rzig", "Build rzig and install it as the compilers in R_HOME/bin/toolchain").dependOn(inst);
@@ -770,6 +773,7 @@ pub fn build(b: *std.Build) !void {
     ctx.linkBlas(libR_mod);
     linkFortranRt(&ctx, libR_mod);
     linkCoreLibs(&ctx, libR_mod);
+    linkCxxRuntime(&ctx, libR_mod);
     ctx.relRPaths(libR_mod, .rlib);
     ctx.libR = addSharedLib(&ctx, "R", libR_mod);
 
@@ -2846,7 +2850,9 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 /// on x86_64 and clear_cache.o on aarch64;
 /// feat-r-home-link-objects). They are the only files directly in that
 /// directory: the toolchain groups' files sit in its subdirectories
-/// (feat-standalone-toolchain B19, B30). The base carries them on every
+/// (feat-standalone-toolchain B19, B30). On linux the base also has
+/// libstdcxx-shim/, the two headers libstdc++ needs with zig's glibc
+/// headers (rzig's libstdcxx.zig; feat-linux-libstdcxx). The base carries them on every
 /// channel: the base archive, r-zig-slim and the r-zig wheel (B19). The
 /// groups' packages hold only subdirectories (B28, B29). The compile
 /// preflight (patch 0009, install.R) runs its check mode by the name of
@@ -2897,6 +2903,8 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
         step.dependOn(&b.addInstallFileWithDir(ctx.rzig, ctx.rhomeInstallDir("bin/toolchain"), n).step);
     }
     if (ctx.rzig_object) |o| step.dependOn(&b.addInstallFileWithDir(o.file, ctx.rhomeInstallDir("bin/toolchain"), o.name).step);
+    // linux: libstdc++'s two shim headers (libstdcxx.zig), R's base
+    if (ctx.rzig_shim) |d| step.dependOn(&b.addInstallDirectory(.{ .source_dir = d, .install_dir = ctx.rhomeInstallDir("bin/toolchain"), .install_subdir = rzig_build.shim_dir }).step);
     // `rzig build`'s tier-2 root (feat-zig-pkg-build): build_t2.zig adds a
     // package's own src/build.zig, and rpkg.zig is the helper its rbuild
     // receives. Tier 1 has no root: rzig builds it (tier1.zig).
@@ -3113,6 +3121,28 @@ fn linkCoreLibs(ctx: *const Ctx, mod: *std.Build.Module) void {
     // slim never hit it (NLS off, LIBINTL empty there too).
     applyLinkFlags(ctx, mod, ctx.subst.get("LIBINTL").?);
     linkOmp(ctx, mod);
+}
+
+/// linux: libR needs gcc's C++ runtime, the env's libstdc++.so.6 and
+/// libgcc_s.so.1, linked by path (DT_NEEDED is the soname), with one
+/// reference each from zigbuild/cxx_runtime.zig, without which zig's
+/// --as-needed drops them. libR's RUNPATH then loads the tree's (or the
+/// env's) runtime before any package, in every variant: packages' C++
+/// is libstdc++ on linux and links against this runtime (rzig's
+/// libstdcxx.zig; feat-linux-libstdcxx). vendor-libs.sh copies both into
+/// the tree's lib/ with libR's closure. macOS and Windows: none.
+fn linkCxxRuntime(ctx: *const Ctx, mod: *std.Build.Module) void {
+    if (ctx.os != .linux) return;
+    const b = ctx.b;
+    mod.addObject(b.addObject(.{ .name = "cxx_runtime", .root_module = b.createModule(.{
+        .root_source_file = b.path("zigbuild/cxx_runtime.zig"),
+        .target = ctx.target,
+        .optimize = .ReleaseSmall,
+        .strip = true,
+        .pic = true,
+    }) }));
+    mod.addObjectFile(.{ .cwd_relative = ctx.condaDir("lib/libstdc++.so.6") });
+    mod.addObjectFile(.{ .cwd_relative = ctx.condaDir("lib/libgcc_s.so.1") });
 }
 
 fn linkOmp(ctx: *const Ctx, mod: *std.Build.Module) void {

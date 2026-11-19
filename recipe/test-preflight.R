@@ -68,8 +68,15 @@ stopifnot(file.exists(file.path(tc, if (windows) c("gcc.exe", "rzig.exe") else c
 ## rzig's link object beside it (feat-r-home-link-objects): linux's
 ## dso_fini.o, x86_64 Windows' cfguard.o (cfguard.zig), aarch64
 ## Windows' clear_cache.o (clear_cache.zig), none on macOS
-lo <- if (windows) { if (R.version$arch == "x86_64") "cfguard.o" else "clear_cache.o" } else if (Sys.info()[["sysname"]] == "Linux") "dso_fini.o"
+linux <- Sys.info()[["sysname"]] == "Linux"
+lo <- if (windows) { if (R.version$arch == "x86_64") "cfguard.o" else "clear_cache.o" } else if (linux) "dso_fini.o"
 stopifnot(is.null(lo) || file.exists(file.path(tc, lo)))
+## linux: libstdc++'s two shims beside rzig, the base's (rzig's
+## libstdcxx.zig; verify-helpers.sh's base_extra_files), and not the
+## compilers group's headers (libstdcxx/)
+if (linux)
+    stopifnot(file.exists(file.path(tc, "libstdcxx-shim", c("bits/c++config.h", "sys/single_threaded.h"))),
+              !dir.exists(file.path(tc, "libstdcxx")))
 ## no writer of R_ZIG_TOOLCHAIN_HINT came back (B35) (PHASE4 Cc9)
 for (f in file.path(R.home("etc"), c("Renviron", "Renviron.site")))
     if (file.exists(f)) stopifnot(!any(startsWith(readLines(f, warn = FALSE), "R_ZIG_TOOLCHAIN_HINT=")))
@@ -102,7 +109,7 @@ cat("base: an R-only package installs: OK\n")
 inst <- function(pkg) run_to(file.path(R.home("bin"), if (windows) "Rcmd.exe" else "R"),
                              c(if (!windows) "CMD", "INSTALL", "-l", shQuote(lib), shQuote(pkg)))
 r <- inst(mkpkg("rzigsrc", src = TRUE)); cat(r$out, sep = "\n")
-pip <- if (windows) "  pip:         no wheels for Windows" else "  pip:         pip install r-zig-compilers (zig only: PyPI has no Fortran compiler); r-zig-toolchain installs every group"
+pip <- if (windows) "  pip:         no wheels for Windows" else if (linux) "  pip:         pip install r-zig-compilers (zig and libstdc++'s headers: PyPI has no Fortran compiler); r-zig-toolchain installs every group" else "  pip:         pip install r-zig-compilers (zig only: PyPI has no Fortran compiler); r-zig-toolchain installs every group"
 stopifnot(r$status != 0L,
           ## no zig is reachable: ZIG_BIN unset, no TC/zig, none in the
           ## env's bin or on this PATH, no python3 with ziglang (PHASE4

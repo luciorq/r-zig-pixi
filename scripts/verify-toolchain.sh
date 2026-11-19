@@ -43,6 +43,10 @@
 #     system's (usr/bin/'s tools find their DLLs beside them);
 #   - OpenMP (the compilers group, B22): openmp/include/omp.h; Windows
 #     also openmp/lib/libomp.lib;
+#   - libstdc++'s headers (the compilers group, linux only;
+#     feat-linux-libstdcxx): libstdcxx/lib/gcc/<triple>/<version>/
+#     include/c++ with its <triple>/bits/c++config.h and vector, one
+#     version; no libstdcxx/ on macOS and Windows (libc++);
 #   - Windows' build tools (the build-tools group, B39; PHASE7 open point
 #     O a): each name R's makefiles and configure scripts run is an .exe
 #     in usr/bin that runs with PATH = System32 alone, make says the
@@ -360,6 +364,28 @@ for f in $omp; do
   [ -s "$TREE/$tc/$f" ] || { echo "error: $tc/$f is missing (the compilers group's OpenMP)" >&2; exit 1; }
 done
 echo "== OpenMP verified: $omp (in $tc)"
+
+# libstdc++'s headers, where rzig's libstdcxx.zig looks for them (linux
+# C++; feat-linux-libstdcxx): libstdcxx/lib/gcc/<triple>/<version>/
+# include/c++, from libstdcxx-devel_linux-*, one version. Their SOURCES
+# and LICENSES are checked above, as every directory's. linux only:
+# macOS and Windows keep libc++, so no libstdcxx/ there.
+if [ "$OS" = linux ]; then
+  case "$(uname -m)" in aarch64|arm64) triple=aarch64-conda-linux-gnu ;; *) triple=x86_64-conda-linux-gnu ;; esac
+  vers="$(cd "$TREE/$tc/libstdcxx/lib/gcc/$triple" 2> /dev/null && ls -d */include/c++ 2> /dev/null | cut -d/ -f1)"
+  [ "$(echo "$vers" | grep -c .)" = 1 ] ||
+    { echo "error: $tc/libstdcxx/lib/gcc/$triple holds '$(echo $vers)', not one version's include/c++ (the compilers group's libstdc++ headers)" >&2; exit 1; }
+  g="libstdcxx/lib/gcc/$triple/$vers/include/c++"
+  for f in "$g/$triple/bits/c++config.h" "$g/vector" "$g/cmath"; do
+    [ -s "$TREE/$tc/$f" ] || { echo "error: $tc/$f is missing (the compilers group's libstdc++ headers)" >&2; exit 1; }
+  done
+  [ -z "$(cd "$TREE/$tc/libstdcxx" && find . -type f ! -path "./lib/gcc/$triple/$vers/include/c++/*" ! -name SOURCES ! -path './LICENSES/*')" ] ||
+    { echo "error: $tc/libstdcxx holds more than libstdc++'s headers (no runtime, no archives: packages link the base's lib/libstdc++.so.6)" >&2; exit 1; }
+  echo "== libstdc++ headers verified: $g (in $tc)"
+elif [ -e "$TREE/$tc/libstdcxx" ]; then
+  echo "error: $tc/libstdcxx exists on $OS, whose C++ is libc++ (feat-linux-libstdcxx)" >&2
+  exit 1
+fi
 
 # Windows' build tools (B39; PHASE7 open point O a, amendment Am10), when
 # the tree has usr/ (the build-tools group): B39's names, coreutils' that

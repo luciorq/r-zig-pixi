@@ -245,21 +245,28 @@ if [ -n "$compile_time" ]; then
   printf '%s\n' "$compile_time" | sed 's/^/  /' >&2
   exit 1
 fi
-names=" $(rzig_names) $(link_object) "
+# and on linux libstdc++'s shims (base_extra_files; feat-linux-libstdcxx)
+names=" $(rzig_names) $(link_object) $(base_extra_files) "
 not_rzig=""
 while IFS= read -r m; do
   case "$names" in *" ${m#"$tc/"} "*) ;; *) not_rzig="$not_rzig ${m#"$tc/"}" ;; esac
-done < <(grep -E "$tc_re" "$lists/base" || true)
+done < <(grep -E "$tc_re" "$lists/base" | grep -v '/$' || true)
 if [ -n "$not_rzig" ]; then
-  echo "error: ${base##*/} has more than rzig ($(rzig_names)) and its link object ($(link_object)) in $tc:$not_rzig (B19, B30: the groups' files are the toolchain tree's)" >&2
+  echo "error: ${base##*/} has more than rzig ($(rzig_names)), its link object ($(link_object)) and $(base_extra_files) in $tc:$not_rzig (B19, B30: the groups' files are the toolchain tree's)" >&2
   exit 1
 fi
+for f in $(base_extra_files); do
+  grep -qxF "$tc/$f" "$lists/base" ||
+    { echo "error: ${base##*/} has no $tc/$f (base_extra_files; feat-linux-libstdcxx)" >&2; exit 1; }
+done
 lo_word=""
 if [ -n "$(link_object)" ]; then
   grep -qxF "$tc/$(link_object)" "$lists/base" ||
     { echo "error: ${base##*/} has no $tc/$(link_object), the object rzig adds to links (feat-r-home-link-objects)" >&2; exit 1; }
   lo_word=" and its $(link_object)"
 fi
+extra_word=""
+[ -z "$(base_extra_files)" ] || extra_word=" and the shims $(base_extra_files)"
 # Each group archive holds only its group's directories (env.sh's
 # group_dirs), as unpack-toolchain.sh requires, and no file is in two of
 # the three archives.
@@ -279,7 +286,7 @@ if [ -n "$both" ]; then
   printf '%s\n' "$both" | sed 's/^/  /' >&2
   exit 1
 fi
-echo "== file lists: ${base##*/} is the R tree ($(wc -l < "$lists/base" | tr -d ' ') files and links), nothing compile-time in it and only rzig${lo_word} in $tc; $(for g in $TOOLCHAIN_GROUPS; do printf '%s %s, ' "$g" "$(wc -l < "$lists/$g" | tr -d ' ')"; done)each under its own directories; no file in two archives"
+echo "== file lists: ${base##*/} is the R tree ($(wc -l < "$lists/base" | tr -d ' ') files and links), nothing compile-time in it and only rzig${lo_word}${extra_word} in $tc; $(for g in $TOOLCHAIN_GROUPS; do printf '%s %s, ' "$g" "$(wc -l < "$lists/$g" | tr -d ' ')"; done)each under its own directories; no file in two archives"
 
 # extract <archive> <list>: into the one directory, then every member of
 # the list is there (unzip -n skips a file that exists; the lists being
@@ -896,8 +903,10 @@ fi
 # its header warnings), the measurement TODO asks for; in the build pass
 # it is env.sh's, for comparison: warm only if an earlier task compiled
 # C++ there (contract, pkg-parity), which a fresh checkout's chain may
-# not have (omicron, phase 5 step 6). No shared C++ runtime: zig links
-# libc++ statically.
+# not have (omicron, phase 5 step 6). macOS and Windows: no shared C++
+# runtime, zig links libc++ statically. linux: gcc's libstdc++, the
+# compilers group's headers and the base's lib/libstdc++.so.6, which the
+# library needs (feat-linux-libstdcxx); zig builds no libc++ there.
 if [ -n "$pass_zig" ]; then
   cx="$VERIFY_DIR/first-cxx"
   mkdir -p "$cx"
@@ -933,14 +942,15 @@ CPP
   if [ "$OS" = windows ]; then
     cx_dep="$(needed_of "$cx/$cx_lib" | grep -iE '^(libc\+\+|libstdc\+\+-6)\.dll$' || true)"
   else
-    cx_dep="$(cxx_deps "$cx/$cx_lib")"
+    cx_dep="$(cxx_runtime_wrong "$cx/$cx_lib")"
   fi
-  [ -z "$cx_dep" ] || { echo "error: $cx_lib, the first C++ compile, needs a shared C++ runtime: $cx_dep" >&2; exit 1; }
+  [ -z "$cx_dep" ] || { echo "error: $cx_lib, the first C++ compile, has the wrong C++ runtime (wanted $(cxx_runtime_word)): $cx_dep" >&2; exit 1; }
+  cx_rt="$(cxx_runtime_word)"
   # sizes from ls, not du: du counts blocks, which a compressing
   # filesystem shrinks
   cx_mb="$(find "$cx_cache" -type f -exec ls -ln {} + | awk '{ s += $5 } END { printf "%d", s / 1048576 }')"
   cx_warn="$(grep -c 'warning:' "$cx/log" || true)"
-  echo "== the first C++ compile (the $pass pass, $cx_which): $cx_s s, zig's cache $cx_mb MB, $cx_warn warning lines; no shared C++ runtime"
+  echo "== the first C++ compile (the $pass pass, $cx_which): $cx_s s, zig's cache $cx_mb MB, $cx_warn warning lines; $cx_rt"
 
   # The zig the compilers run, every OS (Cg4): rzig takes ZIG_BIN only
   # when it names a zig from the compile's own directory, and otherwise
@@ -1273,9 +1283,10 @@ if [ -n "$pass_zig" ]; then
   if grep -q 'junk\.c' "$sn/probe.log"; then cat "$sn/probe.log" >&2; echo "error: R CMD SHLIB foo.c compiled junk.c" >&2; exit 1; fi
   sn_loads probe "$sn/probe" "{dyn.load('foo.$SO'); .C('foo', 0L)[[1]] == 1L}"
 
-  # Rcpp's sourceCpp: C++ (an exception thrown and caught: the static
-  # C++ runtime), a header from CLINK_CPPFLAGS; no rpath and no shared
-  # C++ runtime (unix), the macOS floor on the library and on its object
+  # Rcpp's sourceCpp: C++ (an exception thrown and caught: the C++
+  # runtime), a header from CLINK_CPPFLAGS; no rpath and no shared C++
+  # runtime (macOS), libstdc++.so.6 (linux, feat-linux-libstdcxx), the
+  # macOS floor on the library and on its object
   mkdir -p "$sn/cxx/inc"
   printf '#define RZIG_RP_LEN 6\n' > "$sn/cxx/inc/rzigrp.h"
   cat > "$sn/cxx/rp.cpp" <<'CPP'
@@ -1300,8 +1311,8 @@ CPP
   sn_built sourceCpp "$sn/cxx.log" "$sn/cxx"
   if [ "$OS" != windows ]; then
     so_rp="$(rpaths_of "$sn/cxx/sourceCpp_1.$SO" | tr '\n' ' ')"
-    cxx_dep="$(cxx_deps "$sn/cxx/sourceCpp_1.$SO")"
-    [ -z "$so_rp$cxx_dep" ] || { echo "error: sourceCpp_1.$SO records rpaths ($so_rp) or needs a shared C++ runtime ($cxx_dep)" >&2; exit 1; }
+    cxx_dep="$(cxx_runtime_wrong "$sn/cxx/sourceCpp_1.$SO")"
+    [ -z "$so_rp$cxx_dep" ] || { echo "error: sourceCpp_1.$SO records rpaths ($so_rp) or its C++ runtime is wrong ($cxx_dep)" >&2; exit 1; }
   fi
   check_minos "$sn/cxx/sourceCpp_1.$SO" "$sn/kept-rp.o"
   sn_loads sourceCpp "$sn/cxx" "{dyn.load('sourceCpp_1.$SO'); .Call('rp') == 6L}"
@@ -1720,25 +1731,27 @@ CPP
       echo "error: a package compiled with the bundle records rpaths: $pkg_rp" >&2
       exit 1
     fi
-    # zig's own libc++ is static, and rzig keeps it so where conda-forge
-    # zig would pick a shared one (zigbuild/tools/rzig/libcxx_mirror.zig).
+    # macOS: zig's own libc++ is static, and rzig keeps it so where
+    # conda-forge zig would pick a shared one
+    # (zigbuild/tools/rzig/libcxx_mirror.zig). linux: gcc's libstdc++,
+    # the base's lib/libstdc++.so.6 by its soname (feat-linux-libstdcxx).
     check_minos "$pkg_dir/rp.o" "$pkg_dir/rp.so"
-    cxx_dep="$(cxx_deps "$pkg_dir/rp.so")"
+    cxx_dep="$(cxx_runtime_wrong "$pkg_dir/rp.so")"
     if [ -n "$cxx_dep" ]; then
-      echo "error: a C++ package compiled with the bundle needs a shared C++ runtime: $cxx_dep" >&2
+      echo "error: a C++ package compiled with the bundle: $cxx_dep" >&2
       exit 1
     fi
     (cd "$pkg_dir" && env -i "${base_env[@]}" PATH=/usr/bin:/bin \
       "$R_BIN" --vanilla --no-echo -e 'dyn.load("rp.so"); stopifnot(.Call("rp") == 6L)')
-    echo "== compiled package verified: no rpath, static libc++, loads (C++; R CMD SHLIB, make)"
+    echo "== compiled package verified: no rpath, $(cxx_runtime_word), loads (C++; R CMD SHLIB, make)"
     shape_pkg rp "$pkg_dir/rp.cpp"
     pkg_rp="$(rpaths_of "$shape_so" | tr '\n' ' ')"
     [ -z "$pkg_rp" ] || { echo "error: the rp package built through rzig build records rpaths: $pkg_rp" >&2; exit 1; }
     check_minos "$shape_so"
-    cxx_dep="$(cxx_deps "$shape_so")"
-    [ -z "$cxx_dep" ] || { echo "error: the rp package built through rzig build needs a shared C++ runtime: $cxx_dep" >&2; exit 1; }
+    cxx_dep="$(cxx_runtime_wrong "$shape_so")"
+    [ -z "$cxx_dep" ] || { echo "error: the rp package built through rzig build: $cxx_dep" >&2; exit 1; }
     shape_load rp 'stopifnot(.Call("rp", PACKAGE = "rp") == 6L)'
-    echo "== compiled package verified: no rpath, static libc++, loads (C++; R CMD INSTALL, rzig build)"
+    echo "== compiled package verified: no rpath, $(cxx_runtime_word), loads (C++; R CMD INSTALL, rzig build)"
 
     # Fortran: FLIBS names the static flang runtime (build.zig), so a
     # Fortran package needs no shared runtime and no rpath into the build

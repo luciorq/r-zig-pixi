@@ -47,7 +47,10 @@ if [ "$applied" != "$series" ]; then
   printf '%s\n' "$series" > "$stamp"
 fi
 
-# libc++ is linked statically, everywhere (decided 2026-09-30), also with
+# libc++ is linked statically wherever zig links it (decided 2026-09-30):
+# macOS, Windows, and zig's own builds. linux packages' C++ is gcc's
+# libstdc++ instead (rzig's libstdcxx.zig; feat-linux-libstdcxx), and
+# libR needs that runtime (build.zig's linkCxxRuntime). Also with
 # conda-forge's zig, which links a shared one when it finds one beside
 # its lib dir: build.zig gives R's links a mirror of that lib dir
 # (staticLibcxxLibDir), rzig does the same for packages, one

@@ -8,16 +8,24 @@
 #
 # 1. Copies of rzig named zig-cc, zig-cxx, zig-ar and zig-ranlib build a C
 #    and a C++ shared library, a static archive and a program using all
-#    three, which must run. The libraries must carry their SONAME, link no
-#    shared libc++ and need glibc 2.17 at most. The same commands through
-#    the bash shims in toolchain/ must produce byte-identical objects,
-#    archive and program; the shared libraries differ by rzig's
-#    finalization object (dso_fini.zig, beside the copies as R's build
-#    installs it beside rzig), which the shims do not add, and which a C++
-#    library with a static destructor then needs to unload cleanly. The
-#    copies sit in no R tree, so rzig has no environment of its own there
-#    (environment.zig), and R_ZIG_EXTRA_ENV is unset for this part: the
-#    shims know neither, and an extra environment would add an rpath.
+#    three, which must run. The libraries must carry their SONAME and need
+#    glibc 2.17 at most; the C++ one needs gcc's libstdc++.so.6 and no
+#    libc++ (linux C++ is libstdc++, libstdcxx.zig; feat-linux-libstdcxx).
+#    The same commands through the bash shims in toolchain/ must produce
+#    byte-identical C objects and archive (the shims' C++ is zig's libc++,
+#    so the C++ object and what links it differ by design); the shared
+#    libraries differ by rzig's finalization object (dso_fini.zig, beside
+#    the copies as R's build installs it beside rzig), which the shims do
+#    not add, and which a C++ library with a static destructor then needs
+#    to unload cleanly. The copies sit in a small R-shaped tree,
+#    <root>/lib/R/bin/toolchain, as R installs rzig: <root>/lib holds the
+#    env's libstdc++.so.6 and libgcc_s.so.1 (the runtime, as a tree's
+#    lib/ does), and beside the copies are libstdcxx-shim/ (rzig's build
+#    installs it) and libstdcxx/, the env's libstdc++ headers (the
+#    compilers group's place). That root has no include/ and no
+#    conda-meta, so its only flag on a C command is -L<root>/lib on links
+#    (no rpath), and R_ZIG_EXTRA_ENV is unset for this part: the shims
+#    know neither, and an extra environment would add an rpath.
 # 2. With an R prefix (an installed tree such as dist/slim/R-4.6.2-zig,
 #    whose bin/toolchain is rzig since F3a): small C, C++, Fortran and
 #    OpenMP packages install from source and load, and with
@@ -29,18 +37,31 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 shims=$(cd "$here/../../../toolchain" && pwd)
+# the C++ runtime checks (stdcxx_wrong, elf_needed): verify-helpers.sh,
+# which reads OS (this test is linux only)
+OS=linux
+. "$here/../../../scripts/verify-helpers.sh"
 ZIG=${ZIG:-$(command -v zig)}
 T=$(mktemp -d "${TMPDIR:-/tmp}/rzig-smoke.XXXXXX")
 trap 'rm -rf "$T"' EXIT
 
 # (zig's local cache out of the source tree, which the recipe copies)
 "$ZIG" build --build-file "$here/build.zig" --cache-dir "${ZIG_LOCAL_CACHE_DIR:-$T/zig-cache}" --prefix "$T/build"
-mkdir -p "$T/rzig" "$T/bash"
+# the R-shaped tree (above); its environment is <root>, so the copies go
+# to <root>/lib/R/bin/toolchain, which $T/rzig names
+root="$T/root"
+rz="$root/lib/R/bin/toolchain"
+mkdir -p "$rz" "$T/bash" "$rz/libstdcxx/lib"
+ln -s "$rz" "$T/rzig"
 for n in zig-cc zig-cxx zig-ar zig-ranlib; do
-  cp "$T/build/bin/rzig" "$T/rzig/$n"
+  cp "$T/build/bin/rzig" "$rz/$n"
   ln -s "$shims/$n" "$T/bash/$n"
 done
-cp "$T/build/bin/dso_fini.o" "$T/rzig/"
+cp "$T/build/bin/dso_fini.o" "$rz/"
+cp -R "$T/build/bin/libstdcxx-shim" "$rz/"
+env_dir=${CONDA_PREFIX:?run it through pixi, for the libstdc++ headers and runtime of the env}
+ln -s "$env_dir/lib/gcc" "$rz/libstdcxx/lib/gcc"
+cp -L "$env_dir/lib/libstdc++.so.6" "$env_dir/lib/libgcc_s.so.1" "$root/lib/"
 
 # --- 1. libraries and a program ---------------------------------------------------
 mkdir -p "$T/src"
@@ -88,7 +109,7 @@ for kind in bash rzig; do
     "$t/zig-ar" rcs libtwice.a twice.o
     "$t/zig-ranlib" libtwice.a
     "$t/zig-cc" -o main ../src/main.c -L. -lhello -lgreet -ltwice
-    out=$(LD_LIBRARY_PATH=. ./main)
+    out=$(LD_LIBRARY_PATH=".:$root/lib" ./main)
     [ "$out" = "42 55 -8 42" ] || { echo "error: $kind: main printed '$out'" >&2; exit 1; }
   )
   mv "$T/work" "$T/out-$kind"
@@ -98,16 +119,17 @@ echo "ok: C and C++ shared libraries, archive and program built through rzig; th
 o=$T/out-rzig
 readelf -d "$o/libhello.so" | grep -q 'SONAME.*\[libhello.so\]' || { echo "error: libhello.so has no SONAME" >&2; exit 1; }
 readelf -d "$o/libgreet.so" | grep -q 'SONAME.*\[libgreet.so\]' || { echo "error: libgreet.so has no SONAME" >&2; exit 1; }
-if readelf -d "$o/libgreet.so" | grep -E 'NEEDED.*(libc\+\+|libstdc\+\+)'; then
-  echo "error: libgreet.so links a shared C++ runtime" >&2; exit 1
-fi
+# greet() throws, so libgreet.so calls into the runtime and must need it
+w="$(stdcxx_wrong "$o/libgreet.so")"
+[ -z "$w" ] || { echo "error: libgreet.so $w" >&2; exit 1; }
+elf_needed "$o/libgreet.so" | grep -qx 'libstdc++\.so\.6' || { echo "error: libgreet.so does not need libstdc++.so.6" >&2; exit 1; }
 glibc=$(objdump -T "$o/libgreet.so" "$o/main" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 || :)
 case "$glibc" in GLIBC_2.1[0-7]|GLIBC_2.[0-9]|GLIBC_2.[0-9].*|GLIBC_2.1[0-7].*|"") ;; *) echo "error: needs $glibc" >&2; exit 1 ;; esac
-echo "ok: SONAMEs set, no shared libc++, glibc floor ${glibc:-none} (<= 2.17)"
-for f in hello.o greet.o twice.o libtwice.a main; do
+echo "ok: SONAMEs set, libgreet.so needs libstdc++.so.6 and no libc++, glibc floor ${glibc:-none} (<= 2.17)"
+for f in hello.o twice.o libtwice.a; do
   cmp "$T/out-bash/$f" "$o/$f" || { echo "error: $f differs between the bash shims and rzig" >&2; exit 1; }
 done
-echo "ok: objects, archive and program byte-identical to the bash shims' build"
+echo "ok: C objects and archive byte-identical to the bash shims' build (C++: libstdc++ here, the shims' libc++)"
 for f in libhello.so libgreet.so; do
   readelf -S "$o/$f" | grep -q '\.fini_array' || { echo "error: rzig's $f has no .fini_array (dso_fini.zig)" >&2; exit 1; }
   if readelf -S "$T/out-bash/$f" | grep -q '\.fini_array'; then echo "error: the shims' $f has a .fini_array" >&2; exit 1; fi
@@ -143,7 +165,7 @@ EOF
   "$T/rzig/zig-cxx" -O2 -fpic -c ../src/dtor.cpp -o dtor.o
   "$T/rzig/zig-cxx" -shared -o libdtor.so dtor.o
   "$T/rzig/zig-cc" -o unload ../src/unload.c -ldl
-  out=$(./unload ./libdtor.so) || { echo "error: unloading libdtor.so failed (exit $?), printed '$out'" >&2; exit 1; }
+  out=$(LD_LIBRARY_PATH="$root/lib" ./unload ./libdtor.so) || { echo "error: unloading libdtor.so failed (exit $?), printed '$out'" >&2; exit 1; }
   [ "$out" = "$(printf '64\nunloaded')" ] || { echo "error: unloading libdtor.so printed '$out'" >&2; exit 1; }
 )
 echo "ok: a C++ library unloads cleanly (its static destructor runs at dlclose, exit 0)"
@@ -244,12 +266,19 @@ OMP_NUM_THREADS=2 R_SMOKE_LIB="$T/lib" R_SMOKE_PKGS="$pkgs" "$R" --vanilla -s -e
   if (omp) stopifnot(threads() == 2L)
   cat("ok:", paste(pkgs, collapse = ", "), "built through rzig load and run\n")
 ' 2>&1 || { echo "error: R package checks failed" >&2; exit 1; }
+# linux C++ is gcc's libstdc++ (feat-linux-libstdcxx): no package needs
+# libc++ or a shared Fortran runtime (stdcxx_wrong), and the C++ one
+# (rzcxx_sum throws) needs libstdc++.so.6, R's runtime
 for so in "$T"/lib/*/libs/*.so; do
-  if readelf -d "$so" | grep -E 'NEEDED.*(libc\+\+|libstdc\+\+|flang_rt)'; then
-    echo "error: $so links a shared C++ or Fortran runtime" >&2; exit 1
+  w="$(stdcxx_wrong "$so")"
+  [ -z "$w" ] || { echo "error: $so $w" >&2; exit 1; }
+  if elf_needed "$so" | grep -E 'flang_rt'; then
+    echo "error: $so links a shared Fortran runtime" >&2; exit 1
   fi
 done
-echo "ok: no package links a shared C++ or Fortran runtime"
+elf_needed "$T/lib/rzcxx/libs/rzcxx.so" | grep -qx 'libstdc++\.so\.6' ||
+  { echo "error: rzcxx.so does not need libstdc++.so.6" >&2; exit 1; }
+echo "ok: the C++ package needs libstdc++.so.6; no package links libc++ or a shared Fortran runtime"
 
 if [ "${RZIG_SMOKE_CRAN:-}" = 1 ]; then
   R_SMOKE_LIB="$T/lib" "$R" --vanilla -s -e '

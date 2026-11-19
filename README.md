@@ -57,7 +57,8 @@ r-zig-build-tools and r-zig-extras):
 pixi add r-zig-toolchain
 ```
 
-- `r-zig-compilers` (zig 0.17, LLVM flang 23.1.5, OpenMP) alone installs
+- `r-zig-compilers` (zig 0.17, LLVM flang 23.1.5, OpenMP; on linux also
+  gcc's libstdc++ headers, from libstdcxx-devel_linux-*) alone installs
   packages that have no configure script and whose Makevars only sets
   variables. It also compiles such code at run time (`R CMD SHLIB`:
   Rcpp's `sourceCpp()`, inline, TMB, knitr's engines) with no make: R
@@ -339,9 +340,13 @@ pip install 'ziglang>=0.17.1,<0.17.2'
 pip install --no-index --find-links dist/wheel r-zig-toolchain
 ```
 
-ziglang is an upstream zig build, which links its own libc++ statically,
-so compiled C++ packages need no C++ runtime (with conda-forge's zig,
-which would link conda's shared libc++, rzig keeps it static). Linux
+ziglang is an upstream zig build. On macOS it links its own libc++
+statically, so compiled C++ packages need no C++ runtime (with
+conda-forge's zig, which would link conda's shared libc++, rzig keeps
+it static). On linux C++ uses gcc's libstdc++: the headers come with
+r-zig-compilers, and packages need R's lib/libstdc++.so.6, which libR
+loads (`.github/devdocs/CXX-STDLIB.md`). On linux, r-zig with ziglang
+alone compiles C but not C++. Linux
 wheels are `manylinux2014` (glibc 2.17). PyPI has no Fortran compiler,
 and the wheels have no OpenMP: packages with Fortran sources need LLVM
 `flang` on PATH, and R's FC, rzig's `zig-fc`, stops with a message when
@@ -422,7 +427,7 @@ them:
 ```bash
 sha256sum -c R-4.6.2-slim-linux-64.tar.gz.sha256
 tar -xzf R-4.6.2-slim-linux-64.tar.gz           # R-4.6.2-zig/
-tar -xJf R-4.6.2-linux-64-compilers.tar.xz      # + R-4.6.2-zig/lib/R/bin/toolchain/zig/, flang/ and openmp/
+tar -xJf R-4.6.2-linux-64-compilers.tar.xz      # + R-4.6.2-zig/lib/R/bin/toolchain/zig/, flang/, openmp/ and (linux) libstdcxx/
 tar -xzf R-4.6.2-linux-64-build-tools.tar.gz    # + R-4.6.2-zig/lib/R/bin/toolchain/usr/bin/make
 tar -xzf R-4.6.2-linux-64-extras.tar.gz         # + R-4.6.2-zig/lib/R/bin/toolchain/cmake/
 tar -xzf R-4.6.2-slim-linux-64-recommended.tar.gz  # + R-4.6.2-zig/lib/R/library/{MASS,Matrix,...}/

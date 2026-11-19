@@ -612,14 +612,16 @@ fn shlibIn(ctx: *Ctx, args: Args, r_home: []const u8, cwd: []const u8, stdout: *
         .shlib = .{ .files = files, .output = output, .pkg_libs = args.pkg_libs },
     });
     var fortran = false;
+    var cxx = false;
     for (files) |f| if (pkgplan.langOf(f)) |l| {
         if (l == .f or l == .f9x) fortran = true;
+        if (l == .cxx) cxx = true;
     };
     if (d.tier == .make) {
         if (args.dry_run or args.plan_only) return needsMake(ctx, output, d.reason);
         // what make would need: when a group is missing, every missing
         // group's text, and R does not run make (open point F a)
-        const res = try check.groupsFor(ctx, output, d.reason, fortran);
+        const res = try check.groupsFor(ctx, output, d.reason, fortran, cxx);
         if (res.code != 0) return res.code;
         return needsMake(ctx, output, d.reason);
     }
@@ -635,7 +637,7 @@ fn shlibIn(ctx: *Ctx, args: Args, r_home: []const u8, cwd: []const u8, stdout: *
     }
     // the compilers check the install preflight (patch 0009) makes for a
     // package, which R CMD SHLIB has none of [shlib-r-2]
-    const comp = try check.shlibCompilers(ctx, output, fortran);
+    const comp = try check.shlibCompilers(ctx, output, fortran, cxx);
     if (comp != 0) return comp;
     Io.Dir.cwd().createDirPath(ctx.io, out_dir) catch |err| {
         ctx.warn("cannot create {s}: {t}", .{ out_dir, err });

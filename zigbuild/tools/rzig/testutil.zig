@@ -90,6 +90,26 @@ pub const Fixture = struct {
     }
 };
 
+/// libstdc++'s headers as libstdcxx-devel lays them out, in the tree
+/// <root>/<sub>: lib/gcc/<triple>/<version>/include/c++/<triple>/
+/// (libstdcxx.zig, linux's C++).
+pub fn libstdcxx(f: *Fixture, sub: []const u8, version: []const u8) !void {
+    const triple: []const u8 = switch (f.ctx.arch) {
+        .x86_64 => "x86_64-conda-linux-gnu",
+        .aarch64 => "aarch64-conda-linux-gnu",
+    };
+    try f.tmp.dir.createDirPath(testing.io, f.fmt("{s}/lib/gcc/{s}/{s}/include/c++/{s}", .{ sub, triple, version, triple }));
+}
+
+/// libstdc++'s headers and its runtime (lib/libstdc++.so.6 and
+/// lib/libgcc_s.so.1) in the tree <root>/<sub>: what every linux C++
+/// command needs (libstdcxx.zig).
+pub fn libstdcxxEnv(f: *Fixture, sub: []const u8) !void {
+    try libstdcxx(f, sub, "15.3.0");
+    try f.touch(f.fmt("{s}/lib/libstdc++.so.6", .{sub}));
+    try f.touch(f.fmt("{s}/lib/libgcc_s.so.1", .{sub}));
+}
+
 pub fn expectArgs(expected: Args, actual: Args) !void {
     errdefer std.debug.print("expected: {f}\nactual:   {f}\n", .{ fmtArgs(expected), fmtArgs(actual) });
     try testing.expectEqual(expected.len, actual.len);

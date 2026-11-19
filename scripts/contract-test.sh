@@ -56,6 +56,8 @@
 # each one.
 # (The R programs are written to files, not passed with -e: see below.)
 . "$(dirname "$0")/env.sh"
+# stdcxx_wrong, elf_needed: the linux C++ runtime checks
+. "$(dirname "$0")/verify-helpers.sh"
 
 if [ "$OS" = windows ]; then
   # R_TEST_R_BIN: test a different build's Rscript.exe (e.g. the zig-build
@@ -140,6 +142,15 @@ cat > "$LIB/contract.R" <<'RCODE'
   .libPaths(lib)
   library(Rcpp); library(data.table); library(minqa); library(quadprog); library(pak); library(ps)
   stopifnot(evalCpp("2 + 2") == 4)
+  # a C++ exception thrown and caught in a sourceCpp library; linux (one
+  # shared C++ standard library for all packages, libstdc++,
+  # feat-linux-libstdcxx): also a std::string through Rcpp's callable
+  # demangle (routines.h's global demangle()), from a sourceCpp library
+  # into Rcpp.so. On macOS and Windows each .so has its own static
+  # libc++, so that crossing is not this test's (not run there)
+  f <- cppFunction('int f(int x) { if (x < 0) throw std::range_error("neg"); return x; }')
+  stopifnot(inherits(try(f(-1L), silent = TRUE), "try-error"))
+  if (Sys.info()[["sysname"]] == "Linux") stopifnot(identical(evalCpp('demangle(typeid(int).name())'), "int"))
   dt <- data.table(g = rep(1:3, 4), x = 1:12)
   stopifnot(identical(dt[, sum(x), by = g][[2]], c(22L, 26L, 30L)))
   # OpenMP proof, machine-independent: data.table prints "OpenMP version"
@@ -279,6 +290,17 @@ else
   [ -z "$fl" ] || ln -s "$fl" "$NM/bin/flang"
   nm_env=(HOME="$NM/home" TMPDIR="$NM/tmp" PATH="$NM/bin" ZIG_BIN="$ZIG"
     ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" R_LIBS="$LIB")
+  # linux: C++ needs libstdc++'s headers, the compilers group's as zig
+  # and flang are (feat-linux-libstdcxx); the base has none. They come
+  # through R_ZIG_EXTRA_ENV, a directory that holds only the env's
+  # lib/gcc (where rzig looks for them): no include/ and no conda-meta,
+  # so no -I and no rpath into the env, and a package that reaches into
+  # the env still fails here. The runtime is the base's lib/.
+  if [ "$OS" = linux ]; then
+    mkdir -p "$NM/cxxenv/lib"
+    ln -s "${CONDA_PREFIX:?run it through pixi, for the libstdc++ headers of the env}/lib/gcc" "$NM/cxxenv/lib/gcc"
+    nm_env+=(R_ZIG_EXTRA_ENV="$NM/cxxenv")
+  fi
 fi
 test -x "$base_rscript" || { echo "error: no base tree at $R_HOME_DIR: run 'pixi run build'" >&2; exit 1; }
 test ! -e "$R_HOME_DIR/bin/toolchain/usr" || { echo "error: $R_HOME_DIR/bin/toolchain has usr/: not the base alone" >&2; exit 1; }
@@ -419,20 +441,32 @@ if [ -n "${R_ZIG_EXTRA_ENV:-}" ]; then
   fi
   echo "rzig environments: $own, then $extra (R_ZIG_EXTRA_ENV): -L and headers after the caller's arguments, rpath into conda envs only: OK"
 fi
-# Static libc++ everywhere (decided 2026-09-30): no compiled package may
+# macOS: static libc++ (decided 2026-09-30): no compiled package may
 # depend on a shared C++ runtime. zig links its own libc++ statically, but
 # conda-forge's zig switches to a shared one whenever a libc++ sits beside
-# it (always in a macOS conda env; on linux with any `libcxx` package);
-# rzig (R_HOME/bin/toolchain's zig-cc and zig-cxx) defeats that with a
-# ZIG_LIB_DIR mirror.
-if [ "$OS" = linux ] || [ "$OS" = macos ]; then
+# it (always in a macOS conda env); rzig (R_HOME/bin/toolchain's zig-cc
+# and zig-cxx) defeats that with a ZIG_LIB_DIR mirror.
+# linux: gcc's libstdc++ for all C++ (feat-linux-libstdcxx): no package
+# needs libc++ or leaves a std::__1 (libc++) symbol undefined, and the C++
+# ones (Rcpp, minqa) need libstdc++.so.6, R's runtime.
+if [ "$OS" = linux ]; then
+  bad=""
+  for so in "$LIB"/*/libs/*.so; do
+    w="$(stdcxx_wrong "$so")"
+    [ -z "$w" ] || bad="$bad ${so#$LIB/}($w)"
+  done
+  for p in Rcpp minqa; do
+    elf_needed "$LIB/$p/libs/$p.so" | grep -qx 'libstdc++\.so\.6' || bad="$bad $p/libs/$p.so(no libstdc++.so.6)"
+  done
+  if [ -n "$bad" ]; then
+    echo "error: compiled packages' C++ runtime is not libstdc++ alone:$bad" >&2
+    exit 1
+  fi
+  echo "C++ runtime: libstdc++ in every compiled C++ package (Rcpp, minqa), no libc++"
+elif [ "$OS" = macos ]; then
   shared_cxx=""
   for so in "$LIB"/*/libs/*.so; do
-    if [ "$OS" = linux ]; then
-      hit="$(patchelf --print-needed "$so" 2>/dev/null | grep -E '^lib(c\+\+|stdc\+\+)\.so' || true)"
-    else
-      hit="$(otool -L "$so" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -E '(^|/)lib(c\+\+|stdc\+\+)[.0-9]*\.dylib$' || true)"
-    fi
+    hit="$(otool -L "$so" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -E '(^|/)lib(c\+\+|stdc\+\+)[.0-9]*\.dylib$' || true)"
     [ -z "$hit" ] || shared_cxx="$shared_cxx ${so#$LIB/}->$hit"
   done
   if [ -n "$shared_cxx" ]; then

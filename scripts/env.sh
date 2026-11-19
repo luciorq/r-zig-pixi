@@ -103,7 +103,8 @@ RECOMMENDED_PREFIX="${R_RECOMMENDED_PREFIX:-$ROOT/dist/recommended/$FLAVOR/$TOP}
 R_HOME_DIR="$PREFIX/$RH"
 # The toolchain groups (feat-standalone-toolchain B38) and the directories
 # under R_HOME/bin/toolchain each one holds (B20, B23, B24): compilers,
-# zig/ (upstream zig, B4), flang/ (flang-zig, B9) and openmp/; build-tools,
+# zig/ (upstream zig, B4), flang/ (flang-zig, B9), openmp/ and on linux
+# libstdcxx/ (libstdc++'s C++ headers, feat-linux-libstdcxx); build-tools,
 # usr/ and Windows' etc/ (MSYS's mount table, phase 7); Windows'
 # binutils are rzig's own names since feat-win-zig-binutils, the base's;
 # extras, cmake/ (Kitware's cmake release archive: bin/cmake and
@@ -113,7 +114,7 @@ R_HOME_DIR="$PREFIX/$RH"
 TOOLCHAIN_GROUPS="compilers build-tools extras"
 group_dirs() {
   case "$1" in
-    compilers) echo "zig flang openmp" ;;
+    compilers) echo "zig flang openmp libstdcxx" ;;
     build-tools) echo "usr etc" ;;
     extras) echo "cmake" ;;
     *) echo "error: no toolchain group named '$1'" >&2; return 1 ;;
