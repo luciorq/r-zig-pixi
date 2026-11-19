@@ -151,7 +151,8 @@ exports_of() {
   esac | LC_ALL=C sort
 }
 # rzig's command lines from a traced install log, normalised (see the
-# header) and sorted: its self, environment and cache lines and a
+# header) and sorted: the variables rzig set for zig before its line
+# (ZIG_LIB_DIR=, Windows' _LINK_=, quoted or not), its self, environment and cache lines and a
 # `--version` word (the make path's compiler probes; a
 # -Wl,--version-script= stays) left out; a path keeps its flag's prefix
 # (-I, -L, -Wl,<words>, and --<option>=, also after -Wl,) and its file
@@ -161,7 +162,7 @@ argv_of() {
   tr -d '\r' < "$1" \
     | grep -E '^(zig-cc|zig-cxx|zig-fc): ' \
     | grep -v -E -- '^zig-(cc|cxx|fc): (self|environment|cache) |(^| )--version( |$)' \
-    | sed -E 's/^(zig-(cc|cxx|fc): )ZIG_LIB_DIR=[^ ]+ /\1/' \
+    | sed -E "s/^(zig-(cc|cxx|fc): )(([A-Z_]+)=('[^']*'|[^ ]*) )+/\\1/" \
     | tr -d "'\"" \
     | sed -E 's#(^| )(-[IL]|-Wl,([^ ,]*,)*(--?[A-Za-z-]+=)?|--?[A-Za-z-]+=)?[^ ]*[\\/]([^\\/ ]+)#\1\2\5#g; s/ -Xlinker -install_name -Xlinker [^ ]+//; s/[^ ]*\.def( |$)/X.def\1/' \
     | LC_ALL=C sort

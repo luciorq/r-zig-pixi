@@ -62,6 +62,21 @@
 //!                      pixi.toml sets it to the pixi env for dev and test
 //!                      runs; a standalone R plus an env of libraries is
 //!                      the other use.
+//!   R_ZIG_FALLBACK_SOFT=<dir>  Windows on ARM only (an aarch64 R; ignored
+//!                      elsewhere, with a warning): a static library tree
+//!                      searched after every environment, for what none
+//!                      has: -idirafter <dir>/include, -L<dir>/lib, never
+//!                      -I and never OpenMP's provider. CRAN's Rtools45
+//!                      aarch64-w64-mingw32.static.posix (stress.R sets
+//!                      it); never R's LOCAL_SOFT, whose -I breaks libc++
+//!                      compiles. RZIG_TRACE marks it `(fallback)`.
+//!   _LINK_             rzig puts /OPT:NOICF first in it for zig on every
+//!                      Windows image link (windows.noIcf, lld's ICF off,
+//!                      finding 35); the caller's words follow.
+//!                      RZIG_TRACE shows it before zig's line, as
+//!                      `_LINK_=<value> `; RZIG_PRINT_ARGV does not print
+//!                      it, so dry runs cannot see it (verify-bundle.sh's
+//!                      traced Windows link checks it).
 //!   RZIG_TRACE=1       print the command rzig runs to stderr (one line,
 //!                      shell-quoted, a response file's words in place of
 //!                      its @file), then run it: R CMD INSTALL's log
@@ -70,7 +85,8 @@
 //!                      children (tier1.zig, also tier 2's `rzig t1`), so
 //!                      the line shows after the command rzig build echoed,
 //!                      as under make. Before it: `self <path>`, each
-//!                      `environment <dir>`, and `cache <dir>`, rzig's
+//!                      `environment <dir>` (`(conda)` or `(fallback)`
+//!                      after it), and `cache <dir>`, rzig's
 //!                      cache (cache.zig's root; `(none)` without one),
 //!                      where the harnesses look for what it wrote.
 //!   RZIG_KEEP_ROOT=1   rzig build: keep the build root (the plan, the
@@ -344,7 +360,7 @@ pub fn main(init: std.process.Init) !u8 {
         // what the environment rule saw: this binary's path, and the
         // environments it chose (environment.zig)
         ctx.warn("self {s}", .{ctx.self_exe orelse "(unknown)"});
-        for (try environment.list(&ctx)) |e| ctx.warn("environment {s}{s}", .{ e.dir, if (e.conda) " (conda)" else "" });
+        for (try environment.list(&ctx)) |e| ctx.warn("environment {s}{s}", .{ e.dir, if (e.conda) " (conda)" else if (e.fallback) " (fallback)" else "" });
         // and its cache: an empty cache where a harness looks says
         // nothing unless this is the directory (verify-helpers.sh's
         // rzig_cache_odd)
@@ -355,15 +371,21 @@ pub fn main(init: std.process.Init) !u8 {
         ctx.warn("cache {s}", .{cache_root});
         for (blocks.items) |b| {
             const lib_dir = if (env_changed and b.zig) try ctx.fmt("ZIG_LIB_DIR={f} ", .{shellQuoted(env.get("ZIG_LIB_DIR") orelse "")}) else "";
+            // the variables rzig set for zig (windows.noIcf's _LINK_)
+            var set: []const u8 = "";
+            if (b.zig) for (ctx.env_set.items) |n| {
+                set = try ctx.fmt("{s}{s}={f} ", .{ set, n, shellQuoted(env.get(n) orelse "") });
+            };
             // a response file's words in its place, as zig reads it: rzig
             // build's links name their objects in one (response.zig), and
             // the line shows them as make's link does
-            ctx.warn("{s}{f}", .{ lib_dir, shellCommand(try response.expand(&ctx, b.argv)) });
+            ctx.warn("{s}{s}{f}", .{ lib_dir, set, shellCommand(try response.expand(&ctx, b.argv)) });
         }
     }
+    const zig_env = env_changed or ctx.env_set.items.len > 0;
     return switch (cmd) {
-        .steps => |st| runSteps(&ctx, blocks.items, st.tmp, if (env_changed) env else null),
-        else => run(&ctx, blocks.items[0].argv, if (env_changed) env else null),
+        .steps => |st| runSteps(&ctx, blocks.items, st.tmp, if (zig_env) env else null),
+        else => run(&ctx, blocks.items[0].argv, if (zig_env) env else null),
     };
 }
 

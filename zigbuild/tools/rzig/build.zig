@@ -15,6 +15,10 @@ pub fn build(b: *std.Build) void {
     const steps = add(b, b.path("."), target, optimize, r_version);
     b.getInstallStep().dependOn(&b.addInstallBinFile(steps.bin, if (target.result.os.tag == .windows) "rzig.exe" else "rzig").step);
     if (steps.object) |o| b.getInstallStep().dependOn(&b.addInstallBinFile(o.file, o.name).step);
+    // the link object alone, for -Dtarget: link-objects-test.sh's Windows
+    // links (a cross-build of rzig itself takes minutes)
+    const ob = b.step("object", "Install rzig's link object for -Dtarget, without rzig");
+    if (steps.object) |o| ob.dependOn(&b.addInstallBinFile(o.file, o.name).step);
     const t = b.step("test", "Run rzig's unit tests");
     t.dependOn(&b.addRunArtifact(steps.tests).step);
     // the unit tests as a program for -Dtarget, to copy to and run on
@@ -93,7 +97,9 @@ pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTar
 /// finalization object of shared libraries (dso_fini.zig), on x86_64
 /// Windows cfguard.o, the Control Flow Guard stub (cfguard.zig), and on
 /// aarch64 Windows clear_cache.o, the instruction-cache flush
-/// (clear_cache.zig). None on macOS, which needs none. Each is compiled
+/// (clear_cache.zig). aarch64 Windows needs no CFG object: clang's ARM64
+/// CFG calls only __guard_check_icall_fptr, and zig's libmingw32 defines
+/// it there (link-objects-test.sh). None on macOS, which needs none. Each is compiled
 /// from objects/<name>.zig with the zig that runs this build, for the
 /// baseline CPU, ReleaseSmall and stripped: no debug information, so no
 /// build path (C compiled for Windows carries CodeView's object-name

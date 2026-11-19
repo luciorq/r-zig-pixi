@@ -4,6 +4,7 @@ const std = @import("std");
 const mem = std.mem;
 const Ctx = @import("Ctx.zig");
 const cmdline = @import("cmdline.zig");
+const environment = @import("environment.zig");
 const Args = cmdline.Args;
 
 /// zig's MinGW `-l` search tries only <n>.dll, <n>.lib and lib<n>.a. It
@@ -12,10 +13,15 @@ const Args = cmdline.Args;
 /// name the file when only a missed name exists. MinGW's library names
 /// zig has no import library for under that name are renamed first
 /// (mingw_names). Also the -mwindows libraries. (-lgfortran and
-/// -lquadmath are flang's runtime by now: flang_rt.zig.)
+/// -lquadmath are flang's runtime by now: flang_rt.zig.) Not in
+/// R_ZIG_FALLBACK_SOFT's lib/: the tree is static, and its import
+/// libraries (libomp.dll.a, libboost_*-mt-a64.dll.a, libeigen_blas.dll.a)
+/// are for DLLs it does not install. Such an -l then fails the link, not
+/// the DLL's load.
 pub fn libs(ctx: *Ctx, args: Args) !Args {
     const a = ctx.arena;
     const dirs = try cmdline.libDirs(a, args);
+    const tree = if (try environment.fallback(ctx)) |e| try ctx.fmt("{s}/lib", .{e.dir}) else null;
     var out: std.ArrayList([]const u8) = .empty;
     for (args) |x| {
         var name = cmdline.flagValue(x, "-l") orelse {
@@ -27,7 +33,7 @@ pub fn libs(ctx: *Ctx, args: Args) !Args {
             name = n;
             l = try ctx.fmt("-l{s}", .{n});
         }
-        try out.append(a, (try importLib(ctx, dirs.items, name)) orelse l);
+        try out.append(a, (try importLib(ctx, dirs.items, name, tree)) orelse l);
     }
     // GNU gcc's -mwindows also links the GDI/shell set; zig only sets the
     // subsystem. gnuwin32's makefiles rely on the implicit libraries.
@@ -143,6 +149,42 @@ pub fn implib(ctx: *Ctx, args: Args) !Args {
     return ctx.arena.dupe([]const u8, &.{ "-Xlinker", try ctx.fmt("--out-implib={s}", .{lib}) });
 }
 
+/// lld's identical code folding (ICF) off on a link: `/OPT:NOICF` in
+/// _LINK_, which lld-link reads as words of its command line (as MSVC's
+/// link.exe does), before zig's own. zig cc turns ICF on for every
+/// Windows link with -s, R's DLLFLAGS: it gives lld no -DEBUG then, and
+/// lld's default without -DEBUG is /OPT:REF,ICF. ICF reads each object's
+/// .llvm_addrsig, and the r-windows clang-aarch64 and clang-x86_64
+/// freetype bundles' have a symbol index past the symbol table, so
+/// textshaping's and ragg's links stopped: "invalid symbol index in
+/// addrsig section" (chore-release-11 finding 35; reproduced with a
+/// cross link from linux, both arches). zig cc takes no /OPT: from -Wl,
+/// or -Xlinker ("unsupported linker arg"), so the environment is the way
+/// in. Little is lost: in a png+zlib C DLL and in a small C++ DLL of
+/// templates (std::vector, std::map, std::sort), both arches, both zigs
+/// 0.17.1, ICF folded no function (lld's /VERBOSE), and the DLLs were
+/// the same size with and without it; on aarch64 it merged one string
+/// constant. Not checked on a large C++ package. Off, it also cannot fold two functions whose addresses a package
+/// compares. -s keeps lld's /OPT:REF, which -g would drop with ICF. A
+/// _LINK_ of the caller's comes after, so its own /OPT:ICF still wins.
+/// lld-link reads LINK too: it puts _LINK_'s words first, then LINK's,
+/// then zig's arguments, and the last /OPT: wins. So a LINK=/OPT:ICF of
+/// the caller's also turns ICF back on; rzig leaves LINK alone (checked
+/// with zig 0.17.1 and _LINK_="/OPT:NOICF /VERBOSE" LINK=/OPT:ICF: lld's
+/// "Command line: lld-link /OPT:NOICF /VERBOSE /OPT:ICF -lldmingw ...",
+/// and the addrsig error again; feat-winarm-gaps).
+pub fn noIcf(ctx: *Ctx) !void {
+    const old = ctx.getenv(link_env);
+    if (old) |v| {
+        var it = mem.tokenizeAny(u8, v, " \t");
+        while (it.next()) |w| if (std.ascii.eqlIgnoreCase(w, no_icf)) return;
+    }
+    try ctx.env.put(link_env, if (old) |v| try ctx.fmt("{s} {s}", .{ no_icf, v }) else no_icf);
+    try ctx.env_set.append(ctx.arena, link_env);
+}
+pub const link_env = "_LINK_";
+pub const no_icf = "/OPT:NOICF";
+
 /// MinGW gcc writes `-c a.c` without `-o` to a.o; zig writes a.obj, its
 /// COFF default. Packages compile that way and then name the .o (stress
 /// round 1, Z7: QuickJSR runs `$(R_CC) ... -c libquickjs.c`, then `ar -rs
@@ -173,16 +215,18 @@ pub fn objSuffix(ctx: *Ctx, args: Args) !Args {
 }
 
 /// GNU ld's order in each directory, against what zig finds by itself.
-fn importLib(ctx: *Ctx, dirs: Args, name: []const u8) !?[]const u8 {
+/// No import library from the fallback tree's lib/ (`tree`).
+fn importLib(ctx: *Ctx, dirs: Args, name: []const u8, tree: ?[]const u8) !?[]const u8 {
     for (dirs) |d| {
+        const imports = if (tree) |t| !std.ascii.eqlIgnoreCase(d, t) else true;
         const dll_a = try ctx.fmt("{s}/lib{s}.dll.a", .{ d, name });
-        if (ctx.isFile(dll_a)) return dll_a;
+        if (imports and ctx.isFile(dll_a)) return dll_a;
         // zig will find these itself
         if (ctx.isFile(try ctx.fmt("{s}/{s}.dll", .{ d, name })) or
             ctx.isFile(try ctx.fmt("{s}/{s}.lib", .{ d, name })) or
             ctx.isFile(try ctx.fmt("{s}/lib{s}.a", .{ d, name }))) return null;
         const lib_lib = try ctx.fmt("{s}/lib{s}.lib", .{ d, name });
-        if (ctx.isFile(lib_lib)) return lib_lib;
+        if (imports and ctx.isFile(lib_lib)) return lib_lib;
     }
     return null;
 }
@@ -282,6 +326,26 @@ test "implib: <output>.rzig.lib through -Xlinker, to delete; none over the calle
         &.{ "-shared", "a.o", "-o" },
     }) |args| try expectArgs(&.{}, try implib(c, args));
     try testing.expectEqual(0, c.discard.items.len);
+}
+
+test "noIcf: /OPT:NOICF first in _LINK_, the caller's words kept after it, once" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    try noIcf(c);
+    try testing.expectEqualStrings("/OPT:NOICF", c.env.get("_LINK_").?);
+    try testing.expectEqual(1, c.env_set.items.len);
+    // already there (a nested rzig): left as it is
+    try c.env.put("_LINK_", "/verbose /opt:noicf");
+    c.env_set = .empty;
+    try noIcf(c);
+    try testing.expectEqualStrings("/verbose /opt:noicf", c.env.get("_LINK_").?);
+    try testing.expectEqual(0, c.env_set.items.len);
+    // the caller's own, after ours
+    try c.env.put("_LINK_", "/OPT:ICF");
+    try noIcf(c);
+    try testing.expectEqualStrings("/OPT:NOICF /OPT:ICF", c.env.get("_LINK_").?);
 }
 
 test "objSuffix: gcc's .o for -c without -o" {

@@ -1,7 +1,7 @@
 //! Windows links: the Control Flow Guard symbol zig's MinGW runtime lacks
 //! (stress round 2, Z11). Code compiled with CFG (clang -mguard=cf, MSVC
 //! /guard:cf, Rust's windows-gnullvm std) calls through
-//! __guard_dispatch_icall_fptr. mingw-w64 defines that pointer in
+//! __guard_dispatch_icall_fptr on x86_64. mingw-w64 defines that pointer in
 //! cfguard/mingw_cfguard_support.c and its target,
 //! __guard_dispatch_icall_dummy (a `jmp *%rax`), in cfguard/guard_dispatch.S.
 //! zig 0.16 (conda-forge's and upstream's) builds libmingw32 from the .c
@@ -24,7 +24,13 @@
 //! member never pulls that member, as the symbol is already defined. The
 //! code is x86_64's: R's build makes no cfguard.o for another
 //! architecture, and on Windows on ARM rzig adds clear_cache.o in its
-//! place (clear_cache.zig, compiler.zig).
+//! place (clear_cache.zig, compiler.zig). ARM64 needs no stub. clang's
+//! ARM64 CFG calls only __guard_check_icall_fptr (the target in x15), and
+//! zig's libmingw32 defines that pointer for aarch64
+//! (mingw_cfguard_support.c), aimed at a function that only returns. Such
+//! a link works and checks nothing: a MinGW image has no load config, so
+//! CFG is not enforced, as on x86_64. link-objects-test.sh checks both
+//! arches (feat-winarm-gaps).
 //!
 //! The symbol is excluded from lld's MinGW auto-export (a DLL with no .def
 //! file and no dllexport exports every global symbol), with the

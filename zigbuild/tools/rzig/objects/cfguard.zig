@@ -5,7 +5,8 @@
 //! convention's argument, so the body is the one instruction, in a naked
 //! function. Not auto-exported from a DLL. R's build compiles this file
 //! alone into R_HOME/bin/toolchain/cfguard.o (../build.zig's
-//! linkObject), x86_64 only, stripped.
+//! linkObject), x86_64 only, stripped: on aarch64 the check pointer is
+//! libmingw32's own, and there is no dispatch pointer.
 
 fn guardDispatchIcallDummy() callconv(.naked) noreturn {
     asm volatile ("jmp *%%rax");

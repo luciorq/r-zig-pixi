@@ -96,6 +96,20 @@ T/abi-libstdcxx: zig c++ against the env's `libstdcxx-devel` 15.3.0.
 - **Accept the boundary**: leaves sf and terra, the base of R's spatial
   ecosystem, unusable on linux.
 
+## Windows on ARM: the Rtools45 tree
+
+stress.R uses CRAN's Rtools45 aarch64 toolchain-libs tree on Windows on ARM
+for the libraries conda-forge lacks there (stress/README.md,
+feat-winarm-gaps). That tree is LLVM 19 libc++ (std::__1), as zig. Its C++
+libraries (GDAL, Magick++, oneTBB, libnlopt's StoGO) link with zig's clang
+22 libc++ and libc++abi from zig's cache: package-like DLLs cross-linked
+from linux, with both zigs (2026-11-18). So on win-arm64 GDAL's C++ API
+(gdalraster, terra, sf) may work, unlike win-64. Not checked: run time,
+C++ exceptions thrown in the tree's code and caught in zig's, and layout
+skew between LLVM 19's libc++ headers and zig's clang 22 libc++. win-64
+is not affected: conda-forge is MSVC there, and x86_64 Rtools is gcc's
+libstdc++.
+
 ## Deferred (no decision)
 
 - **Reusing conda-forge's R packages** (user, 2026-11-16: no design

@@ -283,6 +283,105 @@ the log.
   answered its decisions on 2026-10-09; this branch applies decisions 5
   to 9.
 
+## Windows on ARM: the Rtools45 fallback
+
+conda-forge has no win-arm64 build of gdal, hdf5, netcdf, gsl, gmp, mpfr,
+glpk, nlopt, udunits2, harfbuzz or libpq (chore-release-11 finding 26). CRAN's
+Rtools45 aarch64 "full" toolchain-libs tree has them. It is built with LLVM
+(libc++, UCRT), as zig builds packages, so its static C and C++ libraries
+link with zig's libc++. CRAN's own aarch64 builds use this tree. So on
+Windows on ARM stress.R uses it by default, and `--no-rtools-libs` turns it
+off (feat-winarm-gaps). If the tree cannot be made ready (a download or
+extraction failure, no pkgconf), the rows run without it and the report's
+`Fallback:` line says why. Elsewhere nothing changes.
+
+- **The file.** <https://cloud.r-project.org/bin/windows/Rtools/rtools45/files/rtools45-toolchain-libs-full-aarch64-6768.tar.zst>,
+  415437513 bytes, sha256
+  `64dceac9ecdd54aa85a209a0529f5a96c4b7898ae830c165d0d05bffa5e9e8b5`.
+  CRAN publishes no checksum, so stress.R pins its own and checks size and
+  sha256 (`tools::sha256sum`) before it uses the file. The "base" tarball
+  has none of these libraries; "full" is needed. Rtools45 aarch64 is likely
+  at its last build, so 6768 is pinned.
+- **The layout.** `build/rtools45/` in the checkout (`STRESS_RTOOLS_DIR`
+  moves it): the tarball, and `aarch64-w64-mingw32.static.posix/` with only
+  `include/`, `lib/`, `share/gdal` and `share/proj` (1.4 GB in about 30,000
+  files of the 2.86 GB tree). `cmake -E tar` extracts it (libarchive reads
+  zstd; R's `untar()` does not). When that fails, Windows 11's own tar
+  (`System32\tar.exe`, bsdtar) is tried; when both fail, the rows run
+  without the tree. Then `include-pinned/` and `lib/pkgconfig-closed/` are
+  written (below). Stamps skip each step the next time: the extraction is keyed on
+  the sha256, the `.pc` files also on the zig's version and lib directory
+  (upstream and conda-forge zig ship different MinGW `.def` sets). On gamma
+  (linux, 2026-11-18): about 1 min to extract and write the 451 `.pc`
+  files, 30 s to write them again for another zig, 2 s for a ready tree. In CI, stress.yaml caches only the tarball
+  (`actions/cache`, Windows ARM64 legs).
+- **Rule 1: `-idirafter` only.** rzig gets the tree as
+  `R_ZIG_FALLBACK_SOFT`: `-idirafter <tree>/include` and `-L<tree>/lib`
+  after every environment's, never `-I`, and never as the OpenMP provider
+  or for an import library (its `libomp.dll.a`, `libboost_*.dll.a` are for
+  DLLs it does not install: such an `-l` fails the link).
+  The tree's `include/` holds a whole MinGW-w64 sysroot and libc++ headers.
+  As an `-I` they break every C++ compile ("<cstddef> tried including
+  <stddef.h> but didn't find libc++'s <stddef.h> header"). So R's
+  `LOCAL_SOFT` is never set: its `-I"$(LOCAL_SOFT)/include"` is that `-I`.
+  CMake's find_* see the tree too, after the environments (an aarch64 R's
+  `etc/r-zig.cmake`).
+- **Rule 2: closed `.pc` files.** The tree's `.pc` files are static only
+  (everything in Libs.private and Requires.private). stress.R writes a
+  closed copy of each: the module's whole static closure, resolved in the
+  tree alone with the build-tools group's pkgconf (`--static`), with no
+  Requires, each archive named by its path, and MinGW's system libraries
+  and the runtime names left as `-l`. conda-forge's pkg-config 0.29 cannot
+  do it (libgcrypt.pc: "Libs field occurs twice"). A module that names a
+  library the tree does not have as an archive (opencv's `-ltegra_hal`,
+  symphony's `-lSymAppl`) is skipped. Paths matter: the tree's libjpeg is
+  IJG 9, conda-forge's is libjpeg-turbo. Each closed `.pc` also has
+  `-I<tree>/include-pinned`: a copy of `include/` without the names zig
+  has (its MinGW, libc++, libc++abi, libunwind and own headers), without
+  `c++/` and without the OpenMP headers. Without it, a header both have
+  came from the env (rzig's `-idirafter` env before tree) while the tree's
+  archive linked: conda-forge's PROJ 9.9, GEOS 3.15, SQLite 3.54.1 and
+  libtiff 4.7.2 headers against the tree's 9.7.1, 3.14.1, 3.51.2 and 4.7.1
+  (a version check compiled on linux, 2026-11-18). With it, the tree's
+  headers win for every module asked through the closed `.pc` files.
+- **Rule 3: the tree's `.pc` files first.** `PKG_CONFIG_PATH` is the closed
+  `.pc` directory, then the env's. This gives the GDAL stack (gdal, geos,
+  proj) its archives and, through `include-pinned`, its headers from the
+  tree alone, and it avoids two conda-forge
+  win-arm64 `.pc` bugs: proj.pc says `-lproj_9` but only proj.lib ships,
+  and libcurl.pc names a build machine's `D:/bld/.../z.lib`. A module the
+  tree lacks still comes from the env. Every package that asks pkg-config
+  for a module both have (libxml-2.0, libcurl, freetype2, ...) now gets the
+  tree's static copy and headers on Windows on ARM. A package that links
+  an env library by a bare `-l` while it asks pkg-config for a tree module
+  gets the tree's header of that library: not checked.
+- **`R_TOOLS_SOFT` is the tree**, as CRAN's aarch64 LOCAL_SOFT: sf, terra
+  and gdalraster copy its `share/gdal` and `share/proj`, which match the
+  PROJ they link. Makevars that test `$(R_TOOLS_SOFT)/lib/lib<x>.a` take
+  their Rtools branch.
+- **The report** has a `Fallback:` line: the tarball, the start of its
+  sha256, the sysdeps the tree serves (they leave "Sysdeps missing"), and
+  whether rzig uses the tree. rzig's trace names it `environment <tree>
+  (fallback)`; an rzig without `R_ZIG_FALLBACK_SOFT` (build 11 and older)
+  ignores it, and the line says so.
+- **The expects.** The windows-aarch64 rows the tree should change are `?`
+  until a windows-11-arm run, with dated notes on the expected cause. Rows
+  that pass today may change too: the tree adds headers conda and zig's
+  MinGW lack (`dlfcn.h`, `regex.h`, `iconv.h`, `libintl.h`), which a
+  configure probe can now find.
+- **Licensing.** stress.R downloads the tarball from CRAN at run time, and
+  CI keeps it in a private Actions cache. r-zig never repackages or
+  redistributes it. The tree ships no per-library licence texts, and the
+  licences differ: gsl and glpk are GPL-3, gmp and mpfr LGPL-3+, nlopt
+  LGPL/MIT, hdf5 and netcdf BSD-style, gdal, proj and harfbuzz MIT, libpq
+  the PostgreSQL licence, oneTBB Apache-2.0. A package that links gsl or
+  glpk statically is a GPL combination, as on CRAN.
+- **Not verified on Windows.** Everything above ran on linux (cross links
+  with both zigs). Loading the DLLs, C++ exceptions across the tree's LLVM
+  19 libc++ and zig's clang 22 libc++, the tree's libomp import against
+  conda's libomp 23, pkgconf.exe with drive-letter paths, and cmake's zstd
+  on the runner are for the first windows-11-arm run.
+
 ## Notes and known issues
 
 - The `expect` column is a guess until a run confirms it. Update it with

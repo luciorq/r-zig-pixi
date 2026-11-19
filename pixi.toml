@@ -219,7 +219,8 @@ package-recommended = "bash scripts/package-standalone.sh recommended"
 hermetic = "bash scripts/hermetic-check.sh"
 # rzig, the compilers in R_HOME/bin/toolchain (zigbuild/tools/rzig/): its
 # unit tests here, and on linux the parity test against the bash shims in
-# toolchain/ for every OS's command lines. Needs no R build. With an
+# toolchain/ for every OS's command lines and link-objects-test.sh (Windows
+# links of CFG code with rzig's link objects). Needs no R build. With an
 # installed tree's prefix (`pixi run rzig-test dist/slim/R-4.6.2-zig`),
 # linux also runs smoke-test.sh against it: packages installed through
 # that tree's R CMD INSTALL, rzig build [tests-T12].
@@ -749,7 +750,9 @@ conda-publish = "rattler-build upload prefix --channel universe --skip-existing 
 # win-64"), and its x64 zig then compiled every package for x64 against
 # the arm64 tree (stress run 43773932212, chore-release-11 PLAN.md finding 26).
 # A library conda-forge lacks for a platform is left out there instead,
-# and stress.R reports it as missing from the env.
+# and stress.R reports it as missing from the env. On win-arm64 stress.R
+# takes most of them from CRAN's Rtools45 aarch64 tree by default
+# (stress/README.md, "Windows on ARM: the Rtools45 fallback").
 [feature.stress]
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64", "win-arm64"]
 

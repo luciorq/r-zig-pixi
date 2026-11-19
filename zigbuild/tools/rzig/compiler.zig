@@ -81,7 +81,8 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     const soname = try sonameFlag(ctx, args);
     const undefined_version = ctx.os == .linux and !cmdline.compileOnly(args) and cmdline.anyContains(args, "-version-script");
     const fini = if (ctx.os == .linux and dso_fini.wanted(args)) try linkObject(ctx, dso_fini.file, dso_fini.consequence) else null;
-    // Windows: the CFG stub is x86_64 code, the cache flush aarch64's
+    // Windows: the CFG stub is x86_64 code, the cache flush aarch64's;
+    // aarch64 CFG needs no stub (cfguard.zig)
     const cfg = if (ctx.os == .windows and cfguard.wanted(args)) switch (ctx.arch) {
         .x86_64 => try linkObject(ctx, cfguard.file, cfguard.consequence),
         .aarch64 => try linkObject(ctx, clear_cache.file, clear_cache.consequence),
@@ -99,6 +100,9 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
         if (cfguard.wanted(args)) {
             args = try windows.noLtoLink(ctx, args);
             implib = try windows.implib(ctx, args);
+            // lld's ICF off (finding 35): an environment variable, not
+            // an argument (windows.noIcf)
+            try windows.noIcf(ctx);
         }
     }
     if (ctx.os == .macos) {
@@ -161,8 +165,8 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     // on a command that does not link (--version, -print-*, a header's -o).
     if (strip_debug) try out.append(a, "-Wl,--strip-debug");
     if (fini) |o| try out.append(a, o);
-    // zig's MinGW runtime lacks __guard_dispatch_icall_dummy (stress
-    // round 2, Z11: magick's bundle; cfguard.zig), and its aarch64
+    // zig's MinGW runtime lacks x86_64's __guard_dispatch_icall_dummy
+    // (stress round 2, Z11: magick's bundle; cfguard.zig), and its aarch64
     // compiler_rt __clear_cache (finding 36: the same bundle's libffi;
     // clear_cache.zig)
     if (cfg) |o| try out.append(a, o);
@@ -384,6 +388,9 @@ const windows_headers_always = true;
 ///     SHLIB_OPENMP_CFLAGS; a second libomp would be a duplicate
 ///     LC_LOAD_DYLIB, which newer macOS dyld refuses to load. On Windows
 ///     windows.libs resolves it to libomp.lib.
+/// R_ZIG_FALLBACK_SOFT's tree (Windows on ARM) is the last environment:
+/// -idirafter only, and its -L after every other, so an environment's
+/// library of the same name wins; never the OpenMP provider.
 fn envFlags(ctx: *Ctx, args: Args) !Args {
     const a = ctx.arena;
     const envs = try environment.list(ctx);
@@ -652,6 +659,70 @@ test "Windows: -idirafter, no rpath, -lz and -lomp through the environment's -L"
         &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lomp" }),
     );
+}
+
+test "Windows on ARM: R_ZIG_FALLBACK_SOFT after every environment: -idirafter <tree>/include, -L<tree>/lib; an environment's library first" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    try decoy(&f);
+    const c = &f.ctx;
+    c.arch = .aarch64;
+    const a64 = target.zig(.windows, .aarch64).?;
+    try f.env.put("PATH", f.path("nothing"));
+    for ([_][]const u8{ "env/Library/include/zlib.h", "env/Library/lib/libomp.lib", "env/Library/lib/libz.dll.a", "env/Library/lib/R/bin/toolchain/gcc.exe", "env/Library/lib/R/bin/toolchain/clear_cache.o", "rtools/include/nlopt.h", "rtools/include/zlib.h", "rtools/include/omp.h", "rtools/lib/libnlopt.a", "rtools/lib/libz.a", "rtools/lib/libomp.dll.a" }) |p| try f.touch(p);
+    c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
+    try f.env.put("R_ZIG_FALLBACK_SOFT", f.path("rtools"));
+    const inc = f.path("env/Library/include");
+    const l = f.fmt("-L{s}", .{f.path("env/Library/lib")});
+    const rinc = f.path("rtools/include");
+    const rl = f.fmt("-L{s}", .{f.path("rtools/lib")});
+    const omp = f.path("env/Library/lib/libomp.lib");
+    const cc_o = f.path("env/Library/lib/R/bin/toolchain/clear_cache.o");
+    // never -I<tree>/include: its MinGW sysroot and libc++ headers would
+    // shadow zig's own
+    try expectArgs(&.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, "-c", "a.cpp", "-o", "a.o", "-idirafter", inc, "-idirafter", rinc }, try argv(c, .cxx, &.{ "-c", "a.cpp", "-o", "a.o" }));
+    // -lnlopt: only the tree has it (zig finds lib<n>.a); -lz and -lomp:
+    // the environment's (libz.dll.a and libomp.lib by path)
+    try expectArgs(
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", "-lnlopt", omp, f.path("env/Library/lib/libz.dll.a"), l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
+        try argv(c, .cxx, &.{ "-shared", "-o", "pkg.dll", "a.o", "-lnlopt", "-lomp", "-lz" }),
+    );
+    // conda-forge's real names: z.lib and libomp.lib in the environment,
+    // libz.a and libomp.dll.a in the tree. -lz is left to zig, which
+    // takes the environment's z.lib (the first -L, and its <n>.lib before
+    // lib<n>.a); a -fopenmp link gets the environment's libomp.lib, never
+    // the tree's import of a libomp.dll it does not install
+    try f.tmp.dir.deleteFile(testing.io, "env/Library/lib/libz.dll.a");
+    try f.touch("env/Library/lib/z.lib");
+    try f.touch("env/Library/include/omp.h");
+    try expectArgs(
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz", l, rl, "-idirafter", inc, "-idirafter", rinc, omp, "-lws2_32" },
+        try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz" }),
+    );
+    try testing.expectEqualStrings("", f.takeWarnings());
+    // an environment without llvm-openmp: no -lomp, not the tree's
+    try f.tmp.dir.deleteFile(testing.io, "env/Library/include/omp.h");
+    try f.tmp.dir.deleteFile(testing.io, "env/Library/lib/libomp.lib");
+    try expectArgs(
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
+        try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o" }),
+    );
+    // the caller's -lomp then, and -lboost_thread-mt-a64: never the
+    // tree's import libraries (for DLLs it does not install), so the
+    // link fails instead of the DLL's load
+    try f.touch("rtools/lib/libboost_thread-mt-a64.dll.a");
+    try expectArgs(
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", "-lomp", "-lboost_thread-mt-a64", l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
+        try argv(c, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", "-lomp", "-lboost_thread-mt-a64" }),
+    );
+    // the same import library in the environment's lib/: by path
+    try f.touch("env/Library/lib/libboost_thread-mt-a64.dll.a");
+    try expectArgs(
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", f.path("env/Library/lib/libboost_thread-mt-a64.dll.a"), l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
+        try argv(c, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", "-lboost_thread-mt-a64" }),
+    );
+    try testing.expectEqualStrings("", f.takeWarnings());
 }
 
 test "the toolchain's openmp/: headers on every call, -lomp on -fopenmp links, only with the base's libomp (B40)" {
@@ -1164,8 +1235,13 @@ test "Windows links: the CFG stub and the import library before the caller's arg
     );
     // what main.zig's run deletes after each link: the import libraries
     try expectArgs(&.{ "magick.dll.rzig.lib", "cmTC_1.exe.rzig.lib", "px.exe.rzig.lib" }, c.discard.items);
+    // and what it hands zig: lld's ICF off (finding 35), set once
+    try testing.expectEqualStrings("/OPT:NOICF", c.env.get("_LINK_").?);
+    try expectArgs(&.{"_LINK_"}, c.env_set.items);
     // compiles, windres' preprocessing, --version, a partial link
     c.discard = .empty;
+    _ = c.env.swapRemove("_LINK_");
+    c.env_set = .empty;
     for ([_]Args{
         &.{ "-c", "a.cpp", "-o", "a.o" },
         &.{ "-E", "-xc", "-DRC_INVOKED", "r.rc" },
@@ -1182,5 +1258,6 @@ test "Windows links: the CFG stub and the import library before the caller's arg
         try testing.expect(cmdline.anyWord(got, "-flto"));
     }
     try testing.expectEqual(0, c.discard.items.len);
+    try testing.expect(c.env.get("_LINK_") == null and c.env_set.items.len == 0);
     try testing.expectEqualStrings("", f.takeWarnings());
 }
