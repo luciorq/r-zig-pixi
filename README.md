@@ -574,3 +574,8 @@ release's plan is `.github/devdocs/chore-release-11/PLAN.md`;
 `.github/devdocs/feat-zig-build/`'s (milestone 5, 2026-07, the original
 build design that code comments cite), not the current work.
 
+## Licence
+
+MIT for this repository's build scaffolding; R (GPL-2.0-only OR GPL-3.0-only),
+the patches to R in `zigbuild/patches/` and the bundled third-party components
+keep their own licences. See the scope note in `LICENSE`.
