@@ -2,7 +2,8 @@
 //! info (stress round 2, Z10's residual; R2-3). zig builds its own libc++,
 //! libc++abi and libunwind with DWARF whatever the caller asks: 4 to 6 MB
 //! in every linux C++ package (fstcore, Rcpp, mlpack, duckdb, arrow),
-//! which compiler.zig's -g0 cannot reach. On macOS zig builds compiler_rt,
+//! which compiler.zig's -g0 cannot reach. (linux C++ now links gcc's
+//! libstdc++.so.6 instead, libstdcxx.zig; feat-linux-libstdcxx.) On macOS zig builds compiler_rt,
 //! libc++ and libc++abi with debug info, and its MachO linker writes a
 //! debug map for them into every library that pulls a member in (every
 //! C++ library; a C one through compiler_rt: a _Float16 conversion,
@@ -29,8 +30,9 @@
 //!
 //! What zig makes of the flag, with both zigs: zig cc reads
 //! -Wl,--strip-debug (and -Wl,-S) as its own strip option, the same as -s,
-//! on both OSes. On linux it links a libc++ it built without debug info
-//! (a second build in zig's cache) and strips fully: .symtab goes with the
+//! on both OSes. On linux it links what it builds (compiler_rt; libc++
+//! before feat-linux-libstdcxx) without debug info (a second build in
+//! zig's cache) and strips fully: .symtab goes with the
 //! .debug_* sections. .dynsym stays, so loading, dlsym, R's routines and
 //! exceptions work as before. That is what `R CMD INSTALL --strip` does on
 //! linux. It is not binutils' --strip-debug, which keeps .symtab. On macOS

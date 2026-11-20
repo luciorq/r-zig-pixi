@@ -28,7 +28,12 @@
 //!                             R runs by src/'s top level, either case of
 //!                             the f; Fortran a Makevars builds from a
 //!                             subdirectory stops later, at zig-fc, with
-//!                             the same text); and the build tools when the
+//!                             the same text); on linux libstdc++'s
+//!                             headers when C++ is compiled (the same
+//!                             tests with .cc, .cpp, .cxx, .C, and tier 2
+//!                             by src/'s top level: rpkg compiles C++; the
+//!                             compilers group's text; libstdcxx.zig,
+//!                             feat-linux-libstdcxx); and the build tools when the
 //!                             package needs make or R runs a configure
 //!                             script (R_ZIG_CONFIGURE=1, from install.R),
 //!                             with rzig's own reason in the failing line
@@ -99,6 +104,7 @@ const environment = @import("environment.zig");
 const find_zig = @import("find_zig.zig");
 const flang_rt = @import("flang_rt.zig");
 const groups = @import("groups.zig");
+const libstdcxx = @import("libstdcxx.zig");
 const pkgbuild = @import("pkgbuild.zig");
 const pkgplan = @import("pkgplan.zig");
 
@@ -130,8 +136,8 @@ pub const Result = struct {
 
 pub fn run(ctx: *Ctx, kind: Kind) !Result {
     return switch (kind) {
-        .compilers => compilers(ctx, false),
-        .fortran => compilers(ctx, true),
+        .compilers => compilers(ctx, false, false),
+        .fortran => compilers(ctx, true, false),
         .build_tools => buildTools(ctx),
         .extras => extras(ctx),
         .package => package(ctx),
@@ -143,8 +149,8 @@ fn fail(ctx: *Ctx, code: u8, what: []const u8, g: groups.Group) !Result {
     return .{ .code = code };
 }
 
-fn compilers(ctx: *Ctx, fortran: bool) !Result {
-    return switch (try compilersFound(ctx, fortran)) {
+fn compilers(ctx: *Ctx, fortran: bool, cxx: bool) !Result {
+    return switch (try compilersFound(ctx, fortran, cxx)) {
         .ok => |line| .{ .code = 0, .line = line },
         .missing => |what| fail(ctx, 127, what, .compilers),
         .not_r_zig => |what| fail(ctx, 1, try notRZig(ctx, what), .compilers),
@@ -154,11 +160,15 @@ fn compilers(ctx: *Ctx, fortran: bool) !Result {
 /// The compilers check, without its report: what it found (one line), a
 /// tool that is missing (127), or a zig that is not R's (1: another
 /// major.minor, no version, or it did not run), each as its line says it.
+/// `cxx` on linux: libstdc++'s headers too, which every C++ compile there
+/// needs (libstdcxx.zig; feat-linux-libstdcxx), so a C++ package stops
+/// here with the compilers group's text, not at its first compile.
 const CompilersFound = union(enum) { ok: []const u8, missing: []const u8, not_r_zig: []const u8 };
 
-fn compilersFound(ctx: *Ctx, fortran: bool) !CompilersFound {
+fn compilersFound(ctx: *Ctx, fortran: bool, cxx: bool) !CompilersFound {
     const zig = (try find_zig.find(ctx)) orelse return .{ .missing = groups.no_zig };
     const fc: ?[]const u8 = if (fortran) (try flang_rt.flang(ctx)) orelse return .{ .missing = groups.no_flang } else null;
+    const cxx_headers: ?[]const u8 = if (cxx and ctx.os == .linux) (try libstdcxx.headersDir(ctx)) orelse return .{ .missing = libstdcxx.no_headers } else null;
     // zig's command with the file found: python3's path for python3 -m ziglang
     const cmd = try mem.concat(ctx.arena, []const u8, &.{ &.{zig.file}, zig.argv[1..] });
     const shown = try display(ctx, try mem.join(ctx.arena, " ", cmd));
@@ -173,8 +183,10 @@ fn compilersFound(ctx: *Ctx, fortran: bool) !CompilersFound {
             return .{ .not_r_zig = try ctx.fmt("{s} is zig {s}, not R's zig {s}", .{ shown, version, groups.this.zig }) };
         }
     }
-    const line = try ctx.fmt("compilers ok: zig {s} at {s}", .{ if (v != null) version else "(version unknown)", shown });
-    return .{ .ok = if (fc) |p| try ctx.fmt("{s}; flang at {s}", .{ line, try display(ctx, p) }) else line };
+    var line = try ctx.fmt("compilers ok: zig {s} at {s}", .{ if (v != null) version else "(version unknown)", shown });
+    if (fc) |p| line = try ctx.fmt("{s}; flang at {s}", .{ line, try display(ctx, p) });
+    if (cxx_headers) |h| line = try ctx.fmt("{s}; libstdc++ headers at {s}", .{ line, h });
+    return .{ .ok = line };
 }
 
 /// A zig that is not R's, as the failing line says it: with how to skip
@@ -193,8 +205,8 @@ fn notRZig(ctx: *Ctx, what: []const u8) ![]const u8 {
 /// <why>" and 3, so R runs make as with no rzig build; without them, 1
 /// after the line and the compilers group's text. R_ZIG_NO_PREFLIGHT
 /// skips the version comparison, as for the preflight.
-pub fn shlibCompilers(ctx: *Ctx, label: []const u8, fortran: bool) !u8 {
-    return switch (try compilersFound(ctx, fortran)) {
+pub fn shlibCompilers(ctx: *Ctx, label: []const u8, fortran: bool, cxx: bool) !u8 {
+    return switch (try compilersFound(ctx, fortran, cxx)) {
         .ok => 0,
         .missing => |what| (try fail(ctx, 127, what, .compilers)).code,
         .not_r_zig => |what| if (try buildToolsFound(ctx) == .ok) blk: {
@@ -324,14 +336,24 @@ fn envValue(ctx: *const Ctx, name: []const u8) ?[]const u8 {
 /// OBJECTS rule compiles .f, .f90 and .f95; a package's own rules or its
 /// configure script may compile .F too).
 fn topLevelFortran(ctx: *Ctx, src_dir: []const u8) bool {
+    return topLevel(ctx, src_dir, &.{ ".f", ".F", ".f90", ".F90", ".f95", ".F95" });
+}
+
+/// The same test for C++ (R's default rules: .cc and .cpp; .cxx and .C
+/// too, which a package's own rules may compile): on linux the
+/// compilers check then wants libstdc++'s headers.
+fn topLevelCxx(ctx: *Ctx, src_dir: []const u8) bool {
+    return topLevel(ctx, src_dir, &.{ ".cc", ".cpp", ".cxx", ".C" });
+}
+
+/// A file in `src_dir`'s top level with one of `exts`.
+fn topLevel(ctx: *Ctx, src_dir: []const u8, exts: []const []const u8) bool {
     var d = std.Io.Dir.cwd().openDir(ctx.io, src_dir, .{ .iterate = true }) catch return false;
     defer d.close(ctx.io);
     var it = d.iterate();
     while (it.next(ctx.io) catch null) |entry| {
         if (entry.kind == .directory) continue;
-        const n = entry.name;
-        const exts = [_][]const u8{ ".f", ".F", ".f90", ".F90", ".f95", ".F95" };
-        for (exts) |e| if (mem.endsWith(u8, n, e)) return true;
+        for (exts) |e| if (mem.endsWith(u8, entry.name, e)) return true;
     }
     return false;
 }
@@ -398,10 +420,22 @@ fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
         .zig => false,
         .make, .r_only => topLevelFortran(ctx, src_dir),
     };
+    // C++ the same way (libstdc++'s headers on linux): tier 2's rpkg
+    // compiles C++ too, so src/'s top level there
+    const cxx = if (configure) topLevelCxx(ctx, src_dir) else switch (d.tier) {
+        .makevars => blk: {
+            var any = false;
+            for (d.plan.?.sources) |s| if (mem.eql(u8, s.lang, "cxx")) {
+                any = true;
+            };
+            break :blk any;
+        },
+        .zig, .make, .r_only => topLevelCxx(ctx, src_dir),
+    };
     // make, or a configure R runs: the build tools too, with the reason
     const needs_make = configure or d.tier == .make;
     const why: ?[]const u8 = if (configure) "a configure script R runs" else if (d.tier == .make) d.reason else null;
-    const res = try groupsFor(ctx, name, why, fortran);
+    const res = try groupsFor(ctx, name, why, fortran, cxx);
     if (needs_make) try cmakeNote(ctx, name, pkg_dir);
     if (res.code != 0) return res;
     const tier: []const u8 = switch (d.tier) {
@@ -424,8 +458,8 @@ fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
 /// R's, where no group would help. The install preflight's check
 /// (`packageIn`), and `rzig build --shlib` for an R CMD SHLIB call that
 /// needs make (pkgbuild.zig; feat-shlib-rzig-build F a, Cg5, Cc9).
-pub fn groupsFor(ctx: *Ctx, label: []const u8, why: ?[]const u8, fortran: bool) !Result {
-    const comp = try compilers(ctx, fortran);
+pub fn groupsFor(ctx: *Ctx, label: []const u8, why: ?[]const u8, fortran: bool, cxx: bool) !Result {
+    const comp = try compilers(ctx, fortran, cxx);
     if (comp.code != 0 and comp.code != 127) return comp;
     const bt: ?Found = if (why != null) try buildToolsFound(ctx) else null;
     if (bt) |b| switch (b) {
@@ -728,6 +762,43 @@ test "package: flang by tier, never for tier 2, by src/'s top level with a confi
     res = try packageIn(c, r, f.path("zF"));
     try testing.expectEqual(0, res.code);
     try testing.expectEqualStrings(f.fmt("package ok: zF tier 2 (rzig build) (a configure script R runs); {s}; flang at {s}; build-tools ok: make at {s}", .{ ok, fc, make }), res.line);
+    try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "package on linux: C++ needs libstdc++'s headers (the compilers group), C does not" {
+    // feat-linux-libstdcxx
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-ins
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    const zig = try fakeZig(&f, "bin/zig", same_zig);
+    try f.env.put("ZIG_BIN", zig);
+    try f.env.put("PATH", f.path("nothing"));
+    const ok = f.fmt("compilers ok: zig {s} at {s}", .{ same_zig, zig });
+    // C: no headers needed
+    try f.touch("c/src/a.c");
+    var res = try packageIn(c, r, f.path("c"));
+    try testing.expectEqual(0, res.code);
+    try testing.expectEqualStrings(f.fmt("package ok: c tier 1 (rzig build); {s}", .{ok}), res.line);
+    // C++ (tier 1's plan, and tier 3's src/ top level): the compilers' text
+    try f.touch("x/src/a.cpp");
+    try f.write("m/src/Makevars", "all: $(SHLIB)\n", .default_file);
+    try f.touch("m/src/b.cc");
+    _ = try f.touchProgram("mk/make");
+    try f.env.put("PATH", f.path("mk"));
+    const missing = f.fmt("rzig-test: " ++ libstdcxx.no_headers ++ "\n{s}", .{try groups.text(c.arena, .compilers, groups.this)});
+    for ([_][]const u8{ "x", "m" }) |p| {
+        try testing.expectEqual(127, (try packageIn(c, r, f.path(p))).code);
+        try testing.expectEqualStrings(missing, f.takeWarnings());
+    }
+    // with them (here R_ZIG_EXTRA_ENV's): where, in the line
+    try testutil.libstdcxxEnv(&f, "cxx");
+    try f.env.put("R_ZIG_EXTRA_ENV", f.path("cxx"));
+    res = try packageIn(c, r, f.path("x"));
+    try testing.expectEqual(0, res.code);
+    try testing.expectEqualStrings(f.fmt("package ok: x tier 1 (rzig build); {s}; libstdc++ headers at {s}/lib/gcc/{s}/15.3.0", .{ ok, f.path("cxx"), libstdcxx.triple(c) }), res.line);
     try testing.expectEqualStrings("", f.takeWarnings());
 }
 

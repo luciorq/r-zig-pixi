@@ -171,7 +171,10 @@ nothing else on the machine:
   after each package. rzig's own cache is elsewhere: `$XDG_CACHE_HOME/r-zig`,
   by default `~/.cache/r-zig` (Windows: `%LOCALAPPDATA%\r-zig`). There, with
   conda-forge's zig on macOS, rzig makes a libc++ mirror (a directory of
-  symlinks) per zig. Since build 7 it also keeps a copy of each archive
+  symlinks) per zig. On linux zig builds no libc++ for packages: rzig
+  compiles C++ against gcc's libstdc++ headers (the env's
+  libstdcxx-devel, or the compilers group's libstdcxx/) and links R's
+  libstdc++.so.6 and libgcc_s.so.1 by path (feat-linux-libstdcxx). Since build 7 it also keeps a copy of each archive
   linked under a name without an extension (V8 on macOS:
   `archive-<key>/v8_monolith.a`, 161 MB). linux's finalization object and
   win-64's CFG stub are R's, in `R_HOME/bin/toolchain`, not in the cache
@@ -253,7 +256,7 @@ The classes, and who acts on them:
 |---|---|---|
 | network | `cannot open URL`, HTTP 4xx/5xx, `curl: (n)`; also a package missing from the repositories | rerun |
 | resource | out of memory, no space left | fewer jobs, a bigger runner |
-| abi | an undefined symbol with `St3__1`, `__cxx11` or an MSVC name: libc++ code against a libstdc++ (or MSVC) library | a design decision for the user |
+| abi | an undefined symbol with `St3__1`, `__cxx11` or an MSVC name: libc++ code against a libstdc++ (or MSVC) library. On linux, since feat-linux-libstdcxx, rzig compiles all C++ against gcc's libstdc++, so there it means a libc++ object (a prebuilt static library built with libc++) met libstdc++ code, which should not happen | a design decision for the user |
 | toolchain | rzig's own messages (`zig-cc: cannot run ...`, `rzig build: no zig ...`), `LLVM ERROR`, an unknown option, a missing compiler-rt helper; also the install preflight's stops (patch 0009: `needs the r-zig toolchain (...), which is incomplete` after rzig's 127, and `this package cannot be built` after any other status, such as a zig that is not R's; the row shows rzig's `zig-cc: ` line naming what is wrong; before phase 4 it also said `which is not installed` where R had no rzig, and build 8 said `r-zig toolchain is incomplete`). Not the line that follows every failed compile (tier 1's `rzig build: <source> failed (N): <command>`, tier 2's `rzig build: zig build failed (N)`): the compiler's lines decide, as under make | fix in rzig, after the user agrees; for the preflight's stop, add what it names |
 | crash | R died from a signal or a Windows exception (exit status 128 or more, or below 0), or printed `*** caught segfault ***` | read the log; after an unload on linux, Z9 until rzig's fix |
 | upstream | a packaging bug in a conda-forge library or in the channels: a Homebrew path in a conda library (`Library not loaded: /opt/homebrew/...`), CMake's `debug`/`optimized` keywords from a `.pc` file, an import library that lists what its DLL does not export (`The specified procedure could not be found`), a solver conflict when `--conda` makes its env (round 1's U1 to U4) | work around it in the env (a pin, a fixed file) and record it |

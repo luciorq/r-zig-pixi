@@ -292,10 +292,15 @@ pub fn main(init: std.process.Init) !u8 {
         else => {},
     }
     const cmd: Ctx.Command = switch (t) {
-        .cc, .cxx => .{ .zig = try compiler.argv(&ctx, if (t == .cc) .c else .cxx, caller) },
+        // linux C++ with no libstdc++ headers or runtime: 127, after the
+        // compilers group's text (libstdcxx.zig)
+        .cc, .cxx => .{ .zig = compiler.argv(&ctx, if (t == .cc) .c else .cxx, caller) catch |err| switch (err) {
+            error.NoLibstdcxx => return 127,
+            else => |e| return e,
+        } },
         // no flang: 127, as a shell gives for a command it cannot find
         .fc => fortran.command(&ctx, caller) catch |err| switch (err) {
-            error.NoFlang => return 127,
+            error.NoFlang, error.NoLibstdcxx => return 127,
             else => |e| return e,
         },
         .ar => .{ .zig = try ar.argv(&ctx, caller) },
@@ -693,6 +698,7 @@ test {
     _ = ar;
     _ = find_zig;
     _ = libcxx_mirror;
+    _ = @import("libstdcxx.zig");
 }
 
 test "rzig's root panic and debug are crash.zig's (K4)" {

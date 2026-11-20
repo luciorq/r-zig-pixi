@@ -9,7 +9,8 @@
 #     <prefix>/lib on unix, R_HOME/bin/x64 on Windows) or the system's;
 #     linux: a bare name, no glibc above 2.17; macOS: install names and
 #     dependencies relative or the system's, minos at or below MACOS_MIN;
-#     no shared C++ runtime;
+#     no shared libc++ (linux: libstdc++.so.6 is allowed,
+#     feat-linux-libstdcxx; macOS and Windows: no shared C++ runtime);
 #   - every rpath is relative to its file;
 #   - no file names the checkout, the env, zig's or rzig's caches, the
 #     compile tree, the tree's own place or $HOME, R's compressed files
@@ -111,6 +112,9 @@ while IFS= read -r f; do
     seen="$seen
 $dep"
   done
+  # no recommended package is C++; on linux one that became C++ would
+  # need libstdc++.so.6, R's runtime (feat-linux-libstdcxx): libc++ alone
+  # is wrong there
   hit="$(cxx_deps "$f")"
   [ -z "$hit" ] || bad="$bad
   $rel: a shared C++ runtime ($hit)"

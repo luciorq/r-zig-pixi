@@ -106,6 +106,23 @@ Sys.unsetenv("RZIG_TRACE")
 stopifnot(any(grepl("rzig build: tier 1", log, fixed = TRUE)))
 library(rzigc, lib.loc = lib)
 stopifnot(one() == 1L, two() == 2L)
+## linux: C++ is gcc's libstdc++ (feat-linux-libstdcxx): the package
+## needs no libc++, leaves no std::__1 symbol undefined, and needs
+## libstdc++.so.6 when it calls into the runtime (an undefined std:: or
+## C++ ABI symbol: zig links with --as-needed, so two.cpp's inlined
+## std::string may need none; verify-helpers.sh's stdcxx_wrong)
+if (!windows && Sys.info()[["sysname"]] != "Darwin" && nzchar(readelf)) {
+    so <- file.path(lib, "rzigc", "libs", "rzigc.so")
+    dyn <- system2(readelf, c("-d", shQuote(so)), stdout = TRUE)
+    und <- grep(" UND ", system2(readelf, c("-W", "--dyn-syms", shQuote(so)), stdout = TRUE), value = TRUE)
+    ## glibc's symbols are not the C++ runtime: anything versioned
+    ## GLIBC_, and __cxa_finalize, __cxa_atexit, __cxa_thread_atexit_impl
+    ## (every shared object may name them; dso_fini.o, unversioned)
+    und <- grep("@GLIBC_| __cxa_(finalize|atexit|thread_atexit_impl)(@|$)", und, value = TRUE, invert = TRUE)
+    uses <- any(grepl(" (_ZN?K?St|_ZTVN10__cxxabiv|__cxa_|__gxx_personality|_Zn[wa]|_Zd[la])|@(GLIBCXX|CXXABI)_", und))
+    stopifnot(!any(grepl("libc\\+\\+", dyn)), !any(grepl("St3__1", und)),
+              !uses || any(grepl("NEEDED.*\\[libstdc\\+\\+\\.so\\.6\\]", dyn)))
+}
 cat("toolchain: C and C++ package compiled (rzig build: tier 1) and loaded: OK\n")
 lib_make <- file.path(d, "lib-make")
 dir.create(lib_make)

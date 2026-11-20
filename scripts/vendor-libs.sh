@@ -155,6 +155,9 @@ while [ "$i" -lt "${#bins[@]}" ]; do
     [ -e "$PREFIX/lib/$base" ] && continue
     cp -L "$dep" "$PREFIX/lib/$base"
     chmod u+w "$PREFIX/lib/$base"
+    # libstdc++.so.6 and libgcc_s.so.1 come in every variant on linux,
+    # minimal too: libR needs them (build.zig's linkCxxRuntime), the
+    # runtime every package's C++ links against (feat-linux-libstdcxx).
     # linux, every flavor: conda-forge's libraries ship with full DWARF
     # (libstdc++.so.6: 24 MiB, about 2 without), and R's own binaries are
     # built stripped (build.zig newCMod; the user's D1, "Strip Linux debug
