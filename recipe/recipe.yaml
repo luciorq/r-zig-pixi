@@ -148,7 +148,8 @@ build:
   # changes if these files are republished.
   # 3 → 4 (2026-09-30): split into r-zig-slim (R) and r-zig-toolchain
   # (lib/R/bin/toolchain plus the compiler run dependencies), phase T of
-  # feat-no-host-paths; libc++ static everywhere; FLIBS names the static
+  # feat-no-host-paths; libc++ static everywhere (on linux until
+  # feat-linux-libstdcxx: gcc's libstdc++ there); FLIBS names the static
   # flang runtime. linux-64's Fortran moved from conda-forge's flang to
   # flang-zig (2026-10-03) before build 4 was published, so it rides here.
   # 4 → 5 (2026-10-06): rzig, the compilers r-zig-toolchain ships in
@@ -249,7 +250,14 @@ build:
   # conda-forge's global pins (recipe/variants.yaml): pcre2 10.47 in
   # place of 10.49, libdeflate 1.26 in place of the `<1.26` cap; glib
   # 2.90.0 on macOS (chore-release-11 finding 25, 2026-11-15).
-  number: 11
+  # 11 was published on 2026-11-18 (run 44336177906).
+  # 11 → 12 (2026-11-18, feat-linux-libstdcxx): every C++ compile and
+  # link on linux uses gcc's libstdc++ (rzig's libstdcxx.zig;
+  # .github/devdocs/CXX-STDLIB.md decision 3), its headers from
+  # libstdcxx-devel_linux-* (r-zig-compilers' run deps), libR needs
+  # libstdc++.so.6 and libgcc_s.so.1, and the base carries rzig's two
+  # libstdc++ shim headers (R_HOME/bin/toolchain/libstdcxx-shim).
+  number: 12
 
 outputs:
   # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), six
@@ -444,11 +452,15 @@ outputs:
       # Windows (PHASE7 Cr5); binutils/ is gone (feat-win-zig-binutils) and
       # stays excluded so no old tree's copy can ride along; cmake/ is the
       # extras' (feat-extras-group), which the conda build never makes. R's
-      # recommended packages are r-zig-recommended's.
+      # recommended packages are r-zig-recommended's. libstdcxx/ is the
+      # standalone compilers group's (linux libstdc++ headers; conda's
+      # come from libstdcxx-devel_linux-*, r-zig-compilers' run deps), so
+      # it is excluded too; libstdcxx-shim/, rzig's two shims, stays here
+      # (feat-linux-libstdcxx).
       files:
         exclude:
-          - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
-          - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
+          - lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
+          - Library/lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
           - lib/R/library/${{ recommended }}/**
           - Library/lib/R/library/${{ recommended }}/**
     requirements:
@@ -619,6 +631,10 @@ outputs:
               - if: linux
                 then:
                   - lib/R/bin/toolchain/dso_fini.o
+                  # libstdc++'s shims (rzig's libstdcxx.zig;
+                  # verify-helpers.sh's base_extra_files)
+                  - lib/R/bin/toolchain/libstdcxx-shim/bits/c++config.h
+                  - lib/R/bin/toolchain/libstdcxx-shim/sys/single_threaded.h
               # x86_64 code (cfguard.zig); win-arm64's is the cache
               # flush (clear_cache.zig)
               - if: target_platform == "win-64"
@@ -628,8 +644,8 @@ outputs:
                 then:
                   - Library/lib/R/bin/toolchain/clear_cache.o
             not_exists:
-              - lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
-              - Library/lib/R/bin/toolchain/{zig,flang,openmp,usr,etc,binutils,cmake}/**
+              - lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
+              - Library/lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
               - lib/R/library/${{ recommended }}/**
               - Library/lib/R/library/${{ recommended }}/**
     about:
@@ -684,6 +700,20 @@ outputs:
         # omp.h and libomp: r-zig-slim already has them (B41's
         # exception); named here as B28 lists the group
         - llvm-openmp >=23.1.5 zig_*
+        # linux: gcc's libstdc++ headers, which every C++ compile uses
+        # (rzig's libstdcxx.zig finds lib/gcc/<triple>/<version>/include/
+        # c++ in R's env; feat-linux-libstdcxx), and a runtime at least as
+        # new as them (the devel package has no runtime dependency;
+        # conda-forge's zig_linux-* depends on the same devel package)
+        - if: target_platform == "linux-64"
+          then:
+            - libstdcxx-devel_linux-64 15.*
+        - if: target_platform == "linux-aarch64"
+          then:
+            - libstdcxx-devel_linux-aarch64 15.*
+        - if: linux
+          then:
+            - libstdcxx >=15
     tests:
       - package_contents:
           files:
@@ -704,7 +734,7 @@ outputs:
           recipe:
             - test-compilers.R
     about:
-      summary: The r-zig compilers for r-zig-slim (zig 0.17, LLVM flang from flang-pixi, OpenMP)
+      summary: The r-zig compilers for r-zig-slim (zig 0.17, LLVM flang from flang-pixi, OpenMP; on linux libstdc++'s headers)
 
   - package:
       name: r-zig-build-tools

@@ -169,7 +169,10 @@ done
 # A conda env is the exception: on win-64 r-zig-build-tools carries usr/
 # (pkgconf) here. zig's install never removes a file, so a tree
 # built before phase 3 still has the files that left it (PHASE3 C25).
+# The base's own extra files (base_extra_files: linux's libstdc++ shims
+# in libstdcxx-shim/, feat-linux-libstdcxx) are checked by name below.
 lo="$(link_object)"
+extra_dirs=" $(base_extra_dirs) "
 bad=""
 while IFS= read -r f; do
   n="${f##*/}"
@@ -177,15 +180,25 @@ while IFS= read -r f; do
     if [ -n "$conda_tree" ] && [ "$OS" = windows ]; then
       [ "$n" = usr ] && continue
     fi
+    case "$extra_dirs" in *" $n "*) continue ;; esac
     bad="$bad $n/"
   else
     case " $tc_names $lo " in *" $n "*) ;; *) bad="$bad $n" ;; esac
   fi
 done < <(find "$TREE/$tc_dir" -mindepth 1 -maxdepth 1)
 if [ -n "$bad" ]; then
-  echo "error: $tc_dir holds more than rzig and its link object:$bad (the toolchain groups' files are the toolchain tree's now, and zig's install removes no file, so a tree built before phase 3 keeps them): remove the tree and build again" >&2
+  echo "error: $tc_dir holds more than rzig, its link object and $(base_extra_dirs):$bad (the toolchain groups' files are the toolchain tree's now, and zig's install removes no file, so a tree built before phase 3 keeps them): remove the tree and build again" >&2
   exit 1
 fi
+# the base's extra files: exactly these in their directories
+for d in $(base_extra_dirs); do
+  got="$(cd "$TREE/$tc_dir" && find "$d" -type f | LC_ALL=C sort | tr '\n' ' ')"
+  want="$(printf '%s\n' $(base_extra_files) | grep "^$d/" | LC_ALL=C sort | tr '\n' ' ')"
+  if [ "$got" != "$want" ]; then
+    echo "error: $tc_dir/$d holds '$got', not '$want' (base_extra_files; feat-linux-libstdcxx)" >&2
+    exit 1
+  fi
+done
 # rzig's link object (zigbuild/tools/rzig/build.zig's linkObject): a
 # relocatable object for R's target, which rzig finds beside itself and
 # adds to links. Without it rzig warns at each such link and links
@@ -200,7 +213,8 @@ if [ -n "$lo" ]; then
     exit 1
   fi
 fi
-echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig${lo:+, $tc_dir/$lo is its link object}, and nothing else is there"
+extra_files="$(base_extra_files)"
+echo "== compilers verified: $tc_dir/{${tc_names// /,}} are rzig${lo:+, $tc_dir/$lo is its link object}${extra_files:+, $tc_dir/{${extra_files// /,}\} the libstdc++ shims}, and nothing else is there"
 
 # R's target, named on every command rzig runs, every OS
 # (zigbuild/tools/rzig/target.zig; chore-release-11 finding 29): rzig
@@ -1028,7 +1042,9 @@ fi
 # in is reported, not failed: conda-forge's libcurl >= 8.21 links
 # libpsl, which links ICU (and so libstdc++), on every platform — see
 # pixi.toml's [feature.minimal] for the size cost and the pin that would
-# avoid it.
+# avoid it. libstdc++ itself is R's own dependency on linux in every
+# variant, minimal included (libR needs it, feat-linux-libstdcxx), so
+# the list does not name it.
 if [ "$VARIANT" = minimal ]; then
   excluded_re='lib(cairo|pango|harfbuzz|fontconfig|freetype|glib|gobject|gio|pixman|png|jpeg|tiff|X11|xcb|icu|omp|iomp|gomp|deflate)'
   r_bins="$WORK/r-bins.txt"
@@ -1155,10 +1171,16 @@ if [ "$OS" = linux ]; then
   echo "== DT_NEEDED verified: $n_bins binaries, every entry a bare name"
 fi
 
-# Static libc++ everywhere (decided 2026-09-30): none of R's own
-# binaries may depend on a shared C++ runtime. The vendored conda
-# libraries in lib/ may (ICU links libc++ on macOS, libstdc++ on linux);
-# they are not ours to build.
+# macOS: static libc++ (decided 2026-09-30): none of R's own binaries
+# may depend on a shared C++ runtime. The vendored conda libraries in
+# lib/ may (ICU links libc++ on macOS); they are not ours to build.
+# linux: C++ is gcc's libstdc++ (feat-linux-libstdcxx): libR needs
+# libstdc++.so.6 and libgcc_s.so.1 (build.zig's linkCxxRuntime), so its
+# RUNPATH loads the tree's runtime first in every variant, the tree's
+# lib/ has both (vendor-libs.sh), its libstdc++ offers at least
+# GLIBCXX_3.4.34, the version the libstdc++ 15 headers belong to (a safe
+# bound: what they compile needs at most GLIBCXX_3.4.32, CXX-STDLIB.md),
+# and no R binary needs libc++ (cxx_deps).
 bad=""
 n_r=0
 while IFS= read -r f; do
@@ -1168,10 +1190,25 @@ while IFS= read -r f; do
   [ -z "$hit" ] || bad="$bad ${f#$TREE/}->$(echo $hit | tr ' ' ',')"
 done < "$bin_list"
 if [ -n "$bad" ]; then
-  echo "error: R binaries depend on a shared C++ runtime:$bad" >&2
+  echo "error: R binaries depend on a shared $([ "$OS" = linux ] && echo libc++ || echo C++ runtime):$bad" >&2
   exit 1
 fi
-echo "== C++ runtime verified: $n_r R binaries, none needs a shared libc++/libstdc++"
+if [ "$OS" = linux ]; then
+  libr="$TREE/lib/R/lib/libR.so"
+  for so in libstdc++.so.6 libgcc_s.so.1; do
+    needed_of "$libr" | grep -qxF "$so" ||
+      { echo "error: lib/R/lib/libR.so does not need $so (build.zig's linkCxxRuntime; feat-linux-libstdcxx)" >&2; exit 1; }
+    # the conda build's prefix is the env, whose lib/ has them too
+    [ -f "$TREE/lib/$so" ] ||
+      { echo "error: lib/$so is missing: libR needs it (vendor-libs.sh copies libR's closure)" >&2; exit 1; }
+  done
+  # the newest GLIBCXX version the libstdc++ headers reference
+  grep -aq 'GLIBCXX_3\.4\.34' "$TREE/lib/libstdc++.so.6" ||
+    { echo "error: lib/libstdc++.so.6 has no GLIBCXX_3.4.34: older than the libstdc++ 15 headers packages compile with" >&2; exit 1; }
+  echo "== C++ runtime verified: libR needs libstdc++.so.6 and libgcc_s.so.1 (lib/ has both, GLIBCXX_3.4.34), none of $n_r R binaries needs libc++"
+else
+  echo "== C++ runtime verified: $n_r R binaries, none needs a shared libc++/libstdc++"
+fi
 
 # macOS deployment target: every Mach-O in the tree at or below
 # MACOS_MIN (build.zig's macos_min; conda's vendored libraries are

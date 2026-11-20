@@ -25,7 +25,10 @@
 #     0013; RZIG_TRACE=1, and the log must say `rzig build: tier 1`),
 #     through the console script (ZIG_BIN from `import ziglang`) with no
 #     make on PATH, and with ZIG_BIN pointing nowhere (python3 -m
-#     ziglang); its C++ runtime is static; the compilers (rzig) ignore
+#     ziglang); its C++ runtime is static (macOS) or libstdc++.so.6, R's
+#     (linux, feat-linux-libstdcxx: the headers are r-zig-compilers',
+#     the runtime r-zig's), and a C++ exception thrown in it is caught
+#     and reaches R as an error; the compilers (rzig) ignore
 #     CONDA_PREFIX and honour R_ZIG_EXTRA_ENV (an env's header, -L and
 #     rpath), feat-no-host-paths F3b; a package whose Makevars has a rule
 #     (a static library through $(AR)) needs make, and stops in the
@@ -43,13 +46,19 @@
 #     path an embedder such as rpy2 takes: Renviron.site finds ziglang
 #     next door) and R_ZIG_PKG_BUILDER=make
 #   - + r-zig-toolchain: it resolves from the installed groups, and it and
-#     r-zig-compilers hold no file outside their .dist-info; in a second
+#     r-zig-compilers hold no file outside their .dist-info (linux:
+#     r-zig-compilers holds libstdc++'s headers, R_HOME/bin/toolchain/
+#     libstdcxx/, and nothing else; feat-linux-libstdcxx); in a second
 #     venv, r-zig-toolchain from dist/wheel with no index brings the other
 #     three, and that R's make is its own (PHASE4 Cc5)
-#   - uninstalling the three groups leaves r-zig whole: rzig's names and
+#   - uninstalling the three groups leaves r-zig whole: rzig's names, its
+#     link object and on linux the libstdc++ shims (base_extra_files) and
 #     nothing else under R_HOME/bin/toolchain, and a C package still
-#     builds, since ziglang stays; with ziglang uninstalled too,
-#     recipe/test-preflight.R again (PHASE4 Cc6)
+#     builds, since ziglang stays; a C++ one on linux stops in the
+#     preflight with the compilers group's text (libstdc++'s headers left
+#     with r-zig-compilers; feat-linux-libstdcxx), on macOS it builds;
+#     with ziglang uninstalled too, recipe/test-preflight.R again (PHASE4
+#     Cc6)
 # None of the four names is on PyPI (PHASE4 Cc14): the group wheels are
 # installed by file, and pip asks no index for the r-zig they require,
 # which is installed by then; the second venv uses --no-index. pip
@@ -93,11 +102,12 @@ Authors@R: person("r-zig-pixi", role = c("aut", "cre"), email = "noreply@example
 EOF
 cat > "$P/NAMESPACE" << 'EOF'
 useDynLib(rzigwheeltest, .registration = TRUE)
-export(dot, cxx_sum)
+export(dot, cxx_sum, cxx_throw)
 EOF
 cat > "$P/R/fns.R" << 'EOF'
 dot <- function(x, y) .Call(C_dot, as.double(x), as.double(y))
 cxx_sum <- function(x) .Call(C_cxx_sum, as.double(x))
+cxx_throw <- function(x) .Call(C_cxx_throw, as.character(x))
 EOF
 cat > "$P/src/dot.c" << 'EOF'
 #include <R.h>
@@ -106,6 +116,7 @@ cat > "$P/src/dot.c" << 'EOF'
 #include <R_ext/Rdynload.h>
 
 SEXP cxx_sum(SEXP x);
+SEXP cxx_throw(SEXP x);
 
 static SEXP dot(SEXP x, SEXP y) {
     int n = LENGTH(x), one = 1;
@@ -115,6 +126,7 @@ static SEXP dot(SEXP x, SEXP y) {
 static const R_CallMethodDef calls[] = {
     {"C_dot", (DL_FUNC) &dot, 2},
     {"C_cxx_sum", (DL_FUNC) &cxx_sum, 1},
+    {"C_cxx_throw", (DL_FUNC) &cxx_throw, 1},
     {NULL, NULL, 0}
 };
 
@@ -124,13 +136,30 @@ void R_init_rzigwheeltest(DllInfo *dll) {
 }
 EOF
 cat > "$P/src/sum.cpp" << 'EOF'
+#include <cstdio>
 #include <numeric>
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include <Rinternals.h>
 
 extern "C" SEXP cxx_sum(SEXP x) {
     std::vector<double> v(REAL(x), REAL(x) + LENGTH(x));
     return Rf_ScalarReal(std::accumulate(v.begin(), v.end(), 0.0));
+}
+
+// a C++ exception thrown and caught (the C++ runtime's unwinder), its
+// message an R error; Rf_error longjmps, so no C++ object is alive then
+static void thrower(const std::string &s) { throw std::runtime_error("cxx: " + s); }
+extern "C" SEXP cxx_throw(SEXP x) {
+    char msg[256] = "";
+    try {
+        thrower(CHAR(STRING_ELT(x, 0)));
+    } catch (const std::exception &e) {
+        std::snprintf(msg, sizeof msg, "%s", e.what());
+    }
+    Rf_error("%s", msg);
+    return R_NilValue;
 }
 EOF
 echo 'PKG_LIBS = $(BLAS_LIBS) $(FLIBS)' > "$P/src/Makevars"
@@ -192,8 +221,11 @@ cmp -s "$tc/zig-fc" "$tc/zig-cc" || { echo "error: $tc/zig-fc is missing or not 
 printf '      end\n' > "$T/nofc.f"
 rc=0
 (cd "$T" && run_venv "$r_home/bin/R" CMD toolchain/zig-fc -c nofc.f -o nofc.o) > "$T/nofc.log" 2>&1 || rc=$?
+# (linux: the pip line names libstdc++'s headers too, groups.zig)
+if [ "$OS" = linux ]; then pip_cc="pip install r-zig-compilers (zig and libstdc++'s headers: PyPI has no Fortran compiler)"
+else pip_cc="pip install r-zig-compilers (zig only: PyPI has no Fortran compiler)"; fi
 if [ "$rc" != 127 ] || ! grep -q '^zig-fc: no flang (' "$T/nofc.log" || ! grep -qF "flang and the OpenMP files" "$T/nofc.log" ||
-  ! grep -qF "pip install r-zig-compilers (zig only: PyPI has no Fortran compiler)" "$T/nofc.log"; then
+  ! grep -qF "$pip_cc" "$T/nofc.log"; then
   cat "$T/nofc.log" >&2; echo "error: zig-fc with no flang: exit $rc, or not the compilers group's text (flang and the OpenMP files; pip: no Fortran compiler)" >&2; exit 1
 fi
 echo "ok: exit 127: $(head -1 "$T/nofc.log")"
@@ -207,28 +239,22 @@ echo "ok: rzig build: tier 1 ($(grep -E '^zig-(cc|cxx|fc): ' "$T/install1.log" |
 run Rscript -e "
   library(rzigwheeltest, lib.loc = '$T/lib1')
   stopifnot(dot(1:3, 4:6) == 32, cxx_sum(1:10) == 55)
-  cat('compiled package OK (console script)\n')
+  e <- tryCatch(cxx_throw('boom'), error = conditionMessage)
+  stopifnot(identical(e, 'cxx: boom'))
+  cat('compiled package OK (console script; a C++ exception caught)\n')
 "
 
-# The wheel compiles with PyPI ziglang, an upstream zig build, which links
-# its own libc++ statically, so C++ packages carry no C++ runtime
-# dependency. conda-forge's zig is patched to link a shared libc++ when
-# one sits beside its install (always the case in a macOS conda env), so
-# a zig from a conda env on PATH would bring that dependency back.
+# macOS: the wheel compiles with PyPI ziglang, an upstream zig build,
+# which links its own libc++ statically, so C++ packages carry no C++
+# runtime dependency. conda-forge's zig is patched to link a shared libc++
+# when one sits beside its install (always the case in a macOS conda
+# env), so a zig from a conda env on PATH would bring that dependency
+# back. linux: gcc's libstdc++ (feat-linux-libstdcxx), r-zig-compilers'
+# headers and R's runtime, r_zig/R/lib/libstdc++.so.6, which libR loads.
 so="$T/lib1/rzigwheeltest/libs/rzigwheeltest.so"
-if command -v readelf > /dev/null 2>&1; then
-  cxx_deps="$(readelf -d "$so" | grep -E 'NEEDED.*lib(c\+\+|stdc\+\+)' || true)"
-elif command -v otool > /dev/null 2>&1; then
-  cxx_deps="$(otool -L "$so" | tail -n +2 | grep -E 'lib(c\+\+|stdc\+\+)' || true)"
-else
-  cxx_deps="unchecked"
-fi
-case "$cxx_deps" in
-  "") echo "== C++ runtime: static (no shared libc++/libstdc++ dependency)" ;;
-  unchecked) echo "note: neither readelf nor otool found; C++ runtime linkage not checked" ;;
-  *) echo "error: the C++ test package depends on a shared C++ runtime:" >&2
-     echo "$cxx_deps" >&2; exit 1 ;;
-esac
+cxx_wrong="$(cxx_runtime_wrong "$so")"
+[ -z "$cxx_wrong" ] || { echo "error: the C++ test package: $cxx_wrong" >&2; exit 1; }
+echo "== C++ runtime: $(cxx_runtime_word)"
 
 echo "== CONDA_PREFIX ignored by the compilers (rzig, feat-no-host-paths F3b)"
 # An activated env R is not installed in adds nothing: with a poisoned
@@ -313,7 +339,8 @@ echo "ok: stops naming r-zig-build-tools"
 # R CMD SHLIB with no make (feat-shlib-rzig-build): R builds the call
 # through rzig build (patch 0013's one hook), compiled by the PyPI
 # ziglang: pkgbuild's probe (foo.c beside an invalid junk.c) and a C++
-# file, which loads with no shared C++ runtime; a Makevars rule stops with
+# file, which loads with R's libstdc++.so.6 on linux and no shared C++
+# runtime on macOS (cxx_runtime_wrong); a Makevars rule stops with
 # rzig's reason, "no make on PATH" and the build tools' pip line, and
 # builds nothing.
 echo "== R CMD SHLIB with no make on PATH: rzig build"
@@ -334,9 +361,8 @@ run Rscript -e "
   stopifnot(.C('foo', 0L)[[1]] == 1L, .Call('cx') == 5L)
   cat('R CMD SHLIB libraries load\n')
 "
-if command -v readelf > /dev/null 2>&1; then cxx="$(readelf -d "$S/cx/cx.so" | grep -E 'NEEDED.*lib(c\+\+|stdc\+\+)' || true)"
-else cxx="$(otool -L "$S/cx/cx.so" | tail -n +2 | grep -E 'lib(c\+\+|stdc\+\+)' || true)"; fi
-[ -z "$cxx" ] || { echo "error: cx.so (R CMD SHLIB through rzig build) needs a shared C++ runtime: $cxx" >&2; exit 1; }
+cxx="$(cxx_runtime_wrong "$S/cx/cx.so")"
+[ -z "$cxx" ] || { echo "error: cx.so (R CMD SHLIB through rzig build): $cxx" >&2; exit 1; }
 printf 'void x(int *n) { *n = 1; }\n' > "$S/rule/x.c"
 printf '%s\n' 'all: $(SHLIB) extra' 'extra:' '	@echo extra' > "$S/rule/Makevars"
 if (cd "$S/rule" && run_venv R CMD SHLIB x.c) > "$S/rule.log" 2>&1; then
@@ -347,7 +373,7 @@ if ! grep -qF 'x.so needs make: Makevars has a rule or target line' "$S/rule.log
   [ -e "$S/rule/x.so" ] || [ -e "$S/rule/x.o" ]; then
   cat "$S/rule.log" >&2; echo "error: R CMD SHLIB of a Makevars rule did not stop with rzig's reason and the build tools' pip line, or built something" >&2; exit 1
 fi
-echo "ok: foo.c and a C++ file build through rzig build and load (static C++ runtime); a Makevars rule stops naming r-zig-build-tools"
+echo "ok: foo.c and a C++ file build through rzig build and load (C++ runtime: $(cxx_runtime_word)); a Makevars rule stops naming r-zig-build-tools"
 
 echo "== + $(basename "$bt_wheel")"
 pip_ install --quiet "$bt_wheel"
@@ -398,16 +424,23 @@ listed
 # The two wheels of requirements alone hold no file outside their
 # .dist-info. pip lists that directory's own files (METADATA, RECORD,
 # INSTALLER, ...) under Files:, so "no file" cannot be the test (PHASE4
-# Cc6).
+# Cc6). linux: r-zig-compilers also holds libstdc++'s headers, under
+# r_zig/R/lib/R/bin/toolchain/libstdcxx/ (make-wheel.py), and rzig finds
+# them there (the C++ compiles above).
 for d in r-zig-compilers r-zig-toolchain; do
   di="$(printf '%s' "$d" | tr - _)-$R_VERSION.dist-info/"
+  own="$di"
+  [ "$OS" = linux ] && [ "$d" = r-zig-compilers ] && own="r_zig/R/lib/R/bin/toolchain/libstdcxx/"
   files="$(pip_ show -f "$d" | sed -n '/^Files:/,$p' | sed -e 1d -e 's/^ *//')"
-  other="$(printf '%s\n' "$files" | awk -v p="$di" 'index($0, p) != 1')"
+  other="$(printf '%s\n' "$files" | awk -v p="$di" -v q="$own" 'index($0, p) != 1 && index($0, q) != 1')"
   if ! printf '%s\n' "$files" | grep -qxF "${di}METADATA" || [ -n "$other" ]; then
-    printf '%s\n' "$files" >&2; echo "error: $d's files are not its $di alone" >&2; exit 1
+    printf '%s\n' "$files" >&2; echo "error: $d's files are not its $di alone${own:+ (and $own)}" >&2; exit 1
+  fi
+  if [ "$own" != "$di" ] && ! printf '%s\n' "$files" | grep -q "^${own}lib/gcc/.*/include/c++/vector\$"; then
+    echo "error: $d holds no libstdc++ headers under $own" >&2; exit 1
   fi
 done
-echo "ok: r-zig-compilers and r-zig-toolchain hold their .dist-info alone"
+echo "ok: r-zig-compilers and r-zig-toolchain hold their .dist-info alone$([ "$OS" = linux ] && echo ", and r-zig-compilers libstdc++'s headers")"
 
 echo "== a second venv: r-zig-toolchain from dist/wheel, no index, brings the other three"
 python -m venv "$T/venv2"
@@ -430,20 +463,49 @@ run_with "$T/venv2/bin:/usr/bin:/bin" Rscript -e '
 echo "== uninstalling the three group wheels leaves r-zig whole"
 pip_ uninstall --quiet -y r-zig-toolchain r-zig-build-tools r-zig-compilers
 # R_HOME/bin/toolchain keeps the base's files, rzig under each of its
-# names and its link object (verify-helpers.sh; linux's dso_fini.o), and
-# nothing under usr/; pip may leave the empty directories (C32).
+# names, its link object and on linux the libstdc++ shims
+# (verify-helpers.sh; linux's dso_fini.o, base_extra_files), and nothing
+# under usr/ or libstdcxx/; pip may leave the empty directories (C32).
 left="$(cd "$tc" && find . ! -type d | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ')"
-want="$(printf '%s\n' $(rzig_names) $(link_object) | LC_ALL=C sort | tr '\n' ' ')"
-[ "$left" = "$want" ] || { echo "error: R_HOME/bin/toolchain after uninstalling the groups holds '$left', not rzig's names and its link object '$want'" >&2; exit 1; }
+want="$(printf '%s\n' $(rzig_names) $(link_object) $(base_extra_files) | LC_ALL=C sort | tr '\n' ' ')"
+[ "$left" = "$want" ] || { echo "error: R_HOME/bin/toolchain after uninstalling the groups holds '$left', not rzig's names, its link object and the base's extra files '$want'" >&2; exit 1; }
 # ziglang stays (pip removes no dependency), and Renviron.site's ZIG_BIN
-# finds it next door: a package that needs no make still compiles
-run_venv RZIG_TRACE=1 "$r_home/bin/R" CMD INSTALL -l "$T/lib7" "$P" > "$T/install7.log" 2>&1 || { cat "$T/install7.log" >&2; exit 1; }
-grep -q 'rzig build: tier 1' "$T/install7.log" || { cat "$T/install7.log" >&2; echo "error: with the groups uninstalled, the C/C++ package did not build through rzig build" >&2; exit 1; }
+# finds it next door: a package that needs no make still compiles, C
+# alone on linux: there C++ needs libstdc++'s headers, which left with
+# r-zig-compilers, and the install preflight says so with the compilers
+# group's text (feat-linux-libstdcxx); on macOS the C/C++ package builds
+PC="$T/src/rzigwheelc"
+mkdir -p "$PC/R" "$PC/src"
+printf 'Package: rzigwheelc\nVersion: 0.1\nTitle: r-zig Wheel C Test\nDescription: C only.\nLicense: GPL-2\nAuthors@R: person("r-zig-pixi", role = c("aut", "cre"), email = "noreply@example.com")\n' > "$PC/DESCRIPTION"
+printf 'useDynLib(rzigwheelc, .registration = TRUE)\nexport(twice)\n' > "$PC/NAMESPACE"
+echo 'twice <- function(x) .Call(C_twice, as.double(x))' > "$PC/R/fns.R"
+printf '%s\n' '#include <R.h>' '#include <Rinternals.h>' '#include <R_ext/Rdynload.h>' \
+  'static SEXP twice(SEXP x) { return ScalarReal(2 * REAL(x)[0]); }' \
+  'static const R_CallMethodDef calls[] = {{"C_twice", (DL_FUNC) &twice, 1}, {NULL, NULL, 0}};' \
+  'void R_init_rzigwheelc(DllInfo *dll) { R_registerRoutines(dll, NULL, calls, NULL, NULL); R_useDynamicSymbols(dll, FALSE); }' > "$PC/src/twice.c"
+run_venv RZIG_TRACE=1 "$r_home/bin/R" CMD INSTALL -l "$T/lib7" "$PC" > "$T/install7c.log" 2>&1 || { cat "$T/install7c.log" >&2; exit 1; }
+grep -q 'rzig build: tier 1' "$T/install7c.log" || { cat "$T/install7c.log" >&2; echo "error: with the groups uninstalled, the C package did not build through rzig build" >&2; exit 1; }
+if [ "$OS" = linux ]; then
+  if run_venv RZIG_TRACE=1 "$r_home/bin/R" CMD INSTALL -l "$T/lib7" "$P" > "$T/install7.log" 2>&1; then
+    cat "$T/install7.log" >&2; echo "error: with r-zig-compilers uninstalled, the C/C++ package installed on linux (no libstdc++ headers expected)" >&2; exit 1
+  fi
+  grep -qF 'no libstdc++ headers for C++ on linux' "$T/install7.log" && grep -q '^Compiling needs the r-zig compilers for R ' "$T/install7.log" ||
+    { cat "$T/install7.log" >&2; echo "error: the C/C++ package without r-zig-compilers did not stop with the compilers group's text (libstdc++'s headers)" >&2; exit 1; }
+  cxx_note="; the C/C++ package stops: no libstdc++ headers, the compilers group text"
+else
+  run_venv RZIG_TRACE=1 "$r_home/bin/R" CMD INSTALL -l "$T/lib7" "$P" > "$T/install7.log" 2>&1 || { cat "$T/install7.log" >&2; exit 1; }
+  grep -q 'rzig build: tier 1' "$T/install7.log" || { cat "$T/install7.log" >&2; echo "error: with the groups uninstalled, the C/C++ package did not build through rzig build" >&2; exit 1; }
+  cxx_note=""
+fi
 run Rscript -e "
   stopifnot(file.exists(file.path(R.home('etc'), 'Makeconf')))
-  library(rzigwheeltest, lib.loc = '$T/lib7')
-  stopifnot(dot(1:3, 4:6) == 32, cxx_sum(1:10) == 55)
-  cat('r-zig without the groups OK; ziglang still compiles\n')
+  library(rzigwheelc, lib.loc = '$T/lib7')
+  stopifnot(twice(21) == 42)
+  if ('$OS' != 'linux') {
+    library(rzigwheeltest, lib.loc = '$T/lib7')
+    stopifnot(dot(1:3, 4:6) == 32, cxx_sum(1:10) == 55)
+  }
+  cat('r-zig without the groups OK; ziglang still compiles$cxx_note\n')
 "
 
 echo "== and with ziglang uninstalled too: r-zig alone again (recipe/test-preflight.R)"

@@ -3,7 +3,8 @@
 //! -Dtarget (parity-test.sh and smoke-test.sh use it). The repo's build.zig
 //! reuses `add` to build the rzig it installs into R_HOME/bin/toolchain,
 //! for R's own target, and for its `rzig`/`rzig-test` steps. Both install
-//! rzig's link object beside it (`linkObject`).
+//! rzig's link object beside it (`linkObject`), and on linux the
+//! libstdc++ shim headers (`shim`).
 const std = @import("std");
 const floors = @import("floors.zig");
 
@@ -19,6 +20,7 @@ pub fn build(b: *std.Build) void {
     // links (a cross-build of rzig itself takes minutes)
     const ob = b.step("object", "Install rzig's link object for -Dtarget, without rzig");
     if (steps.object) |o| ob.dependOn(&b.addInstallBinFile(o.file, o.name).step);
+    if (steps.shim) |d| b.getInstallStep().dependOn(&b.addInstallDirectory(.{ .source_dir = d, .install_dir = .bin, .install_subdir = shim_dir }).step);
     const t = b.step("test", "Run rzig's unit tests");
     t.dependOn(&b.addRunArtifact(steps.tests).step);
     // the unit tests as a program for -Dtarget, to copy to and run on
@@ -35,7 +37,14 @@ pub const Artifacts = struct {
     /// What to install beside it: the object rzig adds to links
     /// (`linkObject`); none on macOS.
     object: ?LinkObject,
+    /// What to install beside it as `shim_dir`: on linux the two headers
+    /// libstdc++'s need with zig's glibc headers (libstdcxx.zig); none
+    /// on macOS and Windows.
+    shim: ?std.Build.LazyPath,
 };
+
+/// The shims' directory name beside rzig, which libstdcxx.zig looks for.
+pub const shim_dir = "libstdcxx-shim";
 
 pub const LinkObject = struct { name: []const u8, file: std.Build.LazyPath };
 
@@ -88,6 +97,7 @@ pub fn add(b: *std.Build, dir: std.Build.LazyPath, target: std.Build.ResolvedTar
         .bin = bin,
         .tests = addTests(b, dir, b.graph.host, r_version),
         .object = linkObject(b, dir, target),
+        .shim = if (target.result.os.tag == .linux) dir.path(b, "include/" ++ shim_dir) else null,
     };
 }
 

@@ -25,9 +25,14 @@ B29 a; phase 4):
   R_HOME/bin/toolchain, as in the base archive and r-zig-slim (B19). It
   installs packages that need no compiling; a package that does stops in
   the preflight with rzig's text, which names the group's wheel (B35).
-- `r-zig-compilers`: no files; it requires PyPI `ziglang`, the C/C++
-  compiler rzig runs. PyPI has no Fortran compiler, and the wheel's R
-  offers no OpenMP, so the toolchain tree's openmp/ is in no wheel.
+- `r-zig-compilers`: it requires PyPI `ziglang`, the C/C++ compiler rzig
+  runs. On linux it holds libstdc++'s C++ headers, the toolchain tree's
+  libstdcxx/ (with its SOURCES and LICENSES/), at the path rzig looks in
+  (R_HOME/bin/toolchain/libstdcxx): every linux C++ compile uses gcc's
+  libstdc++ (feat-linux-libstdcxx), whose runtime is the base's
+  (lib/libstdc++.so.6, which libR needs); elsewhere no files. PyPI has
+  no Fortran compiler, and the wheel's R offers no OpenMP, so the
+  toolchain tree's openmp/ is in no wheel.
 - `r-zig-build-tools`: the toolchain tree's usr/ (GNU make, its SOURCES
   and LICENSES/), under make's licence (PHASE4 open point E a).
 - `r-zig-toolchain`: no files; it requires both groups.
@@ -78,14 +83,23 @@ TOOLCHAIN_PREFIX = "lib/R/bin/toolchain/"  # inside both trees; rzig's names in 
 # What r-zig-build-tools takes from the toolchain tree: the build-tools
 # group's usr/ (GNU make, its SOURCES and LICENSES/).
 TOOLCHAIN_USR = TOOLCHAIN_PREFIX + "usr/"
+# What r-zig-compilers takes from it on linux: the compilers group's
+# libstdcxx/ (libstdc++'s headers, their SOURCES and LICENSES/;
+# feat-linux-libstdcxx). The base's own libstdc++ shims sit beside rzig
+# in the R tree (TOOLCHAIN_SHIM).
+TOOLCHAIN_CXX = TOOLCHAIN_PREFIX + "libstdcxx/"
+TOOLCHAIN_SHIM = TOOLCHAIN_PREFIX + "libstdcxx-shim/"
 # The licence each wheel states (PHASE4 open point E a): R's own, but
 # GNU make's for r-zig-build-tools, whose only program is make (its
 # usr/SOURCES says the same).
 R_LICENSE = "GPL-2.0-only OR GPL-3.0-only"
 MAKE_LICENSE = "GPL-3.0-or-later"
+# r-zig-compilers on linux: R's and libstdc++'s headers' (their SOURCES)
+CXX_LICENSE = R_LICENSE + " AND GPL-3.0-only WITH GCC-exception-3.1"
 LICENSE_CLASSIFIERS = {
     R_LICENSE: ["GNU General Public License v2 (GPLv2)", "GNU General Public License v3 (GPLv3)"],
     MAKE_LICENSE: ["GNU General Public License v3 or later (GPLv3+)"],
+    CXX_LICENSE: ["GNU General Public License v2 (GPLv2)", "GNU General Public License v3 (GPLv3)"],
 }
 # The runtime compiler. Keep in step with pixi.toml's `zig = "0.17.*"`:
 # zig is pinned by exact version across this project family (consolidation
@@ -333,7 +347,13 @@ The compilers for the [`r-zig`](https://pypi.org/project/r-zig/) wheel
 (R {r_version}): it requires the PyPI
 [`ziglang`](https://pypi.org/project/ziglang/) package, which rzig, the
 compiler front in r-zig's R_HOME/bin/toolchain, runs as the C/C++
-compiler, and exactly the `r-zig` it was built with. It holds no files.
+compiler, and exactly the `r-zig` it was built with. On linux it holds
+gcc's libstdc++ C++ headers (conda-forge's libstdcxx-devel, unchanged,
+in R_HOME/bin/toolchain/libstdcxx, with `SOURCES` and `LICENSES/`, the
+GPL version 3 with the GCC Runtime Library Exception): C++ on linux
+compiles against libstdc++ and links the libstdc++ r-zig carries, as
+the C++ libraries of the distributions and conda-forge do. On macOS it
+holds no files.
 
 With it, `install.packages()` compiles packages that have no configure
 script and no make rules, and `R CMD SHLIB` compiles such code at run
@@ -386,15 +406,17 @@ flang on PATH.
 }
 
 
-def metadata(dist: str, version: str, r_version: str) -> str:
+def metadata(dist: str, version: str, r_version: str, cxx: bool = False) -> str:
     """A wheel's METADATA, from one table for the four (B29 a): its
     summary, licence (PHASE4 open point E a) and requirements, each group
     on exactly this r-zig and r-zig-toolchain on exactly both groups
-    (PHASE4 open point A a)."""
+    (PHASE4 open point A a). `cxx`: r-zig-compilers holds libstdc++'s
+    headers (linux)."""
     summary, license_, requires = {
         DIST_NAME: (f"R {r_version} built with zig (minimal profile), relocatable", R_LICENSE, []),
-        COMPILERS_DIST: (f"The r-zig compilers for R {r_version}: zig, from the PyPI ziglang package",
-                         R_LICENSE, [f"{DIST_NAME}=={version}", ZIGLANG_REQUIREMENT]),
+        COMPILERS_DIST: (f"The r-zig compilers for R {r_version}: zig, from the PyPI ziglang package"
+                         + (", and libstdc++'s C++ headers" if cxx else ""),
+                         CXX_LICENSE if cxx else R_LICENSE, [f"{DIST_NAME}=={version}", ZIGLANG_REQUIREMENT]),
         BUILD_TOOLS_DIST: (f"The r-zig build tools for R {r_version}: GNU make", MAKE_LICENSE, [f"{DIST_NAME}=={version}"]),
         TOOLCHAIN_DIST: (f"The r-zig toolchain for R {r_version}: r-zig-compilers and r-zig-build-tools",
                          R_LICENSE, [f"{COMPILERS_DIST}=={version}", f"{BUILD_TOOLS_DIST}=={version}"]),
@@ -459,14 +481,18 @@ def main() -> None:
         die(f"{prefix} has no records (share/licenses/SOURCES) — run `pixi run -e minimal build` first")
     if not os.path.isfile(os.path.join(tc_prefix, "lib", "R", "bin", "toolchain", "usr", "bin", "make")):
         die(f"no GNU make in the toolchain tree {tc_prefix} — run `pixi run -e minimal toolchain` first")
+    linux = platform.system() == "Linux"
+    if linux and not os.path.isfile(os.path.join(tc_prefix, TOOLCHAIN_CXX, "SOURCES")):
+        die(f"no libstdc++ headers in the toolchain tree {tc_prefix} ({TOOLCHAIN_CXX}) — run `pixi run -e minimal toolchain` first")
     if args.build_tag and not args.build_tag[0].isdigit():
         die("--build-tag must start with a digit (PEP 427)")
 
     base = f"{IMPORT_NAME}/R/"
     tree = collect_tree(prefix)
     print(f"make-wheel: {len(tree)} files from {prefix}")
-    tc_tree = [(rel, path) for rel, path in collect_tree(tc_prefix) if rel.startswith(TOOLCHAIN_USR)]
-    print(f"make-wheel: {len(tc_tree)} files from {tc_prefix}/{TOOLCHAIN_USR}")
+    tc_tree = [(rel, path) for rel, path in collect_tree(tc_prefix)
+               if rel.startswith(TOOLCHAIN_USR) or (linux and rel.startswith(TOOLCHAIN_CXX))]
+    print(f"make-wheel: {len(tc_tree)} files from {tc_prefix}/{TOOLCHAIN_USR}" + (f" and {TOOLCHAIN_CXX}" if linux else ""))
     files: list[tuple[str, bytes]] = []  # (path inside the trees, content)
     modes: dict[str, int] = {}
     for rel, path in tree + tc_tree:
@@ -479,15 +505,20 @@ def main() -> None:
     # The R tree's R_HOME/bin/toolchain holds rzig only, under each of its
     # names (feat-standalone-toolchain B19, B30), and on linux rzig's link
     # object, dso_fini.o (rzig's build.zig, linkObject;
-    # feat-r-home-link-objects): anything else there is a leftover of an
+    # feat-r-home-link-objects), and libstdc++'s two shims in
+    # libstdcxx-shim/ (feat-linux-libstdcxx; verify-helpers.sh's
+    # base_extra_files): anything else there is a leftover of an
     # older build, since zig's install never removes a file, and would
     # ship in r-zig (a usr/ there, beside the toolchain tree's in
     # r-zig-build-tools). The R tree's files come first in `files`.
     rzig = dict(files)[TOOLCHAIN_PREFIX + "zig-cc"]
-    link_object = TOOLCHAIN_PREFIX + "dso_fini.o" if platform.system() == "Linux" else None
+    link_object = TOOLCHAIN_PREFIX + "dso_fini.o" if linux else None
     if link_object and link_object not in dict(files[:len(tree)]):
         die(f"{prefix} has no R_HOME/bin/toolchain/dso_fini.o, rzig's link object — run `pixi run -e minimal build` first")
-    stray = [r for r, d in files[:len(tree)] if r.startswith(TOOLCHAIN_PREFIX) and d != rzig and r != link_object]
+    shims = {TOOLCHAIN_SHIM + "bits/c++config.h", TOOLCHAIN_SHIM + "sys/single_threaded.h"} if linux else set()
+    if not shims <= set(dict(files[:len(tree)])):
+        die(f"{prefix} has no R_HOME/bin/toolchain/libstdcxx-shim/ headers — run `pixi run -e minimal build` first")
+    stray = [r for r, d in files[:len(tree)] if r.startswith(TOOLCHAIN_PREFIX) and d != rzig and r != link_object and r not in shims]
     if stray:
         die(f"not rzig in {prefix}'s R_HOME/bin/toolchain: {', '.join(stray)} — remove {prefix} and run `pixi run -e minimal build` again")
 
@@ -504,7 +535,8 @@ def main() -> None:
     # r-zig-build-tools' files: the toolchain tree's usr/. Everything else,
     # rzig under each of its names included, is r-zig's (B19, B29 a).
     bt_files = [(r, d) for r, d in files if r.startswith(TOOLCHAIN_USR)]
-    files = [(r, d) for r, d in files if not r.startswith(TOOLCHAIN_USR)]
+    cc_files = [(r, d) for r, d in files if r.startswith(TOOLCHAIN_CXX)]
+    files = [(r, d) for r, d in files if not r.startswith(TOOLCHAIN_USR) and not r.startswith(TOOLCHAIN_CXX)]
     make_copying = dict(bt_files).get(TOOLCHAIN_USR + "LICENSES/make/COPYING")
     if make_copying is None:
         die(f"no {TOOLCHAIN_USR}LICENSES/make/COPYING in {tc_prefix} — run `pixi run -e minimal toolchain` first")
@@ -537,8 +569,14 @@ def main() -> None:
     bt_entries = [(base + rel, data, modes[rel]) for rel, data in sorted(bt_files)]
     write_wheel(args, BUILD_TOOLS_DIST, tags, build, bt_entries,
                 metadata(BUILD_TOOLS_DIST, args.version, r_version), None, [("COPYING", make_copying)])
-    for dist in (COMPILERS_DIST, TOOLCHAIN_DIST):
-        write_wheel(args, dist, tags, build, [], metadata(dist, args.version, r_version), None, [("COPYING", copying)])
+    # r-zig-compilers: on linux libstdc++'s headers, with R's COPYING and
+    # gcc's texts (their LICENSES/, also in the wheel at their place)
+    cc_entries = [(base + rel, data, modes[rel]) for rel, data in sorted(cc_files)]
+    cc_licenses = [(f"libstdcxx/{rel[len(TOOLCHAIN_CXX + 'LICENSES/'):]}", data)
+                   for rel, data in sorted(cc_files) if rel.startswith(TOOLCHAIN_CXX + "LICENSES/")]
+    write_wheel(args, COMPILERS_DIST, tags, build, cc_entries,
+                metadata(COMPILERS_DIST, args.version, r_version, bool(cc_files)), None, [("COPYING", copying)] + cc_licenses)
+    write_wheel(args, TOOLCHAIN_DIST, tags, build, [], metadata(TOOLCHAIN_DIST, args.version, r_version), None, [("COPYING", copying)])
 
 
 def write_wheel(args: argparse.Namespace, dist: str, tags: list[str], build: str,

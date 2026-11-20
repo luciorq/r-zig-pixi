@@ -30,6 +30,14 @@
 #     LDFLAGS did that before, the shims never), on every link line: taken
 #     out of rzig's side (where it goes is compiler.zig's unit tests'
 #     business) and reported as "ok+";
+#   - on linux rzig compiles and links C++ with gcc's libstdc++
+#     (libstdcxx.zig; feat-linux-libstdcxx), the shims with zig's libc++:
+#     -nostdinc++, -nostdlib++, the -I of rzig's libstdcxx-shim/ and of
+#     the tree's lib/gcc/<triple>/<version>/include/c++ directories,
+#     -D_GLIBCXX_SYSHDR, and the tree's lib/libstdc++.so.6 and
+#     lib/libgcc_s.so.1 (fakes every tree has) are taken out of its side
+#     too and reported as "ok+" (where they go: libstdcxx.zig's and
+#     compiler.zig's unit tests);
 #   - rzig adds the finalization object of linux shared libraries
 #     (dso_fini.zig) and the object of Windows links (x86_64's CFG stub,
 #     cfguard.zig; aarch64's cache flush, clear_cache.zig, as aarch64 CFG
@@ -95,10 +103,15 @@ exit 0
 EOF
 chmod +x "$W/tools/uname" "$W/tools/xcrun"
 
-# tree NAME: an installed R_HOME/bin with rzig and the shims side by side
+# tree NAME: an installed R_HOME/bin with rzig and the shims side by side,
+# and what every linux C++ command needs (libstdcxx.zig): libstdc++'s
+# headers' directories and runtime in the tree, the shims beside rzig;
+# empty fakes, which the stub never reads
+cxx_triple="$(uname -m | sed 's/^arm64$/aarch64/')-conda-linux-gnu"
 tree() {
   local tc=$W/$1/lib/R/bin/toolchain sh=$W/$1/lib/R/bin/bash n
-  mkdir -p "$tc" "$sh"
+  mkdir -p "$tc" "$sh" "$tc/libstdcxx-shim" "$W/$1/lib/gcc/$cxx_triple/15.3.0/include/c++/$cxx_triple"
+  : > "$W/$1/lib/libstdc++.so.6"; : > "$W/$1/lib/libgcc_s.so.1"
   for n in zig-cc zig-cxx zig-ar zig-ranlib gcc g++ gcc-ar gcc-ranlib ar ranlib; do cp "$RZIG" "$tc/$n"; done
   # rzig's link objects beside it, as R's build installs them (rzig's
   # build.zig, linkObject): the ones that build made beside $RZIG (the
@@ -282,9 +295,12 @@ run_case() {
   # beside it (dso_fini.zig, cfguard.zig), a Windows link's import library
   # (windows.implib) and a Windows DLL link's -lws2_32
   # (windows.defaultLibs), taken out of its side
-  local own_l="-L$W/$t/lib" own_added=0
+  local own_l="-L$W/$t/lib" own_added=0 cxx_re='^$'
+  # linux: libstdc++'s flags (libstdcxx.zig), taken out of rzig's side
+  [ "$os" = linux ] && cxx_re="^(-nostdinc\+\+|-nostdlib\+\+|-D_GLIBCXX_SYSHDR|-I$W/$t/lib/R/bin/toolchain/libstdcxx-shim|-I$W/$t/lib/gcc/$cxx_triple/15\.3\.0/include/c\+\+(/$cxx_triple|/backward)?|$W/$t/lib/lib(stdc\+\+\.so\.6|gcc_s\.so\.1))\$"
   for side in "${sides[@]:1}"; do
     grep -qxF -- "$own_l" "$W/out.$side" && own_added=1
+    grep -qE -- "$cxx_re" "$W/out.$side" && [ "$cxx_re" != '^$' ] && own_added=1
     n=$(grep -cE -- "$obj_re" "$W/out.$side" || :)
     [ "$n" = 0 ] || own_added=1
     [ "$n" = "$obj_want" ] || { ok=0; echo "    $side: $n link objects rzig added, want $obj_want" >> "$W/report"; }
@@ -296,7 +312,7 @@ run_case() {
     n=$(( $(grep -cxF -- "$win_target" "$W/out.$side" || :) - $(grep -cxF -- "$win_target" "$W/want" || :) ))
     [ "$n" = "$wt_want" ] || { ok=0; echo "    $side: $n Windows targets named, want $wt_want" >> "$W/report"; }
     [ "$wt_want" = 0 ] || own_added=1
-    grep -vxF -- "$own_l" "$W/out.$side" | { grep -vE -- "$obj_re" || :; } | drop_implib | drop_ws2 "$ws2_want" |
+    grep -vxF -- "$own_l" "$W/out.$side" | { grep -vE -- "$obj_re" || :; } | { if [ "$cxx_re" != '^$' ]; then grep -vE -- "$cxx_re" || :; else cat; fi; } | drop_implib | drop_ws2 "$ws2_want" |
       { if [ "$wt_want" = 1 ]; then drop_wintarget; else cat; fi; } > "$W/cmp.$side"
     cmp -s "$W/want" "$W/cmp.$side" || { ok=0; diff -u "$W/want" "$W/cmp.$side" | sed 's/^/    /' >> "$W/report" || :; }
   done
@@ -655,7 +671,7 @@ if [ -n "$real_zig" ]; then
   check "--rzig-check=fortran: no flang, 127, the compilers group" \
     bash -c "env -i ZIG_BIN='$real_zig' PATH='$W/nothing' '$tc/zig-cc' --rzig-check=fortran > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
       grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err' &&
-      grep -q '^  standalone:  extract R-[^ ]*-compilers\.tar\.xz where you extracted R (zig [0-9.]*, flang and the OpenMP files)\$' '$W/check.err'"
+      grep -q '^  standalone:  extract R-[^ ]*-compilers\.tar\.xz where you extracted R (zig [0-9.]*, libstdc++.s headers, flang and the OpenMP files)\$' '$W/check.err'"
   check "zig-fc --rzig-check checks flang too" \
     bash -c "cp '$RZIG' '$tc/zig-fc' && env -i ZIG_BIN='$real_zig' PATH='$W/flang' '$tc/zig-fc' --rzig-check | grep -qF '; flang at $W/flang/flang'"
 fi
@@ -1037,5 +1053,5 @@ check "a compile with no zig: 127, the compilers group" \
   bash -c "env -i PATH='$W/nothing' '$tc/zig-cc' -c a.c > /dev/null 2> '$W/check.err'; [ \$? = 127 ] &&
     grep -q '^Compiling needs the r-zig compilers for R ' '$W/check.err'"
 
-echo "== $pass identical, $own identical but for rzig's own-environment -L, link object, import library, default system library or Windows target, $deliberate deliberate differences, $fail failed"
+echo "== $pass identical, $own identical but for rzig's own-environment -L, link object, import library, default system library, Windows target or linux libstdc++ flags, $deliberate deliberate differences, $fail failed"
 [ "$fail" = 0 ]
