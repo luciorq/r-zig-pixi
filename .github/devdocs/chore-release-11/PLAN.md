@@ -439,7 +439,10 @@ flang-pixi), README sections for the three items, and findings 19-21.
     for standalone archives and PyPI (B12). Not needed: flang-pixi's
     upstream-zig switch, `zig build fetch`, v3 package flags,
     R_ZIG_TOOLCHAIN_ENV, ARM64 Control Flow Guard (until a package hits
-    it). Stale records it listed (line numbers as of 2026-11-12) are
+    it; 2026-11-18: a package does, magick's clang-aarch64 librsvg-2.a,
+    and it links with no stub, as zig's libmingw32 defines
+    __guard_check_icall_fptr for aarch64; a no-op, not CFG enforcement;
+    link-objects-test.sh checks it; feat-winarm-gaps/PLAN.md). Stale records it listed (line numbers as of 2026-11-12) are
     not all corrected yet:
     feat-standalone-toolchain/PLAN.md:5-7, :6787, :6872, :6899-6904,
     :6944-6947, :6961; TODO.md:149-161, :1091-1096, :1241-1254;
@@ -751,6 +754,20 @@ flang-pixi), README sections for the three items, and findings 19-21.
     Option C (rzig passes an explicit `-target` on Windows, as on linux
     and macOS): done in build 11, on every tool path and every OS;
     finding 29.
+    (2026-11-18) The libraries conda-forge lacks for win-arm64 now come
+    from CRAN's Rtools45 aarch64 tree in stress (R_ZIG_FALLBACK_SOFT),
+    not yet run on windows-11-arm: decisions W4-W12, W14-W16, W19,
+    W21-W24 and W27, findings 18-40, 49-61, 65-66, 68 and 70-73 in
+    .github/devdocs/feat-winarm-gaps/PLAN.md.
+    (2026-11-19) Verified on windows-11-arm: stress run 44450918935
+    (fd44749, tree and conda legs, channel local) used the tree
+    ("rzig uses it (R_ZIG_FALLBACK_SOFT)") for glpk gmp gsl harfbuzz
+    hdf5 libgdal-core libnetcdf libpq mpfr nlopt udunits2; units,
+    hdf5r, ncdf4, gsl, Rmpfr, nloptr, igraph, terra, gdalraster, lme4,
+    scran, Rsamtools, textshaping and ragg installed and passed their
+    smokes on both legs. sf and lwgeom were skipped: s2 fails to link
+    (no abseil library on its link line). feat-winarm-gaps findings
+    83-88.
 
 27. **Lock bump (user request "bump all package versions in the
     lockfiles", 2026-11-15).** Tree: T/wt/rel11-fix (detached at
@@ -1282,13 +1299,41 @@ flang-pixi), README sections for the three items, and findings 19-21.
     turns on lld's identical code folding for a `-s` link on Windows,
     and ICF reads .llvm_addrsig, which those objects have broken (an
     index past the symbol table). Rtools45-aarch64 and r-universe link
-    their own freetype and never meet it. Not fixed for release 11:
-    recorded (stress.R classes it toolchain; the rows'
-    windows-aarch64= expects). After the release: ICF off on Windows
-    links (`/OPT:NOICF`), which also removes the risk that ICF folds two
-    functions whose addresses a package compares; or Rtools' static
-    C libraries as a win-arm64 gap-filler (r-universe research,
-    T/triage/runiverse).
+    their own freetype and never meet it. (2026-11-18, feat-winarm-gaps:
+    fixed in rzig. 2026-11-19: rzig's _LINK_ verified natively on
+    windows-11-arm and windows-latest; textshaping and ragg ok on
+    windows-11-arm, but through the Rtools45 tree's freetype, so the
+    bundle's broken objects were not linked there; see below.) Cause confirmed by a
+    cross link from linux, both arches, both zigs (scratch
+    next/probe-icf): `-s` drops zig's -DEBUG, and lld's default without
+    it is /OPT:REF,ICF. zig cc has no flag that turns ICF off
+    ("unsupported linker arg"; -Wl,-OPT: is read as -O). rzig now puts
+    /OPT:NOICF first in _LINK_ for zig on every Windows image link
+    (windows.noIcf); lld-link reads _LINK_ before zig's arguments
+    (also natively on win-64 with conda-forge zig.exe, kappa
+    2026-11-18, a direct zig cc, not through rzig).
+    Little is lost: in a png+zlib C DLL and a small C++ template DLL
+    (both arches, both zigs, 2026-11-18) ICF folded no function and the
+    DLL sizes did not change; on aarch64 it merged one string constant.
+    Not checked on a large C++ package. Off, ICF cannot fold two
+    functions whose addresses a package compares. R.dll is not stripped
+    on Windows, so zig passes -DEBUG and lld has no ICF there. Checks:
+    rzig's unit tests, and verify-bundle.sh's traced stripped DLL link
+    on both Windows runners (lld must print "Command line: lld-link
+    /OPT:NOICF -verbose ..."; the dash form because MSYS2 bash would
+    turn an env value /VERBOSE into a Windows path). (2026-11-19)
+    Verified on windows-11-arm and windows-latest: build-r run
+    44450920834, jobs 135319558940 and 135319558860, both passes, so
+    with upstream zig (the compilers group's TC/zig) and conda-forge
+    zig (ZIG_BIN). Stress run 44450918935: textshaping and ragg are ok
+    on windows-11-arm (tree and conda legs), but their configure took
+    harfbuzz, freetype and the image libraries from the Rtools45 tree,
+    not the r-windows clang-aarch64 bundle, so no native link of the
+    broken objects has run; the cross link from linux stays the
+    evidence for that part. Rtools' static libraries
+    as a win-arm64 gap-filler are the same branch's part 3. Record:
+    .github/devdocs/feat-winarm-gaps/PLAN.md (decisions W3, W18, W25,
+    W26; findings 10-17, 47, 48, 62, 63, 67, 69, 79, 82 and 84).
 
 36. **windows-11-arm: magick's link stops at "undefined symbol:
     __clear_cache"** (runs 43879895297, 43947228208; both zigs). The

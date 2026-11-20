@@ -399,6 +399,12 @@ if [ "$OS" = windows ]; then
   has_line "$TREE/$rh/etc/r-zig.cmake" '  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}/Library")' ||
     bad="$bad
   $rh/etc/r-zig.cmake is missing or does not add R_ZIG_EXTRA_ENV's Library"
+  # and on Windows on ARM R_ZIG_FALLBACK_SOFT's tree last (feat-winarm-gaps)
+  if [ "$PLAT" = win-arm64 ]; then
+    has_line "$TREE/$rh/etc/r-zig.cmake" '  file(TO_CMAKE_PATH "$ENV{R_ZIG_FALLBACK_SOFT}" _r_zig_env)' ||
+      bad="$bad
+  $rh/etc/r-zig.cmake does not add R_ZIG_FALLBACK_SOFT's tree (win-arm64)"
+  fi
 else
   for l in 'PATH=${R_HOME}/bin/toolchain/usr/bin:${R_HOME}/bin/toolchain/cmake/bin:${PATH}' "MAKE=\${MAKE-'make'}"; do
     has_line "$TREE/$rh/etc/Renviron" "$l" || bad="$bad

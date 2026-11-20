@@ -59,6 +59,15 @@ echoed: ?*std.ArrayList(u8) = null,
 /// After a command of several steps (`steps`, zig-fc's split), which rzig
 /// waits for on every OS, they are deleted too.
 discard: std.ArrayList([]const u8) = .empty,
+/// environment.fallback's answer, once per command (null: not asked
+/// yet), so its warning is printed once: the tree's directory, or null
+/// when there is none. Unit tests reset it when they change the
+/// variable.
+fallback_soft: ??[]const u8 = null,
+/// Variables rzig put into `env` for the command (windows.noIcf's
+/// _LINK_): main.zig's run then hands `env` to zig, and RZIG_TRACE shows
+/// them before zig's line.
+env_set: std.ArrayList([]const u8) = .empty,
 /// RZIG_PRINT_ARGV: nothing will run (main.zig). zig-fc's split then
 /// names its temporary directory `rzig-fc-dryrun`, so the printed
 /// commands are the same on every run, and nothing creates it.

@@ -40,7 +40,8 @@
 #     compiler.zig's unit tests);
 #   - rzig adds the finalization object of linux shared libraries
 #     (dso_fini.zig) and the object of Windows links (x86_64's CFG stub,
-#     cfguard.zig; aarch64's cache flush, clear_cache.zig), the link
+#     cfguard.zig; aarch64's cache flush, clear_cache.zig, as aarch64 CFG
+#     needs no stub), the link
 #     objects R's build installs beside rzig, which the shims never
 #     added: taken out of its side too, after checking that it is there
 #     exactly when the rule says (a linux link with -shared as a word, no

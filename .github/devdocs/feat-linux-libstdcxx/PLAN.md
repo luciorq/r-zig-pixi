@@ -285,6 +285,30 @@ the prebuilt libarrow (1.27 min in the stress tree leg, finding 33).
 - Who: default chosen by Claude; user may revisit. 2026-11-18 (records
   audit).
 
+L28. stress/packages.tsv: the six rows of L25 now say "linux-64 and
+linux-aarch64, tree and conda: ok (stress 44438790229, 2026-11-19)" in
+place of "linux-64 only; linux-aarch64 not run". The arrow row's
+"linux-aarch64's binary not checked" now records the linux-arm64
+download (finding 66).
+- Options: (a) rewrite the notes; (b) keep them and add a new note.
+- Choice: (a).
+- Reason: stress run 44438790229 ran every row on both arches, both legs
+  (finding 65); the old text would be wrong.
+- Who: Claude, in the workflow step that recorded PR #49's CI.
+  2026-11-19.
+
+- L29. Merge before the upstream-zig gate ran.
+  Options: (a) add the 'upstream-zig' label on #49 and merge after
+  its runs; (b) merge #49 now and run the gate on #50 after main is
+  merged into feat-winarm-gaps.
+  Choice: (b). The user merged #49 as 2674ab4 (main f668295) on
+  2026-11-19, before its upstream-zig runs; these CI and stress
+  results then came to main through #50's branch.
+  Reason: #50 still needed its full-ci and upstream-zig runs; on the
+  merged tree, one set of runs checks both branches with both zigs.
+  Who: user (merge, "merge 50 together with the script"); the gate on
+  #50 proposed by Claude. Date: 2026-11-19.
+
 ## Findings
 
 Each finding: the fact, its evidence, the date, and what is not
@@ -292,9 +316,9 @@ verified. 1-15 are the probe's F1-F15 (probe-libstdcxx, 2026-11-18;
 scratch /data/gamma/luciorq/workspaces/temp/r-zig-pixi/next/probe-libstdcxx,
 README.txt and logs/). 16-32 come from the probe's review, 33-45 from
 the implementation, 46-56 from the implementation review and how each
-was resolved, 57-60 from the final pass, 61 onward from the records
-audit. All on gamma (linux-64,
-Ubuntu 24.04), 2026-11-18, unless said otherwise.
+was resolved, 57-60 from the final pass, 61-63 from the records
+audit, 64 onward from PR #49's CI (GitHub-hosted, 2026-11-19). 1-63 on
+gamma (linux-64, Ubuntu 24.04), 2026-11-18, unless said otherwise.
 
 Probe:
 
@@ -634,6 +658,91 @@ Records audit (2026-11-18):
     records audit with upstream zig 0.17.1. No log saved. Not verified:
     whether main fails the same way in CI.
 
+PR #49's CI (2026-11-19, commit 2674ab4, label full-ci):
+
+64. build-r run 44438791005: 32 jobs success; packaging skipped (full
+    tier, no publish). A second build-r run, 44438791017, was cancelled
+    (duplicate). Jobs: toolchain on all six hosts; conda-package on all
+    six subdirs; default, minimal and full on ubuntu-latest,
+    ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest and
+    windows-11-arm; openblas on both ubuntu hosts. Each default, minimal
+    and full job ran rzig tests, the R build, verify-tree, smoke,
+    contract, pkg-parity, the regression suite and hermetic; default and
+    minimal jobs also packaged and verified the standalone archives;
+    the minimal jobs on ubuntu-latest, ubuntu-24.04-arm, macos-latest and
+    macos-15-intel built and tested the wheel (skipped on Windows).
+    Details read from the job logs (gh run view --job):
+    - rzig tests: 220/220 on ubuntu-24.04-arm and macos-latest default
+      (jobs 135278797002, 135278797077); 191/220 with 29 skipped on
+      windows-latest default (135278796899). Which 29 were skipped was
+      not checked.
+    - verify-tree on both linux arches: "C++ runtime verified: libR
+      needs libstdc++.so.6 and libgcc_s.so.1 (lib/ has both,
+      GLIBCXX_3.4.34), none of 16 R binaries needs libc++" (135278797002,
+      135278797119). macos-latest: "none needs a shared
+      libc++/libstdc++".
+    - contract: "C++ runtime: libstdc++ in every compiled C++ package
+      (Rcpp, minqa), no libc++" on both linux arches; "C++ runtime:
+      static in every compiled package" on macos-latest; the Rcpp
+      cppFunction exception is caught on linux-64, linux-aarch64, macOS
+      and windows-latest (the default jobs read).
+    - verify-bundle's success text (finding 61) ran: "== compilers
+      verified: ... dso_fini.o is its link object,
+      lib/R/bin/toolchain/{libstdcxx-shim/bits/c++config.h,libstdcxx-shim/sys/single_threaded.h}
+      the libstdc++ shims, and nothing else is there" (135278797002 line
+      1101, 135278797119 line 1103).
+    - aarch64 toolchain (135274213342): "libstdc++ headers verified:
+      libstdcxx/lib/gcc/aarch64-conda-linux-gnu/15.3.0/include/c++";
+      libstdcxx-devel_linux-aarch64 15.3.0 h0e8df58_107.
+    - conda-package: build number 12 on all six subdirs (for example
+      r-zig-slim-4.6.2-h3e03716_12 on linux-64, h0122563_12 on
+      linux-aarch64); test-compilers.R's "a C++ package through rzig
+      build (tier 1): an exception caught: OK" on linux-64,
+      linux-aarch64, osx-64, osx-arm64, win-64 and win-arm64; on linux
+      "the C++ package needs libstdc++.so.6, no libc++".
+      test-toolchain.R's NEEDED check (a silent stopifnot) passed before
+      "toolchain: C and C++ package compiled (rzig build: tier 1) and
+      loaded: OK" on linux-64 and linux-aarch64 (135274213575,
+      135274213750). linux-aarch64's r-zig-compilers solved
+      libstdcxx-devel_linux-aarch64 15.* to 15.3.0 h0e8df58_107.
+    - wheel-test on ubuntu-24.04-arm minimal (135278797247): "wheel test
+      passed (r_zig-4.6.2-py3-none-manylinux_2_17_aarch64...)". The
+      wheel test compiles with PyPI ziglang (its design), not with a
+      separate upstream-zig leg.
+    Not verified: anything with upstream zig in CI. The upstream-zig
+    runs 44438791162 and 44438791002 were skipped: the PR has no
+    'upstream-zig' label. Under the both-zigs rule this is a gated
+    release check; the label should run before merge.
+65. stress run 44438790229 (2674ab4): ubuntu-latest and
+    ubuntu-24.04-arm, tree and conda legs, 20 targets (magick sf terra
+    gdalraster protolite V8 Rcpp RPostgres systemfonts textshaping ragg
+    DESeq2 scran Rsamtools arrow arrow:source RcppParallel duckdb rstan
+    qs2). Every leg: "Targets: 20 ok. Unexpected (!): 0. Dependencies:
+    116 ok." All 80 rows read: status ok, expect ok. The conda legs
+    used the run's own build 12 packages (aarch64:
+    r-zig-slim-4.6.2-h0122563_12, r-zig-toolchain-4.6.2-h1fb4297_12).
+    The Rcpp row's smoke throws std::range_error and catches it in R
+    ("stress: smoke ok") on every leg. Times in minutes (x86_64 tree,
+    x86_64 conda, aarch64 tree, aarch64 conda): arrow 1.92, 1.19, 2.73,
+    1.4; arrow:source 15.18, 9.32, 9.47, 9.88; duckdb 16.29, 10.19,
+    10.26, 10.51; rstan 1.06, 0.63, 0.85, 0.83; qs2 0.31, 0.24, 0.32,
+    0.33. StanHeaders built as rstan's dependency. Reports and logs:
+    /data/gamma/luciorq/workspaces/temp/r-zig-pixi/next/stress-44438790229/stress-*/report.md
+    and logs/. Not verified: upstream zig in stress; macOS and Windows
+    stress (the run was linux only).
+66. On linux-aarch64 (both legs) arrow downloads a prebuilt libarrow:
+    "Checksum validated successfully for libarrow", "Successfully
+    retrieved libarrow (linux-arm64)" (logs/arrow.log); arrow:source
+    prints "Building libarrow from source". x86_64 retrieves
+    linux-x86_64. V8 takes jeroen's static bundle: "Getting bundle:
+    v8-debian-11-arm64.tar.gz" on aarch64, "v8-rocky-8-amd64.tar.gz" on
+    x86_64, linked as -lv8_monolith (logs/V8.log). This answers
+    finding 13's open question: a linux-arm64 libarrow exists and is
+    used.
+67. Finding 62's build 12: conda-package built number 12 on all six
+    subdirs (finding 64), so the file names differ from the published
+    build 11. Not verified: an upload (publish skipped).
+
 ## Design (as implemented)
 
 1. Standalone and wheel: option (a) of CXX-STDLIB.md (decisions L4 and L5). The headers are
@@ -818,23 +927,36 @@ otherwise.
 | wheel, wheel-test | implementation | passed on the second run (finding 36) |
 | stress, tree leg, 17 targets | implementation | 17 ok, 0 unexpected (finding 33) |
 
+## Tests in CI (PR #49, commit 2674ab4, 2026-11-19)
+
+GitHub-hosted runners, conda-forge zig only (no upstream-zig label).
+
+| Test | Run | Result |
+| --- | --- | --- |
+| build-r, full tier: toolchain (6 hosts), conda-package (6 subdirs), default/minimal/full (6 hosts), openblas (2 linux hosts) | 44438791005 | 32 jobs success, packaging skipped (finding 64) |
+| rzig tests | 44438791005 | 220/220 (linux-aarch64, macOS); windows-latest 191/220, 29 skipped |
+| verify-tree, smoke, contract, pkg-parity, regression suite, hermetic | 44438791005 | success on every default, minimal and full job |
+| verify-package (standalone archives), with finding 61's text | 44438791005 | success on every default and minimal job |
+| conda-package with test-compilers.R and test-toolchain.R, build 12 | 44438791005 | success on linux-64, linux-aarch64, osx-64, osx-arm64, win-64, win-arm64 |
+| wheel, wheel-test | 44438791005 | success on linux-64, linux-aarch64, osx-arm64 (macos-latest), osx-64 (macos-15-intel); not run on Windows |
+| upstream-zig | 44438791162, 44438791002 | skipped (no 'upstream-zig' label) |
+| stress, tree and conda legs, linux-64 and linux-aarch64, 20 targets | 44438790229 | every leg 20 ok, 0 unexpected, 116 dependencies ok (finding 65) |
+
 ## Not verified
 
-- linux-aarch64: nothing ran. rzig, its tests and the shims
-  cross-built for aarch64-linux-gnu (also aarch64-macos,
-  x86_64-windows-gnu, aarch64-windows-gnu); the aarch64 toolchain tree,
-  R build, packages and stress rows did not run. Whether a linux-arm64
-  libarrow and an arm64 static libv8 exist was not checked.
-- macOS and Windows: only the unit tests' macOS and Windows cases on
-  linux, and the cross builds. No CI ran on this branch. contract.R's
-  new exception check runs on every OS and ran only on linux.
-- Not rerun after the review fixes: conda-package (test-compilers.R,
-  test-toolchain.R changed, build number 12), wheel and wheel-test
-  (cxx_throw changed; the minimal tree was rebuilt since), pkg-parity,
-  stress.
-- Stress not run: the conda leg, upstream zig, arrow:source,
-  RcppParallel:system-tbb, mlpack, StanHeaders/rstan, qs2; the full and
-  openblas builds.
+- Upstream zig (PyPI ziglang as ZIG_BIN) in CI: the upstream-zig runs
+  were skipped (no label), so no CI job and no stress leg ran with it.
+  Upstream zig ran only on gamma (Tests table: unit tests, parity,
+  rzig-test) and as wheel-test's PyPI ziglang. Under the both-zigs
+  rule this is a gated release check. #49 merged without it (L29);
+  the 'upstream-zig' runs on PR #50, after main is merged into it,
+  check this code too.
+- macOS and Windows: build-r passed (finding 64), but no stress run on
+  this branch covered them; the stress run was linux only.
+- Which 29 rzig unit tests were skipped on windows-latest (191/220) was
+  not checked.
+- Stress not run: upstream zig, RcppParallel:system-tbb, mlpack; the
+  full and openblas builds.
 - Hosts with a libstdc++ older than GLIBCXX_3.4.32 (Ubuntu 22.04, RHEL
   8): the failure without libR's NEEDED is inferred (finding 8).
 - rpy2 or another embedder that loads an older libstdc++ first;
@@ -845,19 +967,6 @@ otherwise.
   CMAKE_CXX_IMPLICIT_LINK_LIBRARIES's libunwind.a.
 - `-Wl,-lstdc++` (not rewritten, L21) and a prebuilt static archive
   built with libc++ inside a package (finding 60).
-- recipe/test-compilers.R's C++ throw package runs on every OS. It ran
-  only in the linux-64 conda-package (finding 35), before the
-  char-buffer change (L20). It has not run on macOS, win-64 or
-  win-arm64.
-- test-toolchain.R's new NEEDED check (with the glibc exclusions of
-  finding 59) has only been parsed, never executed.
-- The rzig unit tests' libstdc++ fixtures have only run on a linux
-  host, never on macOS or Windows hosts (CI core jobs).
-- linux-aarch64 conda packages: r-zig-compilers'
-  libstdcxx-devel_linux-aarch64 15.* dependency was never solved or
-  built.
 - verify-tree.sh checks GLIBCXX_3.4.34, a constant tied to the 15.x
   headers. When libstdcxx-devel moves to newer headers, the check still
   passes but its bound is too low; nothing flags this.
-- verify-bundle.sh's new success text (finding 61) has not run in a
-  verify-package run.

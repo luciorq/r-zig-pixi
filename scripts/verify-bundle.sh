@@ -1576,6 +1576,33 @@ if [ "$OS" = windows ]; then
     echo "== an OpenMP DLL from gcc.exe alone: omp.h and libomp.lib from the compilers group, libomp.dll from bin\\x64 at load"
   fi
 
+  # lld's ICF off (chore-release-11 finding 35, feat-winarm-gaps): rzig
+  # puts /OPT:NOICF first in _LINK_ for zig on every Windows image link
+  # (windows.noIcf). Dry runs do not show it, so a real stripped DLL link
+  # by gcc.exe alone, with the caller's _LINK_=-verbose: RZIG_TRACE must
+  # show `_LINK_='/OPT:NOICF -verbose'` before zig's line, lld-link (a
+  # child of zig) must print "Command line: lld-link /OPT:NOICF -verbose
+  # ...", and the DLL must exist. The dash form is on purpose: MSYS2 bash
+  # turns an env value like /VERBOSE into a Windows path when it starts a
+  # native program, and lld-link takes either prefix. This proves on Windows that rzig hands
+  # zig its environment and that lld inside zig.exe reads _LINK_; in both
+  # passes, so with each zig.
+  if [ -n "$pass_zig" ]; then
+    ni="$VERIFY_DIR/noicf"
+    mkdir -p "$ni"
+    printf '%s\n' '__declspec(dllexport) int noicf_f(void) { return 1; }' > "$ni/a.c"
+    (cd "$ni" && env -i "${base_env[@]}" "${zig_env[@]}" PATH="$R_BINDIR:$sys32" "$cc" -O2 -c a.c -o a.o &&
+      env -i "${base_env[@]}" "${zig_env[@]}" PATH="$R_BINDIR:$sys32" _LINK_=-verbose RZIG_TRACE=1 \
+        "$cc" -shared -s -o noicf.dll a.o) > "$ni/log" 2>&1 ||
+      { cat "$ni/log" >&2; echo "error: gcc.exe could not compile and link a stripped DLL (zig from $pass_what)" >&2; exit 1; }
+    tr -d '\r' < "$ni/log" | grep -qF -- "_LINK_='/OPT:NOICF -verbose' " ||
+      { cat "$ni/log" >&2; echo "error: RZIG_TRACE shows no _LINK_='/OPT:NOICF -verbose' before zig's line: rzig did not set lld's ICF off (windows.noIcf)" >&2; exit 1; }
+    tr -d '\r' < "$ni/log" | grep -qiE -- '^Command line: [^ ]*lld-link[^ ]* /OPT:NOICF -verbose ' ||
+      { cat "$ni/log" >&2; echo "error: lld-link's command line does not start with /OPT:NOICF -verbose: zig.exe's lld did not read _LINK_" >&2; exit 1; }
+    [ -f "$ni/noicf.dll" ] || { cat "$ni/log" >&2; echo "error: no noicf.dll" >&2; exit 1; }
+    echo "== lld's ICF off: a stripped DLL link by gcc.exe hands zig _LINK_='/OPT:NOICF -verbose', and lld-link reads it (zig from $pass_what)"
+  fi
+
   # -lsynchronization (D6): Rust's std links WaitOnAddress and
   # WakeByAddress* from it, and upstream zig has no import library of that
   # name; rzig links the API set's, which both zigs have (windows.zig). A

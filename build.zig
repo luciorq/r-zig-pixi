@@ -1654,7 +1654,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rcmd_env, ctx.rhomeInstallDir("etc"), "Rcmd_environ").step);
     // etc/r-zig.cmake: CMake's default toolchain file, as on unix
     // (cmakeToolchain); etc/Rcmd_environ names it.
-    const cmake_tc = rcmd_env_wf.add("r-zig.cmake", cmakeToolchain(.windows));
+    const cmake_tc = rcmd_env_wf.add("r-zig.cmake", cmakeToolchain(.windows, ctx.target.result.cpu.arch));
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(cmake_tc, ctx.rhomeInstallDir("etc"), "r-zig.cmake").step);
 
     try installWindowsCompilerContract(ctx, io);
@@ -2847,7 +2847,7 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
 /// (feat-no-host-paths F3): one binary, a copy per name, dispatching on
 /// the name it was started as, and beside them the object rzig adds to
 /// links (rzig_build.linkObject: linux's dso_fini.o, Windows' cfguard.o
-/// on x86_64 and clear_cache.o on aarch64;
+/// on x86_64 and clear_cache.o on aarch64, where CFG needs no stub;
 /// feat-r-home-link-objects). They are the only files directly in that
 /// directory: the toolchain groups' files sit in its subdirectories
 /// (feat-standalone-toolchain B19, B30). On linux the base also has
@@ -4092,7 +4092,7 @@ fn installStaticTree(ctx: *Ctx, io: std.Io) !*std.Build.Step.WriteFile {
     _ = stage.add("etc/Makeconf", makeconf);
     _ = stage.add("etc/javaconf", try substFile(ctx, io, "etc/javaconf.in"));
     _ = stage.addCopyFile(ctx.path("etc/repositories"), "etc/repositories");
-    _ = stage.add("etc/r-zig.cmake", cmakeToolchain(ctx.os));
+    _ = stage.add("etc/r-zig.cmake", cmakeToolchain(ctx.os, ctx.target.result.cpu.arch));
 
     // --- include/ (public headers) ---
     for (rspec.public_headers) |h| {
@@ -4259,7 +4259,13 @@ fn ldpaths(ctx: *const Ctx) []const u8 {
 ///     only add a second one, and CMAKE_SYSTEM_NAME or
 ///     CMAKE_SYSTEM_PROCESSOR would switch CMake to cross-compiling
 ///     (CMAKE_CROSSCOMPILING: no try_run, find_* rerooted).
-fn cmakeToolchain(os: Os) []const u8 {
+///   - Windows on ARM: R_ZIG_FALLBACK_SOFT's tree (CRAN's Rtools45 aarch64
+///     libraries, rzig's environment.zig item 3) last, after the
+///     environments, read at configure time as R_ZIG_EXTRA_ENV is: CMake's
+///     find_* then reach the libraries conda-forge lacks there, as rzig's
+///     -L does, and an environment's copy wins (feat-winarm-gaps). Only in
+///     an aarch64 R's file: rzig ignores the variable on x86_64.
+fn cmakeToolchain(os: Os, arch: std.Target.Cpu.Arch) []const u8 {
     const head =
         \\# r-zig: CMake's default toolchain file for package builds.
         \\# etc/Renviron (Windows: etc/Rcmd_environ) sets CMAKE_TOOLCHAIN_FILE to
@@ -4293,8 +4299,17 @@ fn cmakeToolchain(os: Os) []const u8 {
         \\set(CMAKE_SYSTEM_IGNORE_PREFIX_PATH /opt/homebrew /usr/local /opt/local /sw $ENV{HOMEBREW_PREFIX})
         \\
     ;
+    const windows_fallback =
+        \\# Windows on ARM: R_ZIG_FALLBACK_SOFT's static library tree last, as rzig.
+        \\if(NOT "$ENV{R_ZIG_FALLBACK_SOFT}" STREQUAL "")
+        \\  file(TO_CMAKE_PATH "$ENV{R_ZIG_FALLBACK_SOFT}" _r_zig_env)
+        \\  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}")
+        \\  unset(_r_zig_env)
+        \\endif()
+        \\
+    ;
     return switch (os) {
-        .windows => head ++ windows_extra ++ tail,
+        .windows => if (arch == .aarch64) head ++ windows_extra ++ tail ++ windows_fallback else head ++ windows_extra ++ tail,
         .macos => head ++ unix_extra ++ tail ++ macos_ignore,
         else => head ++ unix_extra ++ tail,
     };

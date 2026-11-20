@@ -191,5 +191,14 @@ alpha, PDF, PS, SVG) runs correctly on kappa (x64).
   temporary probe in build-r.yaml goes when the contract passes there
   (2026-11-12: it passed in run 43344258167; the probe is removed).
 - Stress on win-arm64 (no GDAL and others on conda-forge).
-- ARM64 Control Flow Guard: rzig has a stub for x86_64 only; whether an
-  ARM64 package built with CFG links is open.
+- Done 2026-11-18 (feat-winarm-gaps): ARM64 Control Flow Guard needs no
+  stub. clang's ARM64 CFG calls only __guard_check_icall_fptr, and zig
+  0.17.1's libmingw32 defines it for aarch64 (mingw_cfguard_support.c),
+  aimed at a function that only returns. A -mguard=cf DLL links with
+  both zigs, with and without clear_cache.o. It links and is a no-op: a
+  MinGW image has no load config, so CFG is not enforced. That is not
+  CFG protection. magick's clang-aarch64 bundle uses CFG (librsvg-2.a,
+  5 references to __guard_check_icall_fptr), and magick was ok on
+  windows-11-arm in stress 44259183592 (a load and magick_config(), no
+  SVG render). zigbuild/tools/rzig/link-objects-test.sh checks it on
+  every rzig-test. Running CFG code on ARM is not verified.

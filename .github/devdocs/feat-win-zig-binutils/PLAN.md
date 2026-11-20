@@ -275,7 +275,9 @@ arches (config.h picks R_CPU by `__aarch64__`). cairo is r-zig's own
 build (zigbuild/cairo.zig) on both Windows arches; pango and harfbuzz
 are not used. The verification scripts use conda-forge's llvm-objdump
 on Windows. The runner is windows-11-arm, a leg of build.yaml. Still
-open: ARM64 Control Flow Guard (rzig has the stub for x86_64 only), and
+open: ARM64 Control Flow Guard (rzig has the stub for x86_64 only;
+2026-11-18: needs none, zig's libmingw32 covers aarch64, see
+feat-winarm-gaps/PLAN.md), and
 building ARM R on an x64 machine, which nothing needs: CI builds
 natively.)
 
@@ -289,6 +291,9 @@ natively.)
   imports; the baseline check needs another disassembler or none on ARM.
 - `cfguard.o` is x86_64 code (rzig_build.linkObject returns none for
   aarch64): ARM64 Control Flow Guard needs checking on a real machine.
+  (2026-11-18: it links with no stub, a no-op as on x86_64;
+  link-objects-test.sh; feat-winarm-gaps/PLAN.md. Running it on a real
+  machine is still not done.)
 - A runner: GitHub's windows-11-arm, or an ARM host for the test loop.
 - R.dll's import stubs run the target's rzig on the build machine
   (build.zig): building ARM R on an x64 machine would need a host rzig;
