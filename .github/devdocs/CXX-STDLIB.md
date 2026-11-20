@@ -120,13 +120,17 @@ was T/abi-libstdcxx: zig c++ against the env's `libstdcxx-devel` 15.3.0.
 - R loads the tree's `libstdc++.so.6` (GLIBCXX_3.4.36, the env's
   libstdcxx 16); packages built with the 15.3 headers need at most
   GLIBCXX_3.4.32 (symbol versions follow what the headers reference).
+- Tested in CI on PR #49 (2026-11-19, conda-forge zig): build-r
+  44438791005 on all six hosts and conda subdirs, and stress 44438790229
+  on linux-64 and linux-aarch64, tree and conda legs, 20 targets
+  including arrow:source, rstan and qs2, all ok (feat-linux-libstdcxx
+  PLAN.md findings 64-66).
 - Not tested yet (full list: feat-linux-libstdcxx/PLAN.md "Not
-  verified"): linux-aarch64 (cross-compiled only); macOS and Windows (no
-  CI on the branch); hosts with a libstdc++ older than GLIBCXX_3.4.32;
-  Rust (cc-rs) and Go packages; a CMake mixed C/C++ target linked
-  through the C compiler; `-Wl,-lstdc++`; a prebuilt libc++ static
-  archive inside a package; arrow:source; the stress conda leg; the
-  conda packages and wheel after the review fixes.
+  verified"): upstream zig in CI (no 'upstream-zig' label run); stress
+  on macOS and Windows; hosts with a libstdc++ older than
+  GLIBCXX_3.4.32; Rust (cc-rs) and Go packages; a CMake mixed C/C++
+  target linked through the C compiler; `-Wl,-lstdc++`; a prebuilt
+  libc++ static archive inside a package.
 
 Known differences from gcc:
 - **`-isystem` order.** rzig passes libstdc++'s directories as `-I`
