@@ -13,6 +13,13 @@ only. This branch's agents used no ssh. One native check ran on kappa
 (win-64): plain zig cc with _LINK_, run by Claude (finding 79). No CI
 run yet.
 
+Status (2026-11-19): committed as fd44749, PR #50 (no labels). The core
+CI tier passed on it (build-r run 44450920834; upstream-zig run
+44450920934 skipped, no label), and a stress run on both Windows
+runners (44450918935) put 14 windows-aarch64 rows at ok (findings
+81-87). Still not run: the full tier, upstream-zig CI, and the rows
+outside that stress run (Not verified).
+
 Recipe build number: not changed on this branch. Build 11 was published
 on 2026-11-18 (run 44336177906). feat-linux-libstdcxx bumps the number
 to 12; the next release is cut after both branches merge (decision W20).
@@ -259,6 +266,50 @@ Decisions made during implementation and the review fixes:
   Reason: magick takes r-windows' bundle whatever the env has;
   RcppParallel:system-tbb is a unix row (finding 51).
   Who: default chosen by Claude; user may revisit. Date: 2026-11-18.
+- W28. packages.tsv after stress run 44450918935 (findings 83-85).
+  Options: (a) write `windows-aarch64=ok` on every confirmed row;
+  (b) drop the `windows-aarch64=` key where the bare or `windows=`
+  value is already ok, and write `windows-aarch64=ok` only where
+  windows= is a failure. For sf and lwgeom: (c) a `windows=` value
+  for both arches; (d) separate windows= and windows-aarch64= keys.
+  Choice: (b) and (c). units, textshaping, Rmpfr, nloptr and lme4 are
+  `ok`; ragg and ncdf4 `linux=ok macos=ok windows=ok`; hdf5r, gsl,
+  igraph, Rsamtools, terra, gdalraster and scran keep their windows=
+  failure and get `windows-aarch64=ok`. sf and lwgeom are
+  `windows=fail-dependency` (they were windows=?). s2 keeps
+  `windows=fail-abi`, with a windows-aarch64 note. Each row has a dated
+  note.
+  Reason: (b) is the same result from stress.R's parser with fewer
+  keys (checked: only these rows' windows-aarch64 values and sf's and
+  lwgeom's windows values changed; linux and macOS are unchanged).
+  (c): s2 failed on all four Windows legs, so sf and lwgeom were
+  skipped on all four.
+  Who: the row values were set by the workflow step that recorded the
+  run (2026-11-19); the key form is a default chosen by Claude; user
+  may revisit. Date: 2026-11-19.
+
+- W29. Merge order with PR #49 (feat-linux-libstdcxx).
+  Options: (a) #49 first, main merged into feat-winarm-gaps, then
+  full-ci and upstream-zig on #50; (b) the same, but the labels before
+  the merge (the full matrix twice); (c) #50 first, then full CI and
+  stress again on #49.
+  Choice: (a). The user merged #49 (main f668295) on 2026-11-19. The
+  merge of main into this branch has two conflicts:
+  zigbuild/tools/rzig/build.zig (both additions kept) and
+  stress/packages.tsv (merged row by row: #49's linux= values and
+  notes, this branch's windows-aarch64= values and notes; magick, s2,
+  sf, terra and gdalraster had both). #49's record commit (its CI and
+  stress results) comes in on this branch, because #49 merged before
+  it was pushed.
+  Reason: #50 still needed full-ci and upstream-zig; #49's 32-job run
+  and its stress would otherwise have to run again. The two branches
+  touch 12 of the same files, but rzig's compiler.zig and main.zig
+  merge without conflict (linux-only against Windows-only code).
+  Check before the commit: on gamma, the merged tree passed rzig's
+  unit tests (6/6 steps), parity-test.sh (109 identical, 77 identical
+  but for flags, 33 deliberate, 0 failed) and link-objects-test.sh.
+  Who: user (merge order); the conflict resolution by Claude.
+  Date: 2026-11-19.
 
 ## Findings
 
@@ -556,7 +607,8 @@ Windows).
 47. ICF G1/G2: no test covered rzig spawning zig with an explicit
     environment on Windows, or lld reading _LINK_ there. True. Added
     verify-bundle.sh's traced stripped DLL link (Windows block, both
-    passes). Not run yet.
+    passes). Not run yet. (2026-11-19: passed on both Windows runners,
+    both passes, finding 82.)
 48. ICF G3, G4, G10, G11: the plan named test.yml, which does not exist
     (rzig-test runs from build-r.yaml); upstream-zig.yaml has no
     windows-11-arm leg (:69-80) and stress.yaml cannot get an upstream
@@ -752,7 +804,9 @@ Windows).
     line: lld-link /OPT:NOICF -verbose ..."). With no _LINK_, rc=0. Not
     run: through rzig's gcc.exe, under MSYS2 bash, on win-arm64, or
     with upstream zig on Windows. Scratch C:\Users\admin\rz-icf was
-    removed.
+    removed. (2026-11-19) Now also verified through rzig's gcc.exe,
+    under MSYS2 bash, on win-64 and win-arm64, with both zigs
+    (finding 82).
 80. Scope of the x86_64 repro (critic G8 of the icf probe plan): on
     win-64 textshaping uses conda-forge's harfbuzz and freetype, not the
     r-windows clang-x86_64 bundle, so the x86_64 repro (findings 12, 62)
@@ -760,6 +814,165 @@ Windows).
     magick on Windows x64 uses a gcc-built bundle (packages.tsv magick
     note), so NOICF changes nothing there. Not verified: read from the
     critic and packages.tsv, no Windows run.
+
+### CI on fd44749 (2026-11-19)
+
+81. build-r run 44450920834 on fd44749 (PR #50, no labels, core
+    tier): 20 jobs success, one matrix placeholder skipped (the full
+    tier needs the full-ci label). upstream-zig run 44450920934 was
+    skipped (no label). Not verified: these job results were given to
+    this record step; the job logs are not under next/.
+82. verify-bundle.sh's ICF check passed natively on both Windows
+    runners, in both passes. Job 135319558860 (windows-latest,
+    default) and job 135319558940 (windows-11-arm, default) each
+    printed "== lld's ICF off: a stripped DLL link by gcc.exe hands
+    zig _LINK_='/OPT:NOICF -verbose', and lld-link reads it (zig from
+    TC/zig)" and the same line "(zig from ZIG_BIN=...)", with
+    x86_64-w64-mingw32-zig.exe and aarch64-w64-mingw32-zig.exe. The
+    RZIG_TRACE lines show "zig-cc: _LINK_=/OPT:NOICF '...zig.exe' cc
+    ..." on both. TC/zig is R_HOME/bin/toolchain/zig/zig, the
+    compilers group's zig: upstream zig, PyPI's ziglang 0.17.1 wheel
+    (verify-bundle.sh's header, the toolchain pass, no ZIG_BIN).
+    ZIG_BIN= is the build pass: env.sh's $ZIG, the default env's
+    conda-forge zig 0.17.1. The script fails the step unless lld
+    prints "Command line: lld-link /OPT:NOICF -verbose ..." and the DLL
+    exists. So lld inside zig.exe reads _LINK_ natively on win-64 and
+    win-arm64, with upstream and conda-forge zig, when rzig's gcc.exe
+    starts zig with an explicit environment, under MSYS2 bash, with
+    the dash form. This closes the open part of findings 47 and 79.
+    Not verified: a native link of objects with a broken .llvm_addrsig
+    (finding 84); the job logs are not under next/ (lines as given to
+    this record step).
+83. Stress run 44450918935 on fd44749 (2026-11-19): windows-11-arm
+    and windows-latest, tree and conda legs, channel local, trace on,
+    19 targets (units gsl Rmpfr nloptr hdf5r ncdf4 igraph RPostgres
+    systemfonts textshaping ragg gdalraster terra sf lwgeom lme4 scran
+    Rsamtools magick). Reports: next/stress-44450918935/stress-*/
+    report.md, report.json and logs/.
+    windows-11-arm, both legs (tree 48.1 min, conda 49.4 min): "Fallback:
+    Rtools45 tree rtools45-toolchain-libs-full-aarch64-6768.tar.zst
+    (sha256 64dceac9ecdd) ...; sysdeps from it: glpk gmp gsl harfbuzz
+    hdf5 libgdal-core libnetcdf libpq mpfr nlopt udunits2; rzig uses it
+    (R_ZIG_FALLBACK_SOFT); PKG_CONFIG_PATH: the tree's closed .pc
+    first." "Targets: 17 ok, 2 skipped. Unexpected (!): 1.
+    Dependencies: 1 install-failed, 88 ok." "Sysdeps missing from the
+    env: imagemagick." The conda leg used r-zig-slim and
+    r-zig-toolchain 4.6.2 _11 from dist/conda (channel local), so the
+    --conda leg works with an rzig that reads R_ZIG_FALLBACK_SOFT.
+    Rows (both legs the same; each smoke log has "stress: smoke ok"):
+
+    | Row | Expect before | Result | Smoke output |
+    | --- | --- | --- | --- |
+    | units | ? | ok | TRUE |
+    | systemfonts | ok | ok | (unchanged row) |
+    | textshaping | ? | ok | 3 (finding 84) |
+    | ragg | fail-dependency | ok, the one unexpected row | TRUE (finding 84) |
+    | magick | ok | ok | '6.9.13.29' (finding 86) |
+    | hdf5r | ? | ok | TRUE |
+    | ncdf4 | ? | ok | netcdf library version 4.9.2 |
+    | gsl | ? | ok | 0.7651977 |
+    | Rmpfr | ? | ok | 0.3333...3346 |
+    | RPostgres | ok | ok | (unchanged row) |
+    | nloptr | ? | ok | 2 |
+    | igraph | ? | ok | 10 |
+    | Rsamtools | ? | ok | TRUE (finding 87) |
+    | sf | ? | skipped: failed dependency s2 | - |
+    | lwgeom | ? | skipped: failed dependency sf s2 | - |
+    | terra | ? | ok | 2 |
+    | gdalraster | ? | ok | GDAL 3.12.1 "Chicoutimi" |
+    | lme4 | ? | ok | Days 10.46729 |
+    | scran | ? | ok | TRUE |
+
+    windows-latest, both legs (tree 33.5 min, conda 20.3 min): "Targets:
+    5 install-failed, 10 ok, 4 skipped. Unexpected (!): 0." Every row
+    matched its expect: hdf5r fail-package (Wrapper_auto_H5P.c
+    'off_t *' to 'HDoff_t *'), gsl fail-upstream (LoadLibrary
+    'procedure could not be found'), igraph fail-sysdep
+    ('libxml/globals.h' not found), Rsamtools fail-dependency (Rhtslib:
+    'regex.h' not found), terra fail-sysdep ('tbb/parallel_for.h' not
+    found), gdalraster fail-abi ('gdal: unrecognized file extension'),
+    scran fail-dependency; sf and lwgeom skipped on s2 (expect ?). The
+    conda leg also had download failures of SingleCellExperiment and
+    beachmat ("download.packages failed 3 times", network); scran's
+    outcome is the same. No Fallback line on windows-latest (the tree
+    is aarch64 only, W21).
+    packages.tsv updated (W28). Not verified: run time beyond each
+    row's one-line smoke (finding 88).
+84. textshaping and ragg on windows-11-arm took the tree's libraries,
+    not r-windows' clang-aarch64 bundle: textshaping's configure
+    printed "using harfbuzz freetype2 fribidi from Rtools" and its link
+    names the tree's libharfbuzz.a, libfreetype.a and libfribidi.a;
+    ragg's printed "using freetype2 libpng libtiff-4 libjpeg libwebpmux
+    libwebp from Rtools". So this run did not link the bundle's
+    libfreetype.a with its broken .llvm_addrsig (finding 12), and it
+    does not show /OPT:NOICF fixing that link natively. Every traced
+    image link had `_LINK_=/OPT:NOICF` (textshaping.log, magick.log).
+    The addrsig fix stays verified by the cross link from linux
+    (findings 12, 62) and the native _LINK_ check (finding 82).
+85. s2 (a dependency of sf) failed on all four Windows legs, for two
+    different reasons (logs/s2.log of each leg):
+    - windows-latest tree: configure.win's pkg-config gave
+      "-LD:/a/.../envs/stress/Library/lib -ignore:4221 -labseil_dll"
+      (conda-forge's libabseil 20260817, an MSVC C++ DLL) and printed
+      "Using Abseil from RTools via pkg-config". But the s2.dll link
+      line (s2.log:1001) has no abseil library, not -labseil_dll
+      either: only -llibssl -llibcrypto -lR -lws2_32. During make,
+      pkg-config for absl_s2 printed "Package absl_base was not found
+      in the pkg-config search path" (4 times), as on windows-11-arm
+      below. Then 84 lines "lld-link: error: undefined symbol:
+      absl::lts_20260817::log_internal::LogMessage::LogMessage(...)",
+      class abi. So in this run it is the same make-time lookup
+      failure, not a link against conda's MSVC abseil_dll. Corrected
+      by the verify step (2026-11-19); the writer had recorded it as
+      the 2026-11-15 cause.
+    - windows-latest conda: the conda env has no abseil, so s2 builds
+      its bundled abseil with CMake through rzig and stops at
+      "time_zone_lookup.cc:51:10: fatal error: 'windows.globalization.h'
+      file not found" (class sysdep; zig's MinGW headers, Z12 in the
+      s2 row).
+    - windows-11-arm, both legs: configure.win printed the tree's
+      archives (libabsl_base.a, libabsl_raw_logging_internal.a,
+      libabsl_log_severity.a, libabsl_spinlock_wait.a) and "Using
+      Abseil from RTools via pkg-config". Then, during make, pkg-config
+      for absl_s2 printed "Package absl_base was not found in the
+      pkg-config search path" and "Package 'absl_base', required by
+      'absl_s2', not found" (4 times). The s2.dll link line has no
+      abseil library at all, only the tree's libssl.a, libcrypto.a,
+      libz.a and -lws2_32 -lgdi32 -lcrypt32. lld-link: undefined absl
+      symbols (78 lines conda leg, 84 tree leg), classed abi. The
+      mangled names differ: lts_20250127 on the conda leg, lts_20260817
+      on the tree leg, where rzig's -idirafter puts the stress env's
+      include (conda-forge libabseil 20260817 headers) before the
+      tree's. So on the tree leg the headers were conda-forge's and the
+      archives would have been the tree's.
+    So the failure on windows-11-arm and on the windows-latest tree leg
+    is not conda-forge's MSVC abseil: it is a pkg-config lookup that
+    works in configure.win and fails in make, and the link then has no
+    abseil library. Not verified: why the make-time lookup misses absl_base
+    (PKG_CONFIG_PATH in make, or a different pkg-config there; s2's
+    Makevars.ucrt was not read); that s2 links once it gets the tree's
+    absl_* archives; the tree's abseil version (lts_20250127 is read
+    from the conda leg's symbols only).
+86. magick on windows-11-arm: ok on both legs, smoke "[1] '6.9.13.29'".
+    Its traced link has `-s`, the bundle's -lrsvg-2 and -lffi, and
+    clear_cache.o (chore-release-11 finding 36). Not verified: an SVG
+    render, so CFG code still has not run on Windows on ARM.
+87. Rsamtools on windows-11-arm: Rhtslib compiled hts_expr.c (no
+    'regex.h' error; the log does not name which regex.h, so the tree's
+    is inferred) and links -lregex (3 times in Rhtslib.log), so htslib's
+    missing regex.h (the windows=fail-dependency cause) is filled by
+    the tree on aarch64. windows-latest has no tree and still fails
+    there.
+88. What the run does not cover: run time of the tree's libraries
+    beyond each row's one-line smoke (C++ exceptions across the tree's
+    LLVM 19 libc++ and zig's clang 22 libc++, proj.db from
+    R_TOOLS_SOFT, HDF5 1.12.1 beyond creating a file); the windows-11-arm
+    rows outside these 19 targets; --no-rtools-libs on windows-11-arm;
+    upstream zig building packages on Windows (upstream-zig run
+    44450920934 skipped; only verify-bundle's one DLL link, finding
+    82); the full CI tier. Which extractor ran (cmake -E tar or
+    System32 tar.exe), its time, and the actions/cache step are not in
+    the reports.
 
 ## What changed
 
@@ -812,7 +1025,9 @@ Windows).
   prefix.
 - chore-release-11/PLAN.md finding 35 is edited in place.
   stress/packages.tsv: textshaping windows-aarch64 is `?` until a
-  windows-11-arm run; ragg keeps fail-dependency, with a note. R.dll is
+  windows-11-arm run; ragg keeps fail-dependency, with a note.
+  (2026-11-19: both ok on windows-11-arm, through the tree's
+  libraries, findings 83-84.) R.dll is
   not stripped on Windows, so build.zig needs no change.
 
 ### Part 3: CRAN's Rtools45 aarch64 libraries as a fallback (findings 18-40, 49-61, 65-66, 68, 70-73)
@@ -854,6 +1069,10 @@ Windows).
   `windows-aarch64=?`; sf, lwgeom, RPostgres get notes only (sf and
   lwgeom are windows=? already). Each note says the expected cause.
   Nothing is marked ok (W10). No Rhtslib row exists.
+  (2026-11-19) After stress run 44450918935: units, textshaping, ragg,
+  hdf5r, ncdf4, gsl, Rmpfr, nloptr, igraph, Rsamtools, terra,
+  gdalraster, lme4 and scran are ok on windows-aarch64; sf and lwgeom
+  are windows=fail-dependency (s2, finding 85) (W28).
 - stress/README.md section "Windows on ARM: the Rtools45 fallback";
   CXX-STDLIB.md paragraph; main.zig doc line; pixi.toml feature.stress
   comment.
@@ -889,7 +1108,25 @@ Run (gamma, linux-64, 2026-11-18):
   (finding 71).
 - Cross links: findings 4, 5, 12, 23, 62, 63, 67, 68, 69, 70.
 
-Not run: any CI workflow; anything on Windows by this branch's agents
+Run (CI on fd44749, 2026-11-19):
+
+- build-r run 44450920834: 20 jobs success, one placeholder skipped
+  (core tier) (finding 81). verify-bundle.sh's ICF check passed on
+  windows-latest (job 135319558860) and windows-11-arm (job
+  135319558940), both passes: upstream zig (TC/zig) and conda-forge
+  zig (ZIG_BIN) (finding 82).
+- stress run 44450918935, Windows only, tree and conda, channel local:
+  windows-11-arm 17 ok, 2 skipped (sf, lwgeom), 1 unexpected (ragg ok);
+  windows-latest 10 ok, 5 install-failed, 4 skipped, 0 unexpected
+  (findings 83-87).
+- packages.tsv after W28: tab field counts unchanged (31 lines of 1
+  field, 45 of 10); stress.R's expected() on the old and new file
+  (Windows aarch64 and x86_64, linux, macOS) differs only in the
+  intended values; `pixi run --frozen -e stress <feat-linux-libstdcxx's
+  compile tree>/bin/Rscript stress/stress.R --list`: rc 0, 172 lines
+  (gamma). No stress build was run for this.
+
+Not run (2026-11-18 list; see above for what CI ran since): any CI workflow; anything on Windows by this branch's agents
 (finding 79 is a separate native check by Claude); the repo's build.zig
 after the cmakeToolchain change: only rzig's own build and test-bin
 were built (the reviewer's zig build test-bin, both Windows targets).
@@ -899,51 +1136,64 @@ repo's build.zig.
 ## Not verified
 
 Everything Windows-native, except the direct zig cc check of
-finding 79. In particular:
+finding 79, the CI checks of finding 82 and the stress rows of findings
+83-87 (2026-11-19). In particular:
 
 - Running CFG code on Windows on ARM (an SVG render smoke in magick's
   stress row on windows-11-arm would close it); Rust CFG objects other
   than this librsvg-2.a, ARM64EC, MSVC /guard:cf libraries.
-- That lld reads _LINK_ when rzig's gcc.exe spawns zig with an
-  explicit environment (Windows environment block, PATH casing, the
-  hidden `=C:` entries), under MSYS2 bash, on win-arm64, and with
-  upstream zig on Windows. A direct zig cc in cmd.exe on win-64 with
-  conda-forge zig did read it (finding 79). verify-bundle.sh's new
-  check covers the rest on the next build-r run.
-- upstream zig on windows-11-arm: no CI leg; only the linux cross link.
-- textshaping and ragg on windows-11-arm (a targeted stress run).
-- Every windows-11-arm stress row with and without the tree
-  (`packages: all`, tree and conda, channel local): DLL loads, smokes,
-  and rows that pass today. Tree-first PKG_CONFIG_PATH gives xml2, curl,
-  systemfonts, ragg and others the tree's static copies, and
-  `-idirafter <tree>/include` exposes dlfcn.h, regex.h, iconv.h and
-  libintl.h to configure probes.
+- upstream zig building packages on windows-11-arm (and win-64): the
+  upstream-zig workflow was skipped (run 44450920934, no label); only
+  verify-bundle's one stripped DLL link ran natively with upstream zig
+  (finding 82). The full CI tier has not run on this branch.
+- /OPT:NOICF on a native link of r-windows' clang-aarch64 objects with
+  a broken .llvm_addrsig: textshaping and ragg took the tree's freetype
+  and harfbuzz instead (finding 84).
+- windows-11-arm stress rows outside the 19 targets of run 44450918935,
+  and every row without the tree (--no-rtools-libs). Tree-first
+  PKG_CONFIG_PATH gives xml2, curl, systemfonts, ragg and others the
+  tree's static copies, and `-idirafter <tree>/include` exposes
+  dlfcn.h, regex.h, iconv.h and libintl.h to configure probes; seen so
+  far only in the rows of finding 83 (regex.h for Rhtslib, finding 87).
+- s2 on windows-11-arm and the windows-latest tree leg: why the
+  make-time pkg-config misses absl_base, and whether s2 then links
+  (finding 85); sf and lwgeom wait on it.
 - R_TOOLS_SOFT=tree side effects in Makevars not read (gert, stringi,
   qs2, fst, Rhdf5lib, V8, duckdb, mlpack, rstan, DESeq2, systemfonts,
   geos, Rsamtools).
-- C++ exceptions and layout across the tree's LLVM 19 libc++ and zig's
-  clang 22 libc++; the tree's libomp import against conda's libomp 23;
-  proj.db from R_TOOLS_SOFT; HDF5 1.12.1 with hdf5r at run time.
+- Run time of the tree's libraries beyond each row's one-line smoke
+  (finding 88): C++ exceptions and layout across the tree's LLVM 19
+  libc++ and zig's clang 22 libc++ (gdalraster, terra and Rmpfr load
+  and pass their smokes); the tree's libomp import against conda's
+  libomp 23; proj.db from R_TOOLS_SOFT; HDF5 1.12.1 with hdf5r beyond
+  creating a file.
 - A real sf or terra compile with include-pinned; a bare -l of an env
   library next to a tree module's header; CMake and pkg-config binding
   different copies (finding 66).
-- pkgconf.exe with drive-letter paths and its slash form; cmake's zstd
-  on the runner; extraction (about 30,000 files) and the include-pinned
-  copy (24,973 files, 141 MB; counted in next/fix-winarm/rt/a) on NTFS,
-  and their time on the runner.
-- conda-forge's libcurl.pc and proj.pc bugs in a Windows R CMD INSTALL;
-  ncdf4, sf and terra on windows-latest at this lock.
-- rzig with the tree for real: only unit tests cover the fallback.
+- Which extractor ran on the runner (cmake's zstd or System32
+  tar.exe) and the time of the extraction and the include-pinned copy.
+  That they work on the runner is shown: both windows-11-arm legs
+  report the tree ready, and links name its archives by C:/ paths from
+  the closed .pc files (finding 83).
+- conda-forge's libcurl.pc and proj.pc bugs in a Windows R CMD INSTALL
+  (tree-first avoided them on windows-11-arm); sf on windows-latest at
+  this lock (not reached: s2). ncdf4 (ok) and terra (fail-sysdep) ran
+  there (finding 83).
 - Whether R's real make paths behave as the linux simulation did:
   Makevars.ucrt selection, $(shell pkg-config ...) under R CMD's PATH
   (the build-tools pkgconf first), and PKG_CONFIG_PATH as stress.R sets
-  it compared with pixi's activation on Windows.
+  it compared with pixi's activation on Windows. (2026-11-19) On
+  windows-11-arm they did for the 17 rows that installed; s2's
+  make-time pkg-config missed a module its configure.win found
+  (finding 85).
 - actions/cache@v5: no other workflow here uses actions/cache, so the
   major is not checked against this repo's pins.
 - CI time of link-objects-test.sh on ubuntu-latest and
   ubuntu-24.04-arm; cross-linking for Windows from linux-aarch64.
 - The --conda leg needs an rzig with R_ZIG_FALLBACK_SOFT: channel local
   only (universe's build 11 ignores it; the Fallback line says so).
+  With channel local it works (finding 83); universe's build 11 with
+  the tree was not run.
 - R_ZIG_FALLBACK_SOFT is not documented for wheel or standalone users
   (W12).
 

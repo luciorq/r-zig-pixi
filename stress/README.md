@@ -364,11 +364,15 @@ extraction failure, no pkgconf), the rows run without it and the report's
   whether rzig uses the tree. rzig's trace names it `environment <tree>
   (fallback)`; an rzig without `R_ZIG_FALLBACK_SOFT` (build 11 and older)
   ignores it, and the line says so.
-- **The expects.** The windows-aarch64 rows the tree should change are `?`
-  until a windows-11-arm run, with dated notes on the expected cause. Rows
-  that pass today may change too: the tree adds headers conda and zig's
-  MinGW lack (`dlfcn.h`, `regex.h`, `iconv.h`, `libintl.h`), which a
-  configure probe can now find.
+- **The expects.** Stress run 44450918935 (2026-11-19, fd44749,
+  windows-11-arm, tree and conda legs) put units, textshaping, ragg,
+  hdf5r, ncdf4, gsl, Rmpfr, nloptr, igraph, Rsamtools, terra,
+  gdalraster, lme4 and scran at ok on windows-aarch64; sf and lwgeom are
+  fail-dependency (s2 does not link: its make-time pkg-config finds no
+  abseil, so the link has none). Rows outside that run may change too:
+  the tree adds headers conda and zig's MinGW lack (`dlfcn.h`,
+  `regex.h`, `iconv.h`, `libintl.h`), which a configure probe can now
+  find (Rhtslib now gets `regex.h`).
 - **Licensing.** stress.R downloads the tarball from CRAN at run time, and
   CI keeps it in a private Actions cache. r-zig never repackages or
   redistributes it. The tree ships no per-library licence texts, and the
@@ -376,11 +380,14 @@ extraction failure, no pkgconf), the rows run without it and the report's
   LGPL/MIT, hdf5 and netcdf BSD-style, gdal, proj and harfbuzz MIT, libpq
   the PostgreSQL licence, oneTBB Apache-2.0. A package that links gsl or
   glpk statically is a GPL combination, as on CRAN.
-- **Not verified on Windows.** Everything above ran on linux (cross links
-  with both zigs). Loading the DLLs, C++ exceptions across the tree's LLVM
-  19 libc++ and zig's clang 22 libc++, the tree's libomp import against
-  conda's libomp 23, pkgconf.exe with drive-letter paths, and cmake's zstd
-  on the runner are for the first windows-11-arm run.
+- **Verified on Windows, and not.** The run above extracted the tree,
+  wrote the closed `.pc` files with drive-letter paths, linked and loaded
+  the DLLs and passed each row's one-line smoke. Not verified: C++
+  exceptions across the tree's LLVM 19 libc++ and zig's clang 22 libc++,
+  the tree's libomp import against conda's libomp 23, which extractor
+  ran (cmake's zstd or `tar.exe`), the rows outside that run, and
+  upstream zig on the runner (record: feat-winarm-gaps PLAN.md findings
+  83-88).
 
 ## Notes and known issues
 
