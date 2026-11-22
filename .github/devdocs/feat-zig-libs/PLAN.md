@@ -244,6 +244,31 @@ report.json, per-package install and smoke logs, phase1-6 logs).
     The stress dispatches 45039934825 and 45039937348 build the same
     packages (`channel=local`) and stop there too.
 
+19. V. After the fix (head b9c39fc, lock e38e0b5): build-r run
+    45043105820, all 21 jobs success, among them `conda-package /
+    win-64` and `/ win-arm64` (the recipe test of finding 18) and the
+    Windows `default` legs (config-parity and contract with the new
+    `R_TOOLS_SOFT ?=` default). stress, `libs_run_id=44984149674`,
+    packages s2 sf terra gdalraster lwgeom, `channel=local`, trace on:
+    45043098992 (conda-forge zig 0.17.1) and 45043101391 (upstream zig,
+    `libs_leg=upstream-zig`), each "Targets: 5 ok. Unexpected (!): 0.
+    Dependencies: 17 ok." on windows-latest and windows-11-arm (jobs
+    137274708232, 137274708326, 137274623405, 137274623351). Every
+    zig-* sysdep shows the default leg's builds from conda-meta
+    (x86_64: zig-gdal zig_d646007_0 …; aarch64: zig-gdal zig_e59a93e_0
+    …), and every library -l binds the zig-libs archive (s2: absl_* ssl
+    crypto z; sf, terra, gdalraster: gdal expat z geos_c geos proj
+    sqlite3, terra also tbb12). The libs-channel artifact download
+    with `LIBS_ZIG_PIXI_TOKEN` works on all four jobs. On windows-11-arm
+    the column's "from the fallback tree" lists c++, m, ws2_32, psapi,
+    ole32, shell32 (s2 also dbghelp advapi32 gdi32 crypt32 user32): the
+    Rtools tree (R_ZIG_FALLBACK_SOFT, there for udunits2) is on -L, and
+    the trace names the first -L file with the name (windows.zig
+    `resolved`). rzig passes these -l unchanged; zig provides libc++
+    and libm itself, and the system names are MinGW import libraries.
+    No zig-* library resolves into the tree. windows-latest has no tree
+    and shows none.
+
 ## What changed after kappa
 
 - `r-zig.cmake`: zig-libs on `CMAKE_PREFIX_PATH` instead of
@@ -258,13 +283,13 @@ report.json, per-package install and smoke logs, phase1-6 logs).
 
 ## Results
 
-| package | win-64 (kappa, conda-forge zig, default leg) | win-arm64 | upstream-zig leg |
+| package | win-64 (kappa, conda-forge zig, default leg) | CI conda-forge zig (win-64 / win-arm64) | CI upstream-zig leg (win-64 / win-arm64) |
 |---|---|---|---|
-| s2 1.1.13 | V ok, smoke ok (finding 8) | pending CI | pending CI |
-| sf 1.1-3 | V ok, smoke ok (finding 9) | pending CI | pending CI |
-| terra 1.9-60 | V ok, smoke ok, TBB threads (finding 10) | pending CI | pending CI |
-| gdalraster 2.7.0 | V ok, smoke ok (finding 11) | pending CI | pending CI |
-| lwgeom | not run | pending CI | pending CI |
+| s2 1.1.13 | V ok, smoke ok (finding 8) | V ok / ok (finding 19) | V ok / ok |
+| sf 1.1-3 | V ok, smoke ok (finding 9) | V ok / ok | V ok / ok |
+| terra 1.9-60 | V ok, smoke ok, TBB threads (finding 10) | V ok / ok | V ok / ok |
+| gdalraster 2.7.0 | V ok, smoke ok (finding 11) | V ok / ok | V ok / ok |
+| lwgeom | not run | V ok / ok | V ok / ok |
 
 ## Tests
 
@@ -294,8 +319,6 @@ the fixes.
 
 ## Not verified
 
-- win-arm64 with zig-* packages, and the upstream-zig leg
-  (`channel-*-upstream-zig`) on either arch.
 - A full Windows stress run: zig-libs now comes first for every row, so
   `-lz`, `-lssl`/`-lcrypto`, `-lexpat` and `-lsqlite3` bind the zig-*
   archives instead of conda's import libraries in every package; seen
@@ -303,8 +326,9 @@ the fixes.
 - A CMake consumer of zig-libs on Windows (abseil, GEOS, TBB, expat
   configs), and `find_library` on Windows with the new
   `CMAKE_PREFIX_PATH` lines.
-- The stress.yaml artifact step, with or without `LIBS_ZIG_PIXI_TOKEN`.
-- The tree leg with zig-libs; lwgeom.
+- The stress.yaml artifact step without `LIBS_ZIG_PIXI_TOKEN` (with
+  it: V, finding 19).
+- The tree leg with zig-libs.
 - verify-tree.sh and verify-bundle.sh with the new checks; an R built
   from this branch.
 - libs-zig-pixi's `tests/r/smoke.R` (D81 there, made from kappa's
