@@ -144,28 +144,34 @@ if (windows) {
     cat("build tools: usr/bin's pkgconf", r$out[1L], "under both names, with its SOURCES and LICENSES: OK\n")
 
     ## under R CMD (Rcmd_environ): the group's pkg-config first on PATH,
-    ## and PKG_CONFIG_PATH, unset, this env's Library/lib/pkgconfig and
-    ## Library/share/pkgconfig, where pkg-config finds this env's .pc files
-    ## (conda-forge's pkg-config, whose activation set it, is no longer a
-    ## dependency)
+    ## and PKG_CONFIG_PATH, unset, zig-libs' lib/pkgconfig (libs-zig-pixi's
+    ## zig-* packages, feat-zig-libs) then this env's Library/lib/pkgconfig
+    ## and Library/share/pkgconfig, where pkg-config finds this env's .pc
+    ## files (conda-forge's pkg-config, whose activation set it, is no
+    ## longer a dependency); PKG_CONFIG_LIBDIR and R_TOOLS_SOFT, unset,
+    ## their zig-libs defaults (as scripts/verify-bundle.sh's pcpath.R)
     pcs <- sub("[.]pc$", "", list.files(file.path(env_bin, "..", "lib", "pkgconfig"), pattern = "[.]pc$"))
     pc <- if ("zlib" %in% pcs) "zlib" else pcs[1L]
     rs <- file.path(d, "pc.R")
     writeLines(c('rh <- Sys.getenv("R_HOME")',
-                 'want <- paste0(rh, "/../../lib/pkgconfig;", rh, "/../../share/pkgconfig")',
-                 'p <- Sys.getenv("PKG_CONFIG_PATH", NA)',
-                 'if (is.na(p) || p != want) stop("PKG_CONFIG_PATH is \'", p, "\', not ", want)',
+                 'zl <- paste0(rh, "/../../zig-libs/", R.version$arch, "-windows-gnu")',
+                 'envpc <- paste0(rh, "/../../lib/pkgconfig;", rh, "/../../share/pkgconfig")',
+                 'want <- c(PKG_CONFIG_PATH = paste0(zl, "/lib/pkgconfig;", envpc),',
+                 '          PKG_CONFIG_LIBDIR = paste0(zl, "/lib/pkgconfig;", envpc),',
+                 '          R_TOOLS_SOFT = zl)',
+                 'for (v in names(want)) { p <- Sys.getenv(v, NA); if (is.na(p) || p != want[[v]]) stop(v, " is \'", p, "\', not ", want[[v]]) }',
                  'cat("pkg-config:", Sys.which("pkg-config"), "\\n")',
                  'a <- commandArgs(TRUE)',
                  'if (length(a) && !is.na(a[1L])) quit(status = system2("pkg-config", c("--exists", "--print-errors", a[1L])))'), rs)
-    old <- Sys.getenv("PKG_CONFIG_PATH", NA)
-    Sys.unsetenv("PKG_CONFIG_PATH")
+    vs <- c("PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR", "R_TOOLS_SOFT")
+    old <- Sys.getenv(vs, NA, names = TRUE)
+    Sys.unsetenv(vs)
     r <- run_to(file.path(R.home("bin"), "Rcmd.exe"), c("Rscript.exe", "--vanilla", shQuote(rs), if (!is.na(pc)) pc))
-    if (!is.na(old)) Sys.setenv(PKG_CONFIG_PATH = old)
+    for (v in vs) if (!is.na(old[[v]])) do.call(Sys.setenv, as.list(old[v]))
     cat(r$out, sep = "\n")
     w <- sub("^pkg-config: ", "", grep("^pkg-config: ", r$out, value = TRUE))
     stopifnot(r$status == 0L, length(w) == 1L, same_path(shown(dirname(w)), shown(file.path(ub, "bin"))))
-    cat("build tools: under R CMD, PKG_CONFIG_PATH is this env's .pc directories",
+    cat("build tools: under R CMD, PKG_CONFIG_PATH is zig-libs' then this env's .pc directories, PKG_CONFIG_LIBDIR and R_TOOLS_SOFT their zig-libs defaults",
         if (is.na(pc)) "(this env has no .pc file to look up)" else paste0("and pkg-config finds ", pc),
         ": OK\n")
 

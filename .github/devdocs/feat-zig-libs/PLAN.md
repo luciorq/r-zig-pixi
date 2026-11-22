@@ -227,6 +227,23 @@ report.json, per-package install and smoke logs, phase1-6 logs).
     Windows only; the unix table is byte-for-byte the old format
     (scratch fix/col.R).
 
+### PR #51 CI (2026-11-22)
+
+18. V. build-r run 45039724911 (head 0e36490): `conda-package / win-64`
+    and `/ win-arm64` failed in the r-zig-build-tools package test,
+    `recipe/test-build-tools.R:153-157`, which still wanted the old
+    `PKG_CONFIG_PATH` (`R_HOME/../../lib/pkgconfig;…/share/pkgconfig`):
+    `Error: PKG_CONFIG_PATH is '…/Library/lib/R/../../zig-libs/x86_64-windows-gnu/lib/pkgconfig;…/lib/pkgconfig;…/share/pkgconfig', not …`
+    (win-arm64 the same with `aarch64-windows-gnu`, which confirms the
+    triple). The new value is the intended one (ZL5); the test was
+    missed, since the first round ran rzig's tests and the verify
+    scripts but not the recipe's R tests. Fixed: the test wants zig-libs'
+    `.pc` directory first and also checks the `PKG_CONFIG_LIBDIR` and
+    `R_TOOLS_SOFT` defaults, with all three unset, as verify-bundle.sh's
+    pcpath.R. Only parsed locally (it runs in the Windows package test).
+    The stress dispatches 45039934825 and 45039937348 build the same
+    packages (`channel=local`) and stop there too.
+
 ## What changed after kappa
 
 - `r-zig.cmake`: zig-libs on `CMAKE_PREFIX_PATH` instead of
