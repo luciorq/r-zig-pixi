@@ -381,7 +381,8 @@ fn sonameFlag(ctx: *Ctx, args: Args) !?[]const u8 {
 const windows_headers_always = true;
 
 /// The environments' flags (environment.zig), each only when its directory
-/// exists, R's own environment first, then the toolchain's openmp/ (when
+/// exists, R's own environment first (on Windows after its zig-libs, item
+/// 4, as R_ZIG_EXTRA_ENV's), then the toolchain's openmp/ (when
 /// the base has libomp, B40; its lib/ only on Windows, with libomp.lib):
 ///   -I<dir>/include (Windows: -idirafter <dir>/include) on every call,
 ///     after the caller's arguments: a package's own and its LinkingTo

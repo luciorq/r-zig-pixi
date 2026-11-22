@@ -102,6 +102,8 @@ Useful options (`--help` lists them all):
   group lacks then fails its row with "command not found" instead of being
   found in the env. A conda run ignores it, with a note: there the tools
   are the env's.
+- `--libs-channel=CH`: with `--conda`, one more channel for libs-zig-pixi's
+  `zig-*` packages, right after r-zig's (see "Windows: zig-libs" below).
 - `--strict`: exit 1 when a result differs from its `expect`.
 
 ## Run it in CI
@@ -114,6 +116,8 @@ gh workflow run stress.yaml -f packages=g2 -f distribution=both -f channel=unive
 gh workflow run stress.yaml -f packages=all -f skip=heavy -f jobs=2
 gh workflow run stress.yaml -f packages='g3 g4' -f trace=true
 gh workflow run stress.yaml -f oses='["windows-latest"]' -f packages='g3 g4' -f msys_from_tree=true
+gh workflow run stress.yaml -f oses='["windows-latest","windows-11-arm"]' -f packages='g2 g3 g4' \
+  -f distribution=conda -f libs_run_id=44984149674 -f trace=true
 ```
 
 The inputs are the runners (a JSON list), the targets, rows to skip, the
@@ -124,7 +128,14 @@ upstream's from `pixi run fetch-zig`), `trace` (`--trace`), the builder
 build where the call qualifies, patch 0013; or make, the make path for
 every package and shared object, a make reference) and
 `msys_from_tree` (false by default; true passes `--msys-from-tree` on
-Windows). Each OS and distribution is one job.
+Windows), and `libs_run_id` with `libs_leg` (empty by default: a
+libs-zig-pixi CI run whose `channel-<win-64|win-arm64>-<libs_leg>`
+artifact a Windows conda job downloads and passes as `--libs-channel`;
+the download reads another repository's artifacts, so it takes the
+repository secret `LIBS_ZIG_PIXI_TOKEN`, a fine-grained token with
+Actions read on luciorq/libs-zig-pixi, and without it tries the run's
+own token, which is not tested to work).
+Each OS and distribution is one job.
 Jobs never stop each other (`fail-fast: false`) and may take up to 6 hours.
 
 Every job builds the dev tree. The conda job with the local channel also
@@ -242,8 +253,9 @@ changes; a copy without `.git` says "unknown". Then one line per target:
 | package | the row; `(!)` marks a result that differs from `expect` |
 | status | `ok`, `install-failed`, `smoke-failed` (the load or the smoke call), `unload-failed` (`unloadNamespace()` gave an error or a warning, or R crashed in it), `exit-failed` (R's exit after the unload did not return 0), `timeout`, `skipped` (a dependency failed), `download-failed`, `unavailable` (not on CRAN or Bioconductor), `error` (the harness) |
 | class | the runner's guess at the cause, from the failing part of the log |
-| expect | the row's expectation for this OS and arch (`windows-aarch64=` before `windows=`) |
+| expect | the row's expectation for this OS and arch (`windows-aarch64=` before `windows=`); `?` when the target's `zig-*` sysdeps are missing (see "Windows: zig-libs") |
 | min, MB | install minutes and installed size |
+| zig-libs | Windows: the target's `zig-*` sysdeps (its row's and its dependencies' rows'), each with its version and build, `Rtools tree` or `missing`; with `--trace`, the `-l` names that resolved into zig-libs and into the Rtools45 fallback tree (rzig's `lib -l<name> <file>` trace lines) |
 | first error | the first error line of the log |
 
 Dependencies that failed a step follow the table. Each package has
@@ -285,6 +297,50 @@ the log.
   [results/2026-10-08-round2.md](results/2026-10-08-round2.md). The user
   answered its decisions on 2026-10-09; this branch applies decisions 5
   to 9.
+
+## Windows: zig-libs
+
+libs-zig-pixi builds static C and C++ libraries with zig and libc++, as
+zig builds packages, as conda packages `zig-*` for win-64 and win-arm64
+(zig-gdal, zig-proj, zig-geos, zig-abseil, zig-openssl, zig-onetbb, ...).
+They install into `<env>/Library/zig-libs/<triple>` (`x86_64-windows-gnu`,
+`aarch64-windows-gnu`): `include/`, `lib/` (`lib<name>.a` only) and
+`lib/pkgconfig` (closed, relocatable `.pc` files). conda-forge's
+GDAL, abseil and oneTBB for Windows are MSVC C++ builds, which a zig-built
+package cannot link (the abi rows: s2, terra, gdalraster). With zig-libs:
+
+- rzig searches each environment's zig-libs right before it (headers and
+  `-L`, `environment.zig`), so `-lgdal` binds the zig-built archive. It
+  also takes `-lz`, `-lssl`, `-lexpat` and `-lsqlite3` for every package
+  of that env, hence a full Windows run, not only the GDAL rows.
+- R's `etc/Rcmd_environ` puts zig-libs' `lib/pkgconfig` first on
+  `PKG_CONFIG_PATH` (always), defaults `PKG_CONFIG_LIBDIR` to it and the
+  env's `.pc` directories (s2's `Makevars.win` sets its own
+  `PKG_CONFIG_PATH`), and defaults `R_TOOLS_SOFT` to zig-libs (sf, terra
+  and gdalraster copy its `share/gdal` and `share/proj`).
+- `etc/r-zig.cmake` puts each environment's zig-libs on
+  `CMAKE_PREFIX_PATH`, which CMake searches before the prefixes PATH
+  gives (a conda env's `Library/bin`) and before the environments
+  themselves; a package's own `-DCMAKE_PREFIX_PATH` stays first.
+- stress.R sets `R_TOOLS_SOFT` to the libraries env's zig-libs when it
+  exists, and for the tree (whose `Rcmd_environ` knows only R's own env)
+  puts that env's zig-libs `.pc` files first itself. On Windows on ARM the
+  order is zig-libs, the Rtools45 tree's closed `.pc` files, the env's.
+
+The rows name them as `zig-gdal@windows` and the like (unix keeps
+conda-forge's libgdal-core, geos, proj, openssl). Until they are published
+(libs-zig-pixi M5) no channel has them, so:
+
+- a conda run takes them from `--libs-channel` (in CI: `libs_run_id`, the
+  artifact of a libs-zig-pixi CI run, which expires after 14 days);
+  without it they are left out of the env, as the stress env lacks them;
+- a tree run cannot have them: its libraries env is the locked stress env.
+
+A target whose `zig-*` sysdeps (its own or its dependencies' rows', such
+as s2's for sf) are missing, and not served by the Rtools45 tree on
+Windows on ARM (gdal, geos, proj, tbb12; not abseil), gets the expect `?`:
+the `windows=ok` expects assume them. Before M5 that is every win-64 tree
+run, and a conda run without `--libs-channel`.
 
 ## Windows on ARM: the Rtools45 fallback
 

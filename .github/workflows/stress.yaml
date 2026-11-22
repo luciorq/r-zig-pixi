@@ -55,6 +55,15 @@ on:
         description: 'Windows tree legs (stress.R --msys-from-tree): the stress env''s Library/usr/bin and Library/mingw-w64/bin off PATH, so the build-tools group''s usr/bin alone answers for sh, make and the tools R''s makefiles run'
         type: boolean
         default: false
+      libs_run_id:
+        description: 'Windows conda legs: a luciorq/libs-zig-pixi workflow run whose channel-<win-64|win-arm64>-<libs_leg> artifact is the zig-* packages'' channel (stress.R --libs-channel), before they are published; empty: none, as before'
+        type: string
+        default: ''
+      libs_leg:
+        description: 'with libs_run_id: the libs-zig-pixi leg whose packages to take (default: built with conda-forge zig; upstream-zig: with PyPI''s ziglang)'
+        type: choice
+        options: [default, upstream-zig]
+        default: default
 
 permissions:
   contents: read
@@ -137,6 +146,26 @@ jobs:
         with:
           path: build/rtools45/rtools45-toolchain-libs-full-aarch64-6768.tar.zst
           key: rtools45-toolchain-libs-full-aarch64-6768-64dceac9ecdd54aa
+      # libs-zig-pixi's zig-* packages before M5 (libs-zig-pixi DESIGN 7.6):
+      # its CI run's channel artifact (a channel directory: <subdir>/ and
+      # noarch/ with repodata.json), which stress.R --conda lists right
+      # after r-zig's channel. Conda legs only: the tree leg's libraries
+      # env is the locked stress env, which has no zig-* until M5.
+      # Another repository's artifacts need a token that can read them,
+      # even for a public one (an unauthenticated download is a 401):
+      # LIBS_ZIG_PIXI_TOKEN, a fine-grained token with Actions read on
+      # luciorq/libs-zig-pixi (stress/README.md). Without the secret the
+      # run's own token is tried, which this workflow's `permissions`
+      # do not extend to that repository; untested.
+      - name: libs-zig-pixi channel (zig-* packages)
+        if: inputs.libs_run_id != '' && runner.os == 'Windows' && matrix.dist == 'conda'
+        uses: actions/download-artifact@v8
+        with:
+          repository: luciorq/libs-zig-pixi
+          run-id: ${{ inputs.libs_run_id }}
+          github-token: ${{ secrets.LIBS_ZIG_PIXI_TOKEN || github.token }}
+          name: channel-${{ runner.arch == 'ARM64' && 'win-arm64' || 'win-64' }}-${{ inputs.libs_leg }}
+          path: build/libs-channel
       - name: Stress
         shell: bash
         # STRESS_-prefixed: the step's environment reaches every package's
@@ -149,6 +178,7 @@ jobs:
           STRESS_CHANNEL: ${{ matrix.dist == 'conda' && inputs.channel || '' }}
           STRESS_TRACE: ${{ inputs.trace }}
           STRESS_MSYS_FROM_TREE: ${{ inputs.msys_from_tree }}
+          STRESS_LIBS: ${{ inputs.libs_run_id != '' && runner.os == 'Windows' && matrix.dist == 'conda' && 'true' || '' }}
           R_ZIG_PKG_BUILDER: ${{ inputs.builder }}
         run: |
           set -euo pipefail
@@ -157,6 +187,8 @@ jobs:
           if [ -n "$STRESS_SKIP" ]; then args+=("--skip=$STRESS_SKIP"); fi
           if [ "$STRESS_TRACE" = true ]; then args+=("--trace"); fi
           if [ "$STRESS_MSYS_FROM_TREE" = true ] && [ "$RUNNER_OS" = Windows ]; then args+=("--msys-from-tree"); fi
+          # relative, as --out: pixi runs the task in the checkout
+          if [ "$STRESS_LIBS" = true ]; then args+=("--libs-channel=build/libs-channel"); fi
           # one target per word
           # shellcheck disable=SC2086
           pixi run -e stress stress "${args[@]}" $STRESS_TARGETS

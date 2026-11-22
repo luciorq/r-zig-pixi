@@ -382,12 +382,19 @@ if [ "$OS" = windows ]; then
     bad="$bad
   ${mk#$TREE/} names a tool through LLVMPREF: $l"
   done < "$WORK/llvmpref.txt"
+  # zig-libs (libs-zig-pixi's zig-* packages): R's triple's directory
+  zl_triple=x86_64-windows-gnu
+  [ "$PLAT" = win-arm64 ] && zl_triple=aarch64-windows-gnu
   for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin' \
     'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"' \
     'R_ZIG_RC=${R_HOME}/bin/toolchain/windres.exe' \
     'R_ZIG_NM=${R_HOME}/bin/toolchain/nm.exe' \
     'R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig' \
-    'PKG_CONFIG_PATH="${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}"' \
+    "R_ZIG_LIBS=\${R_HOME}/../../zig-libs/$zl_triple" \
+    'PKG_CONFIG_PATH="${R_ZIG_LIBS}/lib/pkgconfig;${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}"' \
+    'R_ZIG_PKG_CONFIG_LIBDIR=${R_ZIG_LIBS}/lib/pkgconfig;${R_ZIG_PKG_CONFIG_PATH}' \
+    'PKG_CONFIG_LIBDIR="${PKG_CONFIG_LIBDIR-${R_ZIG_PKG_CONFIG_LIBDIR}}"' \
+    'R_TOOLS_SOFT="${R_TOOLS_SOFT-${R_ZIG_LIBS}}"' \
     'UserNM="${UserNM-${R_ZIG_NM}}"' 'RC="${RC-${R_ZIG_RC}}"' \
     'R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake' \
     'CMAKE_TOOLCHAIN_FILE="${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}"'; do
@@ -399,6 +406,18 @@ if [ "$OS" = windows ]; then
   has_line "$TREE/$rh/etc/r-zig.cmake" '  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}/Library")' ||
     bad="$bad
   $rh/etc/r-zig.cmake is missing or does not add R_ZIG_EXTRA_ENV's Library"
+  # and each environment's zig-libs on CMAKE_PREFIX_PATH, before PATH's
+  # prefixes (libs-zig-pixi DESIGN 7, item 3; feat-zig-libs finding 14)
+  has_line "$TREE/$rh/etc/r-zig.cmake" "  list(APPEND CMAKE_PREFIX_PATH \"\${_r_zig_env}/zig-libs/$zl_triple\")" ||
+    bad="$bad
+  $rh/etc/r-zig.cmake does not add R's env's zig-libs/$zl_triple"
+  has_line "$TREE/$rh/etc/r-zig.cmake" "    list(APPEND CMAKE_PREFIX_PATH \"\${_r_zig_env}/Library/zig-libs/$zl_triple\")" ||
+    bad="$bad
+  $rh/etc/r-zig.cmake does not add R_ZIG_EXTRA_ENV's zig-libs/$zl_triple"
+  # R's own env's zig-libs first on that list, as rzig's -L
+  zl_own=$(tr -d '\r' < "$TREE/$rh/etc/r-zig.cmake" | grep -nF -- "/zig-libs/$zl_triple\")" | head -1)
+  case "$zl_own" in *'${_r_zig_env}/zig-libs/'*) ;; *) bad="$bad
+  $rh/etc/r-zig.cmake adds R_ZIG_EXTRA_ENV's zig-libs before R's own env's" ;; esac
   # and on Windows on ARM R_ZIG_FALLBACK_SOFT's tree last (feat-winarm-gaps)
   if [ "$PLAT" = win-arm64 ]; then
     has_line "$TREE/$rh/etc/r-zig.cmake" '  file(TO_CMAKE_PATH "$ENV{R_ZIG_FALLBACK_SOFT}" _r_zig_env)' ||

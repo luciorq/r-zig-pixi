@@ -2802,8 +2802,28 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     and R_ZIG_EXTRA_ENV's <root>/Library first. The extras group's
 ///     cmake.exe does not search them by itself (chore-release-11 finding
 ///     28: Rhdf5lib found no OpenSSL).
-/// CMAKE_GENERATOR, RC, UserNM, PKG_CONFIG_PATH and CMAKE_TOOLCHAIN_FILE
-/// are defaults:
+///   - zig-libs (libs-zig-pixi DESIGN 7, item 2): libs-zig-pixi's zig-*
+///     conda packages (zig-gdal, zig-proj, zig-abseil, ...) install static
+///     libraries into <env>/Library/zig-libs/<triple> (zigLibsTriple),
+///     R_ZIG_LIBS. Its lib/pkgconfig leads PKG_CONFIG_PATH whatever the
+///     environment set (stress.R sets one), so a package's pkg-config
+///     finds the zig-built gdal.pc before conda-forge's MSVC one; rzig's
+///     environment.zig puts its include/ and lib/ first too. It also leads
+///     the PKG_CONFIG_LIBDIR default, which is searched after
+///     PKG_CONFIG_PATH: s2's Makevars.win runs pkg-config with
+///     PKG_CONFIG_PATH set to its own tools/pkgconfig, whose absl_s2.pc
+///     then finds zig-abseil's absl_*.pc there. R_TOOLS_SOFT defaults to
+///     it: Makeconf.win has `R_TOOLS_SOFT ?= $(LOCAL_SOFT)` (empty), so
+///     the environment's value wins, and sf, terra and gdalraster copy
+///     $(R_TOOLS_SOFT)/share/gdal and share/proj, which zig-gdal and
+///     zig-proj ship. Without zig-* packages the directory does not exist:
+///     pkgconf skips a missing directory, and R_TOOLS_SOFT was empty
+///     before. A nested R CMD reads the file again and prepends the
+///     directory once more, which only repeats a search. Renviron expands
+///     a nested default only when it is one whole ${...} term, hence
+///     R_ZIG_PKG_CONFIG_LIBDIR.
+/// CMAKE_GENERATOR, RC, UserNM, PKG_CONFIG_PATH's tail, PKG_CONFIG_LIBDIR,
+/// R_TOOLS_SOFT and CMAKE_TOOLCHAIN_FILE are defaults:
 /// one set in the environment wins (`${VAR-default}`), in double quotes:
 /// unquoted, R's environ reader (Renviron.c) takes each `\` of the
 /// expanded value as an escape, and a user's `C:\x\nm.exe` or
@@ -2817,6 +2837,7 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
     const eol = if (std.mem.indexOf(u8, src, "\r\n") != null) "\r\n" else "\n";
     var out = std.ArrayList(u8).empty;
     try out.appendSlice(b.allocator, src);
+    const zig_libs = zigLibsTriple(ctx.target.result.cpu.arch);
     for ([_][]const u8{
         "## r-zig: the build tools first on PATH (feat-standalone-toolchain B25): R's",
         "## installer line, with the build-tools group's usr/bin in Rtools' place,",
@@ -2830,9 +2851,19 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
         "## r-zig: R CMD check reads objects' symbols with UserNM, else nm on PATH.",
         "R_ZIG_NM=${R_HOME}/bin/toolchain/nm.exe",
         "UserNM=\"${UserNM-${R_ZIG_NM}}\"",
-        "## r-zig: pkgconf's search path, unless set: R's env's .pc files.",
+        "## r-zig: libs-zig-pixi's zig-* static libraries (zig-libs), when installed.",
+        b.fmt("R_ZIG_LIBS=${{R_HOME}}/../../zig-libs/{s}", .{zig_libs}),
+        "## r-zig: pkgconf's search path: zig-libs' .pc files first, always; then the",
+        "## one set in the environment, else R's env's .pc files.",
         "R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig",
-        "PKG_CONFIG_PATH=\"${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}\"",
+        "PKG_CONFIG_PATH=\"${R_ZIG_LIBS}/lib/pkgconfig;${PKG_CONFIG_PATH-${R_ZIG_PKG_CONFIG_PATH}}\"",
+        "## r-zig: pkgconf's default path, unless set: zig-libs', then R's env's (what a",
+        "## package that sets PKG_CONFIG_PATH itself still finds: s2's Makevars.win).",
+        "R_ZIG_PKG_CONFIG_LIBDIR=${R_ZIG_LIBS}/lib/pkgconfig;${R_ZIG_PKG_CONFIG_PATH}",
+        "PKG_CONFIG_LIBDIR=\"${PKG_CONFIG_LIBDIR-${R_ZIG_PKG_CONFIG_LIBDIR}}\"",
+        "## r-zig: Makeconf's R_TOOLS_SOFT (?= LOCAL_SOFT, empty), unless set: zig-libs",
+        "## (sf, terra and gdalraster copy its share/gdal and share/proj).",
+        "R_TOOLS_SOFT=\"${R_TOOLS_SOFT-${R_ZIG_LIBS}}\"",
         "## r-zig: CMake's default toolchain file: it searches R's env and R_ZIG_EXTRA_ENV's first.",
         "R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake",
         "CMAKE_TOOLCHAIN_FILE=\"${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}\"",
@@ -2841,6 +2872,13 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
         try out.appendSlice(b.allocator, eol);
     }
     return out.items;
+}
+
+/// zig's triple for Windows on `arch`: the directory below
+/// <env>/Library/zig-libs that libs-zig-pixi's zig-* packages install into
+/// (rzig's target.zig names the same).
+fn zigLibsTriple(arch: std.Target.Cpu.Arch) []const u8 {
+    return if (arch == .aarch64) "aarch64-windows-gnu" else "x86_64-windows-gnu";
 }
 
 /// rzig into R_HOME/bin/toolchain under the names Makeconf uses
@@ -4265,6 +4303,17 @@ fn ldpaths(ctx: *const Ctx) []const u8 {
 ///     find_* then reach the libraries conda-forge lacks there, as rzig's
 ///     -L does, and an environment's copy wins (feat-winarm-gaps). Only in
 ///     an aarch64 R's file: rzig ignores the variable on x86_64.
+///   - Windows: each environment's zig-libs/<triple> (libs-zig-pixi's zig-*
+///     static libraries, rcmdEnviron; rzig's environment.zig item 4), when
+///     it exists at configure time (DESIGN 7, item 3), on CMAKE_PREFIX_PATH,
+///     not CMAKE_SYSTEM_PREFIX_PATH: find_package (all hosts) and, on
+///     Windows, find_library and find_path search the prefixes PATH gives
+///     (<prefix>/bin on PATH: <prefix>) before CMAKE_SYSTEM_PREFIX_PATH,
+///     and a conda env's Library/bin is on PATH, so its conda-forge config
+///     or library would win (feat-zig-libs finding 14). CMAKE_PREFIX_PATH
+///     comes before PATH; list(APPEND) keeps a package's -DCMAKE_PREFIX_PATH
+///     first. R's own env's zig-libs before R_ZIG_EXTRA_ENV's. The unix
+///     files are as before.
 fn cmakeToolchain(os: Os, arch: std.Target.Cpu.Arch) []const u8 {
     const head =
         \\# r-zig: CMake's default toolchain file for package builds.
@@ -4274,6 +4323,9 @@ fn cmakeToolchain(os: Os, arch: std.Target.Cpu.Arch) []const u8 {
         \\# CMake searches first the environments rzig compiles packages against:
         \\# R's own (this file is in <dir>/lib/R/etc) and R_ZIG_EXTRA_ENV's.
         \\get_filename_component(_r_zig_env "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+        \\
+    ;
+    const own_env =
         \\list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}")
         \\if(NOT "$ENV{R_ZIG_EXTRA_ENV}" STREQUAL "")
         \\  file(TO_CMAKE_PATH "$ENV{R_ZIG_EXTRA_ENV}" _r_zig_env)
@@ -4292,6 +4344,24 @@ fn cmakeToolchain(os: Os, arch: std.Target.Cpu.Arch) []const u8 {
         \\  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}/Library")
         \\
     ;
+    // zig-libs (libs-zig-pixi's zig-* packages, rcmdEnviron) on
+    // CMAKE_PREFIX_PATH, searched before PATH's prefixes and every
+    // environment, when installed: <dir>/zig-libs/<triple>, as rzig's -L.
+    const zig_libs_own = struct {
+        fn f(comptime triple: []const u8) []const u8 {
+            return "# libs-zig-pixi's zig-* static libraries (zig-libs) before every other prefix.\n" ++
+                "if(EXISTS \"${_r_zig_env}/zig-libs/" ++ triple ++ "\")\n" ++
+                "  list(APPEND CMAKE_PREFIX_PATH \"${_r_zig_env}/zig-libs/" ++ triple ++ "\")\n" ++
+                "endif()\n";
+        }
+    }.f;
+    const zig_libs_extra = struct {
+        fn f(comptime triple: []const u8) []const u8 {
+            return "  if(EXISTS \"${_r_zig_env}/Library/zig-libs/" ++ triple ++ "\")\n" ++
+                "    list(APPEND CMAKE_PREFIX_PATH \"${_r_zig_env}/Library/zig-libs/" ++ triple ++ "\")\n" ++
+                "  endif()\n";
+        }
+    }.f;
     const macos_ignore =
         \\# CMake searches Homebrew's, Fink's and MacPorts' prefixes whatever
         \\# PATH says. This leaves them out of every find_* search (CMake >= 3.23),
@@ -4308,10 +4378,12 @@ fn cmakeToolchain(os: Os, arch: std.Target.Cpu.Arch) []const u8 {
         \\endif()
         \\
     ;
+    const windows_x64 = comptime head ++ zig_libs_own("x86_64-windows-gnu") ++ own_env ++ zig_libs_extra("x86_64-windows-gnu") ++ windows_extra ++ tail;
+    const windows_a64 = comptime head ++ zig_libs_own("aarch64-windows-gnu") ++ own_env ++ zig_libs_extra("aarch64-windows-gnu") ++ windows_extra ++ tail ++ windows_fallback;
     return switch (os) {
-        .windows => if (arch == .aarch64) head ++ windows_extra ++ tail ++ windows_fallback else head ++ windows_extra ++ tail,
-        .macos => head ++ unix_extra ++ tail ++ macos_ignore,
-        else => head ++ unix_extra ++ tail,
+        .windows => if (arch == .aarch64) windows_a64 else windows_x64,
+        .macos => head ++ own_env ++ unix_extra ++ tail ++ macos_ignore,
+        else => head ++ own_env ++ unix_extra ++ tail,
     };
 }
 
