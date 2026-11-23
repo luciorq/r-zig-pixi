@@ -102,8 +102,6 @@ Useful options (`--help` lists them all):
   group lacks then fails its row with "command not found" instead of being
   found in the env. A conda run ignores it, with a note: there the tools
   are the env's.
-- `--libs-channel=CH`: with `--conda`, one more channel for libs-zig-pixi's
-  `zig-*` packages, right after r-zig's (see "Windows: zig-libs" below).
 - `--strict`: exit 1 when a result differs from its `expect`.
 
 ## Run it in CI
@@ -117,7 +115,7 @@ gh workflow run stress.yaml -f packages=all -f skip=heavy -f jobs=2
 gh workflow run stress.yaml -f packages='g3 g4' -f trace=true
 gh workflow run stress.yaml -f oses='["windows-latest"]' -f packages='g3 g4' -f msys_from_tree=true
 gh workflow run stress.yaml -f oses='["windows-latest","windows-11-arm"]' -f packages='g2 g3 g4' \
-  -f distribution=conda -f libs_run_id=44984149674 -f trace=true
+  -f distribution=both -f trace=true
 ```
 
 The inputs are the runners (a JSON list), the targets, rows to skip, the
@@ -128,13 +126,7 @@ upstream's from `pixi run fetch-zig`), `trace` (`--trace`), the builder
 build where the call qualifies, patch 0013; or make, the make path for
 every package and shared object, a make reference) and
 `msys_from_tree` (false by default; true passes `--msys-from-tree` on
-Windows), and `libs_run_id` with `libs_leg` (empty by default: a
-libs-zig-pixi CI run whose `channel-<win-64|win-arm64>-<libs_leg>`
-artifact a Windows conda job downloads and passes as `--libs-channel`;
-the download reads another repository's artifacts, so it takes the
-repository secret `LIBS_ZIG_PIXI_TOKEN`, a fine-grained token with
-Actions read on luciorq/libs-zig-pixi, and without it tries the run's
-own token, which is not tested to work).
+Windows).
 Each OS and distribution is one job.
 Jobs never stop each other (`fail-fast: false`) and may take up to 6 hours.
 
@@ -328,19 +320,15 @@ package cannot link (the abi rows: s2, terra, gdalraster). With zig-libs:
   order is zig-libs, the Rtools45 tree's closed `.pc` files, the env's.
 
 The rows name them as `zig-gdal@windows` and the like (unix keeps
-conda-forge's libgdal-core, geos, proj, openssl). Until they are published
-(libs-zig-pixi M5) no channel has them, so:
-
-- a conda run takes them from `--libs-channel` (in CI: `libs_run_id`, the
-  artifact of a libs-zig-pixi CI run, which expires after 14 days);
-  without it they are left out of the env, as the stress env lacks them;
-- a tree run cannot have them: its libraries env is the locked stress env.
+conda-forge's libgdal-core, geos, proj, openssl). They are on universe
+since 2026-11-23 (libs-zig-pixi M5), so the stress env has them on both
+Windows platforms (pixi.toml), a tree run takes them from there and a
+conda run's env gets them from universe with the rows' other sysdeps.
 
 A target whose `zig-*` sysdeps (its own or its dependencies' rows', such
 as s2's for sf) are missing, and not served by the Rtools45 tree on
 Windows on ARM (gdal, geos, proj, tbb12; not abseil), gets the expect `?`:
-the `windows=ok` expects assume them. Before M5 that is every win-64 tree
-run, and a conda run without `--libs-channel`.
+the `windows=ok` expects assume them.
 
 ## Windows on ARM: the Rtools45 fallback
 

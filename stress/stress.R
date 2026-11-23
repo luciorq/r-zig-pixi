@@ -24,14 +24,6 @@
 #                 (the default: this checkout's dist/conda, made by
 #                 `pixi run -e pkg conda-package`), universe (prefix.dev),
 #                 or another channel path or URL
-#   --libs-channel=CH  with --conda: one more channel, right after r-zig's
-#                 (before universe and conda-forge), for libs-zig-pixi's
-#                 zig-* packages (zig-gdal, zig-abseil, ...) before they are
-#                 published (M5): a channel directory (the libs-zig-pixi CI
-#                 artifact channel-<subdir>-<leg>) or URL. Without it the
-#                 rows' zig-* sysdeps are left out of the conda env unless
-#                 the libraries env has them (stress/README.md, zig-libs).
-#                 Ignored, with a note, for the tree
 #   --out=DIR     run directory (default build/stress/<os>-<arch>-<dist>-<time>)
 #   --jobs=N      make -jN and cmake's parallel level (default: cores, max 8)
 #   --resume      reuse --out's library: skip what is already installed
@@ -63,8 +55,8 @@
 #   --strict      exit 1 when a target's result differs from its expect
 #   --help        print this
 # Environment: STRESS_JOBS (as --jobs), STRESS_TSV (another data file),
-# STRESS_RTOOLS_DIR (where the Rtools45 tree goes), STRESS_LIBS_CHANNEL (as
-# --libs-channel), R_ZIG_PKG_BUILDER (auto or make; the report records it).
+# STRESS_RTOOLS_DIR (where the Rtools45 tree goes), R_ZIG_PKG_BUILDER (auto
+# or make; the report records it).
 
 argv <- commandArgs(trailingOnly = TRUE)
 opt <- function(name, default = NULL) {
@@ -74,7 +66,7 @@ opt <- function(name, default = NULL) {
   if (nzchar(v)) v else TRUE
 }
 flag <- function(name) isTRUE(opt(name))
-known <- c("skip", "tree", "conda", "libs-channel", "out", "jobs", "resume", "keep-path", "msys-from-tree", "no-rtools-libs", "trace", "list",
+known <- c("skip", "tree", "conda", "out", "jobs", "resume", "keep-path", "msys-from-tree", "no-rtools-libs", "trace", "list",
            "sysdeps", "strict", "help")
 bad <- setdiff(sub("=.*", "", sub("^--", "", grep("^--", argv, value = TRUE))), known)
 if (length(bad)) stop("unknown option: --", paste(bad, collapse = " --"), " (see --help)", call. = FALSE)
@@ -111,13 +103,6 @@ root <- sub("/(Library/)?lib/R$", "", rhome)                 # R's own environme
 dist <- if (dir.exists(file.path(root, "conda-meta"))) "conda" else "tree"
 conda <- opt("conda")
 if (flag("tree") && !is.null(conda)) stop("--tree and --conda: choose one", call. = FALSE)
-# libs-zig-pixi's zig-* packages before M5: their channel (--libs-channel)
-libs_channel <- opt("libs-channel", if (nzchar(Sys.getenv("STRESS_LIBS_CHANNEL"))) Sys.getenv("STRESS_LIBS_CHANNEL"))
-if (isTRUE(libs_channel)) stop("--libs-channel needs a channel directory or URL", call. = FALSE)
-if (!is.null(libs_channel) && is.null(conda) && dist == "tree") {
-  message("stress: --libs-channel is for --conda (the tree's libraries env is the stress env); ignored")
-  libs_channel <- NULL
-}
 # zig's triple, the directory below a Windows env's Library/zig-libs that
 # the zig-* packages install into (rzig's environment.zig)
 zig_triple <- paste0(arch, "-windows-gnu")
@@ -317,12 +302,8 @@ if (!is.null(conda) && !in_ws) {
   # universe before conda-forge, as pixi.toml and README: under strict
   # channel priority flang-rt-zig's llvm-openmp (zig_*) is only visible
   # when universe comes first (2026-11-12, chore-release-11 PLAN.md)
-  # libs-zig-pixi's channel right after r-zig's (zig-* are in no other)
-  if (!is.null(libs_channel) && !grepl("^[a-z]+://", libs_channel)) {
-    if (!dir.exists(libs_channel)) stop("no conda channel at ", libs_channel, " (--libs-channel)", call. = FALSE)
-    libs_channel <- normalizePath(libs_channel, winslash = "/")
-  }
-  channels <- unique(c(if (channel != "https://prefix.dev/universe") channel, libs_channel, "https://prefix.dev/universe", "conda-forge"))
+  # (libs-zig-pixi's zig-* packages are on universe too)
+  channels <- unique(c(if (channel != "https://prefix.dev/universe") channel, "https://prefix.dev/universe", "conda-forge"))
   if (is.na(subdir)) stop("no conda subdir for ", os, " ", arch, call. = FALSE)
   # the installed rows' sysdeps only, as a user installs what they need: a
   # conflict in one row's libraries then does not block the other rows.
@@ -333,12 +314,6 @@ if (!is.null(conda) && !in_ws) {
   # Only when the libraries env is the stress env: another env does not
   # say what conda-forge has for the platform, so all sysdeps stay.
   absent <- if (nzchar(libs) && dir.exists(libs) && basename(libs) == "stress") setdiff(needed, env_pkgs(libs)) else character()
-  # zig-* (libs-zig-pixi): from --libs-channel when given; without it only
-  # when the libraries env has them (none before M5, when no channel has
-  # them and the whole solve would fail)
-  zig_needed <- grep("^zig-", needed, value = TRUE)
-  absent <- if (!is.null(libs_channel)) setdiff(absent, zig_needed) else
-    union(absent, setdiff(zig_needed, if (nzchar(libs) && dir.exists(libs)) env_pkgs(libs)))
   if (length(absent)) message("stress: not in the stress env (", libs, ") for ", subdir, ", so not in the conda env: ",
                               paste(absent, collapse = " "))
   deps <- unique(c("r-zig-slim", "r-zig-toolchain", "pkg-config", setdiff(needed, absent)))
@@ -366,7 +341,7 @@ if (!is.null(conda) && !in_ws) {
     e <- Sys.getenv()
     Sys.unsetenv(setdiff(names(e)[grepl(cp, chartr("\\", "/", e), fixed = TRUE)], c("PATH", "Path")))
   }
-  Sys.setenv(STRESS_CHANNEL = channel, STRESS_LIBS_CHANNEL = if (is.null(libs_channel)) "" else libs_channel)
+  Sys.setenv(STRESS_CHANNEL = channel)
   mf <- shQuote(file.path(ws, "pixi.toml"))
   elog <- file.path(out, "logs", "conda-env.log")
   message("stress: making the conda env in ", ws, " (", paste(channels, collapse = ", "), ")")
@@ -494,7 +469,7 @@ if (!nzchar(builder)) builder <- "auto"
 info <- list(
   date = format(t_start, "%Y-%m-%d %H:%M %Z", tz = "UTC"), r = R.version.string, os = os, arch = arch, dist = dist,
   channel = Sys.getenv("STRESS_CHANNEL"), r_zig = paste(meta("^r-zig-(slim|toolchain)-.*\\.json$"), collapse = " "),
-  libs_channel = Sys.getenv("STRESS_LIBS_CHANNEL"), zig_libs = zig_libs,
+  zig_libs = zig_libs,
   zig_pkgs = paste(meta("^zig-[a-z].*\\.json$"), collapse = " "),
   r_home = rhome, libraries_env = sysroot, commit = commit, jobs = jobs, path = if (flag("keep-path")) "kept" else "narrowed",
   msys_from_tree = msys_tree,
@@ -535,10 +510,9 @@ write_report <- function(final = FALSE) {
           sprintf("zig %s; CC `%s`; cmake `%s`; libraries env `%s`%s.", info$zig, info$cc, info$cmake, sysroot,
                   if (dist == "conda") sprintf(" (%s from %s)", info$r_zig, info$channel) else ""),
           sprintf("Builder %s (R_ZIG_PKG_BUILDER).", builder),
-          if (nzchar(info$zig_libs) || nzchar(info$libs_channel))
-            sprintf("zig-libs `%s` (%s)%s.", if (nzchar(info$zig_libs)) info$zig_libs else "none",
-                    if (nzchar(info$zig_pkgs)) info$zig_pkgs else "no zig-* package",
-                    if (nzchar(info$libs_channel)) sprintf(", libs channel %s", info$libs_channel) else ""),
+          if (win)
+            sprintf("zig-libs `%s` (%s).", if (nzchar(info$zig_libs)) info$zig_libs else "none",
+                    if (nzchar(info$zig_pkgs)) info$zig_pkgs else "no zig-* package"),
           if (length(sysdeps_missing)) sprintf("Sysdeps missing from the env: %s.", info$sysdeps_missing),
           if (nzchar(info$rtools_libs)) sprintf("Fallback: %s.", info$rtools_libs),
           if (nzchar(info$rzig_cache_removed)) sprintf("The run added to rzig's cache `%s`, and removed at its end: %s.",
@@ -865,8 +839,7 @@ tiny_pkg <- function(p, n = 64L) {
 # --trace log (rzig's `lib -l<n> <file>` lines, windows.zig), the -l names
 # that resolved into zig-libs and into the fallback tree. A target whose
 # zig-* sysdeps are missing and not served gets the expect ?: its
-# packages.tsv expect assumes them (before M5, every tree leg and a conda
-# leg without --libs-channel).
+# packages.tsv expect assumes them (an env made without them).
 row_zig <- function(name) {
   d <- c(name, if (name %in% rownames(db)) unlist(tools::package_dependencies(name, db = db, which = hard, recursive = TRUE)))
   r <- tab[tab$name %in% d & vapply(tab$oses, function(x) any(words(x) %in% c("all", os)), NA), ]
