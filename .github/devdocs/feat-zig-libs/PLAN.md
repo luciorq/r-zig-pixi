@@ -269,6 +269,21 @@ report.json, per-package install and smoke logs, phase1-6 logs).
     No zig-* library resolves into the tree. windows-latest has no tree
     and shows none.
 
+20. V. Full Windows stress set with zig-libs first (head 972e5a4), run
+    45079784455, conda-forge zig, `channel=local`,
+    `libs_run_id=44984149674`, default package list (25 rows each):
+    windows-11-arm (job 137388149773) "Targets: 1 install-failed, 24
+    ok. Unexpected (!): 0. Dependencies: 55 ok."; windows-latest (job
+    137388149745) "Targets: 4 install-failed, 20 ok, 1 skipped.
+    Unexpected (!): 0. Dependencies: 1 install-failed, 54 ok." Every
+    non-ok row is its packages.tsv expect: Rhdf5lib fail-package on both
+    (`FLT16_MAX` undeclared in the vendored HDF5); win-64 hdf5r
+    fail-package (`off_t *` vs `HDoff_t *`), gsl fail-upstream
+    (LoadLibrary), igraph fail-sysdep (`libxml/globals.h`), Rsamtools
+    skipped (its dependency Rhtslib). So binding `-lz`, `-lssl`/`-lcrypto`,
+    `-lexpat` and `-lsqlite3` to the zig-* archives first changed no
+    row's result (the side effect in Not verified).
+
 ## What changed after kappa
 
 - `r-zig.cmake`: zig-libs on `CMAKE_PREFIX_PATH` instead of
@@ -319,10 +334,6 @@ the fixes.
 
 ## Not verified
 
-- A full Windows stress run: zig-libs now comes first for every row, so
-  `-lz`, `-lssl`/`-lcrypto`, `-lexpat` and `-lsqlite3` bind the zig-*
-  archives instead of conda's import libraries in every package; seen
-  only in the 21 packages of the kappa run (V there).
 - A CMake consumer of zig-libs on Windows (abseil, GEOS, TBB, expat
   configs), and `find_library` on Windows with the new
   `CMAKE_PREFIX_PATH` lines.
