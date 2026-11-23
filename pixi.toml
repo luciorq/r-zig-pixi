@@ -812,8 +812,21 @@ glpk = "*"
 nlopt = "*"
 
 # RPostgres includes Rtools' boost headers (round 1's S1, decision 18).
+# zig-*: libs-zig-pixi's zig-built static libraries (universe, published
+# 2026-11-23), the packages.tsv rows' `zig-*@windows` sysdeps (sf, terra,
+# gdalraster, lwgeom, s2). conda-forge's GDAL, abseil and oneTBB for
+# Windows are MSVC C++ builds that a zig-built package cannot link; these
+# install into Library/zig-libs/<triple>, which rzig searches first
+# (stress/README.md, "Windows: zig-libs"). Their own zig-* dependencies
+# (zig-sqlite, zig-zlib, zig-expat) come with them.
 [feature.stress.target.win.dependencies]
 libboost-headers = "*"
+zig-abseil = "*"        # s2
+zig-gdal = "*"          # sf, terra, gdalraster
+zig-geos = "*"          # sf, terra, gdalraster, lwgeom
+zig-onetbb = "*"        # terra
+zig-openssl = "*"       # s2
+zig-proj = "*"          # sf, terra, gdalraster, lwgeom
 
 # conda-forge's libheif 1.23.4 to 1.23.6 for osx-arm64 link a Homebrew
 # path (/opt/homebrew/.../libsharpyuv), so magick could not load (round
