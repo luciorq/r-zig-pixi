@@ -62,3 +62,22 @@ R_TOOLCHAIN_PREFIX="$PREFIX" bash scripts/zig-toolchain.sh "${pkgconf[@]}"
 # r-zig-slim leaves them out). Last: they need R and, for Matrix's
 # makefile rules, make, which the build env has.
 R_RECOMMENDED_PREFIX="$PREFIX" bash scripts/zig-recommended.sh
+# Licence texts for the packages' info/licenses (recipe/recipe.yaml's
+# license_file globs, which read the work dir, not $PREFIX). zig's: the
+# build env's zig package's own info/licenses (zig's MIT text for
+# compiler_rt, and the libc start files and libunwind zig links), from the
+# package cache its conda-meta record names. The recommended packages':
+# the LICENCE files R CMD INSTALL put in their directories (Matrix's).
+# r-zig's own MIT LICENSE comes in as a recipe source.
+bp="$BUILD_PREFIX" hp="$PREFIX"
+if command -v cygpath >/dev/null; then bp="$(cygpath -u "$bp")" hp="$(cygpath -u "$hp")"; fi
+zig_pkg="$(sed -n 's/.*"extracted_package_dir": *"\([^"]*\)".*/\1/p' "$bp"/conda-meta/zig-[0-9]*.json | sed 's|\\\\|/|g')"
+[ -d "$zig_pkg/info/licenses" ] || { echo "build.sh: no zig licences in the package cache ('$zig_pkg')" >&2; exit 1; }
+mkdir -p licenses/zig licenses/recommended
+cp -R "$zig_pkg/info/licenses/." licenses/zig/
+for f in "$hp"/lib/R/library/*/LICEN[CS]E* "$hp"/Library/lib/R/library/*/LICEN[CS]E*; do
+  [ -f "$f" ] || continue
+  pkg="$(basename "$(dirname "$f")")"
+  mkdir -p "licenses/recommended/$pkg"
+  cp "$f" "licenses/recommended/$pkg/"
+done
