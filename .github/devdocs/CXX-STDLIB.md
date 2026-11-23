@@ -158,6 +158,21 @@ Known differences from gcc:
   bundle. But r-zig would own every rebuild on every upstream release
   (4-6 days to set up, then upkeep), and GDAL loses drivers. It is the
   opposite of reusing what conda-forge builds.
+  Amended (feat-zig-libs, 2026-11-22): for Windows it is done, in a
+  repository of its own, libs-zig-pixi, not in r-zig. There conda-forge
+  has no usable C++ build at all (MSVC on win-64, none on win-arm64), so
+  there is nothing to reuse. Its `zig-*` conda packages (zig-zlib 1.3.1,
+  zig-sqlite 3.51.2, zig-expat 2.7.3, zig-openssl 3.6.0, zig-abseil
+  20250127.0, zig-onetbb 2022.2.0, zig-geos 3.14.1, zig-proj 9.7.1,
+  zig-gdal 3.12.1 with 166 drivers) are static libraries built with zig
+  and libc++ for win-64 and win-arm64, in `<env>/Library/zig-libs/<triple>`.
+  rzig searches that directory before its environment, R's
+  `Rcmd_environ` puts its `.pc` files first and points `R_TOOLS_SOFT` at
+  it, and stress.R's s2, sf, terra and gdalraster rows expect `ok` on
+  Windows with them (stress/README.md, "Windows: zig-libs"). Linux and
+  macOS stay as decided above: libstdc++ on linux (decision 2),
+  conda-forge's libc++ on macOS. Not yet published (libs-zig-pixi M5):
+  until then only a conda stress run with `--libs-channel` has them.
 - **Per-package switching in rzig**: decision 2.
 - **conda-forge's prebuilt r-* packages** (T/abi-condaforge-bin). R 4.5
   builds load in r-zig's R 4.6.2 (except rlang: SETLENGTH is gone in
@@ -179,6 +194,15 @@ C++ exceptions thrown in the tree's code and caught in zig's, and layout
 skew between LLVM 19's libc++ headers and zig's clang 22 libc++. win-64
 is not affected: conda-forge is MSVC there, and x86_64 Rtools is gcc's
 libstdc++.
+
+With libs-zig-pixi's aarch64 `zig-*` packages (zig's own clang and libc++,
+the same as the packages) the GDAL stack, abseil and oneTBB come from
+zig-libs, which rzig searches before the env and the tree, and the tree
+keeps the libraries libs-zig-pixi does not build (nlopt, gsl, mpfr, gmp,
+glpk, hdf5, netcdf, udunits2, harfbuzz, libpq). The LLVM 19 against clang
+22 skew above then no longer applies to those four rows. R_ZIG_FALLBACK_SOFT
+stays until no stress row resolves an `-l` into the tree (the report's
+zig-libs column, with `--trace`); retiring it is a later slice.
 
 ## Deferred (no decision)
 

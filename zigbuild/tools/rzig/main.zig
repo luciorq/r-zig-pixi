@@ -85,8 +85,8 @@
 //!                      children (tier1.zig, also tier 2's `rzig t1`), so
 //!                      the line shows after the command rzig build echoed,
 //!                      as under make. Before it: `self <path>`, each
-//!                      `environment <dir>` (`(conda)` or `(fallback)`
-//!                      after it), and `cache <dir>`, rzig's
+//!                      `environment <dir>` (`(conda)`, `(fallback)` or
+//!                      `(zig-libs)` after it), and `cache <dir>`, rzig's
 //!                      cache (cache.zig's root; `(none)` without one),
 //!                      where the harnesses look for what it wrote.
 //!   RZIG_KEEP_ROOT=1   rzig build: keep the build root (the plan, the
@@ -365,7 +365,7 @@ pub fn main(init: std.process.Init) !u8 {
         // what the environment rule saw: this binary's path, and the
         // environments it chose (environment.zig)
         ctx.warn("self {s}", .{ctx.self_exe orelse "(unknown)"});
-        for (try environment.list(&ctx)) |e| ctx.warn("environment {s}{s}", .{ e.dir, if (e.conda) " (conda)" else if (e.fallback) " (fallback)" else "" });
+        for (try environment.list(&ctx)) |e| ctx.warn("environment {s}{s}", .{ e.dir, if (e.conda) " (conda)" else if (e.fallback) " (fallback)" else if (e.zig_libs) " (zig-libs)" else "" });
         // and its cache: an empty cache where a harness looks says
         // nothing unless this is the directory (verify-helpers.sh's
         // rzig_cache_odd)

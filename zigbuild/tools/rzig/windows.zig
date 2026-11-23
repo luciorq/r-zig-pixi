@@ -18,10 +18,15 @@ const Args = cmdline.Args;
 /// libraries (libomp.dll.a, libboost_*-mt-a64.dll.a, libeigen_blas.dll.a)
 /// are for DLLs it does not install. Such an -l then fails the link, not
 /// the DLL's load.
+/// RZIG_TRACE (not 0): one line per -l, `lib -l<n> <file>`, the file the
+/// first -L directory with one of its names has (`resolved`), or `(none)`
+/// (zig's own MinGW libraries): which link bound a zig-libs archive, an
+/// environment's library or the fallback tree's (stress.R's report).
 pub fn libs(ctx: *Ctx, args: Args) !Args {
     const a = ctx.arena;
     const dirs = try cmdline.libDirs(a, args);
     const tree = if (try environment.fallback(ctx)) |e| try ctx.fmt("{s}/lib", .{e.dir}) else null;
+    const trace = if (ctx.getenv("RZIG_TRACE")) |v| !mem.eql(u8, v, "0") else false;
     var out: std.ArrayList([]const u8) = .empty;
     for (args) |x| {
         var name = cmdline.flagValue(x, "-l") orelse {
@@ -34,6 +39,7 @@ pub fn libs(ctx: *Ctx, args: Args) !Args {
             l = try ctx.fmt("-l{s}", .{n});
         }
         try out.append(a, (try importLib(ctx, dirs.items, name, tree)) orelse l);
+        if (trace) ctx.warn("lib -l{s} {s}", .{ name, (try resolved(ctx, dirs.items, name)) orelse "(none)" });
     }
     // GNU gcc's -mwindows also links the GDI/shell set; zig only sets the
     // subsystem. gnuwin32's makefiles rely on the implicit libraries.
@@ -231,6 +237,21 @@ fn importLib(ctx: *Ctx, dirs: Args, name: []const u8, tree: ?[]const u8) !?[]con
     return null;
 }
 
+/// The first of GNU ld's names for -l<name> in the first directory of
+/// `dirs` that has one (any of them, the fallback tree's import libraries
+/// too: a trace says where the name is, importLib what is linked).
+fn resolved(ctx: *Ctx, dirs: Args, name: []const u8) !?[]const u8 {
+    for (dirs) |d| {
+        const names = [_][]const u8{
+            try ctx.fmt("{s}/lib{s}.dll.a", .{ d, name }), try ctx.fmt("{s}/{s}.dll", .{ d, name }),
+            try ctx.fmt("{s}/{s}.lib", .{ d, name }),      try ctx.fmt("{s}/lib{s}.a", .{ d, name }),
+            try ctx.fmt("{s}/lib{s}.lib", .{ d, name }),
+        };
+        for (names) |p| if (ctx.isFile(p)) return p;
+    }
+    return null;
+}
+
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -251,6 +272,27 @@ test "import libraries GNU ld would find; zig's own names left to zig; -mwindows
     }, try libs(&f.ctx, &.{ l1, l2, "-ldlla", "-lziglib", "-lmsvc", "-lstop", "-lnowhere", "-lonly2", "-L", "/x", "-l", "x", "-mwindows" }));
     // -mwindows as a word only
     try expectArgs(&.{"-mwindowsx"}, try libs(&f.ctx, &.{"-mwindowsx"}));
+}
+
+test "RZIG_TRACE: where each -l is, zig-libs' archive first" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    for ([_][]const u8{ "z/libgdal.a", "z/libz.a", "e/gdal.lib", "e/libz.dll.a", "e/zlib.lib" }) |p| try f.touch(p);
+    const lz = f.fmt("-L{s}", .{f.path("z")});
+    const le = f.fmt("-L{s}", .{f.path("e")});
+    const in: Args = &.{ lz, le, "-lgdal", "-lz", "-lzlib", "-lkernel32" };
+    // the arguments are what they were without the trace
+    try expectArgs(in, try libs(&f.ctx, in));
+    try testing.expectEqualStrings("", f.takeWarnings());
+    try f.env.put("RZIG_TRACE", "0");
+    try expectArgs(in, try libs(&f.ctx, in));
+    try testing.expectEqualStrings("", f.takeWarnings());
+    try f.env.put("RZIG_TRACE", "1");
+    try expectArgs(in, try libs(&f.ctx, in));
+    try testing.expectEqualStrings(f.fmt("rzig-test: lib -lgdal {s}\nrzig-test: lib -lz {s}\nrzig-test: lib -lzlib {s}\nrzig-test: lib -lkernel32 (none)\n", .{
+        f.path("z/libgdal.a"), f.path("z/libz.a"), f.path("e/zlib.lib"),
+    }), f.takeWarnings());
 }
 
 test "defaultLibs: -lws2_32 last on a DLL link, as gcc's LIB_SPEC applies; nothing elsewhere" {
