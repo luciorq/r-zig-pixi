@@ -168,11 +168,14 @@ nothing else on the machine:
   `R_LIBS`, `R_LIBS_USER` and `R_LIBS_SITE` all point to it. Each package is
   installed once per run, and later packages use it.
 - An empty file for `R_MAKEVARS_USER`, `R_ENVIRON_USER` and `R_PROFILE_USER`.
-- `TMPDIR` and zig's cache in the run directory. `rzig build` takes its
-  default, as a user's install does: tier 1 runs no zig build, and tier 2
-  keeps its zig build cache in its build root. The temp files are deleted
-  after each package. rzig's own cache is elsewhere: `$XDG_CACHE_HOME/r-zig`,
-  by default `~/.cache/r-zig` (Windows: `%LOCALAPPDATA%\r-zig`). There, with
+- `TMPDIR` and zig's cache in the run directory: `ZIG_GLOBAL_CACHE_DIR`
+  and `ZIG_LOCAL_CACHE_DIR` are its `zig-cache`. Without the local one,
+  zig cc finds r-zig's `build.zig` above a run directory in the checkout
+  and leaves a `.zig-cache` in the checkout root. Tier 1 runs no zig
+  build; tier 2 takes `ZIG_LOCAL_CACHE_DIR` as its zig build cache, so in
+  a stress run it is the run's, not one per build root. The temp files
+  are deleted after each package. rzig's own cache is elsewhere:
+  `$XDG_CACHE_HOME/r-zig`, by default `~/.cache/r-zig` (Windows: `%LOCALAPPDATA%\r-zig`). There, with
   conda-forge's zig on macOS, rzig makes a libc++ mirror (a directory of
   symlinks) per zig. On linux zig builds no libc++ for packages: rzig
   compiles C++ against gcc's libstdc++ headers (the env's

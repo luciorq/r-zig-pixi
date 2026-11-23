@@ -924,10 +924,13 @@ None blocks phase 8. Each is its own small PR unless it says otherwise.
       intrinsics compiles at `-mcpu=baseline` for the linux, Windows
       and macOS x86_64 targets (gamma, 2026-11-12; chore-release-11).
       The stress rows confirm it on the runners
-- [ ] K1: packages.tsv's RPostgres sysdeps `libpq
+- [x] K1: packages.tsv's RPostgres sysdeps `libpq
       libboost-headers@windows lz4-c@windows` (tested on kappa); the
       Windows conda stress row's `RPostgres (!) install-failed sysdep`
-      (`boost/noncopyable.hpp`) goes with it
+      (`boost/noncopyable.hpp`) goes with it. Not needed: sysdeps stay
+      `libpq`; RPostgres 1.4.10 uses its libpq bundle and vendored boost
+      on x86_64 and Rtools45's on aarch64; stress 45219870330 ok on all
+      four Windows legs (test-stress-rows PLAN.md D2, F5)
 - [x] K2: stress.R `--conda` unsets every variable that names the
       tree's CONDA_PREFIX, PATH excepted (tested on win-64 only); s2's
       configure line then stops naming the tree's stress env
@@ -936,8 +939,10 @@ None blocks phase 8. Each is its own small PR unless it says otherwise.
       and K4 were fixed in feat-tier1-engine (#36). def.zig reads them
       since feat-win-zig-binutils (#47; its test "exports: a bigobj
       object")
-- [ ] N6: correct stress.R:337-338's comment, or set ZIG_LOCAL_CACHE_DIR
-      to the run directory (a `.zig-cache` appears in the checkout root)
+- [x] N6: correct stress.R:337-338's comment, or set ZIG_LOCAL_CACHE_DIR
+      to the run directory (a `.zig-cache` appears in the checkout root).
+      stress.R sets it to the run's `zig-cache`; a local stress run
+      leaves none (test-stress-rows PLAN.md D3, F7)
 - [ ] N7: check that a user's runtime zig cache does not mix
       conda-forge's and upstream zig objects of one version (0.17.0 and
       0.17.1 today, so the keys differ; the case returns when both have

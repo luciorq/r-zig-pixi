@@ -402,12 +402,15 @@ Sys.setenv(
 if (win) Sys.setenv(TMP = tmp, TEMP = tmp)
 # zig caches every object it compiles: in the run directory, whatever the
 # caller set (as scripts/env.sh does for the build). --resume reuses it.
-# rzig build takes its default, as a user's install does: tier 1 runs no
-# zig build (tier1.zig), and tier 2 keeps its zig build cache in each
-# build root (N3). The caller's ZIG_LOCAL_CACHE_DIR would be zig cc's and
-# tier 2's cache instead (feat-tier1-engine).
-Sys.setenv(ZIG_GLOBAL_CACHE_DIR = file.path(out, "zig-cache"))
-Sys.unsetenv("ZIG_LOCAL_CACHE_DIR")
+# ZIG_LOCAL_CACHE_DIR is the same directory: without it zig cc looks up
+# from the package's build directory for a build.zig and, as the run
+# directory is in this checkout by default, makes a .zig-cache next to
+# r-zig's own build.zig (N6). A user's install has no build.zig above it,
+# so zig cc's local cache is its global one there too. Tier 2's zig build
+# takes ZIG_LOCAL_CACHE_DIR as --cache-dir (pkgbuild.zig), so its cache is
+# the run's as well, not one per build root (N3); tier 1 runs no zig build.
+Sys.setenv(ZIG_GLOBAL_CACHE_DIR = file.path(out, "zig-cache"),
+           ZIG_LOCAL_CACHE_DIR = file.path(out, "zig-cache"))
 # rzig's own cache is outside the run directory, where cache.zig puts it
 # (an empty variable counts as unset; with no cache home, zig's global
 # cache). The run removes at its end what it added there (V8's archive
