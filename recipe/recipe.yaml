@@ -384,15 +384,17 @@ outputs:
         - if: win
           then:
             - pixman
-        - expat
-        - fontconfig
-        - freetype
         - libpng
         # glib on unix only, as pixi.toml: R's Windows build uses none of
-        # it, and on Windows glib's python brings tk.
+        # it, and on Windows glib's python brings tk. expat, fontconfig
+        # and freetype too (chore-env-ci Q12): Windows' cairo
+        # (zigbuild/cairo.zig) has no FreeType or fontconfig backend.
         - if: unix
           then:
             - glib
+            - expat
+            - fontconfig
+            - freetype
         # pango/cairo only pull in libharfbuzz (the runtime .so) as their own
         # transitive run dependency, not the headers — the vendored
         # CAIRO_CPPFLAGS build.zig applies unconditionally references
@@ -492,14 +494,14 @@ outputs:
         - if: win
           then:
             - pixman
-        - expat
-        - fontconfig
-        - freetype
         - libpng
         # unix only, as the staging host
         - if: unix
           then:
             - glib
+            - expat
+            - fontconfig
+            - freetype
         # E2, on every OS (staging host): R.dll links it in every variant
         - zstd
         - if: linux

@@ -189,14 +189,13 @@ both on every `conda-package` leg, before the publish.
 ### Publish to your own channel
 
 ```bash
-pixi run -e pkg conda-publish
+pixi run -e pkg conda-publish linux-64   # the subdir conda-package built
 ```
 
-Uploads the just-built packages for the current platform
-(`dist/conda/<platform>/*.conda`) to the `universe` channel via
-`rattler-build upload prefix --skip-existing`. Each platform has its own
-task (`[feature.pkg.target.<platform>.tasks]` in `pixi.toml`), so it
-never uploads another platform's packages. It is CI's publish step (see
+Uploads the just-built packages for the subdir it is given
+(`dist/conda/<subdir>/*.conda`) to the `universe` channel via
+`rattler-build upload prefix --skip-existing`. It takes no glob over
+`dist/conda/`, so it never uploads another platform's packages. It is CI's publish step (see
 CI), not run by hand for `universe`; for a channel of your own, change
 `--channel` in that task or run `rattler-build upload` yourself.
 

@@ -14,7 +14,7 @@ package does not fail the run.
 |---|---|
 | `packages.tsv` | the data: one row per target, with its group, OSes, system libraries, env vars, timeout, expected result, smoke call and a note. The header explains each column. |
 | `stress.R` | the one entry script. Base R only. `--help` prints its options. |
-| `pixi.toml`, `[feature.stress]` | the `stress` environment: the system libraries the rows need (GDAL, GEOS, PROJ, cmake, ...), plus the default feature's zig and flang. All six platforms; on win-arm64 without the libraries conda-forge has no build of there (libgdal-core, udunits2, imagemagick, harfbuzz, hdf5, libnetcdf, gsl, mpfr, gmp, libpq, glpk, nlopt; 2026-11-15), which the report lists as sysdeps missing from the env. |
+| `pixi.toml`, `[feature.stress]` | the `stress` environment: the system libraries the rows need (GDAL, GEOS, PROJ, cmake, ...), plus the default feature's zig and flang. All six platforms; on win-arm64 without the libraries conda-forge has no build of there (libgdal-core, udunits2, imagemagick, harfbuzz, hdf5, libnetcdf, gsl, mpfr, gmp, libpq, glpk, nlopt; 2026-11-15) and without libprotobuf (protolite takes r-windows' protobuf bundle there; chore-env-ci M-3), which the report lists as sysdeps missing from the env. |
 | `.github/workflows/stress.yaml` | the manual CI workflow. |
 
 The groups follow the brief:

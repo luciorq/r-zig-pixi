@@ -311,11 +311,9 @@ llvm-openmp = { version = "==23.1.5", build = "zig_*_1" }
 # Windows builds its cairo (zigbuild/cairo.zig) against pixman
 # ([target.win.dependencies]): conda-forge has none of the three for
 # win-arm64, and R's Windows device has no pango.
-expat = "*"
-fontconfig = "*"
-freetype = "*"
 libpng = "*"
-# glib: unix only ([target.unix.dependencies]).
+# glib, expat, fontconfig and freetype: unix only
+# ([target.unix.dependencies]).
 
 # conda-forge's linux cairo is built with X11 backends; its pkg-config
 # metadata needs the xorg proto files even though R is built --with-x=no
@@ -334,9 +332,17 @@ cairo = "*"
 # python is in R's build envs on unix. Unix only since 2026-11-14: R's
 # Windows build uses no glib (its cairo has none of its backends;
 # zigbuild/cairo.zig), and on Windows glib's python brought tk, tcl and
-# libintl-devel into Windows slim. fontconfig, freetype and expat are
-# unused on Windows too; they stay in every env, as before.
+# libintl-devel into Windows slim.
 glib = "*"
+# fontconfig and freetype for R's cairo device (cairoFns.c's FreeType and
+# fontconfig branch, !_WIN32), expat for fontconfig. Unix only since
+# chore-env-ci (Q12): Windows' cairo (zigbuild/cairo.zig) is built
+# without FreeType or fontconfig and R picks its fonts through GDI;
+# nothing in build.zig, zigbuild/config/win-* or the scripts names them
+# for Windows.
+expat = "*"
+fontconfig = "*"
+freetype = "*"
 # pango for R's cairo device; harfbuzz for its headers (pango's include
 # hb.h; the recipe lists it for the same reason). Unpinned since
 # 2026-11-15 (chore-release-11 finding 27): pango 1.56.* and harfbuzz
@@ -468,9 +474,17 @@ gettext = "*"
 R_BUILD_VARIANT = "full"
 
 # External optimized BLAS/LAPACK instead of R's internal reference
-# implementation (unix configure path only so far; gnuwin32 is TODO).
+# implementation: build.zig's -Dblas=openblas (R_BLAS, scripts/env.sh),
+# a link-time swap on linux and macOS. Not on Windows: buildWindows
+# never reads -Dblas and always builds Rblas.dll/Rlapack.dll, so a
+# Windows openblas env would build slim with an unused openblas
+# (chore-env-ci Q13; backlog M-7). Hence the platforms below, which the
+# openblas and full-openblas environments take.
 # Numerical results may differ in last-bit rounding from the reference
 # BLAS — that is inherent to optimized BLAS, not a build defect.
+[feature.openblas]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
+
 [feature.openblas.dependencies]
 openblas = "*"
 
@@ -703,36 +717,15 @@ conda-channel-delete = "bash scripts/prefix-delete-package.sh"
 # (`rattler-build auth login prefix.dev`). Not chained onto conda-package
 # via depends-on — publishing an already-built artifact shouldn't force a
 # full R rebuild. CI's trusted publishing (build.yaml) is the normal path.
-# Scoped per-platform (rather than one task globbing dist/conda/*/*.conda)
-# so it can never pick up another platform's artifact or anything left in
-# rattler-build's own dist/conda/broken/ (its convention for a package
-# that failed its test phase) — each dev machine only ever builds its own
-# platform, so this is exact, not just defensive.
+# One task that takes the subdir (`pixi run -e pkg conda-publish
+# linux-64`; build.yaml passes its matrix name), never a glob over
+# dist/conda/*/*.conda: it can pick up neither another platform's
+# artifact nor anything in rattler-build's own dist/conda/broken/ (its
+# convention for a package that failed its test phase). Six per-platform
+# copies of this line until chore-env-ci (Q10).
 # Not run by hand either: hosted CI publishes, for a build-number bump
 # only (build.yaml's CONDA_PUBLISH says why).
-[feature.pkg.target.linux-64.tasks]
-conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/linux-64/*.conda"
-
-[feature.pkg.target.osx-64.tasks]
-conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/osx-64/*.conda"
-
-[feature.pkg.target.osx-arm64.tasks]
-conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/osx-arm64/*.conda"
-
-[feature.pkg.target.win-64.tasks]
-conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/win-64/*.conda"
-
-[feature.pkg.target.win-arm64.tasks]
-conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/win-arm64/*.conda"
-
-# linux-aarch64 became a real platform when the repo went public
-# (GitHub-hosted ubuntu-24.04-arm runners): CI's conda-package
-# job builds and publishes through this task via OIDC trusted
-# publishing. Its vendored config lives at zigbuild/config/linux-arm64-*
-# ("arm64", not conda's "aarch64" — build.zig/gen-subst.sh's shared
-# pre-existing dir-naming convention, see Arch.condaForgeSuffix).
-[feature.pkg.target.linux-aarch64.tasks]
-conda-publish = "rattler-build upload prefix --channel universe --skip-existing dist/conda/linux-aarch64/*.conda"
+conda-publish = { cmd = "rattler-build upload prefix --channel universe --skip-existing dist/conda/{{ subdir }}/*.conda", args = ["subdir"] }
 
 # --- stress suite (stress/README.md) -----------------------------------------
 # The on-demand stress run compiles hard CRAN/Bioconductor packages against
@@ -761,7 +754,6 @@ platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64", "win-
 cmake = "<4.5"          # nloptr, s2 (linux), RcppParallel, Rhdf5lib, arrow:source; <4.5: finding 33
 geos = "*"              # sf, terra, lwgeom
 proj = "*"              # sf, terra, lwgeom
-libprotobuf = "*"       # protolite (protoc, protobuf.pc; brings libabseil)
 libxml2-devel = "*"     # xml2, igraph (xml2-config, libxml-2.0.pc)
 openssl = "*"           # openssl, s2
 libgit2 = "*"           # gert
@@ -776,9 +768,20 @@ zstd = "*"              # qs2
 
 # Not on win-arm64, where conda-forge has none of these (win-arm64
 # repodata, 2026-11-15); pixi has no "all but one platform" target, so
-# the list is in unix's table and in win-64's. Keep the two the same.
+# the list is in unix's table and in win-64's. Keep the two the same,
+# but for libgdal-core (unix only: on Windows zig-gdal serves sf, terra
+# and gdalraster, below) and tbb-devel and nlopt (their comments).
+# libprotobuf is here, not on all six, since chore-env-ci (M-3): on
+# win-arm64 its protoc (conda-forge's libprotobuf 7.36) was the one on
+# PATH while protolite's `pkg-config protobuf` took the headers from the
+# Rtools45 tree (stress 45219870330: "Protobuf C++ gencode is built with
+# an incompatible version of"). With no protoc on PATH, protolite's
+# Makevars.win takes protoc, headers and libprotobuf from one source,
+# r-windows' protobuf bundle (tools/winlibs.R). The Rtools45 tree has a
+# protoc.exe (bin/) but stress.R does not put the tree's bin/ on PATH.
 [feature.stress.target.unix.dependencies]
 libgdal-core = "*"      # sf, terra, gdalraster (gdal-config, gdal.pc)
+libprotobuf = "*"       # protolite (protoc, protobuf.pc; brings libabseil)
 udunits2 = "*"          # units
 imagemagick = "*"       # magick (Magick++.pc)
 harfbuzz = "*"          # textshaping
@@ -795,7 +798,7 @@ glpk = "*"              # igraph
 tbb-devel = "*"
 
 [feature.stress.target.win-64.dependencies]
-libgdal-core = "*"
+libprotobuf = "*"
 udunits2 = "*"
 imagemagick = "*"
 harfbuzz = "*"

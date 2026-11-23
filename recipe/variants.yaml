@@ -46,6 +46,9 @@ glib:
     then: '2.90.0'
     else: '2'
 # icu: keep 78 until conda-forge's libxml2-16 (zig's dependency) is built against icu 79.
+# Checked 2026-11-23 (chore-env-ci Q19): a solve of libxml2-16 with
+# icu 79.* has no solution on any of the six subdirs (newest libxml2-16
+# 2.15.4 _1 needs icu >=78.3,<79.0a0 everywhere).
 icu:
   - '78'
 libcurl:

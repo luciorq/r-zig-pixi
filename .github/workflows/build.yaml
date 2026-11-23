@@ -166,6 +166,12 @@ jobs:
       env: ${{ matrix.env }}
       build_args: ${{ matrix.build_args }}
       timeout: ${{ matrix.timeout || 180 }}
+      # R's recommended packages (pixi run recommended, verify-recommended)
+      # in the full tier only, on the default (slim) leg of each of the six
+      # runners: slim is the flavor r-zig-recommended is built for
+      # (recipe/build.sh). The full tier is build-full's condition
+      # (chore-env-ci M-5).
+      recommended: ${{ matrix.env == 'default' && (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
 
   # The full tier's other 13 legs, on the same runners: full on all six,
   # openblas (external optimized BLAS/LAPACK, linux only for now, both
@@ -343,4 +349,4 @@ jobs:
       # 41942729382).
       - name: Publish to prefix.dev (OIDC trusted publishing)
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CONDA_PUBLISH == 'true'
-        run: pixi run -e pkg conda-publish
+        run: pixi run -e pkg conda-publish ${{ matrix.name }}
