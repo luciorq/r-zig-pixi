@@ -56,6 +56,18 @@ test -d "$tree/$RH" || { echo "error: no $what at $tree; run 'pixi run $build_ta
 parent="$(cd "$tree/.." && pwd)"
 mkdir -p "$ROOT/dist"
 
+# The tar archives are reproducible (N9, M-22): the same tree gives the
+# same bytes. GNU tar (conda-forge's tar, every unix env) with members in
+# name order, owner and group 0, and every mtime SOURCE_DATE_EPOCH (the
+# reproducible-builds variable; default the checkout's HEAD commit time,
+# else 0); gzip -n keeps no name or time in its header; xz -T0 is
+# always its multi-threaded compressor (xz 5.4 and later, also on one
+# core), whose output does not depend on the thread count (-T1, the
+# single-threaded one, gives other bytes). The .zip (Windows) is not:
+# zip stores each file's mtime, and nothing here rewrites them.
+epoch="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct 2> /dev/null || true)}"
+epoch="${epoch:-0}"
+tar_repro=(--sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" --format=gnu)
 # archive <file> <member>...: the members (paths relative to $parent) as
 # one archive, plus its sha256, named by its basename in the checksum line
 # (sha256sum -c next to it).
@@ -69,9 +81,9 @@ archive() {
   elif [ "${artifact##*.}" = xz ]; then
     # one level for every platform; -T0: as many threads as xz finds
     # cores and memory for (PHASE6 risk 7)
-    tar -cf - -C "$parent" "$@" | xz -9 -T0 > "$artifact"
+    tar "${tar_repro[@]}" -cf - -C "$parent" "$@" | xz -9 -T0 > "$artifact"
   else
-    tar -czf "$artifact" -C "$parent" "$@"
+    tar "${tar_repro[@]}" -cf - -C "$parent" "$@" | gzip -n > "$artifact"
   fi
   (cd "$ROOT/dist" && sha256sum "${artifact##*/}") > "$artifact.sha256"
   # the file's size in bytes, which B13's measurements record: du gives

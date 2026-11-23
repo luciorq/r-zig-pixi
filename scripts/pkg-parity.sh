@@ -164,7 +164,7 @@ argv_of() {
     | grep -v -E -- '^zig-(cc|cxx|fc): (self|environment|cache) |(^| )--version( |$)' \
     | sed -E "s/^(zig-(cc|cxx|fc): )(([A-Z_]+)=('[^']*'|[^ ]*) )+/\\1/" \
     | tr -d "'\"" \
-    | sed -E 's#(^| )(-[IL]|-Wl,([^ ,]*,)*(--?[A-Za-z-]+=)?|--?[A-Za-z-]+=)?[^ ]*[\\/]([^\\/ ]+)#\1\2\5#g; s/ -Xlinker -install_name -Xlinker [^ ]+//; s/[^ ]*\.def( |$)/X.def\1/' \
+    | sed -E 's#(^| )(-[ILF]|-Wl,([^ ,]*,)*(--?[A-Za-z-]+=)?|--?[A-Za-z-]+=)?[^ ]*[\\/]([^\\/ ]+)#\1\2\5#g; s/ -Xlinker -install_name -Xlinker [^ ]+//; s/[^ ]*\.def( |$)/X.def\1/' \
     | LC_ALL=C sort
 }
 # The zig path's compiles in traced install log $1 that name their source

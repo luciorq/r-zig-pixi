@@ -70,8 +70,10 @@
 #     and Tcl's modules are in <prefix>/lib and etc/Renviron points
 #     TCL_LIBRARY there; Windows: no fontconfig configuration;
 #   - x86_64 (every OS): no binary of R's own has a VEX or EVEX
-#     instruction (AVX, AVX2, FMA, AVX-512, on any register width): R is
-#     compiled for the baseline CPU, not the build machine's;
+#     instruction (AVX, AVX2, FMA, AVX-512, on any register width) or one
+#     of SSE3 to SSE4.2, POPCNT, LZCNT, MOVBE, BMI1/2 (macOS: its
+#     baseline core2 has SSE3 and SSSE3): R is compiled for the baseline
+#     CPU, not the build machine's;
 #   - minimal: no binary of R's own links a library the profile excludes
 #     (Windows: R's own PE files by name, as bin/x64 also holds conda's
 #     DLLs; no winCairo.dll and no tcltk.dll);
@@ -710,9 +712,16 @@ fi
 # %xmm included), whose mnemonics all start with v; the base ISA's only
 # such mnemonics, verr and verw, are not counted. One in R's own code is
 # the build machine's CPU leaking in (an object compiled with
-# -mcpu=native, a -march in some flags). Not caught: the extensions that
-# keep the legacy encoding (SSE3 to SSE4.2, POPCNT, LZCNT, BMI1/2,
-# MOVBE): one of those alone, with no AVX next to it, passes. What CPU
+# -mcpu=native, a -march in some flags). The extensions above the
+# baseline that keep the legacy encoding, or are VEX-encoded without a v
+# (SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, LZCNT, MOVBE, BMI1, BMI2), are
+# caught by name (on macOS from SSE4.1 up: its baseline is core2):
+# legacy_mnemonics, matched against the whole mnemonic
+# (AT&T's b/w/l/q suffix allowed where the instruction takes one), so a
+# baseline name sharing a prefix (andnps, pextrw, pmaxsw) is not
+# counted. tzcnt is left out: it is `rep bsf`, which LLVM emits for the
+# baseline (an older CPU runs it as bsf) and objdump prints as tzcnt
+# (fix-verify-scripts, M-8). What CPU
 # the toolchain compiles for is verify-bundle.sh's check (the LLVM IR's
 # target-cpu, every arch); this one is the backstop on what shipped.
 # R's own: every binary under R_HOME but the conda libraries
@@ -761,42 +770,57 @@ case "$PLAT" in
     done < "$WORK/r-bins-all.txt"
     n_rb="$(wc -l < "$WORK/r-bins.txt" | tr -d ' ')"
     [ "$n_rb" -gt 0 ] || { echo "error: no binaries of R's own found under $TREE/$rh" >&2; exit 1; }
+    # The non-v mnemonics above the baseline (see above), one ERE for awk.
+    # SSE3 and SSSE3 only off macOS: zig's baseline for x86_64-macos is
+    # core2 (lib/zig/std/Target.zig, Cpu.Model.baseline), which has both,
+    # and verify-bundle.sh expects target-cpu core2 there.
+    legacy_mnemonics='pabs[bwd]|palignr|ph(add|sub)(w|d|sw)|pmaddubsw|pmulhrsw|pshufb|psign[bwd]'
+    legacy_mnemonics="addsubp[ds]|h(add|sub)p[ds]|lddqu|movddup|movs[hl]dup|fisttp(s|l|ll)?|monitor|mwait|$legacy_mnemonics"
+    if [ "$OS" = macos ]; then legacy_mnemonics=""; legacy_set="SSE4.1, SSE4.2"; else legacy_set="SSE3 to SSE4.2"; fi
+    legacy_mnemonics="$legacy_mnemonics${legacy_mnemonics:+|}"'blendv?p[ds]|dpp[ds]|extractps|insertps|movntdqa|mpsadbw|packusdw|pblendvb|pblendw|pcmpeqq'
+    legacy_mnemonics="$legacy_mnemonics"'|pextr[bdq]|phminposuw|pinsr[bdq]|pmax(sb|sd|ud|uw)|pmin(sb|sd|ud|uw)|pmov[sz]x(bw|bd|bq|wd|wq|dq)'
+    legacy_mnemonics="$legacy_mnemonics"'|pmuldq|pmulld|ptest|round[ps][ds]'
+    legacy_mnemonics="$legacy_mnemonics"'|crc32[bwlq]?|pcmp[ei]str[im]|pcmpgtq'
+    legacy_mnemonics="^($legacy_mnemonics"'|(popcnt|lzcnt|movbe|andn|bextr|blsi|blsmsk|blsr|bzhi|mulx|pdep|pext|rorx|sarx|shlx|shrx)[wlq]?)$'
+    legacy_set="$legacy_set, POPCNT, LZCNT, MOVBE, BMI1/2"
     # objdump -d --no-show-raw-insn's instruction lines, GNU's and llvm's:
     # "<hex address>:", blanks, the instruction (binutils may put a {vex}
-    # or {evex} pseudo-prefix first). Counts: VEX/EVEX instructions, and
-    # instructions naming a %ymm, a %zmm register.
+    # or {evex} pseudo-prefix first). Counts: VEX/EVEX instructions,
+    # instructions naming a %ymm, a %zmm register, and the legacy-encoded
+    # (or v-less VEX) ones of legacy_mnemonics.
     vex_counts() {
-      "$objdump_cmd" "${objdump_d[@]}" "$1" | awk '
+      "$objdump_cmd" "${objdump_d[@]}" "$1" | awk -v L="$legacy_mnemonics" '
         !sub(/^[[:space:]]*[0-9a-f]+:[[:space:]]+/, "") { next }
         { sub(/^[{][a-z0-9]+[}][[:space:]]+/, "") }
         /^v[a-z]/ && !/^ver[rw][[:space:]]/ { v++ }
         /%ymm/ { y++ }
         /%zmm/ { z++ }
-        END { print v + 0, y + 0, z + 0 }'
+        $1 ~ L { l++ }
+        END { print v + 0, y + 0, z + 0, l + 0 }'
     }
-    bad=""; n_vex=0; n_ymm=0; n_zmm=0
+    bad=""; n_vex=0; n_ymm=0; n_zmm=0; n_leg=0
     while IFS= read -r f; do
       vyz="$(vex_counts "$f")" || { echo "error: $objdump_cmd cannot disassemble ${f#$TREE/}" >&2; exit 1; }
-      read -r v y z <<< "$vyz"
-      n_vex=$((n_vex + v)); n_ymm=$((n_ymm + y)); n_zmm=$((n_zmm + z))
-      if [ "$v" -gt 0 ] || [ "$y" -gt 0 ] || [ "$z" -gt 0 ]; then bad="$bad
-  ${f#$TREE/}: $v VEX/EVEX instructions, $y on %ymm, $z on %zmm"; fi
+      read -r v y z l <<< "$vyz"
+      n_vex=$((n_vex + v)); n_ymm=$((n_ymm + y)); n_zmm=$((n_zmm + z)); n_leg=$((n_leg + l))
+      if [ "$v" -gt 0 ] || [ "$y" -gt 0 ] || [ "$z" -gt 0 ] || [ "$l" -gt 0 ]; then bad="$bad
+  ${f#$TREE/}: $v VEX/EVEX instructions, $y on %ymm, $z on %zmm, $l of $legacy_set"; fi
     done < "$WORK/r-bins.txt"
     if [ -n "$bad" ]; then
-      echo "error: R's own binaries use AVX-class instructions, beyond the x86-64 baseline (an object compiled for the build machine's CPU):$bad" >&2
+      echo "error: R's own binaries use instructions beyond the x86-64 baseline (an object compiled for the build machine's CPU):$bad" >&2
       # name the functions: the first 10 offending instructions per binary
       while IFS= read -r f; do
-        "$objdump_cmd" "${objdump_d[@]}" "$f" | awk -v F="${f#$TREE/}" '
+        "$objdump_cmd" "${objdump_d[@]}" "$f" | awk -v F="${f#$TREE/}" -v L="$legacy_mnemonics" '
           /^[0-9a-f]+ <.*>:$/ { fn = $2; sub(/:$/, "", fn); next }
           /^[^[:space:]]+:$/ { fn = "<" $1; sub(/:$/, ">", fn); next }
           !sub(/^[[:space:]]*[0-9a-f]+:[[:space:]]+/, "") { next }
           { sub(/^[{][a-z0-9]+[}][[:space:]]+/, "") }
-          ((/^v[a-z]/ && !/^ver[rw][[:space:]]/) || /%[yz]mm/) && n++ < 10 { print "  " F " " fn ": " $0 }' >&2
+          ((/^v[a-z]/ && !/^ver[rw][[:space:]]/) || /%[yz]mm/ || $1 ~ L) && n++ < 10 { print "  " F " " fn ": " $0 }' >&2
       done < "$WORK/r-bins.txt"
       exit 1
     fi
     n_conda=$(($(wc -l < "$WORK/r-bins-all.txt") - n_rb))
-    echo "== baseline CPU verified: $n_rb binaries of R's own under R_HOME, $n_vex VEX/EVEX instructions (AVX, FMA, AVX-512), $n_ymm on %ymm, $n_zmm on %zmm ($objdump_cmd ${objdump_d[*]}; $n_conda conda binaries there not counted)"
+    echo "== baseline CPU verified: $n_rb binaries of R's own under R_HOME, $n_vex VEX/EVEX instructions (AVX, FMA, AVX-512), $n_ymm on %ymm, $n_zmm on %zmm, $n_leg of $legacy_set ($objdump_cmd ${objdump_d[*]}; $n_conda conda binaries there not counted)"
     ;;
   *) echo "== baseline CPU: the VEX/EVEX check is x86_64's; on $PLAT it does not apply" ;;
 esac
@@ -1196,10 +1220,34 @@ fi
 # linux: C++ is gcc's libstdc++ (feat-linux-libstdcxx): libR needs
 # libstdc++.so.6 and libgcc_s.so.1 (build.zig's linkCxxRuntime), so its
 # RUNPATH loads the tree's runtime first in every variant, the tree's
-# lib/ has both (vendor-libs.sh), its libstdc++ offers at least
-# GLIBCXX_3.4.34, the version the libstdc++ 15 headers belong to (a safe
-# bound: what they compile needs at most GLIBCXX_3.4.32, CXX-STDLIB.md),
-# and no R binary needs libc++ (cxx_deps).
+# lib/ has both (vendor-libs.sh), its libstdc++ offers at least the
+# newest GLIBCXX version of the libstdc++ headers packages compile with
+# (a safe bound: what the 15 headers compile needs at most
+# GLIBCXX_3.4.32, CXX-STDLIB.md), and no R binary needs libc++
+# (cxx_deps). The headers are libstdcxx-devel_linux-*'s (contract-test.sh
+# and the compilers group take them from the env), and that package also
+# has the same gcc's lib/gcc/<triple>/<version>/libstdc++.so.6, whose
+# newest GLIBCXX_ is the bound: found through its conda-meta record, the
+# tree's own if it is a conda env that has one, else the env's. No table
+# of gcc versions to keep (Q6).
+# glibcxx_max <file>: the newest GLIBCXX_3.4.N its version strings name.
+glibcxx_max() {
+  grep -ao 'GLIBCXX_3\.4\.[0-9]*' "$1" | sed 's/^GLIBCXX_//' | LC_ALL=C sort -t. -k3,3n | tail -n 1 || true
+}
+# devel_libstdcxx: the libstdc++.so.6 libstdcxx-devel_linux-* installed,
+# "<package version> <path>", or nothing.
+devel_libstdcxx() {
+  local d m rel
+  for d in ${conda_tree:+"$TREE/conda-meta"} "${CONDA_PREFIX:-}/conda-meta"; do
+    for m in "$d"/libstdcxx-devel_linux-*-*.json; do
+      [ -f "$m" ] || continue
+      rel="$(grep -o '"lib/gcc/[^"]*/libstdc++\.so\.6"' "$m" | head -n 1 | tr -d '"' || true)"
+      [ -n "$rel" ] && [ -f "${d%/conda-meta}/$rel" ] || continue
+      m="${m##*/libstdcxx-devel_linux-}"; m="${m#*-}"
+      echo "${m%%-*} ${d%/conda-meta}/$rel"; return 0
+    done
+  done
+}
 bad=""
 n_r=0
 while IFS= read -r f; do
@@ -1222,9 +1270,17 @@ if [ "$OS" = linux ]; then
       { echo "error: lib/$so is missing: libR needs it (vendor-libs.sh copies libR's closure)" >&2; exit 1; }
   done
   # the newest GLIBCXX version the libstdc++ headers reference
-  grep -aq 'GLIBCXX_3\.4\.34' "$TREE/lib/libstdc++.so.6" ||
-    { echo "error: lib/libstdc++.so.6 has no GLIBCXX_3.4.34: older than the libstdc++ 15 headers packages compile with" >&2; exit 1; }
-  echo "== C++ runtime verified: libR needs libstdc++.so.6 and libgcc_s.so.1 (lib/ has both, GLIBCXX_3.4.34), none of $n_r R binaries needs libc++"
+  read -r hdr hdr_so <<< "$(devel_libstdcxx)" || true
+  [ -n "${hdr_so:-}" ] ||
+    { echo "error: no libstdcxx-devel_linux-* with its libstdc++.so.6 in ${conda_tree:+$TREE/conda-meta or }${CONDA_PREFIX:-<no CONDA_PREFIX>}/conda-meta: the libstdc++ headers' GLIBCXX version, which lib/libstdc++.so.6 must cover, is unknown (run it through pixi)" >&2; exit 1; }
+  want="$(glibcxx_max "$hdr_so")"
+  [ -n "$want" ] || { echo "error: ${hdr_so} names no GLIBCXX_3.4.N version" >&2; exit 1; }
+  have="$(glibcxx_max "$TREE/lib/libstdc++.so.6")"
+  if [ -z "$have" ] || version_gt "$want" "$have"; then
+    echo "error: lib/libstdc++.so.6's newest version is GLIBCXX_${have:-<none>}, older than GLIBCXX_$want of the libstdc++ $hdr headers packages compile with (libstdcxx-devel's $hdr_so)" >&2
+    exit 1
+  fi
+  echo "== C++ runtime verified: libR needs libstdc++.so.6 and libgcc_s.so.1 (lib/ has both, GLIBCXX_$have >= GLIBCXX_$want of the libstdc++ $hdr headers), none of $n_r R binaries needs libc++"
 else
   echo "== C++ runtime verified: $n_r R binaries, none needs a shared libc++/libstdc++"
 fi
