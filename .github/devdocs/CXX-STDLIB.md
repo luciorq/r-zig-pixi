@@ -171,8 +171,8 @@ Known differences from gcc:
   it, and stress.R's s2, sf, terra and gdalraster rows expect `ok` on
   Windows with them (stress/README.md, "Windows: zig-libs"). Linux and
   macOS stay as decided above: libstdc++ on linux (decision 2),
-  conda-forge's libc++ on macOS. Not yet published (libs-zig-pixi M5):
-  until then only a conda stress run with `--libs-channel` has them.
+  conda-forge's libc++ on macOS. Published on universe since 2026-11-23
+  (libs-zig-pixi M5); the Windows stress env takes them (PR #52).
 - **Per-package switching in rzig**: decision 2.
 - **conda-forge's prebuilt r-* packages** (T/abi-condaforge-bin). R 4.5
   builds load in r-zig's R 4.6.2 (except rlang: SETLENGTH is gone in
