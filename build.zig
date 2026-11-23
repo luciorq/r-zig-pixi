@@ -913,6 +913,7 @@ pub fn build(b: *std.Build) !void {
         // library/tcltk/libs/tcltk.so, as newPkgMod's: R_HOME/lib and
         // <prefix>/lib, where vendor-libs.sh puts libtcl and libtk.
         ctx.relRPaths(m, .pkglibs);
+        ctx.linkSibling(m, ctx.libR); // as newPkgMod's
         m.addIncludePath(ctx.geninc);
         m.addIncludePath(ctx.path("src/include"));
         var extra = std.ArrayList([]const u8).empty;
@@ -1695,11 +1696,10 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         const m = newPkgMod(ctx, "src/library/tools/src", &rspec.tools_c, .{
             .extra = &.{"-I%S/src/main"},
         });
-        // Unlike unix (ELF tolerates undefined symbols in shared libs, so
-        // packages there never link libR directly — see addSharedLib's own
-        // doc comment), PE/COFF needs every base-package DLL to link libR
-        // explicitly for its R API calls (same reason mod_lapack needed it
-        // — found via a real link error, ~100 undefined Rf_*/R_* symbols).
+        // newPkgMod links libR off Windows only; PE/COFF needs every
+        // base-package DLL to link libR explicitly for its R API calls
+        // (same reason mod_lapack needed it — found via a real link
+        // error, ~100 undefined Rf_*/R_* symbols).
         m.linkLibrary(libR);
         try win_pkg_libs.append(b.allocator, .{ .pkg = "tools", .lib = addSharedLib(ctx, "pkg_tools", m) });
     }
@@ -2963,11 +2963,11 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
     return step;
 }
 
-/// Every shared lib/module/package .so in this build (base packages don't
-/// link libR directly — its symbols resolve at runtime since libR is
-/// already loaded into the R process; "zig allows undefined symbols in
-/// shared libs" on ELF/linux, verified). Mach-O's lld backend does NOT
-/// tolerate that by default (link fails with "undefined symbol" on every
+/// Every shared lib/module/package .so in this build (base packages and
+/// modules link libR, as R's shlib.mk does: newPkgMod, wave2-compat M-14;
+/// other undefined symbols still resolve at runtime, "zig allows
+/// undefined symbols in shared libs" on ELF/linux, verified). Mach-O's
+/// lld backend does NOT tolerate that by default (link fails with "undefined symbol" on every
 /// R API call packages make) — the real macOS make build's Makeconf
 /// carries `-undefined dynamic_lookup` on every SHLIB_LDFLAGS/DYLIB_LDFLAGS
 /// for exactly this; `linker_allow_shlib_undefined` is zig's equivalent
@@ -3133,6 +3133,11 @@ fn newPkgMod(ctx: *const Ctx, dir: []const u8, files: []const []const u8, opts: 
     const b = ctx.b;
     const m = newCMod(ctx);
     ctx.relRPaths(m, .pkglibs); // library/<pkg>/libs/<pkg>.so
+    // DT_NEEDED libR, as R's own shlib.mk links them ($(LIBR)): an
+    // embedder (rpy2) loads libR without RTLD_GLOBAL, and methods.so then
+    // failed with "undefined symbol: R_NilValue" (wave2-compat M-14).
+    // Windows links its package DLLs to R.dll itself (buildWindows).
+    if (ctx.os != .windows) ctx.linkSibling(m, ctx.libR);
     m.addIncludePath(ctx.geninc);
     m.addIncludePath(ctx.path("src/include"));
     // Same psignal.h/trioremap.h need as r_core_mod/rscript_mod — any base
