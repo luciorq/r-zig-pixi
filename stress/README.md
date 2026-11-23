@@ -292,6 +292,13 @@ the log.
 
 ## Windows: zig-libs
 
+What these packages promise, and what r-zig depends on, is libs-zig-pixi's
+[CONTRACT.md](https://github.com/luciorq/libs-zig-pixi/blob/main/.github/devdocs/CONTRACT.md):
+a change on either side that it does not allow starts there. New
+libraries arrive in batches (libs-zig-pixi slice 2, replacing the Rtools45
+tree below); each publish ends with a handover note in that repository's
+branch PLAN.md.
+
 libs-zig-pixi builds static C and C++ libraries with zig and libc++, as
 zig builds packages, as conda packages `zig-*` for win-64 and win-arm64
 (zig-gdal, zig-proj, zig-geos, zig-abseil, zig-openssl, zig-onetbb, ...).
