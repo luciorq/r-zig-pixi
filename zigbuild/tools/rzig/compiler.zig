@@ -99,7 +99,9 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     // linux: libstdc++ for all C++ (libstdcxx.zig). The caller's
     // -lstdc++ and -lgcc_s become the runtime's paths on every link, C
     // links too; a C++ command gets the headers and the runtime, after
-    // the environments' -I, as gcc searches -I before its C++ headers.
+    // the caller's -I (gcc searches -I before its C++ headers) and before
+    // the environments' -isystem (M-16: gcc would search those first; no
+    // environment header shares a name with a C++ standard header).
     var cxx: libstdcxx.Flags = .{};
     if (ctx.os == .linux) {
         const rt = try libstdcxx.runtime(ctx);
@@ -386,10 +388,18 @@ const windows_headers_always = true;
 /// exists, R's own environment first (on Windows after its zig-libs, item
 /// 4, as R_ZIG_EXTRA_ENV's), then the toolchain's openmp/ (when
 /// the base has libomp, B40; its lib/ only on Windows, with libomp.lib):
-///   -I<dir>/include (Windows: -idirafter <dir>/include) on every call,
-///     after the caller's arguments: a package's own and its LinkingTo
-///     headers come first, and the environment's still before the C
-///     library's and the SDK's;
+///   on every call, after the caller's arguments, so a package's own and
+///     its LinkingTo headers come first:
+///     linux: -isystem<dir>/include (M-16, wave2-rzig/PLAN.md), after
+///       the caller's -isystem directories too (a bundled library's
+///       CMake -isystem headers win over the environment's copy, as with
+///       gcc), and warnings from its headers are silenced, as
+///       conda-forge's `-isystem $PREFIX/include` does; zig's clang and
+///       glibc directories are -isystem before it (only iconv.h is in
+///       both: glibc's wins, and libiconv.so exports only libiconv_*);
+///     macOS: -I<dir>/include, before the SDK's (its iconv.h would
+///       shadow conda's libiconv, which R links);
+///     Windows: -idirafter <dir>/include (windows_headers_always);
 ///   -L<dir>/lib, and -Wl,-rpath,<dir>/lib for a conda env, on links,
 ///     after the caller's arguments too: a package's own -L directories
 ///     are searched first, so a library it bundles wins over the
@@ -421,10 +431,10 @@ fn envFlags(ctx: *Ctx, args: Args) !Args {
     for (envs) |e| {
         const include = try ctx.fmt("{s}/include", .{e.dir});
         if (headers and ctx.isDir(include)) {
-            if (ctx.os == .windows) {
-                try inc.appendSlice(a, &.{ "-idirafter", include });
-            } else {
-                try inc.append(a, try ctx.fmt("-I{s}", .{include}));
+            switch (ctx.os) {
+                .windows => try inc.appendSlice(a, &.{ "-idirafter", include }),
+                .linux => try inc.append(a, try ctx.fmt("-isystem{s}", .{include})),
+                else => try inc.append(a, try ctx.fmt("-I{s}", .{include})),
             }
         }
         const dir = try ctx.fmt("{s}/lib", .{e.dir});
@@ -575,7 +585,7 @@ fn tree(f: *testutil.Fixture, name: []const u8, conda: bool, omp: bool) ![]const
     return f.path(f.fmt("{s}/lib/R/bin/toolchain/zig-cc", .{name}));
 }
 
-test "R's environment: -I, -L after the caller's, -lomp on -fopenmp links (standalone tree)" {
+test "R's environment: -isystem, -L after the caller's, -lomp on -fopenmp links (standalone tree)" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
@@ -583,7 +593,7 @@ test "R's environment: -I, -L after the caller's, -lomp on -fopenmp links (stand
     const c = &f.ctx;
     c.self_exe = try tree(&f, "tree", false, true);
     const rh = f.path("tree/lib/R");
-    const inc = f.fmt("-I{s}", .{f.path("tree/include")});
+    const inc = f.fmt("-isystem{s}", .{f.path("tree/include")});
     const l = f.fmt("-L{s}", .{f.path("tree/lib")});
     const rinc = f.fmt("-I{s}/include", .{rh});
     const rlib = f.fmt("-L{s}/lib", .{rh});
@@ -628,7 +638,7 @@ test "conda env: rpath into its lib after its -L; missing directories add nothin
     try decoy(&f);
     const c = &f.ctx;
     c.self_exe = try tree(&f, "env", true, true);
-    const inc = f.fmt("-I{s}", .{f.path("env/include")});
+    const inc = f.fmt("-isystem{s}", .{f.path("env/include")});
     const l = f.fmt("-L{s}", .{f.path("env/lib")});
     const rp = f.fmt("-Wl,-rpath,{s}", .{f.path("env/lib")});
     try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "z.so", "z.o", "-lz", l, rp, inc }, try argv(c, .c, &.{ "-shared", "-o", "z.so", "z.o", "-lz" }));
@@ -663,7 +673,7 @@ test "linux C++: libstdc++'s headers after the environments', its runtime on lin
     const t = libstdcxx.triple(c);
     const g = f.fmt("{s}/libstdcxx/lib/gcc/{s}/15.3.0", .{ tc, t });
     const hdr: Args = &.{ f.fmt("-I{s}/libstdcxx-shim", .{tc}), f.fmt("-I{s}/include/c++", .{g}), f.fmt("-I{s}/include/c++/{s}", .{ g, t }), f.fmt("-I{s}/include/c++/backward", .{g}), "-D_GLIBCXX_SYSHDR" };
-    const inc = f.fmt("-I{s}", .{f.path("tree/include")});
+    const inc = f.fmt("-isystem{s}", .{f.path("tree/include")});
     const l = f.fmt("-L{s}", .{f.path("tree/lib")});
     const so = f.path("tree/lib/libstdc++.so.6");
     const gcc_s = f.path("tree/lib/libgcc_s.so.1");
@@ -701,12 +711,12 @@ test "R_ZIG_EXTRA_ENV: after R's own; with no R tree; the decoy never" {
     const c = &f.ctx;
     _ = try tree(&f, "env", true, true);
     try f.env.put("R_ZIG_EXTRA_ENV", f.path("env"));
-    const einc = f.fmt("-I{s}", .{f.path("env/include")});
+    const einc = f.fmt("-isystem{s}", .{f.path("env/include")});
     const el = f.fmt("-L{s}", .{f.path("env/lib")});
     const erp = f.fmt("-Wl,-rpath,{s}", .{f.path("env/lib")});
     // the dev tree under pixi: the tree's own, then the pixi env's
     c.self_exe = try tree(&f, "tree", false, true);
-    const inc = f.fmt("-I{s}", .{f.path("tree/include")});
+    const inc = f.fmt("-isystem{s}", .{f.path("tree/include")});
     const l = f.fmt("-L{s}", .{f.path("tree/lib")});
     try expectArgs(
         pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "p.so", "a.o", l, el, erp, inc, einc, "-lomp" },
@@ -833,7 +843,7 @@ test "the toolchain's openmp/: headers on every call, -lomp on -fopenmp links, o
     c.self_exe = try tree(&f, "tree", false, false);
     try f.touch("tree/lib/R/bin/toolchain/openmp/include/omp.h");
     const l = f.fmt("-L{s}", .{f.path("tree/lib")});
-    const oinc = f.fmt("-I{s}", .{f.path("tree/lib/R/bin/toolchain/openmp/include")});
+    const oinc = f.fmt("-isystem{s}", .{f.path("tree/lib/R/bin/toolchain/openmp/include")});
     // minimal: no libomp in the base, so nothing from openmp/
     try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-fopenmp", "-o", "p.so", "a.o", l }, try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }));
     try expectArgs(pre ++ &[_][]const u8{ "-fopenmp", "-c", "a.c" }, try argv(c, .c, &.{ "-fopenmp", "-c", "a.c" }));
@@ -848,7 +858,7 @@ test "the toolchain's openmp/: headers on every call, -lomp on -fopenmp links, o
     _ = try tree(&f, "env", true, true);
     try f.env.put("R_ZIG_EXTRA_ENV", f.path("env"));
     try expectArgs(
-        pre ++ &[_][]const u8{ "-c", "a.c", f.fmt("-I{s}", .{f.path("tree/include")}), oinc, f.fmt("-I{s}", .{f.path("env/include")}) },
+        pre ++ &[_][]const u8{ "-c", "a.c", f.fmt("-isystem{s}", .{f.path("tree/include")}), oinc, f.fmt("-isystem{s}", .{f.path("env/include")}) },
         try argv(c, .c, &.{ "-c", "a.c" }),
     );
 }

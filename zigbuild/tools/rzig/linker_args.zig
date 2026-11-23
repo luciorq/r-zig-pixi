@@ -177,6 +177,9 @@ test "-l out of -Wl, and -Xlinker, in every spelling (Q24, L21)" {
     // and -Bstatic to the -l after them (measured, zig 0.17.1)
     try expectArgs(&.{ "-Wl,--whole-archive", "-lfoo", "-Wl,--no-whole-archive" }, try rewrite(c, &.{"-Wl,--whole-archive,-lfoo,--no-whole-archive"}));
     try expectArgs(&.{ "-Wl,-Bstatic", "-la", "-lb", "-Wl,-Bdynamic,-rpath,/x" }, try rewrite(c, &.{"-Wl,-Bstatic,-la,-lb,-Bdynamic,-rpath,/x"}));
+    // the -Xlinker form too: the archive is linked whole (wave2-rzig/PLAN.md,
+    // both zigs 0.17.1)
+    try expectArgs(&.{ "-Xlinker", "--whole-archive", "-lfoo", "-Xlinker", "--no-whole-archive" }, try rewrite(c, &.{ "-Xlinker", "--whole-archive", "-Xlinker", "-lfoo", "-Xlinker", "--no-whole-archive" }));
     // ld64's -lto_library and -lazy-l<name>, and no value: kept
     const same: Args = &.{ "-Wl,-lto_library,/x/libLTO.dylib", "-Wl,-lazy-lfoo", "-Wl,-l", "-Wl,-l,", "-Xlinker", "-l" };
     try expectArgs(same, try rewrite(c, same));

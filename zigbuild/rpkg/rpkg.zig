@@ -75,10 +75,17 @@ pub const LibraryOptions = struct {
     /// tier-1 package with an empty Makevars gets. Tier 2 does not read
     /// the package's own src/Makevars, so its PKG_CPPFLAGS and PKG_CFLAGS
     /// do not apply (`#include "x.h"` still finds a header beside the
-    /// source) [code-4].
+    /// source) [code-4]; `cflags` is their place.
     c_sources: []const []const u8 = &.{},
     /// C++ sources likewise.
     cxx_sources: []const []const u8 = &.{},
+    /// The package's own flags for its C compiles (-I, -D, -std=...; a
+    /// relative -I is from src/), after the plan's: what PKG_CPPFLAGS and
+    /// PKG_CFLAGS give a tier-1 package, except that they also follow
+    /// the user's CFLAGS (M-18, wave2-rzig/PLAN.md).
+    cflags: []const []const u8 = &.{},
+    /// The same for the C++ compiles (PKG_CPPFLAGS and PKG_CXXFLAGS).
+    cxxflags: []const []const u8 = &.{},
     /// More imports for the zig root.
     imports: []const std.Build.Module.Import = &.{},
 };
@@ -126,6 +133,8 @@ pub fn addLibrary(b: *std.Build, opts: Options, lo: LibraryOptions) std.Build.La
     }
     for (lo.c_sources) |c| run.addArgs(&.{ "--c", c });
     for (lo.cxx_sources) |c| run.addArgs(&.{ "--cxx", c });
+    for (lo.cflags) |x| run.addArgs(&.{ "--cflag", x });
+    for (lo.cxxflags) |x| run.addArgs(&.{ "--cxxflag", x });
     run.addArg("--out");
     return run.addOutputFileArg(opts.plan.output);
 }

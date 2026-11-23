@@ -276,11 +276,13 @@ fn objectsFile(ctx: *Ctx, plan: *const pkgplan.Plan, root: []const u8, objs: []c
 }
 
 /// `rzig t1 --plan <plan.zon> --root <dir> --out <lib> [--object <o>]...
-/// [--c <source>]... [--cxx <source>]... [-j N]`: tier 2's C and C++
-/// sources (named relative to the plan's srcdir) and its zig object, built
-/// and linked as tier 1 builds a package (zigbuild/rpkg/rpkg.zig's
-/// addLibrary). The plan is the one `rzig build` wrote for the package;
-/// its own sources are replaced by these.
+/// [--c <source>]... [--cxx <source>]... [--cflag <flag>]...
+/// [--cxxflag <flag>]... [-j N]`: tier 2's C and C++ sources (named
+/// relative to the plan's srcdir) and its zig object, built and linked as
+/// tier 1 builds a package (zigbuild/rpkg/rpkg.zig's addLibrary). The
+/// plan is the one `rzig build` wrote for the package; its own sources
+/// are replaced by these, and each --cflag (--cxxflag) follows the plan's
+/// C (C++) flags (rpkg's `cflags`, M-18).
 pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     ctx.name = "rzig t1";
     var plan_path: ?[]const u8 = null;
@@ -289,6 +291,8 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     var jobs: usize = 0;
     var objects: std.ArrayList([]const u8) = .empty;
     var sources: std.ArrayList(pkgplan.Source) = .empty;
+    var cflags: std.ArrayList([]const u8) = .empty;
+    var cxxflags: std.ArrayList([]const u8) = .empty;
     var i: usize = 0;
     while (i < argv.len) : (i += 1) {
         if (i + 1 >= argv.len) {
@@ -308,13 +312,13 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
             try objects.append(ctx.arena, if (builtin.os.tag == .windows) try mem.replaceOwned(u8, ctx.arena, abs, "\\", "/") else abs);
         } else if (mem.eql(u8, k, "-j")) jobs = jobCount(v) else if (mem.eql(u8, k, "--c") or mem.eql(u8, k, "--cxx")) {
             try sources.append(ctx.arena, .{ .lang = k[2..], .path = v, .obj = try ctx.fmt("{s}.o", .{std.fs.path.stem(v)}) });
-        } else {
+        } else if (mem.eql(u8, k, "--cflag")) try cflags.append(ctx.arena, v) else if (mem.eql(u8, k, "--cxxflag")) try cxxflags.append(ctx.arena, v) else {
             ctx.warn("unknown argument '{s}'", .{k});
             return 2;
         }
     }
     if (plan_path == null or root == null or out == null) {
-        ctx.warn("usage: rzig t1 --plan <plan.zon> --root <dir> --out <lib> [--object <o>]... [--c|--cxx <source>]... [-j N]", .{});
+        ctx.warn("usage: rzig t1 --plan <plan.zon> --root <dir> --out <lib> [--object <o>]... [--c|--cxx <source>]... [--cflag|--cxxflag <flag>]... [-j N]", .{});
         return 2;
     }
     const text = Io.Dir.cwd().readFileAllocOptions(ctx.io, plan_path.?, ctx.arena, .limited(16 << 20), .of(u8), 0) catch |err| {
@@ -328,6 +332,8 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
         return 1;
     };
     plan.sources = sources.items;
+    plan.cc = try mem.concat(ctx.arena, []const u8, &.{ plan.cc, cflags.items });
+    plan.cxx = try mem.concat(ctx.arena, []const u8, &.{ plan.cxx, cxxflags.items });
     Io.Dir.cwd().createDirPath(ctx.io, root.?) catch |err| {
         ctx.warn("cannot create {s}: {t}", .{ root.?, err });
         return 1;
@@ -576,7 +582,7 @@ test "a crash in rzig's process, where the .def is made: a failure R reads as on
     try testing.expect(crash.exit_crash != @import("pkgbuild.zig").exit_needs_make);
 }
 
-test "run: rzig t1, tier 2's zig object and its C and C++ sources, built and linked as tier 1" {
+test "run: rzig t1, tier 2's zig object and its C and C++ sources, built and linked as tier 1; its own flags after the plan's" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
@@ -592,14 +598,14 @@ test "run: rzig t1, tier 2's zig object and its C and C++ sources, built and lin
     try pkgplan.writeZon(&plan, &zon.writer);
     try f.write("t2/plan.zon", zon.written(), .default_file);
     const root = f.path("t2/t1");
-    try testing.expectEqual(0, try run(&f.ctx, &.{ "--plan", f.path("t2/plan.zon"), "--root", root, "--object", f.path("zig-cache/o/1/p.o"), "--c", "util.c", "--cxx", "k.cpp", "--out", f.path("zout/p.so"), "-j", "2" }));
+    try testing.expectEqual(0, try run(&f.ctx, &.{ "--plan", f.path("t2/plan.zon"), "--root", root, "--object", f.path("zig-cache/o/1/p.o"), "--c", "util.c", "--cxx", "k.cpp", "--cflag", "-Iinc", "--cxxflag", "-DK=1", "--cflag", "-std=gnu11", "--out", f.path("zout/p.so"), "-j", "2" }));
     try testing.expectEqualStrings("", f.takeWarnings());
     var buf: [512]u8 = undefined;
     try testing.expectEqualStrings("../../zig-cache/o/1/p.o\n../../t2/t1/obj/0/util.o\n../../t2/t1/obj/1/k.o\n", try f.tmp.dir.readFile(testing.io, "zout/p.so", &buf));
     const tc = f.path("tc");
     try testing.expectEqualStrings(f.fmt(
-        \\{0s}/cc{2s} -DC -c util.c -o {1s}/obj/0/util.o
-        \\{0s}/cc{2s} -DCXX -c k.cpp -o {1s}/obj/1/k.o
+        \\{0s}/cc{2s} -DC -Iinc -std=gnu11 -c util.c -o {1s}/obj/0/util.o
+        \\{0s}/cc{2s} -DCXX -DK=1 -c k.cpp -o {1s}/obj/1/k.o
         \\{0s}/ld{2s} -o {1s}/p.so @{1s}/objects.rsp
         \\
     , .{ tc, root, exe }), f.takeEchoed());
