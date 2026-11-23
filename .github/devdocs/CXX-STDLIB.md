@@ -219,6 +219,7 @@ zig-libs column, with `--trace`); retiring it is a later slice.
   conda-forge's for every universe user, r-zig or not; r-zig-recommended
   installs the same files as conda-forge's r-mass, r-class,
   r-kernsmooth.
+  Watch (chore-release-12 M11, decision D11, 2026-11-23): unchanged.
 
 ## Standalone and wheel on linux: option (a), default chosen by Claude
 

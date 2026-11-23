@@ -20,6 +20,13 @@ runners (44450918935) put 14 windows-aarch64 rows at ok (findings
 81-87). Still not run: the full tier, upstream-zig CI, and the rows
 outside that stress run (Not verified).
 
+Status (2026-11-20, recorded 2026-11-23 by docs-backlog-hygiene): #50
+merged (f951022) with the `full-ci` and `upstream-zig` labels. On its
+head bd4c9ee: build-r full tier 44735387872 (33 jobs: 32 success, 1
+skipped) and upstream-zig 44735388684 (6/6 success: ubuntu-latest,
+macos-latest, windows-latest, default and toolchain). windows-11-arm has
+no upstream-zig leg (chore-release-12 backlog M-4).
+
 Recipe build number: not changed on this branch. Build 11 was published
 on 2026-11-18 (run 44336177906). feat-linux-libstdcxx bumps the number
 to 12; the next release is cut after both branches merge (decision W20).
@@ -141,6 +148,11 @@ Claude; user may revisit".
   option would ship an untested path; the wheel and standalone rzig
   already read the variable, undocumented.
   Who: default chosen by Claude; user may revisit. Date: 2026-11-18.
+  Update 2026-11-23 (docs-backlog-hygiene, chore-release-12 Q23): (b)
+  in part. windows-11-arm stress has run since (44450918935,
+  45219870330), so README.md now documents the variable as opt-in and
+  Windows-on-ARM-only, pointing at stress/README.md for the full
+  recipe. No subcommand (c).
 - W13. Upstream reports (zig, conda-forge).
   Options: (a) report to zig and conda-forge (the cfguard dispatch
   dummy, libcurl.pc D:/bld, proj.pc -lproj_9); (b) none.
@@ -1146,6 +1158,9 @@ finding 79, the CI checks of finding 82 and the stress rows of findings
   upstream-zig workflow was skipped (run 44450920934, no label); only
   verify-bundle's one stripped DLL link ran natively with upstream zig
   (finding 82). The full CI tier has not run on this branch.
+  Update 2026-11-23: on windows-latest it has, upstream-zig 44735388684
+  (6/6) and build-r full tier 44735387872 on #50's head bd4c9ee;
+  windows-11-arm still has no upstream-zig leg (chore-release-12 M-4).
 - /OPT:NOICF on a native link of r-windows' clang-aarch64 objects with
   a broken .llvm_addrsig: textshaping and ragg took the tree's freetype
   and harfbuzz instead (finding 84).
@@ -1195,7 +1210,7 @@ finding 79, the CI checks of finding 82 and the stress rows of findings
   With channel local it works (finding 83); universe's build 11 with
   the tree was not run.
 - R_ZIG_FALLBACK_SOFT is not documented for wheel or standalone users
-  (W12).
+  (W12). Update 2026-11-23: README.md documents it (W12's update).
 
 ## Cleanup (2026-11-18)
 
@@ -1215,3 +1230,14 @@ finding 79, the CI checks of finding 82 and the stress rows of findings
   Status: not yet done. On 2026-11-18 `git worktree list` still shows
   21 worktrees under wt/ besides the three kept ones (and the main
   checkout); no backup path is chosen yet.
+  Status (2026-11-23): done. `git worktree list` shows the main
+  checkout and the six build-12 batch worktrees only (chore-env-ci,
+  chore-release-12, docs-backlog-hygiene, fix-rzig-quick,
+  fix-verify-scripts, test-stress-rows). The dirty ones' diffs and
+  untracked files are in archive/wt-backups-2026-11-18/ (beside the
+  repo's temp workspace, not in git). Of the three kept ones,
+  feat-linux-libstdcxx and feat-winarm-gaps merged (#49, #50);
+  feat-userland (parked phase 7a native Windows userland) was archived
+  to archive/wt-backups-2026-11-23/feat-userland/ (tracked.diff,
+  untracked.tgz with its .github/devdocs/feat-userland/ record,
+  README.txt) and removed, the user's call on 2026-11-23.

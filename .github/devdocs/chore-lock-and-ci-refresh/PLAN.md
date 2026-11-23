@@ -292,6 +292,17 @@ legs on it: build.yaml's linux-64 default, full, openblas and minimal,
 conda-package linux-64, and upstream-zig's ubuntu leg; gen-config has
 none.
 
+Observed (2026-11-23, docs-backlog-hygiene): the watch below is over and
+its "expected"/"what to read" wording is history. build-r 45219775112's
+ubuntu-latest / default job (919f3fc) ran on Ubuntu 26.04.1 (image
+20261111.635) and printed "programs started:" (strace works, no "strace
+unavailable" note), "TLS trust verified (no CA file read from the build
+env)", "standalone base verified relocatable (linux/slim)", 24 "compiled
+package verified" lines and "glibc ceiling verified: worst 2.17
+(lib/libomp.so) <= floor 2.17". No pin was applied and none is needed;
+conda-package linux-64 (build.yaml:299, ubuntu-latest) succeeded in
+the full tier runs 44735387872 and 45073714541.
+
 - **pixi and the glibc checks.** Nothing we ship depends on the host's
   glibc: zig targets 2.17, setup-pixi installs pixi's static musl binary
   on linux, the lock's packages need `__glibc >=2.17` (2.28 for build-only

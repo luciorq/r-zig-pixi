@@ -184,6 +184,7 @@ in V3_PACKAGE_SPECS.md should be made *before* the channel accumulates
 more consumers.
 
 **Phase 4 — the backend bet (watch, don't block).**
+Still watch (chore-release-12 M11, decision D11, 2026-11-23).
 `pixi_build_zig` stays the long-term direction for *native zig*
 packages; nothing in phases 0–3 depends on it. Revisit when
 pixi-build-backends' successor story upstream clarifies. Its two

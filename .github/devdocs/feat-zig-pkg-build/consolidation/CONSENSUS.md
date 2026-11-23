@@ -124,6 +124,12 @@ Verified against the code, except where marked "inferred".
 
 ## Implementation checklist
 
+Closed (2026-11-23, docs-backlog-hygiene): this plan was implemented and merged as PR #25
+(feat-zig-pkg-build, 2026-10-13) and its review follow-up PR #26
+(fix-zig-pkg-build-review, merged ea7e6ee); feat-zig-pkg-build/PLAN.md
+and fix-zig-pkg-build-review/PLAN.md record what ran. The boxes below
+were never ticked here and are not tracked any more.
+
 ### A. The merge (M8, M2)
 - [ ] In the worktree: `git merge --no-commit origin/main` (e1ce179).
       Conflicts [accuracy critic; overview section 4]: main.zig and

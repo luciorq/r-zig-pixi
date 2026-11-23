@@ -316,6 +316,10 @@ and have their own narrower, stated verification bars.
 
 ## Task checklist (transcribe into a new `.github/devdocs/feat-cross-platform-standardization/TODO.md` when starting)
 
+Closed (2026-11-23, docs-backlog-hygiene): this list was transcribed into TODO.md beside
+this file, which tracks it, and the milestone merged as PR #3
+(2026-08-07). The boxes below are the plan's copy and stay unticked.
+
 - [ ] Phase 0 — restore configure-only script/task; verify clean
       `subst.txt` diff on gamma
 - [ ] Phase 1.1-1.6 — de-duplication helpers + `rspec.zig` cleanup

@@ -96,7 +96,9 @@ R's own `reg-tests-1c.R`** (line 61, `stopifnot(t2 / t1 < 30)`: `str()`
 of a 1e5-level factor timed against a character vector, ratio 40 on the
 runner). A timing check; the branch changes nothing that job builds or
 runs. The same job logged a GitHub 503 for pak's `zip.exe` download,
-which only warns. Re-run of the failed job: pending.
+which only warns. Re-run of the failed job: done, attempt 2 of
+45219775112 succeeded (2026-11-23, windows-11-arm / default success;
+docs-backlog-hygiene).
 
 **F7 V. Stress 45219870330, the conda legs (the env from universe and
 conda-forge, no libs channel).** windows-latest / conda: the nine win-64
@@ -120,5 +122,6 @@ D5 every leg has Unexpected 0. PR CI 45219775112: F6.
 ## Next steps
 
 1. Done 2026-11-23: PR #52; stress 45219870330 (F4, F5, F7).
-2. The user commits D5 and the findings; re-run of the failed PR CI job (F6).
+2. Done: D5 and the findings committed (52220e6); the failed PR CI job
+   re-ran green (F6, attempt 2 of 45219775112).
 3. Optional: the full set on Windows, as feat-zig-libs finding 20.
