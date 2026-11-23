@@ -425,12 +425,14 @@ if [ -n "${R_ZIG_EXTRA_ENV:-}" ]; then
     ie="$(at "$extra/include")"
     { [ -n "$ie" ] && [ "$ie" -gt "$o" ] && [ "$(printf '%s\n' "$argv" | sed -n "$((ie - 1))p")" = -idirafter ]; } || bad="$bad idirafter"
   else
-    re="$(at "-Wl,-rpath,$extra/lib")" ie="$(at "-I$extra/include")"
+    # linux: the environments' headers as -isystem (wave2-rzig M-16); macOS: -I
+    inc=-I; [ "$OS" = linux ] && inc=-isystem
+    re="$(at "-Wl,-rpath,$extra/lib")" ie="$(at "$inc$extra/include")"
     { [ -n "$re" ] && [ "$re" = $((le + 1)) ]; } || bad="$bad extra-rpath"
     [ -z "$(at "-Wl,-rpath,$own/lib")" ] || bad="$bad own-rpath"
     { [ -n "$ie" ] && [ "$ie" -gt "$o" ]; } || bad="$bad extra-include"
     if [ -d "$own/include" ]; then
-      io="$(at "-I$own/include")"
+      io="$(at "$inc$own/include")"
       { [ -n "$io" ] && [ "$io" -lt "$ie" ]; } || bad="$bad own-include"
     fi
   fi
