@@ -257,6 +257,19 @@ build:
   # libstdcxx-devel_linux-* (r-zig-compilers' run deps), libR needs
   # libstdc++.so.6 and libgcc_s.so.1, and the base carries rzig's two
   # libstdc++ shim headers (R_HOME/bin/toolchain/libstdcxx-shim).
+  # Also in 12, still unpublished: Windows package DLLs link without ICF
+  # (_LINK_=/OPT:NOICF), and win-arm64's rzig and etc/r-zig.cmake take
+  # an opt-in fallback library tree, R_ZIG_FALLBACK_SOFT
+  # (feat-winarm-gaps); on Windows rzig, etc/Rcmd_environ (R_ZIG_LIBS,
+  # PKG_CONFIG_PATH, PKG_CONFIG_LIBDIR, R_TOOLS_SOFT) and etc/r-zig.cmake
+  # search libs-zig-pixi's zig-* static libraries
+  # (<env>/Library/zig-libs/<triple>) first (feat-zig-libs). Build-12
+  # batch 1 (#54): rzig passes -Wl,-l as -l in place, defines
+  # __STDC_WANT_IEC_60559_TYPES_EXT__ for Windows C compiles, and drops
+  # -lgfortran/-lquadmath from flang links (fix-rzig-quick); expat,
+  # fontconfig and freetype leave the Windows host and run deps
+  # (chore-env-ci Q12); Windows' R_HOME/include is CRAN's header set
+  # (test-stress-rows H2). Record: .github/devdocs/chore-release-12/PLAN.md.
   number: 12
 
 outputs:
@@ -384,15 +397,17 @@ outputs:
         - if: win
           then:
             - pixman
-        - expat
-        - fontconfig
-        - freetype
         - libpng
         # glib on unix only, as pixi.toml: R's Windows build uses none of
-        # it, and on Windows glib's python brings tk.
+        # it, and on Windows glib's python brings tk. expat, fontconfig
+        # and freetype too (chore-env-ci Q12): Windows' cairo
+        # (zigbuild/cairo.zig) has no FreeType or fontconfig backend.
         - if: unix
           then:
             - glib
+            - expat
+            - fontconfig
+            - freetype
         # pango/cairo only pull in libharfbuzz (the runtime .so) as their own
         # transitive run dependency, not the headers — the vendored
         # CAIRO_CPPFLAGS build.zig applies unconditionally references
@@ -492,14 +507,14 @@ outputs:
         - if: win
           then:
             - pixman
-        - expat
-        - fontconfig
-        - freetype
         - libpng
         # unix only, as the staging host
         - if: unix
           then:
             - glib
+            - expat
+            - fontconfig
+            - freetype
         # E2, on every OS (staging host): R.dll links it in every variant
         - zstd
         - if: linux

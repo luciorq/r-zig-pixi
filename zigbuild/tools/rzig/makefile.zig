@@ -112,8 +112,8 @@ pub const Evaluator = struct {
 
     /// What make knows and this file does not.
     pub const make_only = [_][]const u8{
-        "MAKEFLAGS",     "MFLAGS",       "GNUMAKEFLAGS", "MAKEOVERRIDES",  "-*-command-variables-*-",
-        "MAKEFILE_LIST", "MAKEFILES",    "MAKE_VERSION", "MAKE_HOST",      "MAKE_RESTARTS",
+        "MAKEFLAGS",     "MFLAGS",       "GNUMAKEFLAGS",  "MAKEOVERRIDES", "-*-command-variables-*-",
+        "MAKEFILE_LIST", "MAKEFILES",    "MAKE_VERSION",  "MAKE_HOST",     "MAKE_RESTARTS",
         "MAKE_TERMOUT",  "MAKE_TERMERR", ".DEFAULT_GOAL", ".VARIABLES",    ".FEATURES",
         ".INCLUDE_DIRS", ".LOADED",      ".RECIPEPREFIX", ".LIBPATTERNS",  ".EXTRA_PREREQS",
         "SUFFIXES",

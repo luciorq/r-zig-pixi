@@ -7,31 +7,31 @@
 /// C sources of src/main linked into libR.so (Rmain.c is the executable,
 /// listed separately).
 pub const main_c = [_][]const u8{
-    "CommandLineArgs.c", "Rdynload.c",   "Renviron.c",   "RNG.c",
-    "agrep.c",           "altclasses.c", "altrep.c",     "apply.c",
-    "arithmetic.c",      "array.c",      "attrib.c",     "bind.c",
-    "builtin.c",         "character.c",  "clippath.c",   "coerce.c",
-    "colors.c",          "complex.c",    "connections.c", "context.c",
-    "cum.c",             "dcf.c",        "datetime.c",   "debug.c",
-    "deparse.c",         "devices.c",    "dotcode.c",    "dounzip.c",
-    "dstruct.c",         "duplicate.c",  "edit.c",       "engine.c",
-    "envir.c",           "errors.c",     "eval.c",       "flexiblas.c",
-    "format.c",          "gevents.c",    "gram.c",       "gram-ex.c",
-    "graphics.c",        "grep.c",       "identical.c",  "inlined.c",
-    "inspect.c",         "internet.c",   "iosupport.c",  "lapack.c",
-    "list.c",            "localecharset.c", "logic.c",   "machine.c",
-    "main.c",            "mapply.c",     "mask.c",       "match.c",
-    "memory.c",          "names.c",      "objects.c",    "options.c",
-    "paste.c",           "patterns.c",   "platform.c",   "plot.c",
-    "plot3d.c",          "plotmath.c",   "print.c",      "printarray.c",
-    "printvector.c",     "printutils.c", "qsort.c",      "radixsort.c",
-    "random.c",          "raw.c",        "registration.c", "relop.c",
-    "rlocale.c",         "saveload.c",   "scan.c",       "seq.c",
-    "serialize.c",       "sort.c",       "source.c",     "split.c",
-    "sprintf.c",         "startup.c",    "subassign.c",  "subscript.c",
-    "subset.c",          "summary.c",    "sysutils.c",   "times.c",
-    "unique.c",          "util.c",       "version.c",    "g_alab_her.c",
-    "g_cntrlify.c",      "g_fontdb.c",   "g_her_glyph.c",
+    "CommandLineArgs.c", "Rdynload.c",      "Renviron.c",     "RNG.c",
+    "agrep.c",           "altclasses.c",    "altrep.c",       "apply.c",
+    "arithmetic.c",      "array.c",         "attrib.c",       "bind.c",
+    "builtin.c",         "character.c",     "clippath.c",     "coerce.c",
+    "colors.c",          "complex.c",       "connections.c",  "context.c",
+    "cum.c",             "dcf.c",           "datetime.c",     "debug.c",
+    "deparse.c",         "devices.c",       "dotcode.c",      "dounzip.c",
+    "dstruct.c",         "duplicate.c",     "edit.c",         "engine.c",
+    "envir.c",           "errors.c",        "eval.c",         "flexiblas.c",
+    "format.c",          "gevents.c",       "gram.c",         "gram-ex.c",
+    "graphics.c",        "grep.c",          "identical.c",    "inlined.c",
+    "inspect.c",         "internet.c",      "iosupport.c",    "lapack.c",
+    "list.c",            "localecharset.c", "logic.c",        "machine.c",
+    "main.c",            "mapply.c",        "mask.c",         "match.c",
+    "memory.c",          "names.c",         "objects.c",      "options.c",
+    "paste.c",           "patterns.c",      "platform.c",     "plot.c",
+    "plot3d.c",          "plotmath.c",      "print.c",        "printarray.c",
+    "printvector.c",     "printutils.c",    "qsort.c",        "radixsort.c",
+    "random.c",          "raw.c",           "registration.c", "relop.c",
+    "rlocale.c",         "saveload.c",      "scan.c",         "seq.c",
+    "serialize.c",       "sort.c",          "source.c",       "split.c",
+    "sprintf.c",         "startup.c",       "subassign.c",    "subscript.c",
+    "subset.c",          "summary.c",       "sysutils.c",     "times.c",
+    "unique.c",          "util.c",          "version.c",      "g_alab_her.c",
+    "g_cntrlify.c",      "g_fontdb.c",      "g_her_glyph.c",
 };
 
 pub const appl_c = [_][]const u8{
@@ -39,48 +39,48 @@ pub const appl_c = [_][]const u8{
 };
 
 pub const appl_f = [_][]const u8{
-    "dpbfa.f", "dpbsl.f", "dpoco.f", "dpodi.f", "dpofa.f", "dposl.f",
+    "dpbfa.f", "dpbsl.f",  "dpoco.f", "dpodi.f", "dpofa.f",  "dposl.f",
     "dqrdc.f", "dqrdc2.f", "dqrls.f", "dqrsl.f", "dqrutl.f", "dsvdc.f",
     "dtrco.f", "dtrsl.f",
 };
 
 pub const nmath_c = [_][]const u8{
-    "mlutils.c",   "d1mach.c",    "i1mach.c",    "fmax2.c",
-    "fmin2.c",     "fprec.c",     "fround.c",    "ftrunc.c",
-    "sign.c",      "fsign.c",     "imax2.c",     "imin2.c",
-    "chebyshev.c", "log1p.c",     "lgammacor.c", "gammalims.c",
-    "stirlerr.c",  "bd0.c",       "gamma.c",     "lgamma.c",
+    "mlutils.c",    "d1mach.c",   "i1mach.c",    "fmax2.c",
+    "fmin2.c",      "fprec.c",    "fround.c",    "ftrunc.c",
+    "sign.c",       "fsign.c",    "imax2.c",     "imin2.c",
+    "chebyshev.c",  "log1p.c",    "lgammacor.c", "gammalims.c",
+    "stirlerr.c",   "bd0.c",      "gamma.c",     "lgamma.c",
     "gamma_cody.c", "beta.c",     "lbeta.c",     "polygamma.c",
-    "cospi.c",     "bessel_i.c",  "bessel_j.c",  "bessel_k.c",
-    "bessel_y.c",  "choose.c",    "snorm.c",     "sexp.c",
-    "dgamma.c",    "pgamma.c",    "qgamma.c",    "rgamma.c",
-    "dbeta.c",     "pbeta.c",     "qbeta.c",     "rbeta.c",
-    "dunif.c",     "punif.c",     "qunif.c",     "runif.c",
-    "dnorm.c",     "pnorm.c",     "qnorm.c",     "rnorm.c",
-    "dlnorm.c",    "plnorm.c",    "qlnorm.c",    "rlnorm.c",
-    "df.c",        "pf.c",        "qf.c",        "rf.c",
-    "dnf.c",       "dt.c",        "pt.c",        "qt.c",
-    "rt.c",        "dnt.c",       "dchisq.c",    "pchisq.c",
-    "qchisq.c",    "rchisq.c",    "rnchisq.c",   "dbinom.c",
-    "pbinom.c",    "qbinom.c",    "rbinom.c",    "rmultinom.c",
-    "dcauchy.c",   "pcauchy.c",   "qcauchy.c",   "rcauchy.c",
-    "dexp.c",      "pexp.c",      "qexp.c",      "rexp.c",
-    "dgeom.c",     "pgeom.c",     "qgeom.c",     "rgeom.c",
-    "dhyper.c",    "phyper.c",    "qhyper.c",    "rhyper.c",
-    "dnbinom.c",   "pnbinom.c",   "qnbinom.c",   "qnbinom_mu.c",
-    "rnbinom.c",   "dpois.c",     "ppois.c",     "qpois.c",
-    "rpois.c",     "dweibull.c",  "pweibull.c",  "qweibull.c",
-    "rweibull.c",  "dlogis.c",    "plogis.c",    "qlogis.c",
-    "rlogis.c",    "dnchisq.c",   "pnchisq.c",   "qnchisq.c",
-    "dnbeta.c",    "pnbeta.c",    "qnbeta.c",    "pnf.c",
-    "pnt.c",       "qnf.c",       "qnt.c",       "ptukey.c",
-    "qtukey.c",    "toms708.c",   "wilcox.c",    "signrank.c",
+    "cospi.c",      "bessel_i.c", "bessel_j.c",  "bessel_k.c",
+    "bessel_y.c",   "choose.c",   "snorm.c",     "sexp.c",
+    "dgamma.c",     "pgamma.c",   "qgamma.c",    "rgamma.c",
+    "dbeta.c",      "pbeta.c",    "qbeta.c",     "rbeta.c",
+    "dunif.c",      "punif.c",    "qunif.c",     "runif.c",
+    "dnorm.c",      "pnorm.c",    "qnorm.c",     "rnorm.c",
+    "dlnorm.c",     "plnorm.c",   "qlnorm.c",    "rlnorm.c",
+    "df.c",         "pf.c",       "qf.c",        "rf.c",
+    "dnf.c",        "dt.c",       "pt.c",        "qt.c",
+    "rt.c",         "dnt.c",      "dchisq.c",    "pchisq.c",
+    "qchisq.c",     "rchisq.c",   "rnchisq.c",   "dbinom.c",
+    "pbinom.c",     "qbinom.c",   "rbinom.c",    "rmultinom.c",
+    "dcauchy.c",    "pcauchy.c",  "qcauchy.c",   "rcauchy.c",
+    "dexp.c",       "pexp.c",     "qexp.c",      "rexp.c",
+    "dgeom.c",      "pgeom.c",    "qgeom.c",     "rgeom.c",
+    "dhyper.c",     "phyper.c",   "qhyper.c",    "rhyper.c",
+    "dnbinom.c",    "pnbinom.c",  "qnbinom.c",   "qnbinom_mu.c",
+    "rnbinom.c",    "dpois.c",    "ppois.c",     "qpois.c",
+    "rpois.c",      "dweibull.c", "pweibull.c",  "qweibull.c",
+    "rweibull.c",   "dlogis.c",   "plogis.c",    "qlogis.c",
+    "rlogis.c",     "dnchisq.c",  "pnchisq.c",   "qnchisq.c",
+    "dnbeta.c",     "pnbeta.c",   "qnbeta.c",    "pnf.c",
+    "pnt.c",        "qnf.c",      "qnt.c",       "ptukey.c",
+    "qtukey.c",     "toms708.c",  "wilcox.c",    "signrank.c",
 };
 
 pub const tre_c = [_][]const u8{
-    "regcomp.c", "regerror.c", "regexec.c", "tre-ast.c", "tre-compile.c",
-    "tre-match-approx.c", "tre-match-backtrack.c", "tre-match-parallel.c",
-    "tre-mem.c", "tre-parse.c", "tre-stack.c",
+    "regcomp.c",          "regerror.c",            "regexec.c",            "tre-ast.c", "tre-compile.c",
+    "tre-match-approx.c", "tre-match-backtrack.c", "tre-match-parallel.c", "tre-mem.c", "tre-parse.c",
+    "tre-stack.c",
 };
 
 pub const tzone_c = [_][]const u8{ "localtime.c", "strftime.c" };
@@ -109,25 +109,25 @@ pub const internet_c = [_][]const u8{
 };
 
 pub const stats_c = [_][]const u8{
-    "init.c",     "kmeans.c",     "ansari.c",   "bandwidths.c",
-    "chisqsim.c", "d2x2xk.c",     "fexact.c",   "kendall.c",
-    "ks.c",       "line.c",       "smooth.c",   "prho.c",
-    "swilk.c",    "ksmooth.c",    "loessc.c",   "monoSpl.c",
-    "isoreg.c",   "Srunmed.c",    "dblcen.c",   "distance.c",
-    "hclust-utils.c", "nls.c",    "rWishart.c", "HoltWinters.c",
-    "PPsum.c",    "arima.c",      "burg.c",     "filter.c",
-    "mAR.c",      "pacf.c",       "starma.c",   "stl.c",
-    "port.c",     "family.c",     "sbart.c",    "approx.c",
-    "loglin.c",   "lowess.c",     "massdist.c", "splines.c",
-    "lm.c",       "complete_cases.c", "cov.c",  "deriv.c",
-    "fft.c",      "fourier.c",    "model.c",    "optim.c",
-    "optimize.c", "integrate.c",  "random.c",   "distn.c",
-    "zeroin.c",   "rcont.c",      "influence.c", "permdist.c",
+    "init.c",         "kmeans.c",         "ansari.c",    "bandwidths.c",
+    "chisqsim.c",     "d2x2xk.c",         "fexact.c",    "kendall.c",
+    "ks.c",           "line.c",           "smooth.c",    "prho.c",
+    "swilk.c",        "ksmooth.c",        "loessc.c",    "monoSpl.c",
+    "isoreg.c",       "Srunmed.c",        "dblcen.c",    "distance.c",
+    "hclust-utils.c", "nls.c",            "rWishart.c",  "HoltWinters.c",
+    "PPsum.c",        "arima.c",          "burg.c",      "filter.c",
+    "mAR.c",          "pacf.c",           "starma.c",    "stl.c",
+    "port.c",         "family.c",         "sbart.c",     "approx.c",
+    "loglin.c",       "lowess.c",         "massdist.c",  "splines.c",
+    "lm.c",           "complete_cases.c", "cov.c",       "deriv.c",
+    "fft.c",          "fourier.c",        "model.c",     "optim.c",
+    "optimize.c",     "integrate.c",      "random.c",    "distn.c",
+    "zeroin.c",       "rcont.c",          "influence.c", "permdist.c",
 };
 
 pub const stats_f = [_][]const u8{
-    "bsplvd.f", "bvalue.f", "bvalus.f", "loessf.f", "ppr.f", "qsbart.f",
-    "sgram.f", "sinerp.f", "sslvrg.f", "stxwx.f", "hclust.f", "kmns.f",
+    "bsplvd.f", "bvalue.f",  "bvalus.f", "loessf.f", "ppr.f",    "qsbart.f",
+    "sgram.f",  "sinerp.f",  "sslvrg.f", "stxwx.f",  "hclust.f", "kmns.f",
     "eureka.f", "portsrc.f", "lminfl.f",
 };
 
@@ -140,8 +140,8 @@ pub const graphics_c = [_][]const u8{
 /// call adds the platform-specific device pair below (same "shared base
 /// + platform tail via two calls" shape as tzone_c/win_tzone_c).
 pub const grdevices_shared_c = [_][]const u8{
-    "axis_scales.c", "chull.c", "devices.c", "init.c", "stubs.c", "colors.c",
-    "clippath.c", "patterns.c", "mask.c", "group.c", "devPicTeX.c", "devPS.c",
+    "axis_scales.c", "chull.c",    "devices.c", "init.c",  "stubs.c",     "colors.c",
+    "clippath.c",    "patterns.c", "mask.c",    "group.c", "devPicTeX.c", "devPS.c",
 };
 
 /// unix-only: the cairo/quartz graphics devices.
@@ -153,14 +153,14 @@ pub const grdevices_cairo_c = [_][]const u8{ "devCairo.c", "devQuartz.c" };
 pub const win_grdevices_c = [_][]const u8{ "devWindows.c", "winbitmap.c" };
 
 pub const grid_c = [_][]const u8{
-    "clippath.c", "gpar.c", "grid.c", "just.c", "layout.c", "mask.c",
-    "matrix.c", "path.c", "register.c", "state.c", "typeset.c", "unit.c",
-    "util.c", "viewport.c",
+    "clippath.c", "gpar.c",     "grid.c",     "just.c",  "layout.c",  "mask.c",
+    "matrix.c",   "path.c",     "register.c", "state.c", "typeset.c", "unit.c",
+    "util.c",     "viewport.c",
 };
 
 pub const methods_c = [_][]const u8{
-    "do_substitute_direct.c", "init.c", "methods_list_dispatch.c", "slot.c",
-    "class_support.c", "tests.c", "utils.c",
+    "do_substitute_direct.c", "init.c",  "methods_list_dispatch.c", "slot.c",
+    "class_support.c",        "tests.c", "utils.c",
 };
 
 pub const parallel_c = [_][]const u8{ "init.c", "rngstream.c", "fork.c" };
@@ -168,9 +168,9 @@ pub const parallel_c = [_][]const u8{ "init.c", "rngstream.c", "fork.c" };
 pub const splines_c = [_][]const u8{"splines.c"};
 
 pub const tools_c = [_][]const u8{
-    "text.c", "init.c", "Rmd5.c", "md5.c", "signals.c", "install.c",
-    "getfmts.c", "http.c", "gramLatex.c", "gramRd.c", "pdscan.c",
-    "Rsha256.c", "sha256.c",
+    "text.c",    "init.c", "Rmd5.c",      "md5.c",    "signals.c", "install.c",
+    "getfmts.c", "http.c", "gramLatex.c", "gramRd.c", "pdscan.c",  "Rsha256.c",
+    "sha256.c",
 };
 
 pub const utils_c = [_][]const u8{
@@ -203,8 +203,8 @@ pub const public_headers = [_][]const u8{
 /// R front-end scripts copied verbatim from src/scripts into R_HOME/bin.
 /// Not config: R CMD config is rzig's (patch 0010, feat-config-rzig).
 pub const scripts_s = [_][]const u8{
-    "BATCH", "COMPILE", "INSTALL", "LINK", "REMOVE", "Rd2pdf", "Rdconv",
-    "Rdiff", "Rprof", "SHLIB", "Stangle", "Sweave", "build", "check",
+    "BATCH", "COMPILE", "INSTALL", "LINK",    "REMOVE", "Rd2pdf", "Rdconv",
+    "Rdiff", "Rprof",   "SHLIB",   "Stangle", "Sweave", "build",  "check",
 };
 
 /// Scripts generated by @VAR@ substitution from src/scripts/*.in.
@@ -214,8 +214,8 @@ pub const scripts_b = [_][]const u8{
 
 /// All base packages, in R_PKGS_BASE order (share/make/vars.mk).
 pub const pkgs_base = [_][]const u8{
-    "base", "tools", "utils", "grDevices", "graphics", "stats", "datasets",
-    "methods", "grid", "splines", "stats4", "tcltk", "compiler", "parallel",
+    "base",    "tools", "utils",   "grDevices", "graphics", "stats",    "datasets",
+    "methods", "grid",  "splines", "stats4",    "tcltk",    "compiler", "parallel",
 };
 
 // ----------------------------------------------------------------------
@@ -232,10 +232,10 @@ pub const pkgs_base = [_][]const u8{
 /// src/gnuwin32/*.c — R.dll's own required core (console/GUI plumbing
 /// baked in architecturally, gnuwin32 has no seam to drop it — F6.0).
 pub const win_gnuwin32_c = [_][]const u8{
-    "console.c", "dos_wglob.c", "dynload.c",   "editor.c",
-    "embeddedR.c", "extra.c",   "opt.c",       "pager.c",
-    "preferences.c", "psignal.c", "rhome.c",   "rt_complete.c",
-    "rui.c",     "run.c",       "shext.c",     "sys-win32.c",
+    "console.c",     "dos_wglob.c", "dynload.c", "editor.c",
+    "embeddedR.c",   "extra.c",     "opt.c",     "pager.c",
+    "preferences.c", "psignal.c",   "rhome.c",   "rt_complete.c",
+    "rui.c",         "run.c",       "shext.c",   "sys-win32.c",
     "system.c",
 };
 
@@ -243,12 +243,12 @@ pub const win_gnuwin32_c = [_][]const u8{
 /// dependency (not prunable — F6.0). All files, gnuwin32 has no partial
 /// build (Makefile.win uses `$(wildcard *.c)`).
 pub const win_graphapp_c = [_][]const u8{
-    "arith.c", "array.c", "bitmaps.c", "buttons.c", "clipboard.c",
-    "context.c", "controls.c", "cursors.c", "dialogs.c", "drawing.c",
-    "drawtext.c", "events.c", "fonts.c", "gbuttons.c", "gdraw.c",
-    "gif.c", "gimage.c", "gmenus.c", "image.c", "init.c",
-    "menus.c", "metafile.c", "objects.c", "printer.c", "rgb.c",
-    "status.c", "stdimg.c", "strings.c", "tooltips.c", "windows.c",
+    "arith.c",    "array.c",    "bitmaps.c", "buttons.c",  "clipboard.c",
+    "context.c",  "controls.c", "cursors.c", "dialogs.c",  "drawing.c",
+    "drawtext.c", "events.c",   "fonts.c",   "gbuttons.c", "gdraw.c",
+    "gif.c",      "gimage.c",   "gmenus.c",  "image.c",    "init.c",
+    "menus.c",    "metafile.c", "objects.c", "printer.c",  "rgb.c",
+    "status.c",   "stdimg.c",   "strings.c", "tooltips.c", "windows.c",
 };
 
 /// src/extra/intl/*.c — Windows' own bundled gettext (a third distinct
@@ -259,11 +259,11 @@ pub const win_graphapp_c = [_][]const u8{
 /// SOURCES and are not compiled (likely #included by printf.c/gettext.c,
 /// matching trio's compat.o/trio.o #include pattern below).
 pub const win_intl_c = [_][]const u8{
-    "bindtextdom.c", "dcgettext.c", "dgettext.c",  "gettext.c",
-    "finddomain.c",  "loadmsgcat.c", "textdomain.c", "l10nflist.c",
-    "explodename.c", "dcigettext.c", "dcngettext.c", "dngettext.c",
-    "ngettext.c",    "plural.c",    "plural-exp.c", "langprefs.c",
-    "localcharset.c", "localename.c", "printf.c",    "osdep.c",
+    "bindtextdom.c",  "dcgettext.c",  "dgettext.c",   "gettext.c",
+    "finddomain.c",   "loadmsgcat.c", "textdomain.c", "l10nflist.c",
+    "explodename.c",  "dcigettext.c", "dcngettext.c", "dngettext.c",
+    "ngettext.c",     "plural.c",     "plural-exp.c", "langprefs.c",
+    "localcharset.c", "localename.c", "printf.c",     "osdep.c",
     "hash-string.c",
 };
 

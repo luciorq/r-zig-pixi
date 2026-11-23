@@ -46,7 +46,10 @@
 //!                             `rzig build` does
 //!                             (pkgbuild.buildZigNeedsMake). R_ZIG_C_STD is
 //!                             install.R's use_C (the hook's --c-std);
-//!                             R_ZIG_PKG_BUILDER=make forces make. Four
+//!                             R_ZIG_PKG_BUILDER=make forces make;
+//!                             R_ZIG_PKG_BUILDER=zig refuses a src/Makefile
+//!                             package (exit 1 and why), which install.R
+//!                             runs with make before its hook. Four
 //!                             inputs differ from the hook's and are
 //!                             recorded (feat-zig-pkg-build PLAN.md):
 //!                             CLINK_CPPFLAGS is set after the preflight, a
@@ -376,7 +379,18 @@ fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
     const src_dir = try ctx.fmt("{s}/src", .{pkg_dir});
     const name = pkgbuild.packageName(ctx, pkg_dir) orelse std.fs.path.basename(pkg_dir);
     const configure = envSet(ctx, "R_ZIG_CONFIGURE");
-    const forced_make = if (ctx.getenv("R_ZIG_PKG_BUILDER")) |b| mem.eql(u8, b, "make") else false;
+    const builder = ctx.getenv("R_ZIG_PKG_BUILDER") orelse "";
+    const forced_make = mem.eql(u8, builder, "make");
+    // R_ZIG_PKG_BUILDER=zig, no make path: install.R runs a src/Makefile
+    // with make itself, before run_shlib's hook could refuse it (patch
+    // 0013's stop_zig), so this check refuses it (fix-rzig-quick Q8).
+    // Other make cases reach the hook, which refuses them there.
+    if (mem.eql(u8, builder, "zig")) {
+        if (try pkgplan.Planner.srcMakefile(ctx, src_dir)) |m| {
+            ctx.warn("{s} needs make: src/{s}, which R runs with make, and R_ZIG_PKG_BUILDER is 'zig'", .{ name, m });
+            return .{ .code = 1 };
+        }
+    }
     const d: pkgbuild.Decision = if (forced_make)
         .{ .tier = .make, .reason = "R_ZIG_PKG_BUILDER=make", .class = .{ .tier = .make } }
     else
@@ -925,6 +939,35 @@ test "package: a tier-2 package whose plan needs make, 1 and why, no group's tex
     try f.env.put("ZIG_BIN", try fakeZig(&f, "bin/zig", same_zig));
     try testing.expectEqual(127, (try packageIn(c, r, f.path("t"))).code);
     try testing.expect(mem.startsWith(u8, f.takeWarnings(), f.fmt("rzig-test: t needs make: CC = ccache is not a compiler of R's toolchain ({s}/bin/toolchain); no make on PATH\n", .{r})));
+}
+
+test "package: R_ZIG_PKG_BUILDER=zig refuses a src/Makefile package, 1 and why" {
+    // fix-rzig-quick Q8: install.R runs src/Makefile with make, never the hook
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const r = try pkgplan.rHome(&f);
+    try f.env.put("PATH", f.path("nothing"));
+    try f.env.put("R_ZIG_PKG_BUILDER", "zig");
+    try f.touch("m/src/Makefile");
+    try f.touch("m/src/a.c");
+    try testing.expectEqual(1, (try packageIn(c, r, f.path("m"))).code);
+    try testing.expectEqualStrings("rzig-test: m needs make: src/Makefile, which R runs with make, and R_ZIG_PKG_BUILDER is 'zig'\n", f.takeWarnings());
+    // Windows: Makefile.ucrt first, as R runs it; a plain Makefile is not R's there
+    c.os = .windows;
+    try f.touch("w/src/Makefile");
+    try f.touch("w/src/Makefile.win");
+    try f.touch("w/src/Makefile.ucrt");
+    try testing.expectEqual(1, (try packageIn(c, r, f.path("w"))).code);
+    try testing.expectEqualStrings("rzig-test: w needs make: src/Makefile.ucrt, which R runs with make, and R_ZIG_PKG_BUILDER is 'zig'\n", f.takeWarnings());
+    // auto: no refusal; the build tools' check decides (no make: 127)
+    if (builtin.os.tag == .windows) return; // shell-script stand-ins below
+    c.os = .linux;
+    try f.env.put("ZIG_BIN", try fakeZig(&f, "bin/zig", same_zig));
+    try f.env.put("R_ZIG_PKG_BUILDER", "auto");
+    try testing.expectEqual(127, (try packageIn(c, r, f.path("m"))).code);
+    try testing.expect(mem.startsWith(u8, f.takeWarnings(), "rzig-test: m needs make: src/Makefile; no make on PATH\n"));
 }
 
 test "package on Windows: a configure.win script needs make, its reason before the missing make" {

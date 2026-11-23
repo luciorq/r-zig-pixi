@@ -224,10 +224,11 @@ drop_ws2() {
   awk -v drop="$1" '{ l[NR] = $0; if ($0 == "-lws2_32") last = NR } END { for (i = 1; i <= NR; i++) if (!(drop == 1 && i == last)) print l[i] }'
 }
 # Windows' target (target.zig): the lines -target and <arch>-windows-gnu,
-# the first -target of the command; drop_wintarget takes both out
+# the first -target of the command, and the define after them
+# (windows.iec_60559_types); drop_wintarget takes them out
 win_target="$(uname -m)-windows-gnu"
 drop_wintarget() {
-  awk -v t="$win_target" '{ l[NR] = $0 } END { d = 0; for (i = 1; i <= NR; i++) { if (!d && l[i] == "-target" && i < NR && l[i + 1] == t) { d = 1; i++; continue }; print l[i] } }'
+  awk -v t="$win_target" '{ l[NR] = $0 } END { d = 0; for (i = 1; i <= NR; i++) { if (!d && l[i] == "-target" && i < NR && l[i + 1] == t) { d = 1; i++; if (i < NR && l[i + 1] == "-D__STDC_WANT_IEC_60559_TYPES_EXT__") i++; continue }; print l[i] } }'
 }
 why_tree="rzig names the tree it is installed in as such, not as the shim's <its dir>/../../../.."
 why_conda="rzig never reads CONDA_PREFIX (F3b): an activated env R is not installed in adds nothing"

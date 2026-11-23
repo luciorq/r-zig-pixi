@@ -2237,9 +2237,16 @@ fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win
     // include/ (public headers), which packages compile against
     // (Makeconf's -I"$(R_INCLUDE_DIR)").
     const inc_wf = b.addWriteFiles();
+    // CRAN's set (src/include/Makefile.win): no Rinterface.h, which is
+    // unix-only; gnuwin32's iconv.h (Riconv.dll's libiconv_* names) and
+    // graphapp's graphapp.h and ga.h (Rgraphapp.dll's API).
     for (rspec.public_headers) |h| {
+        if (std.mem.eql(u8, h, "Rinterface.h")) continue;
         _ = inc_wf.addCopyFile(ctx.path(b.fmt("src/include/{s}", .{h})), h);
     }
+    _ = inc_wf.addCopyFile(ctx.path("src/gnuwin32/fixed/h/iconv.h"), "iconv.h");
+    _ = inc_wf.addCopyFile(ctx.path("src/extra/graphapp/graphapp.h"), "graphapp.h");
+    _ = inc_wf.addCopyFile(ctx.path("src/extra/graphapp/ga.h"), "ga.h");
     _ = inc_wf.addCopyFile(ctx.geninc.path(b, "Rconfig.h"), "Rconfig.h");
     _ = inc_wf.addCopyFile(ctx.geninc.path(b, "Rversion.h"), "Rversion.h");
     _ = inc_wf.addCopyFile(ctx.geninc.path(b, "Rmath.h"), "Rmath.h");

@@ -1,5 +1,27 @@
 # TODO
 
+Status (2026-11-23, docs-backlog-hygiene): this is the July-September
+2026 record; nothing below is tracked here any more. The open boxes, by
+where each ended:
+- gfortran (narrow the -O2 bug, linux-aarch64 `make check`, swap to
+  flang): moot. flang-zig replaced gfortran on every platform (PRs #7,
+  #8, #9, 2026-09-20; consolidation/PHASE2_FORTRAN.md).
+- `-single_module` warning: moot. zig build replaced configure (PR #1;
+  feat-legacy-retirement, PR #2).
+- Headless cairo: done. scripts/smoke-test.sh:95-99 draws a cairo PNG
+  in every build-r leg; tk is not in the slim variant.
+- Windows parity caveats: resolved (feat-win-variants/PLAN.md, the note
+  in place below).
+- MinGW `-l` report to zig, `make distribution`/installer, manuals
+  (Parked: texinfo): won't do (chore-release-12 backlog M11, decision
+  D11). rzig resolves `-l` names itself (zigbuild/tools/rzig/windows.zig).
+- Recommended packages: done, r-zig-recommended since build 11.
+- Publish to a real channel: done, prefix.dev universe since 2026-09-19.
+- SOURCE_DATE_EPOCH: done (build.zig); the standalone tar's
+  reproducibility is chore-release-12 M-22.
+- Milestone 5 (inventory, build.zig prototype, feature flags, replace
+  gnuwin32/autoconf): done, PRs #1 and #2.
+
 ## Milestone 1 — Linux build (linux-64)
 
 - [x] pixi manifest solving for all 5 platforms (linux-64, linux-aarch64,

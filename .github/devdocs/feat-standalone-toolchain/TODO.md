@@ -166,6 +166,13 @@ merged as #21, and feat-tier1-engine as #36.)
       build_t1.zig and PR #27's shared runner go; after the queue
       merges, its slot beside phase 8 the user's
 
+Closed (2026-11-23, docs-backlog-hygiene): every box of this list happened, as the note
+above says. `gh pr list --state merged`: #16 (re-lock), #14 and #15
+merged 2026-10-08; #21 (stress suite) 2026-10-10; the follow-ups (i)
+D12 as #17 (chore-deps-ci-checks, rattler-build >= 0.76 with its
+--error-* flags, pixi.toml:643) and (ii) D6 as #19 (fix-rzig-follow-ups),
+both 2026-10-08; #36 (feat-tier1-engine) 2026-11-05.
+
 ## The zig 0.17 wave (B18 = a; not a phase of this plan)
 
 - [x] 2026-10-06: conda-forge has 0.17.0 only on the `zig_dev` label
@@ -616,6 +623,13 @@ phase4/ beside these files.
       merges (phase 7's item)
 - [ ] The user commits and opens the PR (hand over the commands, no
       trailer)
+      Closed (2026-11-23, docs-backlog-hygiene): phase 4 merged as #30 (2026-11-04); CI
+      has run conda-package on every subdir since (build-r full tier
+      44735387872: conda-package on all six subdirs, each with its
+      package tests and conda-consume). The times item (Cc11) is moot:
+      R_ZIG_TEST_ZIG_CACHE stays a test secret (recipe.yaml) and CI
+      speed is the chore-release-12 menu M10 (D10). The optional stress
+      dispatch is superseded by later conda-leg stress runs (45219870330).
 - [ ] After the publish from main, which waits for phase 7's bump and
       `CONDA_PUBLISH` (PHASE4 section 7, with that bump's number `_N`
       for `_9`): the four `_N` files on all five subdirs
@@ -624,6 +638,10 @@ phase4/ beside these files.
       add r-zig-toolchain` and passes test-toolchain.R; then the closing
       note "published as `_N`, <date>" in feat-zig-pkg-build's N5 and
       fix-zig-pkg-build-review's status (Cc19)
+      Closed (2026-11-23, docs-backlog-hygiene): `_9` was published 2026-11-05 (build.yaml
+      run 41942729382), `_10` 2026-11-09 (42644467377), `_11` 2026-11-18
+      (44336177906, six subdirs); universe's repodata lists all three
+      (2026-11-23).
 
 Taken before phase 5: R CMD SHLIB through rzig build
 (feat-shlib-rzig-build, its PLAN.md), from "Later" (its open point A a,
@@ -664,6 +682,9 @@ user's answers"). Build number 11 (M a); since 2026-10-19 it stays 8
       `upstream-zig` label); per K (a) there is no upstream leg for
       linux-aarch64 or osx-64, so their one-zig case stays untested
       (open item: an upstream leg for them is a later menu)
+      Closed (2026-11-23, docs-backlog-hygiene): phase 5 merged as #32 (2026-11-05); the
+      default legs run on all six subdirs in every core run since; the
+      upstream legs for linux-aarch64/osx-64 are chore-release-12 M-4.
 - [x] Archive sizes recorded in PLAN.md; the first C++ compile's time
       with upstream zig measured ("Later": cache pre-seeding)
 - [ ] Tested: linux-64, omicron (both), kappa, CI, upstream-zig label run
@@ -671,12 +692,22 @@ user's answers"). Build number 11 (M a); since 2026-10-19 it stays 8
       both hosts after the review's fixes and round 2 on kappa after the
       host fix, all passed; CI and the label run wait for the PR, which
       the user pushes, so this stays open)
+      Closed (2026-11-23, docs-backlog-hygiene): #32 merged 2026-11-05
+      without a run of its own (no labels; build-r 41938285875
+      cancelled, upstream-zig 41938285763 skipped). Its code has passed
+      since in the full tier and the upstream-zig label run on later PRs
+      (44735387872, 44735388684 on #50's head bd4c9ee).
 - [ ] After phase 4's and SHLIB's PRs merge: phase 5's commit
       (`phase5-only.diff`, open point O) and its PR with the `full-ci`
       and `upstream-zig` labels; record CI's run IDs, each toolchain
       leg's time and artifact size, windows-latest's toolchain step times
       (Cc7), unpack times per leg kind (Cg6) and verify-package's
       per-pass times against ea7e6ee's (Cg1) in PLAN.md
+      Closed (2026-11-23, docs-backlog-hygiene): #31 (SHLIB) and #32 (phase 5) merged
+      2026-11-05, without labels and with their build-r runs cancelled
+      (41938121376, 41938285875), so no run IDs to record. The timing
+      records were not taken; CI speed is the chore-release-12 menu M10
+      (D10).
 - [x] ~~Before merging: `pixi run -e pkg conda-channel-list universe
       <subdir>` still shows nothing newer than `_8` (else the number
       after universe's newest, M a); after merging, the publish of `_11`
@@ -724,6 +755,8 @@ Prototype first (linux-64, osx-arm64, osx-64, win-64):
       `TC/flang/` (none failed: linux-64, osx-arm64 and win-64 pass,
       linux-aarch64's cross pre-check passes; CI must show
       linux-aarch64 and native osx-64)
+      Closed (2026-11-23, docs-backlog-hygiene): no OS failed; CI showed both (toolchain
+      legs on ubuntu-24.04-arm and macos-15-intel in every run since #33).
 
 Then:
 - [x] Toolchain step: the set from the env into `TC/flang/` (no
@@ -736,6 +769,10 @@ Then:
 - [ ] The carve script's cross-check, once (carved for all five
       subdirs; linux-64's and osx-arm64's 20 files MATCH their SOURCES;
       linux-aarch64, osx-64 and win-64 against CI's compilers artifacts)
+      Won't do (2026-11-23, docs-backlog-hygiene): verify-toolchain.sh checks every
+      directory's copies against its SOURCES' sha256 on every toolchain
+      leg (scripts/verify-toolchain.sh:139-183), which supersedes a
+      one-off carve cross-check.
 - [x] groups.zig (B35): the compilers standalone line names the archive
       for flang too (`...-compilers.tar.xz where you extracted R (zig
       0.16, flang and the OpenMP files)`, M a)
@@ -760,12 +797,20 @@ Then:
       CI (all five platforms) (linux-64, osx-arm64 and win-64 done by
       hand; osx-64 under Rosetta passed on omicron, 2026-10-17;
       CI with `full-ci` and the `upstream-zig` label after the push)
+      Closed (2026-11-23, docs-backlog-hygiene): phase 6 merged as #33
+      (2026-11-05) without a run of its own (no labels; build-r
+      41938396305 cancelled, upstream-zig 41938396286 skipped); the full
+      tier (all six subdirs) and upstream-zig passed on later PRs
+      (44735387872, 44735388684).
 - [ ] After phase 5's PR merges: phase 6's commit (`phase6-only.diff`,
       S a; `phase6/handover/commands.sh`) and its PR with the `full-ci`
       and `upstream-zig` labels; record CI's run IDs, each toolchain
       leg's time (xz) and artifact size, unpack times per leg kind,
       verify-package per pass, and linux-aarch64's first TC/flang run (T
       a) in PLAN.md
+      Closed (2026-11-23, docs-backlog-hygiene): #33 merged 2026-11-05,
+      without labels and with its build-r run cancelled (41938396305);
+      the timing records were not taken (CI speed: menu M10, D10).
 - [x] ~~Before merging: `pixi run -e pkg conda-channel-list universe
       <subdir>` still shows nothing newer than `_8` (else the number
       after universe's newest, R a); after merging, the publish of `_12`
@@ -879,10 +924,13 @@ None blocks phase 8. Each is its own small PR unless it says otherwise.
       intrinsics compiles at `-mcpu=baseline` for the linux, Windows
       and macOS x86_64 targets (gamma, 2026-11-12; chore-release-11).
       The stress rows confirm it on the runners
-- [ ] K1: packages.tsv's RPostgres sysdeps `libpq
+- [x] K1: packages.tsv's RPostgres sysdeps `libpq
       libboost-headers@windows lz4-c@windows` (tested on kappa); the
       Windows conda stress row's `RPostgres (!) install-failed sysdep`
-      (`boost/noncopyable.hpp`) goes with it
+      (`boost/noncopyable.hpp`) goes with it. Not needed: sysdeps stay
+      `libpq`; RPostgres 1.4.10 uses its libpq bundle and vendored boost
+      on x86_64 and Rtools45's on aarch64; stress 45219870330 ok on all
+      four Windows legs (test-stress-rows PLAN.md D2, F5)
 - [x] K2: stress.R `--conda` unsets every variable that names the
       tree's CONDA_PREFIX, PATH excepted (tested on win-64 only); s2's
       configure line then stops naming the tree's stress env
@@ -891,15 +939,18 @@ None blocks phase 8. Each is its own small PR unless it says otherwise.
       and K4 were fixed in feat-tier1-engine (#36). def.zig reads them
       since feat-win-zig-binutils (#47; its test "exports: a bigobj
       object")
-- [ ] N6: correct stress.R:337-338's comment, or set ZIG_LOCAL_CACHE_DIR
-      to the run directory (a `.zig-cache` appears in the checkout root)
+- [x] N6: correct stress.R:337-338's comment, or set ZIG_LOCAL_CACHE_DIR
+      to the run directory (a `.zig-cache` appears in the checkout root).
+      stress.R sets it to the run's `zig-cache`; a local stress run
+      leaves none (test-stress-rows PLAN.md D3, F7)
 - [ ] N7: check that a user's runtime zig cache does not mix
       conda-forge's and upstream zig objects of one version (0.17.0 and
       0.17.1 today, so the keys differ; the case returns when both have
       the same version: the cache key has only the version)
-- [ ] N8: never delete a universe `_8` file before the next number is
+- [x] N8: never delete a universe `_8` file before the next number is
       out (a rebuilt `_8` differs from universe's); a rule for every
-      release, recorded here
+      release, recorded here. Now in the durable checklist
+      `.github/devdocs/RELEASE.md` (2026-11-23, docs-backlog-hygiene)
 - [ ] N9: test-preflight.R:75 (no link object on macOS) and
       wheel-test.sh:71 (`mktemp -d "${TMPDIR:-/tmp}/wheel-test.XXXXXX"`):
       done (chore-release-11). Left: package-standalone.sh's tar (not
@@ -907,6 +958,8 @@ None blocks phase 8. Each is its own small PR unless it says otherwise.
       for the standalone release, which the user put after the conda
       one, 2026-11-12), and chore-lock-and-ci-refresh PLAN.md:305-306,
       :313-318, :322-327 (stale wording)
+      Wording: done 2026-11-23 (docs-backlog-hygiene; an "Observed"
+      note in that section). The tar stays open (chore-release-12 M-22).
 
 Next: phase 8, then phase 9, pkgconf from source, the zig 0.17 port,
 Windows on ARM (the user's order, 2026-10-22).
@@ -1100,9 +1153,12 @@ Needs (answered): B14 (a), with B37 (a).
       point D): under rzig build each new model name compiles libTMB.cpp
       again (about 45 s and 4 MB of zig cache on linux-64), where make
       reused one libTMB.o; only if users ask
+      Won't do (chore-release-12 M11, decision D11, 2026-11-23): README.md documents the cost and
+      `R_ZIG_PKG_BUILDER=make`; reopen only if a user asks.
 - [ ] The build root of R CMD INSTALL's package mode under
       `R_SESSION_TMPDIR` too, as SHLIB mode's (feat-shlib-rzig-build's
       open point M c), if a killed install's `src/.rzig` is seen
+      Watch (chore-release-12 M11, decision D11, 2026-11-23): none seen so far.
 - [ ] macOS `zig cc --version` writes an empty `a.o` in the working
       directory (conda-forge's zig and upstream 0.16.0; not re-checked
       with 0.17, 2026-11-12: compiler.zig still adds `-c`): rzig's driver
@@ -1176,6 +1232,7 @@ Needs (answered): B14 (a), with B37 (a).
 - [ ] Windows `-lmsvcrt` with upstream zig (PHASE5 open point L a): map
       `msvcrt` in `mingw_names` only if a real package needs it (magick
       and gifski did not reach it, 2026-10-15)
+      Watch (chore-release-12 M11, decision D11, 2026-11-23): no stress row has needed it since.
 - [ ] package-standalone.sh's "== done:" size is `du -h`'s, the blocks
       used (97M on APFS, 45M on gamma's compressed filesystem, for an
       87-88 MB compilers archive): print the byte size instead, as
@@ -1273,6 +1330,8 @@ PLAN.md's "Phase 1 record" (under Design 11) has the details.
 - [ ] `pixi run -e pkg conda-package` passes on linux-64, osx-arm64,
       osx-64 (omicron) and win-64 (kappa), both packages' tests included
       (linux-64 passed 2026-10-06; omicron and kappa not run)
+      Closed (2026-11-23, docs-backlog-hygiene): superseded by CI's conda-package on all six
+      subdirs (build-r full tier 44735387872) and three publishes.
 - [x] File lists of r-zig-slim and r-zig-toolchain equal build 4's; etc/
       and base's R code equal build 4's; no `/bin/which`, `/bin/sed`,
       `/bin/grep` in either package (linux-64, 2026-10-06. Besides the
@@ -1284,3 +1343,5 @@ PLAN.md's "Phase 1 record" (under Design 11) has the details.
       linux-64 run shows nothing running `which`; the macOS runs above
       still have to pass)
 - [ ] CI: the five conda-package jobs green
+      Closed (2026-11-23, docs-backlog-hygiene): six jobs green in 44735387872 and
+      45073714541.

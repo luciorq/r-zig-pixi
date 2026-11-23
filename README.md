@@ -151,6 +151,19 @@ the environment (`pixi shell`, `conda activate`) or start R with
 to make (the build tools then are needed). Details:
 `.github/devdocs/feat-shlib-rzig-build/PLAN.md`.
 
+`R_ZIG_FALLBACK_SOFT=<dir>` is opt-in, for Windows on ARM only (an
+aarch64 R; elsewhere rzig ignores it with a warning), and read by rzig
+from build 12 on (universe's build 11 ignores it). It names an
+extracted Rtools45 aarch64 toolchain-libs tree (its
+`aarch64-w64-mingw32.static.posix` directory, which you download
+yourself) for the C libraries conda-forge's win-arm64 lacks (nlopt, gsl,
+mpfr, gmp, glpk, hdf5, netcdf, udunits2, ...). rzig adds its `include`
+as `-idirafter` and its `lib` after every environment's, and never
+takes OpenMP or an import library from it. It is what the stress suite
+uses on `windows-11-arm`, together with a `PKG_CONFIG_PATH` and
+`R_TOOLS_SOFT` of the same tree (`stress/README.md`); it goes away as
+libs-zig-pixi's `zig-*` packages cover those libraries.
+
 ### Build the conda packages yourself
 
 ```bash
@@ -176,14 +189,13 @@ both on every `conda-package` leg, before the publish.
 ### Publish to your own channel
 
 ```bash
-pixi run -e pkg conda-publish
+pixi run -e pkg conda-publish linux-64   # the subdir conda-package built
 ```
 
-Uploads the just-built packages for the current platform
-(`dist/conda/<platform>/*.conda`) to the `universe` channel via
-`rattler-build upload prefix --skip-existing`. Each platform has its own
-task (`[feature.pkg.target.<platform>.tasks]` in `pixi.toml`), so it
-never uploads another platform's packages. It is CI's publish step (see
+Uploads the just-built packages for the subdir it is given
+(`dist/conda/<subdir>/*.conda`) to the `universe` channel via
+`rattler-build upload prefix --skip-existing`. It takes no glob over
+`dist/conda/`, so it never uploads another platform's packages. It is CI's publish step (see
 CI), not run by hand for `universe`; for a channel of your own, change
 `--channel` in that task or run `rattler-build upload` yourself.
 
@@ -569,7 +581,8 @@ gh variable delete CONDA_PUBLISH             # after universe and a fresh env ch
 
 Build internals, platform-specific fixes, and the CI/publish pipeline are
 tracked in `.github/devdocs/`, one directory per branch. The current
-release's plan is `.github/devdocs/chore-release-11/PLAN.md`;
+release's plan is `.github/devdocs/chore-release-11/PLAN.md`, and the
+steps every release follows are `.github/devdocs/RELEASE.md`;
 `PLAN.md`/`TODO.md` at the repo root are symlinks to
 `.github/devdocs/feat-zig-build/`'s (milestone 5, 2026-07, the original
 build design that code comments cite), not the current work.

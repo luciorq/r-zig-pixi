@@ -238,6 +238,9 @@ run, the release.
 
 ### A later BLAS route (recorded 2026-11-13, not planned)
 
+Watch (chore-release-12 M11, decision D11, 2026-11-23): not in build 12; R's internal BLAS
+stays the default.
+
 conda-forge selects the BLAS of an environment by a package build:
 `pixi add "libblas=*=*openblas"` (or mkl, blis, accelerate...) swaps
 the implementation without a rebuild, but only for programs linked

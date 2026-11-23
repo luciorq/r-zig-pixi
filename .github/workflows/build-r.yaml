@@ -32,6 +32,10 @@ on:
         description: "conda: the env's zig; upstream: PyPI's ziglang, the ziglang.org release (pixi run fetch-zig)"
         type: string
         default: conda
+      recommended:
+        description: Build and verify R's recommended packages (build.yaml's full tier)
+        type: boolean
+        default: false
 
 jobs:
   # Named after the env (the caller names its job after the runner, so a
@@ -135,6 +139,19 @@ jobs:
         run: pixi run -e ${{ inputs.env }} pkg-parity
       - name: Regression suite (Examples/Specific/Reg)
         run: pixi run -e ${{ inputs.env }} check
+      # R's 15 recommended packages, by their own zig build with the
+      # compile tree's R (contract made it), into a tree of their own,
+      # dist/recommended/<flavor>/R-<ver>-zig; then its static checks and
+      # recipe/test-recommended.R (scripts/verify-recommended.sh). Until
+      # chore-env-ci (M-5) only conda-package built them in CI.
+      - name: Recommended packages (build + verify)
+        if: inputs.recommended
+        # bash on Windows too: pwsh would run the second line after a
+        # failed first one and take only the last exit code
+        shell: bash
+        run: |
+          pixi run -e ${{ inputs.env }} recommended
+          pixi run -e ${{ inputs.env }} verify-recommended
       # Tiers 0/1 (feat-no-host-paths): a copy of the installed tree starts
       # R and installs source R-only and binary packages with an empty
       # environment and only its own bin/ on PATH (unix: plus /bin/sh, and
@@ -177,6 +194,8 @@ jobs:
             !dist/R-*-extras.*
           retention-days: 7
           if-no-files-found: error
+          # .tar.gz/.zip (and a .sha256): compressing again only costs time
+          compression-level: 0
       # The r-zig wheel: the minimal tree verify-package just packaged,
       # zipped with the r_zig Python package, then pip-installed into a
       # fresh venv (ziglang from PyPI) and used with the pixi env scrubbed
@@ -194,3 +213,4 @@ jobs:
           name: r-zig-wheel-${{ inputs.os }}
           path: dist/wheel/*.whl
           if-no-files-found: error
+          compression-level: 0  # a wheel is a zip

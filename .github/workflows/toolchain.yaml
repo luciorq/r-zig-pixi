@@ -90,8 +90,9 @@ jobs:
       # without re-running this job when it passed: kept those 30 days,
       # still short of a release. The compilers archive, with zig and
       # flang, is .tar.xz since phase 6 (B13, PHASE6 open point L): 95 MB
-      # on linux-64, where gzip made 151 MB; the upload's own compression
-      # stays the default (PHASE5 open point T).
+      # on linux-64, where gzip made 151 MB. compression-level 0: the
+      # archives are compressed already, so the upload's own zip pass only
+      # costs time (PHASE5 open point T, done in chore-env-ci D10).
       - name: Upload the group archives
         uses: actions/upload-artifact@v7
         with:
@@ -102,3 +103,4 @@ jobs:
             dist/R-*-extras.*
           retention-days: 30
           if-no-files-found: error
+          compression-level: 0

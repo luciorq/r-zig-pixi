@@ -951,6 +951,11 @@ GitHub-hosted runners, conda-forge zig only (no upstream-zig label).
   rule this is a gated release check. #49 merged without it (L29);
   the 'upstream-zig' runs on PR #50, after main is merged into it,
   check this code too.
+  Closed 2026-11-23 (docs-backlog-hygiene): #50's head bd4c9ee contains
+  #49's merge f668295 (`git merge-base --is-ancestor`), and upstream-zig
+  44735388684 on it succeeded (6/6: ubuntu-latest, macos-latest,
+  windows-latest, default and toolchain legs). No stress leg has run
+  with upstream zig yet (chore-release-12 backlog CI3).
 - macOS and Windows: build-r passed (finding 64), but no stress run on
   this branch covered them; the stress run was linux only.
 - Which 29 rzig unit tests were skipped on windows-latest (191/220) was

@@ -316,6 +316,8 @@ test-servers notes for SSH):
 - Testing rule (the user, 2026-10-07, E1): a failure on omicron that
   CrowdStrike Falcon could have caused stops testing that platform
   there; leave it to CI (build.yaml's macos-15-intel legs for osx-64).
+  Watch (chore-release-12 M11, decision D11, 2026-11-23): the rule stays; CI is the only
+  osx-64 test path.
 
 R source references are to R 4.6.1 (`build/R-4.6.1/`).
 
@@ -2764,6 +2766,15 @@ the same for its C++ test package.
   Phase 3); `r-base` depends on the gate above.
 - **Wheel toolchain mechanism:** a shared `r_zig/R/bin/toolchain/`
   directory vs discovery at startup.
+  Closed 2026-11-23 (docs-backlog-hygiene, chore-release-12 Q22):
+  settled by the group wheels (feat-standalone-toolchain phase 4, PR
+  #30), which use both: r-zig-compilers and r-zig-build-tools install
+  their files into the shared `r_zig/R/lib/R/bin/toolchain/`
+  (libstdcxx/, usr/; scripts/make-wheel.py:19-40, TOOLCHAIN_PREFIX at
+  :82), and rzig finds zig at startup ($ZIG_BIN, which the r-zig wheel
+  points at ziglang, then `python3 -m ziglang`;
+  zigbuild/tools/rzig/find_zig.zig:1-16). wheel-test passes on the four
+  unix legs (run 44438791005).
 - **BLAS link contract for binary packages.** openblas builds link
   packages to `libopenblas.so.0` (`BLAS_LIBS = -lopenblas`, as upstream
   configure does), internal-BLAS builds to `libRblas.so`, so a binary

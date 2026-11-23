@@ -283,11 +283,3 @@ fortran_compiler() {
     return 1
   fi
 }
-
-require_not_windows() {
-  if [ "$OS" = windows ]; then
-    echo "R's autoconf build does not run on Windows yet; the gnuwin32 +" >&2
-    echo "zig toolchain path is milestone 2 — see PLAN.md and TODO.md." >&2
-    exit 1
-  fi
-}
