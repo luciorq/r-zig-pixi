@@ -159,6 +159,15 @@ pub const Planner = struct {
         return out.items;
     }
 
+    /// The src/Makefile install.R runs with make itself, never reaching
+    /// run_shlib's hook (Windows: Makefile.ucrt, else Makefile.win), as a
+    /// file name in `src_dir`; null when there is none.
+    pub fn srcMakefile(ctx: *Ctx, src_dir: []const u8) error{OutOfMemory}!?[]const u8 {
+        const makefiles: []const []const u8 = if (ctx.os == .windows) &.{ "Makefile.ucrt", "Makefile.win" } else &.{"Makefile"};
+        for (makefiles) |m| if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ src_dir, m }))) return m;
+        return null;
+    }
+
     pub fn classify(p: *Planner, pkg_dir: []const u8, src_dir: []const u8) Error!Classification {
         const ctx = p.ctx;
         if (!ctx.isDir(src_dir)) return .{ .tier = .r_only };
@@ -169,10 +178,7 @@ pub const Planner = struct {
         // build.zig wins over configure and the Makevars: install.R runs
         // configure, then run_shlib. A configure script stays the reason
         // given first, as before.
-        const makefiles: []const []const u8 = if (windows) &.{ "Makefile.ucrt", "Makefile.win" } else &.{"Makefile"};
-        const src_makefile: ?[]const u8 = for (makefiles) |m| {
-            if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ src_dir, m }))) break m;
-        } else null;
+        const src_makefile = try srcMakefile(ctx, src_dir);
         if (src_makefile == null and ctx.isFile(try ctx.fmt("{s}/build.zig", .{src_dir}))) return .{ .tier = .zig };
         const configures: []const []const u8 = if (windows) &.{ "configure.ucrt", "configure.win" } else &.{"configure"};
         for (configures) |c| if (ctx.isFile(try ctx.fmt("{s}/{s}", .{ pkg_dir, c }))) return .{ .tier = .make, .reason = try ctx.fmt("a {s} script", .{c}) };

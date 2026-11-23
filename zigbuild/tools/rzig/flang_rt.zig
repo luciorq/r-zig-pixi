@@ -299,7 +299,7 @@ test "-lgfortran and -lquadmath: the same runtime, once, in place of the first o
 }
 
 test "a Windows flang's answer: CRLF stripped, backslashes turned" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for flang
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
     defer f.deinit();
@@ -312,7 +312,7 @@ test "a Windows flang's answer: CRLF stripped, backslashes turned" {
 }
 
 test "flang that fails or says nothing: dropped without looking further" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-ins for flang
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();

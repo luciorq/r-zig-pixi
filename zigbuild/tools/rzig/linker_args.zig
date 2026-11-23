@@ -8,12 +8,21 @@
 //!   -L...". RcppParallel's `-Wl,-Ltbb/build/lib_release`, on every OS.
 //!   It becomes the driver's own -L<dir>, in the same place: zig searches
 //!   it as the linker would.
+//! - -l<name>, -l <name>, --library=<name> and --library <name>:
+//!   "error: unsupported linker arg: -lstdc++" (`-Wl,-lstdc++`, `-Xlinker
+//!   -lm`; zig 0.17.1, conda-forge's and upstream's, every name;
+//!   fix-rzig-quick Q24, L21). It becomes the driver's own -l<name>, in
+//!   the same place, so the rules after this one see it as any -l:
+//!   libstdcxx.zig's libstdc++ on linux, flang_rt.zig's runtime,
+//!   windows.zig's import libraries. ld64's own -lto_library and -lazy-*
+//!   options are no -l and stay.
 //! - --allow-multiple-definition and -z muldefs: "unsupported linker arg"
 //!   (StanHeaders' Makevars.win). Dropped: with nothing defined twice the
 //!   link is the same, and a real duplicate now fails loudly instead of
 //!   linking one of the two.
 //!
-//! The bash shims do the same (toolchain/zig-cc, zig-cxx).
+//! The bash shims do the same (toolchain/zig-cc, zig-cxx), but for -l:
+//! rzig's alone (the shims are parity-test's reference only).
 const std = @import("std");
 const mem = std.mem;
 const Ctx = @import("Ctx.zig");
@@ -41,6 +50,7 @@ pub fn rewrite(ctx: *Ctx, args: Args) !Args {
                 },
                 .drop => {},
                 .lib_dir => try out.append(a, try ctx.fmt("-L{s}", .{it.value})),
+                .lib => try out.append(a, try ctx.fmt("-l{s}", .{it.value})),
             }
             i += 2 * it.items - 1;
         } else if (mem.eql(u8, x, "-z") and i + 1 < args.len and mem.eql(u8, args[i + 1], "muldefs")) {
@@ -73,16 +83,31 @@ fn wl(ctx: *Ctx, out: *std.ArrayList([]const u8), x: []const u8) !void {
                 try out.append(a, try ctx.fmt("-L{s}", .{it.value}));
                 changed = true;
             },
+            .lib => {
+                // in order: zig applies -Wl,'s --whole-archive, -Bstatic
+                // and --as-needed to the -l after them, so what came
+                // before goes first (`-Wl,--whole-archive,-lfoo,...`)
+                try flush(ctx, out, &kept);
+                try out.append(a, try ctx.fmt("-l{s}", .{it.value}));
+                changed = true;
+            },
         }
         j += it.items;
     }
     if (!changed) return out.append(a, x);
-    if (kept.items.len > 0) try out.append(a, try ctx.fmt("-Wl,{s}", .{try mem.join(a, ",", kept.items)}));
+    try flush(ctx, out, &kept);
+}
+
+/// `kept` as one -Wl, argument, when there is any; emptied.
+fn flush(ctx: *Ctx, out: *std.ArrayList([]const u8), kept: *std.ArrayList([]const u8)) !void {
+    if (kept.items.len == 0) return;
+    try out.append(ctx.arena, try ctx.fmt("-Wl,{s}", .{try mem.join(ctx.arena, ",", kept.items)}));
+    kept.clearRetainingCapacity();
 }
 
 const Item = struct {
-    what: enum { keep, drop, lib_dir },
-    /// lib_dir's directory
+    what: enum { keep, drop, lib_dir, lib },
+    /// lib_dir's directory, lib's name
     value: []const u8 = "",
     /// how many linker items it is: 2 when its value is the next one
     items: usize = 1,
@@ -98,6 +123,15 @@ fn item(x: []const u8, next: ?[]const u8) Item {
     if (mem.eql(u8, x, "-z")) {
         const n = next orelse return .{ .what = .keep };
         return if (mem.eql(u8, n, "muldefs")) .{ .what = .drop, .items = 2 } else .{ .what = .keep };
+    }
+    if (mem.eql(u8, x, "-l") or mem.eql(u8, x, "--library")) {
+        const n = next orelse return .{ .what = .keep };
+        if (n.len == 0) return .{ .what = .keep };
+        return .{ .what = .lib, .value = n, .items = 2 };
+    }
+    if (cmdline.flagValue(x, "--library=")) |n| return .{ .what = .lib, .value = n };
+    if (cmdline.flagValue(x, "-l")) |n| {
+        if (!mem.startsWith(u8, n, "to_") and !mem.startsWith(u8, n, "azy")) return .{ .what = .lib, .value = n };
     }
     if (cmdline.flagValue(x, "-L")) |d| return .{ .what = .lib_dir, .value = d };
     if (cmdline.flagValue(x, "--library-path=")) |d| return .{ .what = .lib_dir, .value = d };
@@ -129,6 +163,23 @@ test "-L out of -Wl, and -Xlinker, in every spelling" {
     // no value: kept as it was, for zig to say so
     const dangling: Args = &.{ "-Wl,-L", "-Wl,-L,", "-Wl,--library-path=", "-Xlinker", "-L" };
     try expectArgs(dangling, try rewrite(c, dangling));
+}
+
+test "-l out of -Wl, and -Xlinker, in every spelling (Q24, L21)" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    try expectArgs(&.{ "-o", "p.so", "a.o", "-lstdc++", "b.o" }, try rewrite(c, &.{ "-o", "p.so", "a.o", "-Wl,-lstdc++", "b.o" }));
+    try expectArgs(&.{ "-lm", "-lz", "-ly", "-lw", "-Wl,-z,now" }, try rewrite(c, &.{"-Wl,-lm,-l,z,--library=y,--library,w,-z,now"}));
+    try expectArgs(&.{ "-lm", "-lz", "a.o" }, try rewrite(c, &.{ "-Xlinker", "-lm", "-Xlinker", "-l", "-Xlinker", "z", "a.o" }));
+    // the options around it keep their place: zig applies --whole-archive
+    // and -Bstatic to the -l after them (measured, zig 0.17.1)
+    try expectArgs(&.{ "-Wl,--whole-archive", "-lfoo", "-Wl,--no-whole-archive" }, try rewrite(c, &.{"-Wl,--whole-archive,-lfoo,--no-whole-archive"}));
+    try expectArgs(&.{ "-Wl,-Bstatic", "-la", "-lb", "-Wl,-Bdynamic,-rpath,/x" }, try rewrite(c, &.{"-Wl,-Bstatic,-la,-lb,-Bdynamic,-rpath,/x"}));
+    // ld64's -lto_library and -lazy-l<name>, and no value: kept
+    const same: Args = &.{ "-Wl,-lto_library,/x/libLTO.dylib", "-Wl,-lazy-lfoo", "-Wl,-l", "-Wl,-l,", "-Xlinker", "-l" };
+    try expectArgs(same, try rewrite(c, same));
 }
 
 // zig 0.16 panicked on CMake's `-Xlinker --dependency-file=...` (stress

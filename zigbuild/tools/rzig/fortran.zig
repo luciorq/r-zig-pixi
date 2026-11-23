@@ -25,7 +25,7 @@
 //!   which compiles and links it as zig-cc does (Cc7).
 //! - Compiles (.f .f90 .F ...: -c, -S, -E, -M, -fsyntax-only) and probes
 //!   (--version, -v alone, -print-*, ...) run flang with the caller's
-//!   arguments, after R's target (`--target=`, target.zig; finding 29)
+//!   arguments (less the runtime's -l words, `runtime_libs`), after R's target (`--target=`, target.zig; finding 29)
 //!   and on macOS the floor (floors.zig), so the caller's own --target
 //!   and -mmacosx-version-min still win. flang compiles for its target's
 //!   baseline CPU unless told otherwise (target-cpu x86-64 on linux-64 and
@@ -70,6 +70,7 @@ const flang_rt = @import("flang_rt.zig");
 const floors = @import("floors.zig");
 const groups = @import("groups.zig");
 const rzig_target = @import("target.zig");
+const windows = @import("windows.zig");
 const Args = cmdline.Args;
 
 /// What zig-fc runs for the caller's arguments. error.NoFlang, after the
@@ -81,7 +82,7 @@ pub fn command(ctx: *Ctx, caller: Args) !Ctx.Command {
     };
     const pre = try flangPre(ctx);
     return switch (kind(caller)) {
-        .flang => .{ .program = try mem.concat(ctx.arena, []const u8, &.{ &.{flang}, pre, caller, try modules(ctx, flang, caller) }) },
+        .flang => .{ .program = try mem.concat(ctx.arena, []const u8, &.{ &.{flang}, pre, try drop(ctx, caller, &runtime_libs), try modules(ctx, flang, caller) }) },
         .link => .{ .zig = try zigLink(ctx, caller) },
         .split => split(ctx, flang, pre, caller),
     };
@@ -216,6 +217,18 @@ const compile_refused = [_]Refused{
     .{ .flag = "-e", .value = true },
 };
 
+/// The Fortran runtime's -l words (flang_rt.zig's three: FLIBS's, and
+/// gfortran's runtime and libquadmath, as a Makevars written for gcc names
+/// them), which no flang command gets: flang only compiles here (a compile,
+/// a probe, a split's compile) and zig links, where flang_rt.resolve makes
+/// them flang's runtime archive. On a compile flang would only warn that
+/// they are unused, an error with -Werror (fix-rzig-quick Q9; O-A9).
+const runtime_libs = [_]Refused{
+    .{ .flag = "-lgfortran" },
+    .{ .flag = "-lquadmath" },
+    .{ .flag = flang_rt.flag },
+};
+
 /// An option one driver refuses: the word itself, with the next argument
 /// when it takes a value, or every argument it starts (`-F<dir>`).
 const Refused = struct { flag: []const u8, value: bool = false, prefix: bool = false };
@@ -285,7 +298,7 @@ fn split(ctx: *Ctx, flang: []const u8, pre: Args, caller: Args) !Ctx.Command {
             }
         }
     }
-    const compile_args = try drop(ctx, shared.items, &compile_refused);
+    const compile_args = try drop(ctx, shared.items, &(compile_refused ++ runtime_libs));
     const mods = try modulesFlag(ctx, flang);
 
     var steps: std.ArrayList(Ctx.Step) = .empty;
@@ -472,8 +485,11 @@ test "compiles, -E, -fsyntax-only and probes: flang with the caller's arguments,
         for (reads) |call| try expectProgram(cat(&f, &.{ &.{m.fc}, fpre(os), call, m.flag }), try command(c, call));
         for (others) |call| try expectProgram(cat(&f, &.{ &.{m.fc}, fpre(os), call }), try command(c, call));
     }
-    // a flang with no modules directory beside it: no flag
+    // the runtime's -l words never reach flang, which links nothing here
+    // (Q9): a gcc Makevars' PKG_LIBS on a compile line
     c.os = .linux;
+    try expectProgram(cat(&f, &.{ &.{ m.fc, fl_linux, "-c", "a.f", "-o", "a.o", "-lm" }, m.flag }), try command(c, &.{ "-c", "a.f", "-o", "a.o", "-lgfortran", "-lm", "-lquadmath", "-lflang_rt.runtime" }));
+    // a flang with no modules directory beside it: no flag
     const fc = try plainFlang(&f);
     for (reads ++ others) |call| try expectProgram(cat(&f, &.{ &.{ fc, fl_linux }, call }), try command(c, call));
     try testing.expectEqualStrings("", f.takeWarnings());
@@ -590,6 +606,12 @@ test "sources and a link: a flang compile per Fortran source, then zig's link" {
         },
         try zigCc(&f, cat(&f, &.{ &.{ "-o", "p", f.fmt("{s}/0-m.o", .{d}), f.fmt("{s}/1-u.o", .{d}) }, fl })),
         try command(c, &.{ "-J", "mods", "-o", "p", "m.f90", "u.f90" }),
+    );
+    // the runtime's -l words: off the compile (Q9), the link's to resolve
+    try expectSplit(
+        &.{cat(&f, &.{ &.{ fc, fl_linux, "-shared" }, q, &.{ "a.f", "-o", a0 }, m.flag })},
+        try zigCc(&f, cat(&f, &.{ &.{ "-shared", "-o", "p.so", a0, "-lgfortran", "-lquadmath" }, fl })),
+        try command(c, &.{ "-shared", "-o", "p.so", "a.f", "-lgfortran", "-lquadmath" }),
     );
     // what zig cc refuses stays on the compile (flang 23 refuses -Mfree
     // there itself, loudly); a value of -Xlinker is no option
@@ -786,7 +808,7 @@ test "Windows: the shared link resolves -l to import libraries, adds the runtime
     // winshlib.mk: $(SHLIB_LD) $(SHLIB_LDFLAGS) $(LDFLAGS) $(DLLFLAGS) -o pkg.dll tmp.def <objects> $(ALL_LIBS),
     // then a DLL's default system library (windows.defaultLibs)
     try expectZig(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", rzig_target.zig(.windows, .own).?, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, f.path("d/libz.dll.a"), a, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", rzig_target.zig(.windows, .own).?, windows.iec_60559_types, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, f.path("d/libz.dll.a"), a, "-lws2_32" },
         try command(c, &.{ "-shared", "-O2", "-s", "-static-libgcc", "-o", "pkg.dll", "tmp.def", "a.o", l, "-lz" }),
     );
 }

@@ -7,6 +7,18 @@ const cmdline = @import("cmdline.zig");
 const environment = @import("environment.zig");
 const Args = cmdline.Args;
 
+/// On every Windows command, after R's target (compiler.argv): MinGW's
+/// fenv.h includes float.h before a source can ask for the ISO/IEC TS
+/// 18661-3 names, so FLT16_MAX and the other _Float16 limits stay
+/// undeclared in code that includes both (Rhdf5lib's HDF5 2.0, which
+/// enables _Float16 on Windows: K9, stress/packages.tsv). Defining it
+/// only declares more of float.h's macros; a source's own `#define ... 1`
+/// is the same definition, no warning. Measured on linux, both zigs
+/// 0.17.1, x86_64- and aarch64-windows-gnu: FLT16_MAX undeclared without
+/// it, compiles with it, C and C++; a link line with it and -Werror links
+/// (fix-rzig-quick M-1). Before the caller's arguments, so its -U wins.
+pub const iec_60559_types = "-D__STDC_WANT_IEC_60559_TYPES_EXT__";
+
 /// zig's MinGW `-l` search tries only <n>.dll, <n>.lib and lib<n>.a. It
 /// misses lib<n>.dll.a (MinGW import libraries, what GNU ld tries first)
 /// and lib<n>.lib (conda-forge's MSVC naming: libbz2.lib, libcurl.lib), so

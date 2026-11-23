@@ -53,7 +53,9 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
         // compatible, so a floor, not a restriction. Not a native target,
         // so zig adds no rpaths either. Windows: <arch>-windows-gnu
         // (target.zig).
-        .linux, .windows => before = try ctx.arena.dupe([]const u8, &.{ "-target", target.zig(ctx.os, ctx.arch).? }),
+        .linux => before = try ctx.arena.dupe([]const u8, &.{ "-target", target.zig(ctx.os, ctx.arch).? }),
+        // and the _Float16 limits MinGW's headers hide (windows.iec_60559_types)
+        .windows => before = try ctx.arena.dupe([]const u8, &.{ "-target", target.zig(ctx.os, ctx.arch).?, windows.iec_60559_types }),
         .macos => {
             const t = try darwin.target(ctx);
             before = t.before;
@@ -505,7 +507,7 @@ test "every OS: the baseline CPU, once, before the target and the caller's own -
         .{ .os = .macos, .target = mac },
         // Windows: R's target since finding 29; before it none, and
         // without the flag zig compiled for the machine's own CPU
-        .{ .os = .windows, .target = &.{ "-target", win_target } },
+        .{ .os = .windows, .target = &.{ "-target", win_target, windows.iec_60559_types } },
     };
     for (targets) |t| {
         c.os = t.os;
@@ -745,14 +747,14 @@ test "Windows: -idirafter, no rpath, -lz and -lomp through the environment's -L"
     const l = f.fmt("-L{s}", .{f.path("env/Library/lib")});
     const omp = f.path("env/Library/lib/libomp.lib");
     const z = f.path("env/Library/lib/libz.dll.a");
-    try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-c", "z.c", "-o", "z.o", "-idirafter", inc }, try argv(c, .c, &.{ "-c", "z.c", "-o", "z.o" }));
+    try expectArgs(&.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types, "-c", "z.c", "-o", "z.o", "-idirafter", inc }, try argv(c, .c, &.{ "-c", "z.c", "-o", "z.o" }));
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", z, l, "-idirafter", inc, omp, "-lws2_32" },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", z, l, "-idirafter", inc, omp, "-lws2_32" },
         try argv(c, .cxx, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz" }),
     );
     // the caller's -lomp, resolved the same way; none added
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lomp" }),
     );
 }
@@ -777,11 +779,11 @@ test "Windows on ARM: R_ZIG_FALLBACK_SOFT after every environment: -idirafter <t
     const cc_o = f.path("env/Library/lib/R/bin/toolchain/clear_cache.o");
     // never -I<tree>/include: its MinGW sysroot and libc++ headers would
     // shadow zig's own
-    try expectArgs(&.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, "-c", "a.cpp", "-o", "a.o", "-idirafter", inc, "-idirafter", rinc }, try argv(c, .cxx, &.{ "-c", "a.cpp", "-o", "a.o" }));
+    try expectArgs(&.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, "-c", "a.cpp", "-o", "a.o", "-idirafter", inc, "-idirafter", rinc }, try argv(c, .cxx, &.{ "-c", "a.cpp", "-o", "a.o" }));
     // -lnlopt: only the tree has it (zig finds lib<n>.a); -lz and -lomp:
     // the environment's (libz.dll.a and libomp.lib by path)
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", "-lnlopt", omp, f.path("env/Library/lib/libz.dll.a"), l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", "-lnlopt", omp, f.path("env/Library/lib/libz.dll.a"), l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
         try argv(c, .cxx, &.{ "-shared", "-o", "pkg.dll", "a.o", "-lnlopt", "-lomp", "-lz" }),
     );
     // conda-forge's real names: z.lib and libomp.lib in the environment,
@@ -793,7 +795,7 @@ test "Windows on ARM: R_ZIG_FALLBACK_SOFT after every environment: -idirafter <t
     try f.touch("env/Library/lib/z.lib");
     try f.touch("env/Library/include/omp.h");
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz", l, rl, "-idirafter", inc, "-idirafter", rinc, omp, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz", l, rl, "-idirafter", inc, "-idirafter", rinc, omp, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz" }),
     );
     try testing.expectEqualStrings("", f.takeWarnings());
@@ -801,7 +803,7 @@ test "Windows on ARM: R_ZIG_FALLBACK_SOFT after every environment: -idirafter <t
     try f.tmp.dir.deleteFile(testing.io, "env/Library/include/omp.h");
     try f.tmp.dir.deleteFile(testing.io, "env/Library/lib/libomp.lib");
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o" }),
     );
     // the caller's -lomp then, and -lboost_thread-mt-a64: never the
@@ -809,13 +811,13 @@ test "Windows on ARM: R_ZIG_FALLBACK_SOFT after every environment: -idirafter <t
     // link fails instead of the DLL's load
     try f.touch("rtools/lib/libboost_thread-mt-a64.dll.a");
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", "-lomp", "-lboost_thread-mt-a64", l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", "-lomp", "-lboost_thread-mt-a64", l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", "-lomp", "-lboost_thread-mt-a64" }),
     );
     // the same import library in the environment's lib/: by path
     try f.touch("env/Library/lib/libboost_thread-mt-a64.dll.a");
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", f.path("env/Library/lib/libboost_thread-mt-a64.dll.a"), l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", f.path("env/Library/lib/libboost_thread-mt-a64.dll.a"), l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", "-lboost_thread-mt-a64" }),
     );
     try testing.expectEqualStrings("", f.takeWarnings());
@@ -860,7 +862,7 @@ test "Windows: the toolchain's openmp/: -idirafter, -L openmp/lib and libomp.lib
     try f.env.put("PATH", f.path("nothing"));
     for ([_][]const u8{ "env/Library/lib/R/bin/toolchain/gcc.exe", "env/Library/lib/R/bin/toolchain/openmp/include/omp.h", "env/Library/lib/R/bin/toolchain/openmp/lib/libomp.lib" }) |p| try f.touch(p);
     c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
-    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target };
+    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types };
     const implib: Args = &.{ "-Xlinker", "--out-implib=pkg.dll.rzig.lib" };
     const l = f.fmt("-L{s}", .{f.path("env/Library/lib")});
     const ol = f.fmt("-L{s}", .{f.path("env/Library/lib/R/bin/toolchain/openmp/lib")});
@@ -885,7 +887,7 @@ test "Windows: R's target, the Fortran runtime before the -l lookup" {
     try f.touch("d/libz.dll.a");
     const l = f.fmt("-L{s}", .{f.path("d")});
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", l, f.path("d/libz.dll.a"), "-lws2_32" },
         try argv(&f.ctx, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", l, "-lz", "-lflang_rt.runtime" }),
     );
 }
@@ -908,7 +910,7 @@ test "every OS: -lgfortran and -lquadmath link flang's runtime, once; no gfortra
     const targets = [_]struct { os: Ctx.Os, target: Args, strip: Args = &.{}, implib: Args = &.{}, ws2: Args = &.{} }{
         .{ .os = .linux, .target = &.{ "-target", linux_target }, .strip = &.{"-Wl,--strip-debug"} },
         .{ .os = .macos, .target = mac, .strip = &.{"-Wl,--strip-debug"} },
-        .{ .os = .windows, .target = &.{ "-target", win_target }, .implib = &.{ "-Xlinker", "--out-implib=p.so.rzig.lib" }, .ws2 = &.{"-lws2_32"} },
+        .{ .os = .windows, .target = &.{ "-target", win_target, windows.iec_60559_types }, .implib = &.{ "-Xlinker", "--out-implib=p.so.rzig.lib" }, .ws2 = &.{"-lws2_32"} },
     };
     for (targets) |t| {
         c.os = t.os;
@@ -1160,7 +1162,7 @@ test "linker options zig cannot take, through the whole line" {
     // StanHeaders' Makevars.win
     c.os = .windows;
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-Xlinker", "--out-implib=StanHeaders.dll.rzig.lib", "-shared", "-o", "StanHeaders.dll", "a.o", "-lws2_32" },
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types, "-Xlinker", "--out-implib=StanHeaders.dll.rzig.lib", "-shared", "-o", "StanHeaders.dll", "a.o", "-lws2_32" },
         try argv(c, .cxx, &.{ "-shared", "-Wl,--allow-multiple-definition", "-o", "StanHeaders.dll", "a.o" }),
     );
 }
@@ -1207,7 +1209,7 @@ test "Windows: -c without -o names <stem>.o, as MinGW gcc" {
     const c = &f.ctx;
     // QuickJSR
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, "-O2", "-c", "quickjs/libquickjs.c", "-o", "libquickjs.o" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types, "-O2", "-c", "quickjs/libquickjs.c", "-o", "libquickjs.o" },
         try argv(c, .c, &.{ "-O2", "-c", "quickjs/libquickjs.c" }),
     );
     // unix: zig's default is <stem>.o already
@@ -1295,7 +1297,7 @@ test "Windows: -target names R's arch, x86_64 and aarch64, on compiles and links
     // 43773932212), which compiled for x64 with no target
     for ([_]target.Arch{ .x86_64, .aarch64 }, [_][]const u8{ "x86_64-windows-gnu", "aarch64-windows-gnu" }) |arch, t| {
         c.arch = arch;
-        const head: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", t };
+        const head: Args = &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", t, windows.iec_60559_types };
         try expectArgs(try mem.concat(c.arena, []const u8, &.{ head, &.{ "-O2", "-c", "a.c", "-o", "a.o" } }), try argv(c, .c, &.{ "-O2", "-c", "a.c", "-o", "a.o" }));
         const stub: Args = &.{f.path(if (arch == .x86_64) "tc/cfguard.o" else "tc/clear_cache.o")};
         try expectArgs(
@@ -1320,7 +1322,7 @@ test "Windows links: the CFG stub and the import library before the caller's arg
     // the object of R's architecture (rzig's own here): x86_64's CFG
     // stub, aarch64's cache flush; the rest is the same
     const stub: Args = &.{f.path(if (builtin.cpu.arch == .x86_64) "tc/cfguard.o" else "tc/clear_cache.o")};
-    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target };
+    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types };
     // magick's link, and an executable (CMake's): -lws2_32 on the DLL only
     try expectArgs(
         try mem.concat(c.arena, []const u8, &.{ head, stub, &.{ "-Xlinker", "--out-implib=magick.dll.rzig.lib", "-shared", "-s", "-o", "magick.dll", "tmp.def", "a.o", "-lrsvg-2", "-lws2_32" } }),

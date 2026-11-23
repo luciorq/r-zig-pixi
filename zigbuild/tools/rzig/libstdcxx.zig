@@ -162,8 +162,9 @@ fn traced(ctx: *const Ctx) bool {
 /// -static-libstdc++. The two-argument form (`-l stdc++`) counts too: zig
 /// would map it to its libc++. With no runtime the names stay (a bare
 /// rzig outside any environment: zig then decides, as before).
-/// Not rewritten: -Wl,-lstdc++ (lld then searches -L for libstdc++.so,
-/// which R's env has; feat-linux-libstdcxx PLAN.md).
+/// -Wl,-lstdc++ arrives here as -lstdc++: zig refuses an -l inside -Wl,
+/// ("unsupported linker arg"), so linker_args.zig makes it the driver's
+/// first (fix-rzig-quick Q24; was L21's "not rewritten").
 pub fn rewriteLibs(ctx: *Ctx, args: Args, rt: ?Runtime) !Args {
     if (cmdline.compileOnly(args)) return args;
     const a = ctx.arena;
