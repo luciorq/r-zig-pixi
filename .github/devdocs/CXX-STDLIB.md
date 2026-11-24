@@ -145,9 +145,20 @@ Known differences from gcc:
   `R_ZIG_EXTRA_ENV` whose libraries were built with a newer libstdcxx
   (17.x later) than R's runtime gives "GLIBCXX_3.4.3x not found" when
   they load. This already happened for slim through ICU; it is new for
-  minimal and the wheel. Not probed: rpy2 or other embedded R, where
-  Python may have loaded the host's older libstdc++ first; then
-  packages that need GLIBCXX_3.4.32 fail to load.
+  minimal and the wheel. Embedded R (rpy2, probed in wave2-compat/PLAN.md,
+  M-14): works in a conda env and with a distro Python that has not
+  loaded a libstdc++; when the host's older libstdc++ is loaded first
+  (Ubuntu 22.04, GLIBCXX_3.4.30), slim's libR fails to load with
+  "version `CXXABI_1.3.15' not found (required by ...libicui18n.so.78)".
+- **Older hosts and distro libraries** (wave2-compat/PLAN.md, M-12,
+  M-13): the standalone tree and the conda packages compile and run C++
+  (Rcpp, exceptions) on Rocky 8 (GLIBCXX_3.4.25), Ubuntu 22.04 and
+  24.04, since R's own libstdc++ is loaded first. A distro library's C++
+  API (Ubuntu 24.04's GDAL 3.8, std::string by value) works with it. But
+  building against distro `-dev` packages fails today: zig searches no
+  /usr/include, and a distro `.pc` that names `-I/usr/include/<multiarch>`
+  (libcurl's, via PROJ) mixes the host's glibc headers into zig's 2.17
+  ones ("unknown type name '__time64_t'").
 
 ## Ruled out, and why
 

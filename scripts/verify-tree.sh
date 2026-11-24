@@ -715,7 +715,7 @@ fi
 # -mcpu=native, a -march in some flags). The extensions above the
 # baseline that keep the legacy encoding, or are VEX-encoded without a v
 # (SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, LZCNT, MOVBE, BMI1, BMI2), are
-# caught by name (on macOS from SSE4.1 up: its baseline is core2):
+# caught by name (on macOS from SSE4.2 up: see below):
 # legacy_mnemonics, matched against the whole mnemonic
 # (AT&T's b/w/l/q suffix allowed where the instruction takes one), so a
 # baseline name sharing a prefix (andnps, pextrw, pmaxsw) is not
@@ -771,16 +771,22 @@ case "$PLAT" in
     n_rb="$(wc -l < "$WORK/r-bins.txt" | tr -d ' ')"
     [ "$n_rb" -gt 0 ] || { echo "error: no binaries of R's own found under $TREE/$rh" >&2; exit 1; }
     # The non-v mnemonics above the baseline (see above), one ERE for awk.
-    # SSE3 and SSSE3 only off macOS: zig's baseline for x86_64-macos is
-    # core2 (lib/zig/std/Target.zig, Cpu.Model.baseline), which has both,
-    # and verify-bundle.sh expects target-cpu core2 there.
+    # SSE3, SSSE3 and SSE4.1 only off macOS: zig's baseline for
+    # x86_64-macos is core2 (lib/zig/std/Target.zig, Cpu.Model.baseline),
+    # which has SSE3 and SSSE3, and verify-bundle.sh expects target-cpu
+    # core2 for zig's code; flang, like Apple's clang, compiles for
+    # LLVM's macOS default CPU, penryn (SSE4.1 too: clang's
+    # Driver/ToolChains/Arch/X86.cpp, "macosx10.12 drops support for all
+    # pre-Penryn Macs"), so R's Fortran code (libRlapack, libRblas,
+    # stats) has SSE4.1 (blendvpd, pinsrd, pextrb; build-r 45275675601,
+    # macos-15-intel). Every Mac macOS 13 runs on has SSE4.2 and AVX2.
     legacy_mnemonics='pabs[bwd]|palignr|ph(add|sub)(w|d|sw)|pmaddubsw|pmulhrsw|pshufb|psign[bwd]'
     legacy_mnemonics="addsubp[ds]|h(add|sub)p[ds]|lddqu|movddup|movs[hl]dup|fisttp(s|l|ll)?|monitor|mwait|$legacy_mnemonics"
-    if [ "$OS" = macos ]; then legacy_mnemonics=""; legacy_set="SSE4.1, SSE4.2"; else legacy_set="SSE3 to SSE4.2"; fi
-    legacy_mnemonics="$legacy_mnemonics${legacy_mnemonics:+|}"'blendv?p[ds]|dpp[ds]|extractps|insertps|movntdqa|mpsadbw|packusdw|pblendvb|pblendw|pcmpeqq'
+    legacy_mnemonics="$legacy_mnemonics"'|blendv?p[ds]|dpp[ds]|extractps|insertps|movntdqa|mpsadbw|packusdw|pblendvb|pblendw|pcmpeqq'
     legacy_mnemonics="$legacy_mnemonics"'|pextr[bdq]|phminposuw|pinsr[bdq]|pmax(sb|sd|ud|uw)|pmin(sb|sd|ud|uw)|pmov[sz]x(bw|bd|bq|wd|wq|dq)'
     legacy_mnemonics="$legacy_mnemonics"'|pmuldq|pmulld|ptest|round[ps][ds]'
-    legacy_mnemonics="$legacy_mnemonics"'|crc32[bwlq]?|pcmp[ei]str[im]|pcmpgtq'
+    if [ "$OS" = macos ]; then legacy_mnemonics=""; legacy_set="SSE4.2"; else legacy_set="SSE3 to SSE4.2"; fi
+    legacy_mnemonics="$legacy_mnemonics${legacy_mnemonics:+|}"'crc32[bwlq]?|pcmp[ei]str[im]|pcmpgtq'
     legacy_mnemonics="^($legacy_mnemonics"'|(popcnt|lzcnt|movbe|andn|bextr|blsi|blsmsk|blsr|bzhi|mulx|pdep|pext|rorx|sarx|shlx|shrx)[wlq]?)$'
     legacy_set="$legacy_set, POPCNT, LZCNT, MOVBE, BMI1/2"
     # objdump -d --no-show-raw-insn's instruction lines, GNU's and llvm's:

@@ -319,6 +319,11 @@ libpng = "*"
 # metadata needs the xorg proto files even though R is built --with-x=no
 [target.linux.dependencies]
 xorg-xorgproto = "*"
+# find (vendor-libs.sh, verify-tree.sh) and cmp (verify-tree.sh) from
+# conda-forge, not the host (M-21; macOS keeps its own, Windows has
+# m2-findutils and m2-diffutils)
+findutils = "*"
+diffutils = "*"
 
 # cairo/pango/harfbuzz and glib (see above), then shell + GNU text tools for the
 # scripts and configure runs (all from conda-forge)
@@ -585,6 +590,10 @@ m2-unzip = "*"
 m2-zip = "*"
 m2-patch = "*"
 
+[feature.minimal.target.linux.dependencies]
+findutils = "*"  # as default's [target.linux.dependencies]
+diffutils = "*"
+
 [feature.minimal.target.linux-64.dependencies]
 uutils-coreutils = "*"
 patchelf = "*"
@@ -635,9 +644,12 @@ R_BUILD_VARIANT = "minimal"
 python = ">=3.9"
 
 # readelf (wheel-test.sh's C++ runtime and rpath checks) from conda-forge,
-# not the host; macOS uses otool there.
+# not the host; macOS uses otool there. bash and coreutils (dirname, the
+# tasks' and wheel-test.sh's) too (M-21); macOS has its own.
 [feature.wheel.target.linux.dependencies]
 binutils = "*"
+bash = "*"
+coreutils = "*"
 
 [feature.wheel.tasks]
 wheel = "python scripts/make-wheel.py"

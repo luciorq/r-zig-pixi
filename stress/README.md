@@ -301,6 +301,8 @@ a change on either side that it does not allow starts there. New
 libraries arrive in batches (libs-zig-pixi slice 2, replacing the Rtools45
 tree below); each publish ends with a handover note in that repository's
 branch PLAN.md.
+The first r-zig build that searches zig-libs is 12; build 11 on universe
+predates PR #51 and ignores them.
 
 libs-zig-pixi builds static C and C++ libraries with zig and libc++, as
 zig builds packages, as conda packages `zig-*` for win-64 and win-arm64

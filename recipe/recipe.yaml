@@ -67,6 +67,10 @@ source:
       - url: https://cairographics.org/releases/cairo-1.18.6.tar.xz
         sha256: 1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4
         target_directory: cairo-src
+  # r-zig's own licence (rzig, the build scripts), for every package's
+  # info/licenses (about.license_file)
+  - path: ../LICENSE
+    target_directory: licenses/r-zig
 
 build:
   # 2: first zig-built release (recipe/build.sh switched from configure-
@@ -668,6 +672,23 @@ outputs:
       # Windows: R's and, linked into winCairo.dll, cairo's (r-zig's
       # build, zigbuild/cairo.zig; its texts in R_HOME/share/licenses/cairo)
       license: ${{ "(GPL-2.0-only OR GPL-3.0-only) AND (LGPL-2.1-only OR MPL-1.1)" if win else "GPL-2.0-only OR GPL-3.0-only" }}
+      # info/licenses: R's texts (COPYING; doc/COPYRIGHTS and the files it
+      # names), rzig's, zig's (compiler_rt and the libc start files zig
+      # links into every binary; build.sh copies them from the build env's
+      # zig package) and, on Windows, cairo's
+      license_file:
+        - build/R-${{ version }}/COPYING
+        - build/R-${{ version }}/doc/COPYRIGHTS
+        - build/R-${{ version }}/share/licenses/{GPL-2,GPL-3,LGPL-2,LGPL-2.1,LGPL-3}
+        - build/R-${{ version }}/src/extra/tre/LICENSE
+        - build/R-${{ version }}/src/extra/xdr/copyrght.txt
+        - build/R-${{ version }}/src/modules/lapack/LICENSE
+        - build/R-${{ version }}/src/library/grDevices/inst/afm/LICENSE.LPPL
+        - licenses/r-zig/LICENSE
+        - licenses/zig/**
+        - if: win
+          then:
+            - cairo-src/{COPYING,COPYING-LGPL-2.1,COPYING-MPL-1.1}
       description: |
         R built from source with the zig toolchain, in the headless slim
         profile on every OS: cairo and PNG graphics, ICU, libcurl and
@@ -858,6 +879,16 @@ outputs:
       # Windows holds pkgconf (ISC), with the mingw-w64 CRT startup zig
       # links into it (ZPL-2.1); unix holds no file
       license: ${{ "ISC AND ZPL-2.1" if win else "GPL-2.0-only OR GPL-3.0-only" }}
+      # the top level's, and on Windows pkgconf's and zig's (pkgconf.exe
+      # is zig-linked: compiler_rt and the mingw-w64 CRT), as r-zig-slim
+      license_file:
+        - build/R-${{ version }}/COPYING
+        - build/R-${{ version }}/share/licenses/{GPL-2,GPL-3}
+        - licenses/r-zig/LICENSE
+        - if: win
+          then:
+            - pkgconf-src/COPYING
+            - licenses/zig/**
 
   # The extras group (feat-extras-group): cmake, for packages that build
   # a bundled library with it (nloptr, s2, RcppParallel's TBB...).
@@ -990,10 +1021,28 @@ outputs:
       # BSD-3-Clause, LGPL-2.1-or-later, GPL-2.0-or-later, and METIS,
       # Apache-2.0. The texts are in each package's directory.
       license: GPL-2.0-or-later AND (GPL-2.0-only OR GPL-3.0-only) AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause AND Apache-2.0 AND LicenseRef-Unlimited
+      # info/licenses: the texts of those licences R carries, Matrix's
+      # LICENCE (build.sh copies it), rzig's and zig's (compiler_rt and the
+      # libc start files in each package's shared library)
+      license_file:
+        - build/R-${{ version }}/COPYING
+        - build/R-${{ version }}/share/licenses/{GPL-2,GPL-3,LGPL-2,LGPL-2.1,Apache-2.0}
+        - licenses/recommended/**
+        - licenses/r-zig/LICENSE
+        - licenses/zig/**
 
 about:
   homepage: https://www.r-project.org
   # R's own (PHASE4 open point E a), as the r-zig wheel says; Windows'
   # r-zig-build-tools states its pkgconf's own
   license: GPL-2.0-only OR GPL-3.0-only
+  # info/licenses (rattler-build reads the work dir, then recipe/): R's
+  # texts and r-zig's own MIT text (recipe sources); the payload-less
+  # packages (r-zig-compilers, r-zig-extras, r-zig-toolchain) take these,
+  # their dependencies (zig, flang-zig, cmake...) ship their own.
+  # r-zig-slim, r-zig-build-tools and r-zig-recommended list theirs.
+  license_file:
+    - build/R-${{ version }}/COPYING
+    - build/R-${{ version }}/share/licenses/{GPL-2,GPL-3}
+    - licenses/r-zig/LICENSE
   summary: R built with the zig toolchain (headless slim profile)

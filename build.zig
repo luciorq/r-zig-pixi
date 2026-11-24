@@ -913,6 +913,7 @@ pub fn build(b: *std.Build) !void {
         // library/tcltk/libs/tcltk.so, as newPkgMod's: R_HOME/lib and
         // <prefix>/lib, where vendor-libs.sh puts libtcl and libtk.
         ctx.relRPaths(m, .pkglibs);
+        ctx.linkSibling(m, ctx.libR); // as newPkgMod's
         m.addIncludePath(ctx.geninc);
         m.addIncludePath(ctx.path("src/include"));
         var extra = std.ArrayList([]const u8).empty;
@@ -1695,11 +1696,10 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         const m = newPkgMod(ctx, "src/library/tools/src", &rspec.tools_c, .{
             .extra = &.{"-I%S/src/main"},
         });
-        // Unlike unix (ELF tolerates undefined symbols in shared libs, so
-        // packages there never link libR directly — see addSharedLib's own
-        // doc comment), PE/COFF needs every base-package DLL to link libR
-        // explicitly for its R API calls (same reason mod_lapack needed it
-        // — found via a real link error, ~100 undefined Rf_*/R_* symbols).
+        // newPkgMod links libR off Windows only; PE/COFF needs every
+        // base-package DLL to link libR explicitly for its R API calls
+        // (same reason mod_lapack needed it — found via a real link
+        // error, ~100 undefined Rf_*/R_* symbols).
         m.linkLibrary(libR);
         try win_pkg_libs.append(b.allocator, .{ .pkg = "tools", .lib = addSharedLib(ctx, "pkg_tools", m) });
     }
@@ -2185,7 +2185,11 @@ fn installCommonPayload(ctx: *Ctx) void {
         .source_dir = ctx.path("doc"),
         .install_dir = ctx.rhomeInstallDir("doc"),
         .install_subdir = "",
-        .exclude_extensions = &.{ "Makefile.in", ".texi", "R.aux", "Rscript.aux" },
+        // NEWS and html/NEWS.html: the bootstrap writes them (doc NEWS);
+        // installed too, they would replace its copies on every build,
+        // and so run it again (bootgate, M-19). "NEWS.html", not
+        // "html/NEWS.html": the walker's path has '\\' on Windows.
+        .exclude_extensions = &.{ "Makefile.in", ".texi", "R.aux", "Rscript.aux", "NEWS", "NEWS.html" },
     }).step);
 }
 
@@ -2959,11 +2963,11 @@ fn installRzig(ctx: *const Ctx) *std.Build.Step {
     return step;
 }
 
-/// Every shared lib/module/package .so in this build (base packages don't
-/// link libR directly — its symbols resolve at runtime since libR is
-/// already loaded into the R process; "zig allows undefined symbols in
-/// shared libs" on ELF/linux, verified). Mach-O's lld backend does NOT
-/// tolerate that by default (link fails with "undefined symbol" on every
+/// Every shared lib/module/package .so in this build (base packages and
+/// modules link libR, as R's shlib.mk does: newPkgMod, wave2-compat M-14;
+/// other undefined symbols still resolve at runtime, "zig allows
+/// undefined symbols in shared libs" on ELF/linux, verified). Mach-O's
+/// lld backend does NOT tolerate that by default (link fails with "undefined symbol" on every
 /// R API call packages make) — the real macOS make build's Makeconf
 /// carries `-undefined dynamic_lookup` on every SHLIB_LDFLAGS/DYLIB_LDFLAGS
 /// for exactly this; `linker_allow_shlib_undefined` is zig's equivalent
@@ -3129,6 +3133,11 @@ fn newPkgMod(ctx: *const Ctx, dir: []const u8, files: []const []const u8, opts: 
     const b = ctx.b;
     const m = newCMod(ctx);
     ctx.relRPaths(m, .pkglibs); // library/<pkg>/libs/<pkg>.so
+    // DT_NEEDED libR, as R's own shlib.mk links them ($(LIBR)): an
+    // embedder (rpy2) loads libR without RTLD_GLOBAL, and methods.so then
+    // failed with "undefined symbol: R_NilValue" (wave2-compat M-14).
+    // Windows links its package DLLs to R.dll itself (buildWindows).
+    if (ctx.os != .windows) ctx.linkSibling(m, ctx.libR);
     m.addIncludePath(ctx.geninc);
     m.addIncludePath(ctx.path("src/include"));
     // Same psignal.h/trioremap.h need as r_core_mod/rscript_mod — any base
@@ -4009,7 +4018,7 @@ fn stageLibraryPayload(ctx: *const Ctx, io: std.Io, libstage: *std.Build.Step.Wr
         _ = libstage.add("base/R/Rprofile", b.fmt("{s}{s}", .{ common, osp }));
     }
 
-    const built_stamp = b.fmt("Built: R {s}; ; {s}; {s}\n", .{ r_version, utcNow(b, io), os_stamp });
+    const built_stamp = b.fmt("Built: R {s}; ; {s}; {s}\n", .{ r_version, stagedBuiltTime(b), os_stamp });
 
     for (rspec.pkgs_base) |pkg| {
         const pkg_src = b.fmt("src/library/{s}", .{pkg});
@@ -4563,17 +4572,17 @@ fn strLessThan(_: void, a: []const u8, b_: []const u8) bool {
     return std.mem.lessThan(u8, a, b_);
 }
 
-/// F2.2: honors SOURCE_DATE_EPOCH (https://reproducible-builds.org/specs/
-/// source-date-epoch/) when set, instead of the wall clock, so the `Built:`
-/// DESCRIPTION stamp — currently the only wall-clock read in the whole
-/// build — doesn't make two builds of the same tree differ.
-fn utcNow(b: *std.Build, io: std.Io) []const u8 {
+/// The `Built:` time in the staged base and tools DESCRIPTIONs, which the
+/// bootstrap reads (loadNamespace checks their R version) and then writes
+/// again with its own time (mkdesc, bootgate's decision). SOURCE_DATE_EPOCH
+/// (https://reproducible-builds.org/specs/source-date-epoch/; F2.2) when
+/// set, else the epoch: never the wall clock, which would change the
+/// staged payload, and so run the bootstrap, on every build (M-19).
+fn stagedBuiltTime(b: *std.Build) []const u8 {
     const secs: u64 = if (b.graph.environ_map.get("SOURCE_DATE_EPOCH")) |sde|
         std.fmt.parseInt(u64, std.mem.trim(u8, sde, " \n\r\t"), 10) catch @panic("invalid SOURCE_DATE_EPOCH (must be an integer unix timestamp)")
-    else blk: {
-        const ts = std.Io.Timestamp.now(io, .real);
-        break :blk @intCast(@divTrunc(ts.nanoseconds, std.time.ns_per_s));
-    };
+    else
+        0;
     const es = std.time.epoch.EpochSeconds{ .secs = secs };
     const yd = es.getEpochDay().calculateYearDay();
     const md = yd.calculateMonthDay();
@@ -4591,6 +4600,64 @@ fn utcNow(b: *std.Build, io: std.Io) []const u8 {
 const Boot = struct {
     ctx: *const Ctx,
     last: *std.Build.Step,
+    /// bootgate (zigbuild/tools/bootgate.zig), which runs every gated
+    /// step's command, or not, as its decision says.
+    exe: *std.Build.Step.Compile,
+    /// bootgate's decision: "run" or "skip" for every gated step alike,
+    /// then the bootstrap's `Built:` time.
+    decision: std.Build.LazyPath,
+    /// Each gated step's command, stdin, environment and working
+    /// directory: part of bootgate's key, so that a change to any step
+    /// runs them all.
+    key: std.crypto.hash.sha2.Sha256 = .init(.{}),
+    runs: std.ArrayList(*std.Build.Step.Run) = .empty,
+    /// The key's text, when R_ZIG_BOOTGATE_LIST is set (bootgate's list:
+    /// bootstrap() writes it beside the stamp, as <stamp>.key.list).
+    list: ?*std.ArrayList(u8) = null,
+
+    fn feed(self: *Boot, bytes: []const u8) void {
+        self.key.update(bytes);
+        if (self.list) |l| l.appendSlice(self.ctx.b.allocator, bytes) catch @panic("OOM");
+    }
+
+    /// Variables that differ between two shells (an SSH client's port,
+    /// a terminal's session) or two `pixi run`s (pixi's own, e.g.
+    /// PIXI_ENVIRONMENT_PLATFORMS, in no fixed order), and that nothing in
+    /// the bootstrap reads: not passed to it, so they do not make it run
+    /// again.
+    const volatile_env = [_][]const u8{
+        "SSH_CLIENT", "SSH_CONNECTION",  "SSH_TTY", "SSH_AUTH_SOCK", "OLDPWD", "SHLVL",          "_",
+        "WINDOWID",   "TERM_SESSION_ID", "TMUX",    "TMUX_PANE",     "STY",    "XDG_SESSION_ID", "GPG_TTY",
+    };
+    const volatile_env_prefix = "PIXI_";
+
+    /// `bootgate run <decision> -- <argv>`, next in the chain. Every gated
+    /// step runs on every build, as all of them did before (has_side_
+    /// effects), and bootgate runs its command, or exits at once, for all
+    /// of them alike: never zig's cache, whose hit or miss is per step,
+    /// and which takes an input file rewritten unchanged for a change.
+    fn gate(self: *Boot, name: []const u8, argv: []const []const u8) *std.Build.Step.Run {
+        const run = self.ctx.b.addRunArtifact(self.exe);
+        run.setName(name);
+        run.addArg("run");
+        run.addFileArg(self.decision);
+        run.addArg("--");
+        run.addArgs(argv);
+        // stdin a pipe, empty unless r() gives the code: bootgate reads it
+        // to the end on a skip, and the build's own stdin is not for it
+        run.setStdIn(.{ .bytes = "" });
+        run.has_side_effects = true;
+        run.step.dependOn(self.last);
+        self.last = &run.step;
+        self.feed(name);
+        self.feed("\x00");
+        for (argv) |a| {
+            self.feed(a);
+            self.feed("\x00");
+        }
+        self.runs.append(self.ctx.b.allocator, run) catch @panic("OOM");
+        return run;
+    }
 
     /// Run `bin/R --vanilla --no-echo` with `code` on stdin (unix/macOS), or
     /// `bin/x64/Rterm.exe --vanilla --no-echo` with `code` on stdin
@@ -4606,15 +4673,18 @@ const Boot = struct {
     /// never produced a working base package, since Rscript.exe's own
     /// startup for anything beyond --version/--help depends on a real,
     /// already-installed Rterm.exe existing).
+    /// `--args <decision>` follows, so the code can read the bootstrap's
+    /// `Built:` time, the decision's second line (commandArgs(TRUE)[1]).
     fn r(self: *Boot, name: []const u8, code: []const u8) *std.Build.Step.Run {
         const b = self.ctx.b;
         const rbin = switch (self.ctx.os) {
             .windows => b.fmt("{s}/bin/x64/Rterm.exe", .{self.ctx.rhome}),
             else => b.fmt("{s}/bin/R", .{self.ctx.rhome}),
         };
-        const run = b.addSystemCommand(&.{ rbin, "--vanilla", "--no-echo" });
+        const run = self.gate(b.fmt("R bootstrap: {s}", .{name}), &.{ rbin, "--vanilla", "--no-echo", "--args" });
+        run.addFileArg(self.decision);
         run.setStdIn(.{ .bytes = b.dupe(code) });
-        run.setName(b.fmt("R bootstrap: {s}", .{name}));
+        self.feed(code);
         run.setEnvironmentVariable("TZ", "UTC");
         run.setEnvironmentVariable("LC_ALL", "C");
         run.setEnvironmentVariable("R_DEFAULT_PACKAGES", "NULL");
@@ -4627,19 +4697,52 @@ const Boot = struct {
         // in full): no display is opened, and none is warned about
         run.setEnvironmentVariable("R_DONT_USE_TK", "1");
         if (self.ctx.buildLdPath()) |p| run.setEnvironmentVariable("R_LD_LIBRARY_PATH", p);
-        run.has_side_effects = true;
-        run.step.dependOn(self.last);
-        self.last = &run.step;
+        for (volatile_env) |k| run.removeEnvironmentVariable(k);
+        const env = run.getEnvMap();
+        var i: usize = 0;
+        while (i < env.keys().len) {
+            if (std.mem.startsWith(u8, env.keys()[i], volatile_env_prefix)) {
+                run.removeEnvironmentVariable(env.keys()[i]);
+            } else i += 1;
+        }
         return run;
     }
 
     fn cmd(self: *Boot, name: []const u8, argv: []const []const u8) *std.Build.Step.Run {
+        return self.gate(name, argv);
+    }
+
+    /// A step that runs on every build, after the gated ones before it.
+    fn always(self: *Boot, name: []const u8, argv: []const []const u8) *std.Build.Step.Run {
         const run = self.ctx.b.addSystemCommand(argv);
         run.setName(name);
         run.has_side_effects = true;
         run.step.dependOn(self.last);
         self.last = &run.step;
         return run;
+    }
+
+    /// The key's last part, once every gated step exists: each one's
+    /// environment (null: the build's own, whose changes do not reach the
+    /// bootstrap's results) and working directory.
+    fn keyDigest(self: *Boot) []const u8 {
+        for (self.runs.items) |run| {
+            const env = run.environ_map orelse continue;
+            for (env.keys(), env.values()) |k, v| {
+                self.feed(k);
+                self.feed("=");
+                self.feed(v);
+                self.feed("\x00");
+            }
+            if (run.cwd) |c| switch (c) {
+                .cwd_relative => |p| self.feed(p),
+                else => {}, // mkdesc's: its DESCRIPTION is in the key
+            };
+            self.feed("\x01");
+        }
+        var out: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+        self.key.final(&out);
+        return self.ctx.b.fmt("{x}", .{&out});
     }
 };
 
@@ -4649,7 +4752,31 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
     const lib = b.fmt("{s}/library", .{rhome});
     const srclib = b.fmt("{s}/src/library", .{ctx.src_abs});
 
-    var boot = Boot{ .ctx = ctx, .last = b.getInstallStep() };
+    // The gate (zigbuild/tools/bootgate.zig), after the install step: the
+    // tree and source state it compares is the one the bootstrap would
+    // start from. One stamp per prefix, in zig's local cache, beside the
+    // results of the steps it lets zig's cache skip.
+    const gate_exe = b.addExecutable(.{ .name = "bootgate", .root_module = b.createModule(.{
+        .root_source_file = b.path("zigbuild/tools/bootgate.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    }) });
+    const stamp = b.fmt("{s}/r-zig-bootstrap/{x}.stamp", .{
+        try localCacheDir(b, io), std.hash.Wyhash.hash(0, ctx.prefix),
+    });
+    const check = b.addRunArtifact(gate_exe);
+    check.setName("bootstrap gate");
+    check.has_side_effects = true;
+    check.step.dependOn(b.getInstallStep());
+    check.addArgs(&.{ "check", stamp });
+    const decision = check.addOutputFileArg("decision");
+
+    var boot = Boot{ .ctx = ctx, .last = &check.step, .exe = gate_exe, .decision = decision };
+    if (b.graph.environ_map.get("R_ZIG_BOOTGATE_LIST") != null) {
+        boot.list = try b.allocator.create(std.ArrayList(u8));
+        boot.list.?.* = .empty;
+        try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(stamp).?);
+    }
 
     // Reset library/ to the pristine staged payload: the bootstrap mutates
     // it in place (lazyload DBs, Meta/, baseloader), so an interrupted or
@@ -4666,7 +4793,8 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
     // executable bits: WriteFiles/InstallDir produce 0644 files. Windows has
     // neither a bin/R wrapper script nor the unix scripts_s/scripts_b shell
     // scripts (Rscript.exe *is* the front end, and .exe files need no
-    // execute bit on NTFS) — skip entirely there.
+    // execute bit on NTFS) — skip entirely there. On every build, gated or
+    // not: the install step gives these files their 0644 back each time.
     if (ctx.os != .windows) {
         var argv = std.ArrayList([]const u8).empty;
         try argv.appendSlice(b.allocator, &.{ "chmod", "+x" });
@@ -4676,7 +4804,7 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
         try argv.append(b.allocator, b.fmt("{s}/bin/Rscript", .{rhome}));
         for (rspec.scripts_s) |s| try argv.append(b.allocator, b.fmt("{s}/bin/{s}", .{ rhome, s }));
         for (rspec.scripts_b) |s| try argv.append(b.allocator, b.fmt("{s}/bin/{s}", .{ rhome, s }));
-        _ = boot.cmd("chmod scripts", argv.items);
+        _ = boot.always("chmod scripts", argv.items);
     }
 
     // share/zoneinfo (internal tzcode database; needs conda unzip)
@@ -4701,14 +4829,17 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
             const desc = try substFile(ctx2, io2, b2.fmt("src/library/{s}/DESCRIPTION.in", .{pkg}));
             _ = wf.add("DESCRIPTION", desc);
             // builtStamp: tools:::.install_package_description() defaults
-            // to Sys.time() when omitted (undoing utcNow's SOURCE_DATE_
-            // EPOCH honoring at the R level) — R has a builtStamp param
-            // "some build systems want to supply a package-build
-            // timestamp for reproducibility" exactly for this; use it.
+            // to Sys.time() when omitted (which ignores SOURCE_DATE_EPOCH)
+            // — R has a builtStamp param "some build systems want to
+            // supply a package-build timestamp for reproducibility"
+            // exactly for this; use it: the decision's time, which bootgate
+            // takes from SOURCE_DATE_EPOCH when set, and which stays the
+            // same while the bootstrap is skipped.
             const run = bt.r(b2.fmt("{s} mkdesc", .{pkg}), b2.fmt(
-                "tools:::.install_package_description('.', '{s}/library/{s}', '{s}')",
-                .{ ctx2.rhome, pkg, utcNow(b2, io2) },
+                "tools:::.install_package_description('.', '{s}/library/{s}', readLines(commandArgs(TRUE)[1L])[2L])",
+                .{ ctx2.rhome, pkg },
             ));
+            bt.feed(desc);
             run.setCwd(wf.getDirectory());
         }
     }.add;
@@ -4992,6 +5123,26 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
         \\stopifnot(file.rename(paste0(done, ".new"), done))
     , .{ rhome, lib }));
 
+    // The stamp: the tree as the bootstrap left it, and its time. Then
+    // the gate's key, for check and stamp alike: the steps' digest, the
+    // staged library's path (zig's cache names it by content), and the
+    // trees the bootstrap reads and writes: R_HOME, the launchers in
+    // <prefix>/bin, R's sources.
+    const stamp_run = b.addRunArtifact(gate_exe);
+    stamp_run.setName("bootstrap stamp");
+    stamp_run.has_side_effects = true;
+    stamp_run.step.dependOn(boot.last);
+    stamp_run.addArgs(&.{ "stamp", stamp });
+    stamp_run.addFileArg(decision);
+    boot.last = &stamp_run.step;
+    const key = boot.keyDigest();
+    if (boot.list) |l| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = b.fmt("{s}.key.list", .{stamp}), .data = l.items });
+    for ([_]*std.Build.Step.Run{ check, stamp_run }) |run| {
+        run.addArg(key);
+        run.addDirectoryArg(libstage_dir);
+        run.addArgs(&.{ "--", rhome, b.fmt("{s}/bin", .{ctx.prefix}), ctx.src_abs });
+    }
+
     // sanity: the built product answers from its own launchers. Windows has
     // no top-level {prefix}/bin/Rscript convenience copy (F6.0: no unix-style
     // bin/ front-end layer at all) — verify against the real installed
@@ -5001,7 +5152,7 @@ fn bootstrap(ctx: *Ctx, io: std.Io, libstage_dir: std.Build.LazyPath) !*std.Buil
             .windows => b.fmt("{s}/bin/x64/Rscript.exe", .{rhome}),
             else => b.fmt("{s}/bin/Rscript", .{ctx.prefix}),
         };
-        const run = boot.cmd("verify Rscript", &.{
+        const run = boot.always("verify Rscript", &.{
             rscript_path,
             "-e",
             "set.seed(1); m <- matrix(rnorm(64), 8); s <- svd(m); stopifnot(max(abs(s$u %*% diag(s$d) %*% t(s$v) - m)) < 1e-9); cat('zig-built R OK:', R.version.string, '\\n')",

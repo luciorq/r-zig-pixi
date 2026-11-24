@@ -114,10 +114,11 @@
 - **Vignettes and man pages** (R.1/Rscript.1, NEWS.pdf regeneration) are
   skipped exactly like the make build skips them here: no pdflatex or
   help2man in the env (NEWS.pdf ships prebuilt in the tarball).
-- **Bootstrap steps re-run on every `zig build`** (side-effect Run steps,
-  ~1.5 min): correctness over speed — library/ is reset from the staged
-  pristine payload each time. A content-stamp optimization is possible
-  later.
+- ~~**Bootstrap steps re-run on every `zig build`** (side-effect Run steps,
+  ~1.5 min)~~ — done (M-19, 2026-11-23, wave2-build/PLAN.md):
+  zigbuild/tools/bootgate.zig skips the whole bootstrap when its inputs
+  and the tree are as the last one left them; a no-op `pixi run build`
+  went from 134 s to 17 s on delta.
 - The compile graph uses zig's native Compile steps, NOT the
   toolchain/zig-* shims — but etc/Makeconf still points packages at the
   shims, so the R CMD SHLIB contract is unchanged.

@@ -123,15 +123,20 @@ while IFS= read -r f; do
   head -c4 "$f" 2>/dev/null | LC_ALL=C grep -q "$magic" && bins+=("$f")
 done < <(find "$PREFIX/lib" -type f)
 
-# Conda libraries a binary needs. linux: ldd with the env's lib dir on the
-# search path (R's own rpaths are relative and the copies may not exist
-# yet), keeping what resolves into the env. macOS: conda-forge's dylibs
+# Conda libraries a binary needs. linux: each DT_NEEDED name (needed_of,
+# patchelf) that the env's lib dir has, as ldd with that dir on
+# LD_LIBRARY_PATH resolved it before (M-21: no host ldd); the walk below
+# takes each copy's own names, which is the rest of ldd's closure. R's
+# own libraries (libR.so, libRblas.so, ...) are not in the env, the
+# system's (libc.so.6, libm.so.6) neither. macOS: conda-forge's dylibs
 # are named @rpath/<name> and live in <env>/lib; a few name a dependency
 # by the env's absolute path instead (ncurses re-exports libtinfo so),
 # which conda's prefix replacement rewrites at install time.
 deps() {
   if [ "$OS" = linux ]; then
-    LD_LIBRARY_PATH="$CONDA/lib" ldd "$1" 2>/dev/null | awk -v p="$CONDA/" 'index($3, p) == 1 {print $3}'
+    needed_of "$1" | while IFS= read -r name; do
+      [ -f "$CONDA/lib/$name" ] && echo "$CONDA/lib/$name"
+    done
   else
     otool -L "$1" 2>/dev/null | tail -n +2 | awk '{print $1}' |
       while IFS= read -r dep; do
