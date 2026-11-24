@@ -440,6 +440,12 @@ rzig_cache_old <- list.files(rzig_cache, all.files = TRUE, no.. = TRUE)
 zig_libs <- if (win && nzchar(envdir)) file.path(envdir, "zig-libs", zig_triple) else ""
 if (!nzchar(zig_libs) || !dir.exists(zig_libs)) zig_libs <- ""
 if (win && nzchar(envdir)) Sys.setenv(R_TOOLS_SOFT = if (nzchar(zig_libs)) zig_libs else envdir)
+# LOCAL_SOFT (jpeg's configure.win reads it): the env's zig-libs, as
+# Rcmd_environ's default is R's own (b13-fixes). Only zig-libs: rzig turns
+# its -I (Makeconf.win's LOCAL_CPPFLAGS) into -idirafter, which it does
+# not for another tree (the Rtools45 one's MinGW headers would shadow
+# zig's: feat-winarm-gaps finding 22)
+if (nzchar(zig_libs)) Sys.setenv(LOCAL_SOFT = zig_libs)
 if (nzchar(zig_libs) && dist == "tree") {
   pcp <- Sys.getenv("PKG_CONFIG_PATH")
   pcp <- if (nzchar(pcp)) strsplit(pcp, ";", fixed = TRUE)[[1]] else file.path(envdir, c("lib/pkgconfig", "share/pkgconfig"))
@@ -523,7 +529,8 @@ write_report <- function(final = FALSE) {
                   info$minutes, jobs, info$path),
           sprintf("zig %s; CC `%s`; cmake `%s`; libraries env `%s`%s.", info$zig, info$cc, info$cmake, sysroot,
                   if (dist == "conda") sprintf(" (%s from %s)", info$r_zig, info$channel) else ""),
-          sprintf("Builder %s (R_ZIG_PKG_BUILDER).", builder),
+          # R_HOME names the tree, so the variant stress.yaml built (b13-leftovers CI5)
+          sprintf("Builder %s (R_ZIG_PKG_BUILDER); R_HOME `%s`.", builder, rhome),
           if (win)
             sprintf("zig-libs `%s` (%s).", if (nzchar(info$zig_libs)) info$zig_libs else "none",
                     if (nzchar(info$zig_pkgs)) info$zig_pkgs else "no zig-* package"),

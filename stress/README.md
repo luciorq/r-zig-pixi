@@ -132,6 +132,7 @@ gh workflow run stress.yaml -f packages='g3 g4' -f trace=true
 gh workflow run stress.yaml -f oses='["windows-latest"]' -f packages='g3 g4' -f msys_from_tree=true
 gh workflow run stress.yaml -f oses='["windows-latest","windows-11-arm"]' -f packages='g2 g3 g4' \
   -f distribution=both -f trace=true
+gh workflow run stress.yaml -f oses='["ubuntu-latest","windows-latest"]' -f packages='RcppArmadillo igraph' -f variant=openblas
 ```
 
 The inputs are the runners (a JSON list), the targets, rows to skip, the
@@ -144,13 +145,21 @@ every package and shared object, a make reference) and
 `msys_from_tree` (false by default; true passes `--msys-from-tree` on
 Windows), `rtools_libs` (true by default; false passes `--no-rtools-libs`
 on windows-11-arm) and `libs_smoke` (a libs-zig-pixi git ref, empty by
-default; set, it passes `--libs-smoke=<ref>`).
+default; set, it passes `--libs-smoke=<ref>`), and `variant` (slim by
+default; full or openblas): the R the tree legs build, with that pixi
+env (`pixi run -e full build`), and run, from its compile tree
+(`build/compile-tree/full` or `build/compile-tree/slim-openblas`, made by
+`pixi run -e <env> compile-tree`), in the stress env as for slim. The
+conda legs test r-zig-slim only: a conda leg with another variant fails
+at its first step.
 Each OS and distribution is one job.
 Jobs never stop each other (`fail-fast: false`) and may take up to 6 hours.
 
 Every job builds the dev tree. The conda job with the local channel also
-builds the conda packages. The report goes to the job summary. The
-artifact `stress-<os>-<dist>` holds `report.md`, `report.json`, the logs, the
+builds the conda packages. The report goes to the job summary (its
+R_HOME names the compile tree, so the variant). The
+artifact `stress-<os>-<dist>` (`stress-<os>-<dist>-<variant>` for full
+and openblas) holds `report.md`, `report.json`, the logs, the
 smoke files and the conda env's `pixi.toml` and `pixi.lock`.
 
 ## What a run does
@@ -237,6 +246,11 @@ nothing else on the machine:
   the sources of gert, stringi, qs2, fst, Rhdf5lib, V8, duckdb, mlpack,
   rstan, DESeq2, systemfonts, geos and their compiled dependencies do not
   (b13-stress Q26, CRAN and Bioconductor 3.23 sources of 2026-11-24).
+  `LOCAL_SOFT` is the env's zig-libs when it has one (else Rcmd_environ's
+  default, R's own env's zig-libs), never the Rtools45 tree: Makeconf.win
+  puts `-I"$(LOCAL_SOFT)/include"` on every compile, which rzig turns into
+  `-idirafter` for zig-libs only. jpeg's `configure.win` reads it
+  (b13-fixes).
 
 The distribution comes from where R lives. An R inside a conda env (its root
 has `conda-meta`) is "conda", and that env holds the libraries. Otherwise it
