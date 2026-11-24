@@ -29,11 +29,15 @@ invisible(.Internal(setMaxNumMathThreads(old)))
 ## variant table is the same on every OS since 2026-11-14. On Windows
 ## capabilities() reads config.h only (platform.c), so the devices and
 ## tcltk are also checked by what they do.
+## tcltk (build 13): win-64's libR has HAVE_TCLTK and the tcltk package
+## is the add-on r-zig-tcltk's; win-arm64 (no tk 8.6 on conda-forge)
+## keeps the stub and capabilities("tcltk") FALSE.
+arm64 <- R.version$arch == "aarch64"
 caps <- capabilities()
 stopifnot(
   caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]],
   caps[["libcurl"]],
-  !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]
+  caps[["tcltk"]] == !arm64, !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]
 )
 ## the cairo devices draw: winCairo.dll loads on first use, and
 ## capabilities("cairo") is TRUE even when it cannot load
@@ -64,8 +68,14 @@ for (fmt in c("jpeg", "tiff")) {
   cat(fmt, "() fails cleanly: ", paste(r$msgs, collapse = "; "), "\n", sep = "")
 }
 cat("conda R OK\n")
-## tcltk: r-zig-slim has no Tcl/Tk; library(tcltk) is the stub
-## (R/unix/zzzstub.R, as on unix), which stops with its own message
-m <- tryCatch({ library(tcltk); "loaded" }, error = function(e) conditionMessage(e))
-if (!grepl("Tcl/Tk support is not available", m)) stop("library(tcltk): ", m)
-cat("conda tcltk stub OK:", m, "\n")
+## tcltk: on win-64 the package is r-zig-tcltk's, so r-zig-slim has
+## none; on win-arm64 library(tcltk) is the stub (R/unix/zzzstub.R, as on
+## unix), which stops with its own message
+if (arm64) {
+  m <- tryCatch({ library(tcltk); "loaded" }, error = function(e) conditionMessage(e))
+  if (!grepl("Tcl/Tk support is not available", m)) stop("library(tcltk): ", m)
+  cat("conda tcltk stub OK:", m, "\n")
+} else {
+  if (nzchar(system.file(package = "tcltk"))) stop("r-zig-slim has a tcltk package; it is r-zig-tcltk's")
+  cat("conda tcltk: none in the base (r-zig-tcltk's)\n")
+}

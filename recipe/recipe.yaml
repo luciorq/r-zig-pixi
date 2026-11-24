@@ -15,8 +15,8 @@ source:
   # R sources from CRAN plus this repo's build scripts — the recipe is a
   # consumer of the same scripts pixi tasks use. The compilers in
   # R_HOME/bin/toolchain are rzig (zigbuild/tools/rzig/), built by zig
-  # build; the bash shims in toolchain/ only serve configure-only.sh.
-  # CRAN, then its CDN, as scripts/fetch-r.sh: rattler-build tries each
+  # build; configure-only.sh runs rzig too.
+  # CRAN, then its CDN, as `zig build fetch`: rattler-build tries each
   # url in turn (CRAN failed CI legs on 2026-11-11), against the one sha256.
   - url:
       - https://cran.r-project.org/src/base/R-4/R-${{ version }}.tar.gz
@@ -56,6 +56,16 @@ source:
       - url: https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.11.tar.xz
         sha256: d0cd841bc8e55b9da888106c00dc256d05b7d1d8e5a46f4be4eb4c5125bd2dc4
         target_directory: pkgconf-src
+  # unix: GNU make's source, which the toolchain build compiles into
+  # R_HOME/bin/toolchain/usr/bin/make for r-zig-build-tools
+  # (zigbuild/make/build.zig, zigbuild/toolchain/make.zig; recipe/build.sh
+  # passes the directory as -Dmake). The url and sha256 are make.zig's, as
+  # its test checks; Windows keeps m2-make.
+  - if: unix
+    then:
+      - url: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+        sha256: dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3
+        target_directory: make-src
   # Windows: cairo's source, which R's build compiles and links statically
   # into winCairo.dll (zigbuild/cairo.zig; recipe/build.sh passes the
   # directory as -Dcairo). conda-forge has no win-arm64 cairo; one build
@@ -278,18 +288,33 @@ build:
   # cflags/cxxflags in rzig, base packages linked to libR (embedded R),
   # verify-tree allows SSE4.1 on macOS. Published 2026-11-24, build.yaml
   # run 45381914199 on main 7e3648e. Record: .github/devdocs/chore-release-12/PLAN.md.
-  number: 12
+  # Build 13: R's tcltk package is the add-on r-zig-tcltk (every subdir
+  # but win-arm64), built in the same build on top of slim (-Dtcltk: the
+  # full config's Tcl/Tk keys and HAVE_TCLTK) against conda-forge's tk
+  # 8.6; r-zig-slim has no tcltk package there and capabilities("tcltk")
+  # is TRUE; win-arm64 keeps the stub (b13-recipe). r-zig-build-tools'
+  # unix make is GNU make 4.4.1 built with zig from source
+  # (R_HOME/bin/toolchain/usr/bin/make; conda-forge's make before;
+  # Windows keeps m2-make). The openblas flavor ships libRblas/libRlapack
+  # as forwarders to openblas, so packages link -lRblas -lRlapack in every
+  # flavor (b13-build); R's source comes from `zig build fetch`, and the
+  # vendored configs are captured with rzig. rzig takes the toolchain from
+  # R_ZIG_TOOLCHAIN_ENV and builds against distro libraries with
+  # R_ZIG_SYSTEM_LIBS (b13-rzig). Windows wheels (b13-env-ci).
+  number: 13
 
 outputs:
-  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), six
+  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), seven
   # packages (feat-standalone-toolchain B28 a; r-zig-extras and
-  # r-zig-recommended since build 11). The base, r-zig-slim, owns
-  # R and its compiler front rzig (R_HOME/bin/toolchain's compiler names,
-  # which Makeconf points at, and share/zig/rpkg), as the standalone base
+  # r-zig-recommended since build 11, r-zig-tcltk since build 13). The
+  # base, r-zig-slim, owns R and its compiler front rzig
+  # (R_HOME/bin/toolchain's compiler names, which Makeconf points at, and
+  # share/zig/rpkg), as the standalone base
   # archive does (B19). Each group package owns, or depends on,
   # third-party software only: r-zig-compilers depends on zig, flang and
-  # llvm-openmp; r-zig-build-tools on make (Windows: the MSYS2 tools), and
-  # on Windows owns R_HOME/bin/toolchain/usr/ (pkgconf, built from source).
+  # llvm-openmp; r-zig-build-tools on Windows on the MSYS2 tools, and owns
+  # R_HOME/bin/toolchain/usr/ (built from source: Windows pkgconf, unix
+  # GNU make).
   # Windows' binutils are rzig's own names, r-zig-slim's
   # (feat-win-zig-binutils). r-zig-toolchain is the
   # metapackage of the groups (with r-zig-extras, cmake). Without a
@@ -451,7 +476,14 @@ outputs:
         - if: osx
           then:
             - libiconv
-        # No libjpeg-turbo, libtiff, tk or gettext, on Windows too
+        # Tcl/Tk for r-zig-tcltk, the add-on (build.sh's -Dtcltk): 8.6,
+        # as pixi.toml's feature.tcltk (the vendored full configs link
+        # -ltcl8.6 -ltk8.6, Windows tcl86t and tk86t). r-zig-slim ignores
+        # its run export; r-zig-tcltk depends on it.
+        - if: target_platform != "win-arm64"
+          then:
+            - tk 8.6.*
+        # No libjpeg-turbo, libtiff or gettext, on Windows too
         # (2026-11-14): r-zig-slim is the slim variant on every OS
         # (build.zig's variant table, zigbuild/config/win-slim). R's
         # Windows NLS is its own intl, and only full has it.
@@ -470,8 +502,8 @@ outputs:
       # everything but the groups' directories under R_HOME/bin/toolchain
       # (feat-standalone-toolchain B20, B28): rzig's names and its link
       # object stay here (Windows: with the binutils, rzig's names too). Of
-      # these, the conda build makes only Windows' usr/ (pkgconf), which
-      # r-zig-build-tools owns; etc/ is the standalone tree's only on
+      # these, the conda build makes only usr/ (Windows pkgconf, unix GNU
+      # make), which r-zig-build-tools owns; etc/ is the standalone tree's only on
       # Windows (PHASE7 Cr5); binutils/ is gone (feat-win-zig-binutils) and
       # stays excluded so no old tree's copy can ride along; cmake/ is the
       # extras' (feat-extras-group), which the conda build never makes. R's
@@ -480,13 +512,23 @@ outputs:
       # come from libstdcxx-devel_linux-*, r-zig-compilers' run deps), so
       # it is excluded too; libstdcxx-shim/, rzig's two shims, stays here
       # (feat-linux-libstdcxx).
+      # The tcltk package is r-zig-tcltk's where that is built (not
+      # win-arm64, where the base keeps the stub).
       files:
         exclude:
           - lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
           - Library/lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
           - lib/R/library/${{ recommended }}/**
           - Library/lib/R/library/${{ recommended }}/**
+          - if: target_platform != "win-arm64"
+            then:
+              - lib/R/library/tcltk/**
+              - Library/lib/R/library/tcltk/**
     requirements:
+      # tk is r-zig-tcltk's (the staging host has it for that build)
+      ignore_run_exports:
+        by_name:
+          - tk
       run:
         # R's own shared libraries (libR, base packages like stats/utils via
         # pcre2/icu, cairo devices, ...) are runtime-loaded — every *runtime*
@@ -562,7 +604,9 @@ outputs:
       # that runs in a truly isolated env (no dev pixi env masking a gap).
       # Windows asserts the same slim profile (2026-11-14), and test-win.R
       # also checks it by what R does: png draws, jpeg() and tiff() fail
-      # cleanly, library(tcltk) gives the stub's message.
+      # cleanly. tcltk (build 13): capabilities("tcltk") is TRUE (libR is
+      # built with HAVE_TCLTK for r-zig-tcltk) and the package is
+      # r-zig-tcltk's, so the base has none; win-arm64 keeps the stub.
       - script:
           content:
             - if: win
@@ -606,7 +650,7 @@ outputs:
                 - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-win.R'
                 - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-preflight.R'
               else:
-                - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], !caps[["tcltk"]], !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
+                - $PREFIX/bin/Rscript -e 'set.seed(1); m <- matrix(rnorm(64),8,8); stopifnot(max(abs(solve(m) %*% m - diag(8))) < 1e-9); stopifnot(abs(det(qr.R(qr(m)))) > 0); stopifnot(max(Mod(fft(fft(1:8), inverse = TRUE) / 8 - 1:8)) < 1e-9); stopifnot(grepl("[0-9]+", "R 4", perl = TRUE), identical(memDecompress(memCompress("x")), charToRaw("x"))); caps <- capabilities(); stopifnot(caps[["cairo"]], caps[["png"]], caps[["ICU"]], caps[["iconv"]], caps[["libcurl"]], !caps[["X11"]], !caps[["aqua"]], caps[["tcltk"]], !nzchar(system.file(package = "tcltk")), !caps[["jpeg"]], !caps[["tiff"]], !caps[["NLS"]]); cat("conda R OK\n")'
                 - $PREFIX/bin/Rscript test-preflight.R
           # conda-package's shared zig cache for the recipe tests
           # (pixi.toml): on unix rattler-build gives a test script a clean
@@ -671,6 +715,10 @@ outputs:
               - Library/lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
               - lib/R/library/${{ recommended }}/**
               - Library/lib/R/library/${{ recommended }}/**
+              - if: target_platform != "win-arm64"
+                then:
+                  - lib/R/library/tcltk/**
+                  - Library/lib/R/library/tcltk/**
     about:
       summary: R built with the zig toolchain, with its compiler front rzig (headless slim profile)
       # Windows: R's and, linked into winCairo.dll, cairo's (r-zig's
@@ -696,7 +744,8 @@ outputs:
       description: |
         R built from source with the zig toolchain, in the headless slim
         profile on every OS: cairo and PNG graphics, ICU, libcurl and
-        OpenMP; no X11, Tcl/Tk, JPEG, TIFF or NLS.
+        OpenMP; no X11, JPEG, TIFF or NLS. Tcl/Tk (the tcltk package) is
+        the add-on r-zig-tcltk.
 
         To compile packages, add r-zig-toolchain (r-zig-compilers,
         r-zig-build-tools and r-zig-extras). r-zig-compilers alone installs
@@ -782,24 +831,24 @@ outputs:
       from: r-zig-build
       run_exports: false
     build:
-      # Windows: usr/bin's pkgconf.exe and pkg-config.exe, which the
-      # toolchain build compiles from source (zigbuild/toolchain/pkgconf.zig), with
-      # usr/SOURCES and usr/LICENSES/pkgconf/. R puts usr/bin first on
-      # PATH, before the env's. unix: nothing (no branch matches: an empty
-      # package)
+      # usr/bin's tools the toolchain build compiles from source, with
+      # usr/SOURCES and usr/LICENSES/: Windows pkgconf.exe and
+      # pkg-config.exe (zigbuild/toolchain/pkgconf.zig), unix GNU make
+      # (zigbuild/make/build.zig; backlog L7). R puts usr/bin first on
+      # PATH (etc/Renviron, Windows etc/Rcmd_environ), before the env's.
       files:
         - if: win
           then:
             - Library/lib/R/bin/toolchain/usr/**
+          else:
+            - lib/R/bin/toolchain/usr/**
     requirements:
       run:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
-        # B28 (a): unix make. On Windows, m2-make is the make R runs (it
-        # comes first on PATH), so no native make there (PHASE4 Cg7;
-        # PHASE7 open point B a)
-        - if: unix
-          then:
-            - make >=4.4
+        # unix: nothing else, make is the package's own (files, above;
+        # conda-forge's make until build 13). On Windows m2-make is the
+        # make R runs (it comes first on PATH), so no native make there
+        # (PHASE4 Cg7; PHASE7 open point B a; b13-build D12)
         # Windows: the build-tools group's set on both channels (B11; PHASE7
         # open points A-C): MSYS2's userland from conda-forge's m2 packages;
         # the standalone tree copies the same packages' files into
@@ -860,8 +909,14 @@ outputs:
                   - Library/lib/R/bin/toolchain/usr/SOURCES
                   - Library/lib/R/bin/toolchain/usr/LICENSES/pkgconf/COPYING
                   - Library/lib/R/bin/toolchain/usr/LICENSES/pkgconf/mingw-w64-crt-COPYING
+                else:
+                  - lib/R/bin/toolchain/usr/bin/make
+                  - lib/R/bin/toolchain/usr/SOURCES
+                  - lib/R/bin/toolchain/usr/LICENSES/make/COPYING
             not_exists:
-              - lib/R/**
+              # unix: only usr/ under lib/R (the base's files stay r-zig-slim's)
+              - lib/R/{etc,lib,library,include,share,modules}/**
+              - lib/R/bin/toolchain/{rzig,zig-cc}
               - Library/lib/R/bin/toolchain/{gcc,rzig}.exe
               - Library/lib/R/bin/toolchain/binutils/**
               - Library/lib/R/etc/**
@@ -879,12 +934,13 @@ outputs:
           recipe:
             - test-build-tools.R
     about:
-      summary: The r-zig build tools for r-zig-slim (make; on Windows also sh, the MSYS2 tools and pkg-config)
+      summary: The r-zig build tools for r-zig-slim (GNU make; on Windows also sh, the MSYS2 tools and pkg-config)
       # Windows holds pkgconf (ISC), with the mingw-w64 CRT startup zig
-      # links into it (ZPL-2.1); unix holds no file
-      license: ${{ "ISC AND ZPL-2.1" if win else "GPL-2.0-only OR GPL-3.0-only" }}
-      # the top level's, and on Windows pkgconf's and zig's (pkgconf.exe
-      # is zig-linked: compiler_rt and the mingw-w64 CRT), as r-zig-slim
+      # links into it (ZPL-2.1); unix holds GNU make (GPL-3.0-or-later)
+      license: ${{ "ISC AND ZPL-2.1" if win else "GPL-3.0-or-later" }}
+      # the top level's, on Windows pkgconf's and zig's (pkgconf.exe
+      # is zig-linked: compiler_rt and the mingw-w64 CRT), as r-zig-slim,
+      # on unix make's and zig's (compiler_rt and the libc start files)
       license_file:
         - build/R-${{ version }}/COPYING
         - build/R-${{ version }}/share/licenses/{GPL-2,GPL-3}
@@ -892,7 +948,9 @@ outputs:
         - if: win
           then:
             - pkgconf-src/COPYING
-            - licenses/zig/**
+          else:
+            - make-src/COPYING
+        - licenses/zig/**
 
   # The extras group (feat-extras-group): cmake, for packages that build
   # a bundled library with it (nloptr, s2, RcppParallel's TBB...).
@@ -969,6 +1027,81 @@ outputs:
     about:
       summary: "The r-zig toolchain for r-zig-slim: r-zig-compilers, r-zig-build-tools and r-zig-extras"
 
+  # The Tcl/Tk add-on (b13-recipe PLAN.md, L3; feat-standalone-toolchain
+  # PLAN.md's "which full-only features can become add-on R components,
+  # starting with tcltk"): R's tcltk package, built against conda-forge's
+  # tk 8.6 by the same build (build.sh's -Dtcltk: build.zig takes the
+  # full config's Tcl/Tk keys on top of slim). Opt-in, as
+  # r-zig-recommended: without it the base has no tcltk package, and
+  # capabilities("tcltk") is TRUE either way (libR's HAVE_TCLTK).
+  # tcltk.so (Windows tcltk.dll) links libR and conda-forge's libtcl and
+  # libtk; Windows' etc/Renviron.site (the base's) points MY_TCLTK at
+  # the env's Library/bin. Not on win-arm64 (build.skip).
+  - package:
+      name: r-zig-tcltk
+    inherit:
+      from: r-zig-build
+      run_exports: false
+    build:
+      # conda-forge has no tk 8.6 for win-arm64 (only 9.0, whose DLL
+      # names, tcl90.dll and tcl9tk90.dll, win-full's config does not link)
+      skip:
+        - target_platform == "win-arm64"
+      files:
+        - lib/R/library/tcltk/**
+        - Library/lib/R/library/tcltk/**
+    requirements:
+      run:
+        - ${{ pin_subpackage("r-zig-slim", exact=True) }}
+        # tcltk.so needs libtcl8.6 and libtk8.6 (linux: not libX11, which
+        # libtk needs, through tk's own dependencies)
+        - tk 8.6.*
+        # linux: X11's protocol headers, which tk.h includes (Xlib.h's
+        # X11/X.h), for a package compiled against Makeconf's
+        # TCLTK_CPPFLAGS (tkrplot: "'X11/X.h' file not found" without
+        # them; b13-recipe PLAN.md)
+        - if: linux
+          then:
+            - xorg-xorgproto
+    tests:
+      - package_contents:
+          files:
+            exists:
+              - if: win
+                then:
+                  - Library/lib/R/library/tcltk/libs/x64/tcltk.dll
+                  - Library/lib/R/library/tcltk/exec/hierarchy.tcl
+                else:
+                  - lib/R/library/tcltk/libs/tcltk.so
+                  - lib/R/library/tcltk/exec/hierarchy.tcl
+            not_exists:
+              - lib/R/bin/**
+              - Library/lib/R/bin/**
+              - lib/R/library/{base,stats,utils,tools}/**
+              - Library/lib/R/library/{base,stats,utils,tools}/**
+      - script:
+          content:
+            - if: win
+              then:
+                - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-tcltk.R'
+              else:
+                - $PREFIX/bin/Rscript test-tcltk.R
+        files:
+          recipe:
+            - test-tcltk.R
+    about:
+      summary: R's tcltk package for r-zig-slim, linked against conda-forge's Tcl/Tk 8.6
+      # R's (tcltk is part of R); Tcl/Tk is the tk dependency, not
+      # bundled
+      license: GPL-2.0-only OR GPL-3.0-only
+      # info/licenses: R's texts, rzig's and zig's (compiler_rt and the
+      # libc start files in tcltk.so), as r-zig-recommended
+      license_file:
+        - build/R-${{ version }}/COPYING
+        - build/R-${{ version }}/share/licenses/{GPL-2,GPL-3}
+        - licenses/r-zig/LICENSE
+        - licenses/zig/**
+
   # R's 15 recommended packages (MASS, lattice, Matrix, ..., mgcv), from
   # the tarballs R's source carries, installed by build.sh's last step
   # (scripts/zig-recommended.sh, zigbuild/recommended/build.zig) with the
@@ -1044,7 +1177,8 @@ about:
   # texts and r-zig's own MIT text (recipe sources); the payload-less
   # packages (r-zig-compilers, r-zig-extras, r-zig-toolchain) take these,
   # their dependencies (zig, flang-zig, cmake...) ship their own.
-  # r-zig-slim, r-zig-build-tools and r-zig-recommended list theirs.
+  # r-zig-slim, r-zig-build-tools, r-zig-tcltk and r-zig-recommended
+  # list theirs.
   license_file:
     - build/R-${{ version }}/COPYING
     - build/R-${{ version }}/share/licenses/{GPL-2,GPL-3}

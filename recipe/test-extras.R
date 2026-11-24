@@ -5,7 +5,8 @@
 ## is installed in this env, then the group's text.
 windows <- .Platform$OS.type == "windows"
 d <- tempfile("rzig-"); dir.create(d)
-Sys.unsetenv(c("R_ZIG_EXTRA_ENV", "ZIG_BIN", "R_ZIG_TOOLCHAIN_HINT", "R_ZIG_NO_PREFLIGHT"))
+Sys.unsetenv(c("R_ZIG_EXTRA_ENV", "ZIG_BIN", "R_ZIG_TOOLCHAIN_HINT", "R_ZIG_NO_PREFLIGHT",
+               "R_ZIG_TOOLCHAIN_ENV", "R_ZIG_SYSTEM_LIBS"))
 ## only this env's programs; env_bin is <prefix>/bin, on Windows
 ## <prefix>/Library/bin, where conda-forge's cmake.exe is
 env_bin <- normalizePath(file.path(R.home(), "..", "..", "bin"))

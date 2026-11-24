@@ -2,7 +2,9 @@
 ## 4): rzig's check finds make (Windows: also sh), names
 ## r-zig-compilers for what is missing, and says when make is installed
 ## in this env but not on PATH (on Windows R CMD then finds them itself,
-## PHASE7 F2 b); R CMD config reads Makeconf through make. On Windows the
+## PHASE7 F2 b); R CMD config reads Makeconf through make. On unix the
+## package's own make: GNU make built from source into
+## R_HOME/bin/toolchain/usr/bin (backlog L7). On Windows the
 ## package's own files: pkgconf,
 ## built from source, as pkgconf and pkg-config, and PKG_CONFIG_PATH's
 ## default under R CMD (B43); and B39's tools from this env (B11).
@@ -16,6 +18,7 @@ d <- tempfile("rzig-"); dir.create(d)
 ## build decline (0013); ZIG_LOCAL_CACHE_DIR defeats N3's per-install
 ## cache; R_ZIG_TOOLCHAIN_HINT adds a line
 Sys.unsetenv(c("R_ZIG_EXTRA_ENV", "ZIG_BIN", "R_ZIG_TOOLCHAIN_HINT", "R_ZIG_NO_PREFLIGHT",
+               "R_ZIG_TOOLCHAIN_ENV", "R_ZIG_SYSTEM_LIBS",
                "R_ZIG_PKG_BUILDER", "RZIG_TRACE", "MAKEFLAGS", "ZIG_LOCAL_CACHE_DIR"))
 ## a user Makevars switches the preflight off. Unset, R_MAKEVARS_USER lets
 ## R (install.R's makevars_user) and rzig (pkgbuild.zig) fall back to
@@ -27,13 +30,17 @@ Sys.setenv(ZIG_GLOBAL_CACHE_DIR = Sys.getenv("R_ZIG_TEST_ZIG_CACHE", file.path(d
            XDG_CACHE_HOME = file.path(d, "cache"))
 ## only this env's programs (Windows: also R's bin\x64 and System32);
 ## env_bin is <prefix>/bin, on Windows <prefix>/Library/bin. With usr_bin
-## also the userland R's makefiles run besides make: on Windows m2's
-## Library\usr\bin, before the env; on unix the host's /usr/bin and /bin,
-## after it (B25), since GNU make runs a recipe line with no shell syntax,
-## such as config.mk's `@echo $($(VAR))`, from PATH itself
+## the build tools' make_dir first (Windows m2's Library\usr\bin; unix
+## the group's R_HOME/bin/toolchain/usr/bin, as etc/Renviron puts it) and
+## the userland R's makefiles run besides make: on Windows in make_dir;
+## on unix the host's /usr/bin and /bin, after the env (B25), since GNU
+## make runs a recipe line with no shell syntax, such as config.mk's
+## `@echo $($(VAR))`, from PATH itself
 env_bin <- normalizePath(file.path(R.home(), "..", "..", "bin"))
+make_dir <- normalizePath(if (windows) file.path(env_bin, "..", "usr", "bin")
+                          else file.path(R.home(), "bin", "toolchain", "usr", "bin"))
 narrow <- function(usr_bin = FALSE)
-    Sys.setenv(PATH = paste(c(if (windows && usr_bin) normalizePath(file.path(env_bin, "..", "usr", "bin")),
+    Sys.setenv(PATH = paste(c(if (usr_bin) make_dir,
                               env_bin,
                               if (windows) c(R.home("bin"), file.path(Sys.getenv("SystemRoot"), "System32"))
                               else if (usr_bin) c("/usr/bin", "/bin")),
@@ -53,12 +60,13 @@ run_to <- function(cmd, args) {
 narrow(usr_bin = TRUE)
 cc <- file.path(R.home(), "bin", "toolchain", if (windows) "gcc.exe" else "zig-cc")
 tc <- shown(file.path(R.home(), "bin", "toolchain"))
-## the build tools, from this env: unix make in <prefix>/bin; Windows m2's
-## make and sh in <prefix>/Library/usr/bin
+## the build tools, from this env: unix the group's make in
+## R_HOME/bin/toolchain/usr/bin; Windows m2's make and sh in
+## <prefix>/Library/usr/bin
 r <- run_to(cc, "--rzig-check=build-tools"); cat(r$out, sep = "\n")
 ok <- r$out[1L]
 field <- function(name) sub(paste0("^.*", name, " at ([^;]*).*$"), "\\1", ok)
-make_dir <- shown(if (windows) file.path(env_bin, "..", "usr", "bin") else env_bin)
+make_dir <- shown(make_dir)
 stopifnot(r$status == 0L, startsWith(ok, "zig-cc: build-tools ok: make at "),
           same_path(shown(dirname(field("make"))), make_dir))
 if (windows)
@@ -74,9 +82,12 @@ stopifnot(r$status == 127L, any(grepl("pixi add r-zig-compilers", r$out, fixed =
 cat("build tools: no zig, the check names r-zig-compilers: OK\n")
 
 ## installed in this env but not on PATH (an env used without activation:
-## an IDE pointed at its R; win-64's R.bat adds nothing to PATH): the
-## check says so, naming this env's make (Windows: m2's, in
-## Library/usr/bin), then the text (PHASE4 open point I a, Cg2). On
+## an IDE pointed at its R; win-64's R.bat adds nothing to PATH): on
+## Windows the check says so, naming this env's make (m2's, in
+## Library/usr/bin), then the text (PHASE4 open point I a, Cg2); on unix,
+## whose make is R_HOME's (etc/Renviron puts it on PATH in R and under R
+## CMD), it says only "no make on PATH" (with MAKE=make: Renviron's
+## default), then the text. On
 ## Windows only outside R: under R CMD (Rcmd_environ) and in sessions
 ## (Rprofile.windows) R puts this env's Library/usr/bin on PATH itself,
 ## after the group's usr/bin, so the same PATH (with this env's
@@ -87,11 +98,22 @@ r <- run_to(cc, "--rzig-check=build-tools"); cat(r$out, sep = "\n")
 narrow(usr_bin = TRUE)
 not_on_path <- " is installed in R's environment, which is not on PATH: activate it (pixi shell, conda activate) or start R with pixi run"
 line <- r$out[startsWith(r$out, "zig-cc: no make on PATH")]
-stopifnot(r$status == 127L, length(line) == 1L, endsWith(line, not_on_path),
-          same_path(sub("^.*; ", "", substr(line, 1L, nchar(line) - nchar(not_on_path))),
-                    paste0(make_dir, if (windows) "/make.exe" else "/make")),
+stopifnot(r$status == 127L, length(line) == 1L,
+          if (windows) endsWith(line, not_on_path) &&
+              same_path(sub("^.*; ", "", substr(line, 1L, nchar(line) - nchar(not_on_path))),
+                        paste0(make_dir, "/make.exe"))
+          else !grepl(" is installed in ", line, fixed = TRUE),
           any(startsWith(r$out, "Building packages needs the r-zig build tools for R ")))
-cat("build tools: make off PATH is named as installed in this env: OK\n")
+cat("build tools: make off PATH", if (windows) "is named as installed in this env" else "is reported", ": OK\n")
+## unix: R's own sessions find the group's make with a PATH that lacks
+## it (etc/Renviron puts R_HOME/bin/toolchain/usr/bin first)
+if (!windows) {
+    Sys.setenv(PATH = paste(c(env_bin, "/usr/bin", "/bin"), collapse = ":"))
+    r <- run_to(file.path(R.home("bin"), "Rscript"), c("--vanilla", "-e", shQuote('cat(Sys.which("make"))')))
+    narrow(usr_bin = TRUE)
+    stopifnot(r$status == 0L, same_path(shown(dirname(r$out[1L])), make_dir))
+    cat("build tools: R's session finds the group's make: OK\n")
+}
 if (windows) {
     Sys.setenv(PATH = paste(c(empty, env_bin, file.path(Sys.getenv("SystemRoot"), "System32")), collapse = ";"))
     r <- run_to(file.path(R.home("bin"), "Rcmd.exe"), c(shortPathName(cc), "--rzig-check=build-tools"))

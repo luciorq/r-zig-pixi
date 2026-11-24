@@ -18,6 +18,7 @@ d <- tempfile("rzig-"); dir.create(d)
 ## build decline (0013); ZIG_LOCAL_CACHE_DIR defeats N3's per-install
 ## cache; R_ZIG_TOOLCHAIN_HINT adds a line
 Sys.unsetenv(c("R_ZIG_EXTRA_ENV", "ZIG_BIN", "R_ZIG_TOOLCHAIN_HINT", "R_ZIG_NO_PREFLIGHT",
+               "R_ZIG_TOOLCHAIN_ENV", "R_ZIG_SYSTEM_LIBS",
                "R_ZIG_PKG_BUILDER", "RZIG_TRACE", "MAKEFLAGS", "ZIG_LOCAL_CACHE_DIR"))
 ## a user Makevars switches the preflight off. Unset, R_MAKEVARS_USER lets
 ## R (install.R's makevars_user) and rzig (pkgbuild.zig) fall back to
@@ -109,7 +110,7 @@ cat("base: an R-only package installs: OK\n")
 inst <- function(pkg) run_to(file.path(R.home("bin"), if (windows) "Rcmd.exe" else "R"),
                              c(if (!windows) "CMD", "INSTALL", "-l", shQuote(lib), shQuote(pkg)))
 r <- inst(mkpkg("rzigsrc", src = TRUE)); cat(r$out, sep = "\n")
-pip <- if (windows) "  pip:         no wheels for Windows" else if (linux) "  pip:         pip install r-zig-compilers (zig and libstdc++'s headers: PyPI has no Fortran compiler); r-zig-toolchain installs every group" else "  pip:         pip install r-zig-compilers (zig only: PyPI has no Fortran compiler); r-zig-toolchain installs every group"
+pip <- if (linux) "  pip:         pip install r-zig-compilers (zig and libstdc++'s headers: PyPI has no Fortran compiler); r-zig-toolchain installs every group" else "  pip:         pip install r-zig-compilers (zig only: PyPI has no Fortran compiler); r-zig-toolchain installs every group"
 stopifnot(r$status != 0L,
           ## no zig is reachable: ZIG_BIN unset, no TC/zig, none in the
           ## env's bin or on this PATH, no python3 with ziglang (PHASE4
