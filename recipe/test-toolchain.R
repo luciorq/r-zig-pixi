@@ -183,11 +183,9 @@ if (windows) {
     if (dir.exists(file.path(envdir, "include")))
         stopifnot(has("-idirafter"), has(paste0(envdir, "/include")))
 } else {
-    # linux: the env's headers as -isystem (wave2-rzig M-16); macOS: -I
-    inc <- if (Sys.info()[["sysname"]] == "Linux") "-isystem" else "-I"
-    stopifnot(has(paste0("-Wl,-rpath,", envdir, "/lib")), has(paste0(inc, envdir, "/include")))
+    stopifnot(has(paste0("-Wl,-rpath,", envdir, "/lib")), has(paste0("-I", envdir, "/include")))
 }
-cat("toolchain: the compilers add this env's headers and -L", if (!windows) "and rpath", "and ignore CONDA_PREFIX: OK\n")
+cat("toolchain: the compilers add this env's -I/-L", if (!windows) "and rpath", "and ignore CONDA_PREFIX: OK\n")
 
 ## A package that links an env library with no flags of its own: zlib's
 ## header and library come from the env the compilers are installed in,

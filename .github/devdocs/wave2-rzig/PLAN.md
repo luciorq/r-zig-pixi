@@ -1,4 +1,4 @@
-# wave2-rzig: environment headers as -isystem on linux, tier-2 flags
+# wave2-rzig: tier-2 flags (environment headers stay -I: W6)
 
 Branch wave2-rzig from main f5a6c84 (build-12 batch 1, PR #54). Backlog:
 `.github/devdocs/chore-release-12/BACKLOG.md`. Tests on delta (linux-64),
@@ -23,6 +23,7 @@ conda-forge zig 0.17.1 and upstream (PyPI ziglang) 0.17.1.
 | W3 | M-18: shape | two optional fields, `cflags` (C) and `cxxflags` (C++), passed as `--cflag`/`--cxxflag` to `rzig t1` | a `-std=` for C must not reach C++; mirrors PKG_CFLAGS/PKG_CXXFLAGS |
 | W4 | M-18: position | after the plan's flags (Makeconf's with the user's Makevars) | the plan is one flat word list; R puts PKG_* before the user's CFLAGS, so here a package's `-O`/`-std` beats the user's. Recorded in the rpkg.zig doc comment. A relative `-I` is from src/ (the compiles run there) |
 | W5 | Q24 open form | no code change; one unit assertion | measured: order kept, archive linked whole (F6) |
+| W6 | Keep W1 (-isystem on linux) for build 12? (user, 2026-11-23, after CI) | **No: reverted, linux keeps `-I<env>/include`**, as macOS; W1's code, its parity mapping and the three test changes it needed (test-toolchain.R, contract-test.sh, verify-bundle.sh) are gone | CRAN compatibility, one behaviour on every platform, fewest surprises. CRAN's macOS layout is exactly ours: libraries under one prefix (`/opt/R/<arch>`), `-I/opt/R/<arch>/include` in Makeconf's CPPFLAGS; on CRAN's linux machines library headers are the compiler's implicit system dirs, and Windows (Rtools) the same, which our `-idirafter` matches. W1's gains do not reach CRAN packages: CRAN does not accept `-Werror` in a package's flags, a package's `-I` beats the env either way, and the bundled-`-isystem` case seen (arrow's aws config.h) is on macOS, which W1 left alone. Its cost: a package including iconv.h got glibc's iconv while R links libiconv (F4), and every linux compile changed. It cost three CI failures (#55: 45289106642 conda-package linux, 45289104950 contract, 45292868395 verify-bundle) before any stress run. Revisit only with a stress run showing a real package that needs it | user, 2026-11-23 |
 
 ## Findings
 

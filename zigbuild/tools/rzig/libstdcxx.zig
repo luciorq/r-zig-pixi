@@ -5,9 +5,9 @@
 //! time (Rcpp's callables), so one standard library for all C++ on linux.
 //! macOS and Windows keep zig's libc++.
 //!
-//! Compile: -nostdinc++ before the caller's arguments; after them (as
-//! gcc searches -I before its own C++ headers; before the environments'
-//! -isystem, compiler.zig envFlags): the shim directory, then libstdc++'s headers
+//! Compile: -nostdinc++ before the caller's arguments; after them (and
+//! after the environments' -I, as gcc searches -I before its own C++
+//! headers): the shim directory, then libstdc++'s headers
 //! (<gcc dir>/include/c++, its <triple> and backward directories) as -I,
 //! because zig passes its libc directories as -isystem first, and
 //! libstdc++'s #include_next <stdlib.h> must find them after its own

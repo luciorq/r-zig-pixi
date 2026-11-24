@@ -27,8 +27,9 @@ Build 12 is no longer a separate release step. It is the final batch after every
   - wave2-build: M-19 (bootstrap skipped when its inputs are unchanged:
     a no-change build 18 s against about 110 s), M-21 (linux host tools
     from the env); M-20 deferred (design in its PLAN.md).
-  - wave2-rzig: M-16 (env headers as `-isystem` on linux), M-18
-    (tier-2 `cflags`/`cxxflags`), Q24's `-Xlinker` form checked.
+  - wave2-rzig: M-18 (tier-2 `cflags`/`cxxflags`), Q24's `-Xlinker`
+    form checked; M-16 closed as won't-do: linux keeps `-I` (wave2-rzig
+    W6, user 2026-11-23).
   - wave2-compat: M-12 (Ubuntu 22.04/24.04, Rocky 8: tree and conda ok),
     M-14 (rpy2: base packages now link libR), M-26 (pip, uv); M-13
     deferred: new item M-29 below.

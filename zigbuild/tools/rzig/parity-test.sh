@@ -452,9 +452,7 @@ run_case "-lgfortran5, -lquadmathx and a word inside an argument are other thing
 # put the tree's -L after the caller's arguments with -lomp; rzig ignores
 # CONDA_PREFIX and adds its environment's -L to every link (F3b), after the
 # caller's arguments (R2).
-why_omp="the shims' OpenMP -L<tree>/lib is rzig's own-environment -L (on every link, F3b); its headers are -isystem on linux (M-16)"
-# linux: rzig's environment headers are -isystem, the shims' -I (M-16)
-omp_isystem="s|^-I\\($W/omptree/include\\)\$|-isystem\\1|"
+why_omp="the shims' OpenMP -L<tree>/lib is rzig's own-environment -L (on every link, F3b)"
 CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_DELIBERATE="\|^-I$W/env/include\$|d"; CASE_WHY=$why_conda
 run_case "OpenMP compile (CONDA_PREFIX ignored)" linux zig-cc -fopenmp -c a.c
 CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_DELIBERATE="\|^-[IL]$W/env/|d
@@ -462,30 +460,27 @@ CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_DELIBERATE="\|^-[IL]$W/en
 run_case "OpenMP link (CONDA_PREFIX ignored)" linux zig-cxx -shared -fopenmp -o pkg.so a.o
 CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_DELIBERATE="\|^-[IL]$W/env/|d"; CASE_WHY=$why_conda
 run_case "OpenMP link, caller's -lomp (data.table; CONDA_PREFIX ignored)" linux zig-cc -shared -fopenmp -o datatable.so a.o -lomp
-CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d
-$omp_isystem"; CASE_WHY=$why_omp
+CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d"; CASE_WHY=$why_omp
 run_case "-fopenmp-simd counts (substring)" linux zig-cc -fopenmp-simd -o prog a.o
 run_case "OpenMP without omp.h anywhere" linux zig-cc -fopenmp -shared -o pkg.so a.o
-CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d
-$omp_isystem"; CASE_WHY=$why_omp
+CASE_ENV=(ZIG_BIN="$STUB" CONDA_PREFIX="$W/env"); CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d"; CASE_WHY=$why_omp
 run_case "OpenMP from the tree rzig is in (omp.h there)" linux zig-cc -shared -fopenmp -o pkg.so a.o
-CASE_TREE=omptree; CASE_DELIBERATE=$omp_isystem; CASE_WHY=$why_omp
+CASE_TREE=omptree
 run_case "OpenMP from the tree, compile, no CONDA_PREFIX" linux zig-cxx -fopenmp -c a.cpp
-CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d
-$omp_isystem"; CASE_WHY=$why_omp
+CASE_TREE=omptree; CASE_DELIBERATE="\|^-L$W/omptree/lib\$|d"; CASE_WHY=$why_omp
 run_case "OpenMP from the tree, caller's -lomp" linux zig-cc -shared -fopenmp -o dt.so a.o -lomp
-CASE_TREE=omptree; CASE_DELIBERATE="\$a -isystem$W/omptree/include"
+CASE_TREE=omptree; CASE_DELIBERATE="\$a -I$W/omptree/include"
 CASE_WHY="rzig adds its environment's headers to every call, not only -fopenmp ones (F3b)"
 run_case "no -fopenmp: the tree's headers, no -lomp" linux zig-cc -shared -o pkg.so a.o -lomp
 # the toolchain's openmp/ (feat-standalone-toolchain B40)
 why_tc_omp="rzig counts the toolchain's openmp/ when the base has the libomp runtime (B40): its headers on every call, -lomp on a -fopenmp link; the shims never knew it"
 tc_omp=$W/omptc/lib/R/bin/toolchain/openmp
-CASE_TREE=omptc; CASE_DELIBERATE="\$a -isystem$tc_omp/include
+CASE_TREE=omptc; CASE_DELIBERATE="\$a -I$tc_omp/include
 \$a -lomp"; CASE_WHY=$why_tc_omp
 run_case "OpenMP from the toolchain's openmp/ (libomp.so in the base)" linux zig-cc -shared -fopenmp -o pkg.so a.o
-CASE_TREE=omptc; CASE_DELIBERATE="\$a -isystem$tc_omp/include"; CASE_WHY=$why_tc_omp
+CASE_TREE=omptc; CASE_DELIBERATE="\$a -I$tc_omp/include"; CASE_WHY=$why_tc_omp
 run_case "the toolchain's openmp/ headers on a compile" linux zig-cxx -c a.cpp
-CASE_TREE=omptc; CASE_DELIBERATE="\$a -isystem$tc_omp/include"; CASE_WHY=$why_tc_omp
+CASE_TREE=omptc; CASE_DELIBERATE="\$a -I$tc_omp/include"; CASE_WHY=$why_tc_omp
 run_case "the toolchain's openmp/: the caller's -lomp, none added" linux zig-cc -shared -fopenmp -o dt.so a.o -lomp
 CASE_TREE=omptcmin
 run_case "openmp/ without the base's libomp (minimal): nothing" linux zig-cc -shared -fopenmp -o pkg.so a.o

@@ -767,7 +767,7 @@ test "linux: a shared link of objects goes through zig cc, as zig-cc's, with the
     // OpenMP, as zig-cc: -lomp when an environment has omp.h
     try f.touch("env/include/omp.h");
     try expectZig(
-        pre ++ &[_][]const u8{ "-Wl,--strip-debug", fini, "-shared", "-fopenmp", "-o", "p.so", "a.o", a, "-lm", l, rp, f.fmt("-isystem{s}", .{f.path("env/include")}), "-lomp" },
+        pre ++ &[_][]const u8{ "-Wl,--strip-debug", fini, "-shared", "-fopenmp", "-o", "p.so", "a.o", a, "-lm", l, rp, f.fmt("-I{s}", .{f.path("env/include")}), "-lomp" },
         try command(c, &.{ "-shared", "-fopenmp", "-o", "p.so", "a.o" }),
     );
     try testing.expectEqualStrings("", f.takeWarnings());
