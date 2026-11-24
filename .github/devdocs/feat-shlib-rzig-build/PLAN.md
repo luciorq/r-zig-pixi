@@ -703,6 +703,12 @@ In feat-standalone-toolchain TODO.md:
   (05:18), so some step in it may run rzig with the user's cache rather
   than the test's. Not traced; harmless (a zig lib cache), left in
   place.
+  (2026-11-24, b13-hosts H4: by design. On macOS every conda env has
+  libc++.dylib beside conda-forge's zig, so rzig gives zig a mirror of
+  its lib dir, `<cache>/r-zig/zig-lib-<key>` (libcxx_mirror.zig), one
+  per zig lib dir, symlinks only; the cache is XDG_CACHE_HOME, else
+  HOME/.cache (cache.zig). A step that runs rzig without the test's
+  XDG_CACHE_HOME writes the user's cache.)
 - With K and L at (a), nothing more: the binary repository
   (feat-no-host-paths, "Our own repository first") would ship pkgbuild
   and pak prebuilt.

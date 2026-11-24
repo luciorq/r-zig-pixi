@@ -1,0 +1,24 @@
+# L4 prototype on kappa (b13-design PLAN.md): published build 12 without
+# the build-tools group. `native` has R and the compilers only (no m2-*,
+# no make, no sh); `msys` adds r-zig-build-tools (the MSYS2 set that
+# ships today) as the baseline.
+[workspace]
+name = "l4-native-tools"
+channels = ["https://prefix.dev/universe", "conda-forge"]
+platforms = ["win-64"]
+
+[dependencies]
+r-zig-slim = { version = "==4.6.2", build = "*_12" }
+r-zig-compilers = { version = "==4.6.2", build = "*_12" }
+# cmake (RcppParallel builds its bundled TBB with it); no MSYS2 in it
+r-zig-extras = { version = "==4.6.2", build = "*_12" }
+# Rmpfr's configure.win finds gmp and mpfr in R's env
+gmp = "*"
+mpfr = "*"
+
+[feature.msys.dependencies]
+r-zig-build-tools = { version = "==4.6.2", build = "*_12" }
+
+[environments]
+native = []
+msys = ["msys"]

@@ -1187,6 +1187,11 @@ finding 79, the CI checks of finding 82 and the stress rows of findings
   different copies (finding 66).
 - Which extractor ran on the runner (cmake's zstd or System32
   tar.exe) and the time of the extraction and the include-pinned copy.
+  (2026-11-24, b13-hosts CI8, stress 45305358893: the whole step,
+  download, extraction and the closed .pc files, took 6.9 min on the
+  tree leg and 6.5 min on the conda leg, with no actions/cache hit; the
+  tree leg saved the cache at its end. stress.R does not say which
+  extractor ran; a one-line message is proposed in b13-hosts PLAN.md.)
   That they work on the runner is shown: both windows-11-arm legs
   report the tree ready, and links name its archives by C:/ paths from
   the closed .pc files (finding 83).
@@ -1205,6 +1210,11 @@ finding 79, the CI checks of finding 82 and the stress rows of findings
   major is not checked against this repo's pins.
 - CI time of link-objects-test.sh on ubuntu-latest and
   ubuntu-24.04-arm; cross-linking for Windows from linux-aarch64.
+  (2026-11-24, b13-hosts CI8: publish run 45381914199, build 12. On
+  ubuntu-24.04-arm link-objects-test takes 171-183 s over the four
+  envs, on ubuntu-latest 96-195 s; on ubuntu-24.04-arm its x86_64 and
+  aarch64 Windows DLL links pass, so cross-linking for Windows from
+  linux-aarch64 works.)
 - The --conda leg needs an rzig with R_ZIG_FALLBACK_SOFT: channel local
   only (universe's build 11 ignores it; the Fallback line says so).
   With channel local it works (finding 83); universe's build 11 with

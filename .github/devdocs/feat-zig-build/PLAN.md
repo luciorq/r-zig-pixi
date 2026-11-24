@@ -150,13 +150,17 @@ copied wholesale from the source tree: `share/`, `doc/`, `include/`
 ## What deliberately stays outside `zig build` (for now)
 
 - **fetch**: `scripts/fetch-r.sh` (curl + checksum pin) still fetches the
-  source tree; a `zig build fetch` step is a later nicety.
+  source tree; a `zig build fetch` step is a later nicety. (Build 13:
+  done; `zig build fetch` runs zigbuild/tools/fetch.zig and fetch-r.sh
+  is gone, .github/devdocs/b13-build/.)
 - **Fortran compiler**: flang from conda-forge, invoked by build.zig.
 - **Third-party libs**: linked from the pixi env, not built from source.
   Building deps under zig too is a possible milestone 7, not this one.
 - **The `toolchain/zig-*` shims**: no longer used to build R itself, but
   still written into `etc/Makeconf` — they remain the contract for
-  *package* compilation (`R CMD SHLIB`) on the installed R.
+  *package* compilation (`R CMD SHLIB`) on the installed R. (Since
+  replaced by rzig in R_HOME/bin/toolchain; build 13 deleted the shims,
+  .github/devdocs/b13-build/.)
 - **smoke/check/contract test scripts**: unchanged; they validate the
   product, whoever built it.
 

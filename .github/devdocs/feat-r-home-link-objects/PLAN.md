@@ -430,3 +430,13 @@ UNVERIFIED:
 - CI, linux-aarch64 at run time, Windows on ARM.
 - A zig other than 0.16.0 linking these objects (expected: lld links
   older relocatable objects).
+
+Update 2026-11-24 (b13-hosts CI8, build 12: publish run 45381914199,
+stress 45305358893): verified now, from CI logs and host runs:
+`TC/cfguard.o` ships in win-64's r-zig-slim (kappa) and magick's
+windows-latest link names R_HOME/bin/toolchain/cfguard.o (row ok);
+pkg-parity runs and passes on both Windows runners and on macos-latest,
+macos-15-intel and ubuntu-24.04-arm; rzig-test's link-objects test runs
+on ubuntu-24.04-arm (171-183 s); every conda-package leg built and
+tested; zig 0.17.1 links the objects. Still not run: the wheel's
+pip install on Windows (no Windows wheel yet, L2).
