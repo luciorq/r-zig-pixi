@@ -1,0 +1,11 @@
+Package: zigcmake
+Version: 0.1
+Title: A CMake Consumer of zig-libs
+Description: Written for r-zig's stress suite (stress/README.md). Its
+    configure.win runs CMake on tools/probe, which finds libs-zig-pixi's
+    abseil, GEOS, oneTBB and expat CMake configs, links a program against
+    them and runs it.
+License: GPL-3
+Author: r-zig
+Maintainer: r-zig <r-zig@example.invalid>
+OS_type: windows

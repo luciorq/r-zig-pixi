@@ -1,0 +1,18 @@
+#!/bin/sh
+# A CMake consumer of zig-libs (chore-release-12 M-9): CMake (the tree's
+# or the env's, with R's etc/Rcmd_environ defaults: CMAKE_GENERATOR MSYS
+# Makefiles, CMAKE_TOOLCHAIN_FILE etc/r-zig.cmake, which puts each env's
+# zig-libs/<triple> on CMAKE_PREFIX_PATH) configures tools/probe with R's
+# compilers; tools/probe/CMakeLists.txt fails unless every config, library
+# and header it finds is under zig-libs. Then it builds and runs the probe.
+CC=`"${R_HOME}/bin/R" CMD config CC`
+CXX=`"${R_HOME}/bin/R" CMD config CXX`
+echo "zigcmake: CC=$CC CXX=$CXX CMAKE_GENERATOR=$CMAKE_GENERATOR CMAKE_TOOLCHAIN_FILE=$CMAKE_TOOLCHAIN_FILE"
+echo "zigcmake: cmake `command -v cmake`"
+rm -rf tools/build
+CC="$CC" CXX="$CXX" cmake -S tools/probe -B tools/build -DCMAKE_BUILD_TYPE=Release || exit 1
+cmake --build tools/build || exit 1
+./tools/build/probe.exe > tools/build/run.txt || exit 1
+cat tools/build/found.txt tools/build/run.txt
+mkdir -p inst
+cat tools/build/found.txt tools/build/run.txt > inst/zigcmake.txt

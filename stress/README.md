@@ -14,6 +14,8 @@ package does not fail the run.
 |---|---|
 | `packages.tsv` | the data: one row per target, with its group, OSes, system libraries, env vars, timeout, expected result, smoke call and a note. The header explains each column. |
 | `stress.R` | the one entry script. Base R only. `--help` prints its options. |
+| `smoke/<name>.R` | a smoke call longer than one line: a row whose smoke is `@<name>.R` runs this file (its last value is the result), copied into the run's smoke file. |
+| `local/<name>/` | a `local` row's package source (zigcmake), copied into the run directory before each install. |
 | `pixi.toml`, `[feature.stress]` | the `stress` environment: the system libraries the rows need (GDAL, GEOS, PROJ, cmake, ...), plus the default feature's zig and flang. All six platforms; on win-arm64 without the libraries conda-forge has no build of there (libgdal-core, udunits2, imagemagick, harfbuzz, hdf5, libnetcdf, gsl, mpfr, gmp, libpq, glpk, nlopt; 2026-11-15) and without libprotobuf (protolite takes r-windows' protobuf bundle there; chore-env-ci M-3), which the report lists as sysdeps missing from the env. |
 | `.github/workflows/stress.yaml` | the manual CI workflow. |
 
@@ -22,7 +24,7 @@ The groups follow the brief:
 | group | what it tests | rows |
 |---|---|---|
 | g3 | C libraries from the env (rzig's `-I`/`-L` rule) | curl, openssl, xml2, gert, units, systemfonts, textshaping, ragg, magick, hdf5r, ncdf4, gsl, Rmpfr, RPostgres |
-| g4 | own build systems and bundled code | nloptr, s2, igraph, stringi, stringi:bundled, qs2, fst, geos, Rhdf5lib, Rsamtools |
+| g4 | own build systems and bundled code | nloptr, s2, igraph, stringi, stringi:bundled, qs2, fst, geos, Rhdf5lib, Rsamtools, zigcmake (Windows) |
 | g2 | C++ across a library boundary (the C++ ABI risk) | lwgeom, sf, terra, gdalraster, RcppParallel, RcppParallel:system-tbb, protolite, arrow, arrow:source, V8 |
 | g1 | heavy C++ | Rcpp, RcppArmadillo, lme4, DESeq2, scran, StanHeaders, rstan, duckdb, mlpack |
 | g0 | rzig itself: many tiny jobs at a high `-j`, repeated | tinyjobs |
@@ -35,11 +37,17 @@ them out. A tag written `name@os` (arrow's `heavy@linux`) counts on that OS
 only. A `name:variant` row installs the same package again with other
 env vars, into a library of its own (for example `stringi:bundled` builds
 stringi's own ICU). A row tagged `local` is no CRAN package: `stress.R`
-writes it into the run directory and installs it `STRESS_REPEAT` times (the
-row's env), a fresh copy each time, until the first failure. `tinyjobs` is
-64 one-line C files, installed 20 times at `-j 32`: `rzig build`'s tier-1
-pool (tier1.zig) starts and ends many quick compiles, which guards its
-lifetime rule (feat-tier1-engine).
+writes it into the run directory (a copy of `stress/local/<name>/`, or for
+tinyjobs files it writes itself) and installs it `STRESS_REPEAT` times (the
+row's env; once without it), a fresh copy each time, until the first
+failure. `tinyjobs` is 64 one-line C files, installed 20 times at `-j 32`:
+`rzig build`'s tier-1 pool (tier1.zig) starts and ends many quick compiles,
+which guards its lifetime rule (feat-tier1-engine). `zigcmake` (Windows) is
+a CMake consumer of zig-libs: its `configure.win` runs cmake with R's
+compilers and R's `etc/Rcmd_environ` defaults, and its probe project fails
+unless the abseil, GEOS, oneTBB and expat CMake configs, `find_library(z)`
+and `find_path(expat.h)` all resolve under zig-libs; it then links a
+program against the four and runs it (chore-release-12 M-9).
 
 ## Run it locally
 
@@ -103,6 +111,14 @@ Useful options (`--help` lists them all):
   found in the env. A conda run ignores it, with a note: there the tools
   are the env's.
 - `--strict`: exit 1 when a result differs from its `expect`.
+- `--libs-smoke[=REF]`: after the rows, run libs-zig-pixi's own
+  `tests/r/smoke.R` (REF: a git ref of github.com/luciorq/libs-zig-pixi,
+  `main` by default, or a local file) for those of sf, terra, gdalraster
+  and s2 that installed and passed in this run. Its log is
+  `logs/libs-smoke.log`, the script is kept in `smoke/libs-smoke.R`, and
+  report.md has one "libs smoke" line: pass or FAIL, the checks that
+  failed. Opt-in; meant for Windows, where those four link zig-libs, but it
+  runs on any OS.
 
 ## Run it in CI
 
@@ -126,7 +142,9 @@ upstream's from `pixi run fetch-zig`), `trace` (`--trace`), the builder
 build where the call qualifies, patch 0013; or make, the make path for
 every package and shared object, a make reference) and
 `msys_from_tree` (false by default; true passes `--msys-from-tree` on
-Windows).
+Windows), `rtools_libs` (true by default; false passes `--no-rtools-libs`
+on windows-11-arm) and `libs_smoke` (a libs-zig-pixi git ref, empty by
+default; set, it passes `--libs-smoke=<ref>`).
 Each OS and distribution is one job.
 Jobs never stop each other (`fail-fast: false`) and may take up to 6 hours.
 
@@ -210,9 +228,15 @@ nothing else on the machine:
   MacPorts' `/opt/local`, and its
   `etc/Renviron` makes it `CMAKE_TOOLCHAIN_FILE`'s default. The runner
   then writes none, so a run tests the tree's file, as a user gets it.
-- Windows only: `R_TOOLS_SOFT` is the env's `Library`, where packages built
-  for Rtools look for libraries (sf and terra copy GDAL's and PROJ's data
-  from there).
+- Windows only: `R_TOOLS_SOFT` is the env's zig-libs when it has one, else
+  its `Library` (on Windows on ARM: the Rtools45 tree when the env has no
+  zig-gdal), where packages built for Rtools look for libraries (sf, terra
+  and gdalraster copy GDAL's and PROJ's data from there). Among the rows
+  only these and Rhtslib (Rsamtools' dependency: `-lnghttp2`, `-lpsl`,
+  `-lbrotlidec` when `$(R_TOOLS_SOFT)/lib` has their archives) read it;
+  the sources of gert, stringi, qs2, fst, Rhdf5lib, V8, duckdb, mlpack,
+  rstan, DESeq2, systemfonts, geos and their compiled dependencies do not
+  (b13-stress Q26, CRAN and Bioconductor 3.23 sources of 2026-11-24).
 
 The distribution comes from where R lives. An R inside a conda env (its root
 has `conda-meta`) is "conda", and that env holds the libraries. Otherwise it
@@ -250,7 +274,7 @@ changes; a copy without `.git` says "unknown". Then one line per target:
 | class | the runner's guess at the cause, from the failing part of the log |
 | expect | the row's expectation for this OS and arch (`windows-aarch64=` before `windows=`); `?` when the target's `zig-*` sysdeps are missing (see "Windows: zig-libs") |
 | min, MB | install minutes and installed size |
-| zig-libs | Windows: the target's `zig-*` sysdeps (its row's and its dependencies' rows'), each with its version and build, `Rtools tree` or `missing`; with `--trace`, the `-l` names that resolved into zig-libs and into the Rtools45 fallback tree (rzig's `lib -l<name> <file>` trace lines) |
+| zig-libs | Windows: the target's `zig-*` sysdeps (its row's and its dependencies' rows'), each with its version and build, `Rtools tree` or `missing`; with `--trace`, the `-l` names that resolved into zig-libs and into the Rtools45 fallback tree (rzig's `lib -l<name> <file>` trace lines), and `copies`: the libraries the log's links took from more than one directory (a `-l` name's file, and a `lib<n>.a` a link names by path, counted as `<n>`), `none` when each came from one place. A name zig serves itself (`c++`, `m`, the MinGW system libraries such as `ws2_32`) shows the file the first `-L` directory has, but zig links its own (stress/README.md, "Windows on ARM") |
 | first error | the first error line of the log |
 
 Dependencies that failed a step follow the table. Each package has
@@ -414,10 +438,12 @@ extraction failure, no pkgconf), the rows run without it and the report's
   tree's static copy and headers on Windows on ARM. A package that links
   an env library by a bare `-l` while it asks pkg-config for a tree module
   gets the tree's header of that library: not checked.
-- **`R_TOOLS_SOFT` is the tree**, as CRAN's aarch64 LOCAL_SOFT: sf, terra
-  and gdalraster copy its `share/gdal` and `share/proj`, which match the
-  PROJ they link. Makevars that test `$(R_TOOLS_SOFT)/lib/lib<x>.a` take
-  their Rtools branch.
+- **`R_TOOLS_SOFT` is the tree** when the env has no zig-gdal, as CRAN's
+  aarch64 LOCAL_SOFT: sf, terra and gdalraster copy its `share/gdal` and
+  `share/proj`, which match the PROJ they link (with zig-gdal it is
+  zig-libs, whose GDAL and PROJ they link). Makevars that test
+  `$(R_TOOLS_SOFT)/lib/lib<x>.a` take their Rtools branch: among the rows
+  only Rhtslib's (above).
 - **The report** has a `Fallback:` line: the tarball, the start of its
   sha256, the sysdeps the tree serves (they leave "Sysdeps missing"), and
   whether rzig uses the tree. rzig's trace names it `environment <tree>
@@ -447,6 +473,23 @@ extraction failure, no pkgconf), the rows run without it and the report's
   ran (cmake's zstd or `tar.exe`), the rows outside that run, and
   upstream zig on the runner (record: feat-winarm-gaps PLAN.md findings
   83-88).
+- **Runtime checks since 2026-11-24 (b13-stress M-10).** The smoke files
+  of hdf5r (a dataset and an attribute round trip: the tree's HDF5
+  1.12.1), sf and terra (EPSG lookups through proj.db, a failed read as an
+  R error), fst (two OpenMP threads, and at most one OpenMP DLL in the
+  process, from `tasklist /m`) and magick (an SVG through the bundle's
+  librsvg, CFG code) check more than loading, on every OS. The zig-libs
+  column's `copies` lists a library a target's links took from two
+  directories (zig-libs and the tree, say). On C++ exceptions across the
+  tree's libc++ and zig's: zig links its own libc++ whatever `-L` holds
+  (`-lc++` with a non-archive `libc++.a` first on `-L` links, with
+  conda-forge zig 0.17.1 and upstream zig 0.16.0, gamma 2026-11-24; so
+  do `-lm`, `-lws2_32`, `-lole32` and the other MinGW names), so a
+  package's DLL has one libc++, zig's. The trace's `lib -lc++ <tree>/lib/libc++.a`
+  line names a file zig does not read. The tree's libraries the rows link
+  on Windows on ARM are C APIs (gsl, gmp, mpfr, glpk, nlopt, hdf5,
+  netcdf, udunits2, libpq; harfbuzz is C++ inside, built without
+  exceptions), so no row throws a C++ exception out of tree code.
 
 ## Notes and known issues
 
