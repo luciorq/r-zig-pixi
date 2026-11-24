@@ -22,6 +22,17 @@ macOS blendvpd, pinsrd, pextrb, pshufb, haddpd pass and pcmpestri,
 crc32q, popcntq, lzcntl are flagged; on linux all nine are flagged;
 pextrw, andnps, pmaxsw (baseline) are flagged on neither.
 
+**X-F3 V.** Stress 45305358893 (d58dc2c, g0-g4, tree and conda, six
+OSes): 0 unexpected rows on linux and macOS; one unexpected row on
+Windows: Rhdf5lib is ok on windows-x86_64 and windows-aarch64 (3.5-5.1
+min), expect was fail-package (FLT16_MAX in stress 45219870330). Cause:
+rzig adds `-D__STDC_WANT_IEC_60559_TYPES_EXT__` on Windows (batch 1,
+0903594). packages.tsv: Rhdf5lib expect `ok`. Other non-ok rows match
+their expects (protolite and arrow on Windows, rstan smoke on Windows,
+hdf5r, gsl, igraph and the skipped Rsamtools and scran on win-64);
+arrow and arrow:source on macos-x86_64 stay `?` (M-6, aws-checksums
+AVX-512, build 13).
+
 ## Also
 
 - stress/README.md: the first r-zig build that searches zig-libs is 12
@@ -29,4 +40,5 @@ pextrw, andnps, pmaxsw (baseline) are flagged on neither.
 
 ## Not verified
 
-- The fixed check on a macos-15-intel runner (the next CI run).
+- Verified since: the fixed check passes on macos-15-intel (build-r
+  45299747894, d58dc2c).
