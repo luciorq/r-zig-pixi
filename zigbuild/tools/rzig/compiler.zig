@@ -109,6 +109,8 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
         args = try system_libs.rewrite(ctx, args);
         link_last = try system_libs.last(ctx, !cmdline.compileOnly(args));
     }
+    // Windows: a zig-libs -I (LOCAL_SOFT's) searched after zig's headers
+    if (ctx.os == .windows) args = try windows.demoteZigLibs(ctx, args);
     args = try envFlags(ctx, args);
     // linux: libstdc++ for all C++ (libstdcxx.zig). The caller's
     // -lstdc++ and -lgcc_s become the runtime's paths on every link, C
@@ -436,7 +438,8 @@ fn envFlags(ctx: *Ctx, args: Args) !Args {
         const include = try ctx.fmt("{s}/include", .{e.dir});
         if (headers and ctx.isDir(include)) {
             if (ctx.os == .windows) {
-                try inc.appendSlice(a, &.{ "-idirafter", include });
+                // not twice: the caller's zig-libs -I is one by now
+                if (!try windows.hasIdirafter(ctx, args, include)) try inc.appendSlice(a, &.{ "-idirafter", include });
             } else {
                 try inc.append(a, try ctx.fmt("-I{s}", .{include}));
             }
@@ -771,6 +774,67 @@ test "Windows: -idirafter, no rpath, -lz and -lomp through the environment's -L"
         &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", omp, l, "-idirafter", inc, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lomp" }),
     );
+}
+
+test "Windows: a zig-libs -I (LOCAL_SOFT's, R_ZIG_LIBS spelled as Rcmd_environ does) becomes -idirafter, in place, not added twice" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    try f.env.put("PATH", f.path("nothing"));
+    const triple = target.zig(.windows, c.arch).?;
+    for ([_][]const u8{ "env/Library/include/zlib.h", "env/Library/lib/R/bin/toolchain/gcc.exe", f.fmt("env/Library/zig-libs/{s}/include/gdal.h", .{triple}), f.fmt("env/Library/zig-libs/{s}/include/nlopt/nlopt.h", .{triple}), f.fmt("env/Library/zig-libs/{s}/lib/libz.a", .{triple}) }) |p| try f.touch(p);
+    c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
+    const inc = f.path("env/Library/include");
+    const zinc = f.path(f.fmt("env/Library/zig-libs/{s}/include", .{triple}));
+    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types };
+    // Rcmd_environ's R_ZIG_LIBS: ${R_HOME}/../../zig-libs/<triple>, and
+    // make's -I"$(LOCAL_SOFT)/include" (a caller may spell it with `\`
+    // and another case)
+    const rzl = f.fmt("{s}/../../zig-libs/{s}", .{ f.path("env/Library/lib/R"), triple });
+    try f.env.put("R_ZIG_LIBS", rzl);
+    const local = f.fmt("{s}/include", .{rzl});
+    const upper = try std.ascii.allocUpperString(c.arena, try mem.replaceOwned(u8, c.arena, local, "/", "\\"));
+    const sub = f.fmt("{s}/include/nlopt", .{rzl});
+    // joined and separate -I, the include dir and one below it; other -I
+    // (a package's own, a name that only starts like zig-libs') kept, in
+    // their places; zig-libs' include/ not added again after them
+    const other = f.fmt("{s}2/include", .{rzl});
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ "-I.", "-idirafter", local, "-Ipkg/inc", "-idirafter", upper, "-idirafter", sub, f.fmt("-I{s}", .{other}), "-c", "a.cpp", "-o", "a.o", "-idirafter", inc } }),
+        try argv(c, .cxx, &.{ "-I.", f.fmt("-I{s}", .{local}), "-Ipkg/inc", "-I", upper, f.fmt("-I{s}", .{sub}), f.fmt("-I{s}", .{other}), "-c", "a.cpp", "-o", "a.o" }),
+    );
+    // LOCAL_LIBS: -L<zig-libs>/lib/x64 (none) dropped, -L<zig-libs>/lib
+    // kept, as an -L elsewhere that does not exist
+    const objects: Args = &.{ "-shared", "-o", "p.dll", "a.o" };
+    const link = try argv(c, .cxx, try mem.concat(c.arena, []const u8, &.{ objects, &.{ f.fmt("-L{s}/lib/x64", .{rzl}), "-L", f.fmt("{s}/lib/x64", .{rzl}), f.fmt("-L{s}/lib", .{rzl}), "-Lnowhere" } }));
+    var lflags: std.ArrayList([]const u8) = .empty;
+    for (link) |x| if (mem.startsWith(u8, x, "-L")) try lflags.append(c.arena, x);
+    try expectArgs(&.{ f.fmt("-L{s}/lib", .{rzl}), "-Lnowhere", f.fmt("-L{s}", .{f.path(f.fmt("env/Library/zig-libs/{s}/lib", .{triple}))}), f.fmt("-L{s}", .{f.path("env/Library/lib")}) }, lflags.items);
+    // no -I of it: zig-libs' include/ first, as before
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ "-c", "a.cpp", "-o", "a.o", "-idirafter", zinc, "-idirafter", inc } }),
+        try argv(c, .cxx, &.{ "-c", "a.cpp", "-o", "a.o" }),
+    );
+    // without R_ZIG_LIBS (outside R CMD): the environment's own zig-libs
+    // still counts, spelled as rzig finds it
+    _ = f.env.swapRemove("R_ZIG_LIBS");
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ "-idirafter", zinc, "-c", "a.cpp", "-o", "a.o", "-idirafter", inc } }),
+        try argv(c, .cxx, &.{ f.fmt("-I{s}", .{zinc}), "-c", "a.cpp", "-o", "a.o" }),
+    );
+    // R_ZIG_LIBS alone (no zig-libs in R's env; a user's LOCAL_SOFT tree)
+    c.self_exe = null;
+    try f.env.put("R_ZIG_LIBS", f.path("soft"));
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ "-idirafter", f.path("soft/include"), "-I", f.path("softer/include"), "-c", "a.cpp", "-o", "a.o" } }),
+        try argv(c, .cxx, &.{ "-I", f.path("soft/include"), "-I", f.path("softer/include"), "-c", "a.cpp", "-o", "a.o" }),
+    );
+    // linux: never (no zig-libs there)
+    c.os = .linux;
+    c.self_exe = null;
+    const l = try argv(c, .c, &.{ f.fmt("-I{s}", .{f.path("soft/include")}), "-c", "a.c" });
+    for (l) |x| try testing.expect(!mem.eql(u8, x, "-idirafter"));
 }
 
 test "Windows on ARM: R_ZIG_FALLBACK_SOFT after every environment: -idirafter <tree>/include, -L<tree>/lib; an environment's library first" {

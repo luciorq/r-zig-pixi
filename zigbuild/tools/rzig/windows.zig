@@ -233,6 +233,99 @@ pub fn objSuffix(ctx: *Ctx, args: Args) !Args {
     return mem.concat(ctx.arena, []const u8, &.{ args, &.{ "-o", try ctx.fmt("{s}.o", .{stem}) } });
 }
 
+/// The caller's -I<dir> and -I <dir> where <dir> is zig-libs or below it
+/// become -idirafter <dir>, in place: zig-libs' headers are searched after
+/// zig's own MinGW and libc++ headers, as environment.zig's flags put
+/// them, so none of its names can shadow one of theirs. Makeconf.win's
+/// LOCAL_CPPFLAGS (-I"$(LOCAL_SOFT)/include", on every package compile)
+/// is the one that comes this way: Rcmd_environ defaults LOCAL_SOFT to
+/// zig-libs (build.zig's rcmdEnviron; b13-fixes), as CRAN sets it to its
+/// library tree, and so do a package's -I$(R_TOOLS_SOFT)/include/<dir>
+/// (nloptr). An -I of a whole MinGW sysroot broke every libc++ compile
+/// (feat-winarm-gaps finding 22: "<cstddef> tried including <stddef.h>
+/// but didn't find libc++'s"). zig-libs: each environment's
+/// (environment.zig, item 4) and R_ZIG_LIBS (Rcmd_environ's
+/// R_HOME/../../zig-libs/<triple>); paths compared ignoring case, `/` or
+/// `\`, `.` and `..` (`samePath`). Other -I untouched, -isystem too.
+/// Also an -L<dir> (or -L <dir>) under zig-libs that is not a directory is
+/// dropped: LOCAL_LIBS names -L"$(LOCAL_SOFT)/lib$(R_ARCH)" (lib/x64)
+/// before lib, and zig warned on every link "unable to open library
+/// directory" for it (kappa, b13-fixes).
+pub fn demoteZigLibs(ctx: *Ctx, args: Args) !Args {
+    var roots: std.ArrayList([]const u8) = .empty;
+    for (try environment.list(ctx)) |e| if (e.zig_libs) try roots.append(ctx.arena, e.dir);
+    if (ctx.getenv("R_ZIG_LIBS")) |v| if (v.len > 0) try roots.append(ctx.arena, v);
+    if (roots.items.len == 0) return args;
+    var out: std.ArrayList([]const u8) = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const x = args[i];
+        const lib = mem.startsWith(u8, x, "-L");
+        if (!lib and !mem.startsWith(u8, x, "-I")) {
+            try out.append(ctx.arena, x);
+            continue;
+        }
+        const sep = x.len == 2 and i + 1 < args.len;
+        const dir = if (sep) args[i + 1] else if (x.len > 2) x[2..] else {
+            try out.append(ctx.arena, x);
+            continue;
+        };
+        const zl = for (roots.items) |r| {
+            if (try underPath(ctx, dir, r)) break true;
+        } else false;
+        if (!zl or (lib and ctx.isDir(dir))) {
+            try out.append(ctx.arena, x);
+            continue;
+        }
+        if (!lib) try out.appendSlice(ctx.arena, &.{ "-idirafter", dir });
+        if (sep) i += 1;
+    }
+    return out.items;
+}
+
+/// Whether `args` already has `-idirafter <dir>` (`samePath`): an
+/// environment's include/ is not added twice (compiler.envFlags), as when
+/// demoteZigLibs made the caller's zig-libs -I one.
+pub fn hasIdirafter(ctx: *Ctx, args: Args, dir: []const u8) !bool {
+    var i: usize = 0;
+    while (i + 1 < args.len) : (i += 1) {
+        if (mem.eql(u8, args[i], "-idirafter") and try samePath(ctx, args[i + 1], dir)) return true;
+    }
+    return false;
+}
+
+/// Windows paths `a` and `b` name the same place, lexically: ignoring
+/// case, `/` against `\`, repeated separators, `.` and `..` components.
+pub fn samePath(ctx: *Ctx, a: []const u8, b: []const u8) !bool {
+    return std.ascii.eqlIgnoreCase(try normalPath(ctx, a), try normalPath(ctx, b));
+}
+
+/// `path` is `dir` or below it (`samePath`'s comparison).
+pub fn underPath(ctx: *Ctx, path: []const u8, dir: []const u8) !bool {
+    const p = try normalPath(ctx, path);
+    const d = try normalPath(ctx, dir);
+    if (p.len < d.len or !std.ascii.eqlIgnoreCase(p[0..d.len], d)) return false;
+    return p.len == d.len or p[d.len] == '/' or (d.len > 0 and d[d.len - 1] == '/');
+}
+
+/// `path` with `/` separators, no empty or `.` components and each `..`
+/// applied (not above the root: a drive's `C:` or a leading `/` stays).
+fn normalPath(ctx: *Ctx, path: []const u8) ![]const u8 {
+    var parts: std.ArrayList([]const u8) = .empty;
+    const lead = path.len > 0 and (path[0] == '/' or path[0] == '\\');
+    var it = mem.tokenizeAny(u8, path, "/\\");
+    while (it.next()) |c| {
+        if (mem.eql(u8, c, ".")) continue;
+        if (mem.eql(u8, c, "..")) {
+            if (parts.items.len > 0 and !(parts.items.len == 1 and mem.endsWith(u8, parts.items[0], ":"))) _ = parts.pop();
+            continue;
+        }
+        try parts.append(ctx.arena, c);
+    }
+    const joined = try mem.join(ctx.arena, "/", parts.items);
+    return if (lead) ctx.fmt("/{s}", .{joined}) else joined;
+}
+
 /// GNU ld's order in each directory, against what zig finds by itself.
 /// No import library from the fallback tree's lib/ (`tree`).
 fn importLib(ctx: *Ctx, dirs: Args, name: []const u8, tree: ?[]const u8) !?[]const u8 {
@@ -516,4 +609,22 @@ test "exeSuffix: gcc's .exe for an executable named without an extension" {
     try expectArgs(&.{ "-shared", "-o", "ps", "a.o" }, try exeSuffix(&f.ctx, &.{ "-shared", "-o", "ps", "a.o" }));
     try expectArgs(&.{ "-c", "a.c", "-o", "a" }, try exeSuffix(&f.ctx, &.{ "-c", "a.c", "-o", "a" }));
     try expectArgs(&.{ "-Xlinker", "-o", "a.c" }, try exeSuffix(&f.ctx, &.{ "-Xlinker", "-o", "a.c" }));
+}
+
+test "samePath and underPath: case, separators, `.` and `..`, not a longer name" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    try testing.expect(try samePath(c, "C:/env/Library/lib/R/../../zig-libs/x/include", "c:\\ENV\\library\\zig-libs\\x\\include\\"));
+    try testing.expect(try samePath(c, "C:/a/./b//c", "C:/a/b/c"));
+    try testing.expect(!try samePath(c, "C:/a/b", "C:/a/bc"));
+    try testing.expect(!try samePath(c, "C:/a/b", "D:/a/b"));
+    // `..` never goes above a drive or the root
+    try testing.expect(try samePath(c, "C:/../a", "C:/a"));
+    try testing.expect(try samePath(c, "/../a", "/a"));
+    try testing.expect(try underPath(c, "C:/zl/include/nlopt", "c:\\ZL"));
+    try testing.expect(try underPath(c, "C:/zl", "C:/zl/"));
+    try testing.expect(!try underPath(c, "C:/zl2/include", "C:/zl"));
+    try testing.expect(!try underPath(c, "C:/z", "C:/zl"));
 }
