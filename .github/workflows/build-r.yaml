@@ -54,9 +54,9 @@ jobs:
           # binary, so each pixi release would also drop every cached env.
           # The other workflows pin the same version.
           pixi-version: v0.84.2
-          # minimal on unix also needs the python-only `wheel` env for its
-          # last steps (no Windows wheel yet)
-          environments: ${{ (inputs.env == 'minimal' && !startsWith(inputs.os, 'windows')) && 'minimal wheel' || inputs.env }}
+          # minimal also needs the python-only `wheel` env for its last
+          # steps (Windows too since b13-env-ci L2)
+          environments: ${{ inputs.env == 'minimal' && 'minimal wheel' || inputs.env }}
           # No cache, as toolchain.yaml: the build's last step (-Dbase)
           # copies the licence files of the packages the tree takes files
           # from, out of pixi's package cache. An env restored from
@@ -96,8 +96,8 @@ jobs:
         if: inputs.env == 'minimal'
         run: pixi run -e minimal minimal-check
       # rzig, the compilers zig build installs into R_HOME/bin/toolchain
-      # (feat-no-host-paths F3): unit tests on this OS; on linux also the
-      # parity test against the bash shims for every OS's command lines.
+      # (feat-no-host-paths F3): unit tests on this OS; on linux also
+      # link-objects-test.sh (Windows links of CFG code, cross-built).
       - name: rzig tests
         run: pixi run -e ${{ inputs.env }} rzig-test
       # `zig build` installs the tree that ships (feat-no-host-paths F1,
@@ -118,10 +118,11 @@ jobs:
       # R_HOME/Tcl and libintl.h, so without it nothing in CI checks them
       # (feat-win-variants). One rule for every OS: the check is cheap,
       # and linux-64 full passed it and hermetic locally (feat-zig-017);
-      # macOS full runs them first in CI. openblas differs from default
-      # only in BLAS, so it is skipped.
+      # macOS full runs them first in CI. openblas too: its BLAS
+      # forwarders (libRblas/libRlapack, Windows Rblas.dll) and the
+      # vendored openblas library are in the closure (b13-build M-7, M-23).
       - name: Verify the installed tree (Makeconf, rzig, libraries, floors)
-        if: inputs.env == 'default' || inputs.env == 'minimal' || inputs.env == 'full'
+        if: inputs.env == 'default' || inputs.env == 'minimal' || inputs.env == 'full' || inputs.env == 'openblas'
         run: pixi run -e ${{ inputs.env }} verify-tree
       - name: Smoke test
         run: pixi run -e ${{ inputs.env }} smoke
@@ -200,14 +201,20 @@ jobs:
       # zipped with the r_zig Python package, then pip-installed into a
       # fresh venv (ziglang from PyPI) and used with the pixi env scrubbed
       # away — including R CMD INSTALL of a C/C++ package through ziglang.
-      # unix only: there is no Windows wheel yet (make-wheel.py).
+      # Every OS since b13-env-ci (L2): on Windows make-wheel.py wraps the
+      # Library/ tree (win_amd64, win_arm64) and wheel-test runs
+      # scripts/wheel-test-windows.py, the same scenarios in Python. The
+      # Windows minimal legs are in build-full (the full tier).
       - name: Build + test the r-zig wheel
-        if: inputs.env == 'minimal' && !startsWith(inputs.os, 'windows')
+        if: inputs.env == 'minimal'
+        # bash on Windows too: pwsh would run the second line after a
+        # failed first one
+        shell: bash
         run: |
           pixi run -e wheel wheel
           pixi run -e wheel wheel-test
       - name: Upload the r-zig wheel
-        if: inputs.env == 'minimal' && !startsWith(inputs.os, 'windows')
+        if: inputs.env == 'minimal'
         uses: actions/upload-artifact@v7
         with:
           name: r-zig-wheel-${{ inputs.os }}

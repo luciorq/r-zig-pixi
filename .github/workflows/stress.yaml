@@ -55,6 +55,17 @@ on:
         description: 'Windows tree legs (stress.R --msys-from-tree): the stress env''s Library/usr/bin and Library/mingw-w64/bin off PATH, so the build-tools group''s usr/bin alone answers for sh, make and the tools R''s makefiles run'
         type: boolean
         default: false
+      # b13-env-ci (CI4): the windows-11-arm rows with and without the
+      # Rtools45 fallback, one dispatch each
+      rtools_libs:
+        description: 'windows-11-arm legs: take the libraries conda-forge lacks from CRAN''s Rtools45 aarch64 tree (stress.R''s default); false: stress.R --no-rtools-libs'
+        type: boolean
+        default: true
+      # b13-stress (W9): libs-zig-pixi's own R smoke test after the rows
+      libs_smoke:
+        description: 'stress.R --libs-smoke=REF: after the rows, libs-zig-pixi''s tests/r/smoke.R at this git ref (empty: off) for sf, terra, gdalraster, s2'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -132,7 +143,7 @@ jobs:
       # sha256 and downloads it again when they differ. The key names the
       # pinned file and the start of its sha256.
       - name: Rtools45 aarch64 libraries (cache)
-        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        if: runner.os == 'Windows' && runner.arch == 'ARM64' && inputs.rtools_libs
         uses: actions/cache@v6
         with:
           path: build/rtools45/rtools45-toolchain-libs-full-aarch64-6768.tar.zst
@@ -149,6 +160,8 @@ jobs:
           STRESS_CHANNEL: ${{ matrix.dist == 'conda' && inputs.channel || '' }}
           STRESS_TRACE: ${{ inputs.trace }}
           STRESS_MSYS_FROM_TREE: ${{ inputs.msys_from_tree }}
+          STRESS_RTOOLS_LIBS: ${{ inputs.rtools_libs }}
+          STRESS_LIBS_SMOKE: ${{ inputs.libs_smoke }}
           R_ZIG_PKG_BUILDER: ${{ inputs.builder }}
         run: |
           set -euo pipefail
@@ -157,6 +170,8 @@ jobs:
           if [ -n "$STRESS_SKIP" ]; then args+=("--skip=$STRESS_SKIP"); fi
           if [ "$STRESS_TRACE" = true ]; then args+=("--trace"); fi
           if [ "$STRESS_MSYS_FROM_TREE" = true ] && [ "$RUNNER_OS" = Windows ]; then args+=("--msys-from-tree"); fi
+          if [ "$STRESS_RTOOLS_LIBS" = false ] && [ "$RUNNER_OS" = Windows ] && [ "$RUNNER_ARCH" = ARM64 ]; then args+=("--no-rtools-libs"); fi
+          if [ -n "$STRESS_LIBS_SMOKE" ]; then args+=("--libs-smoke=$STRESS_LIBS_SMOKE"); fi
           # one target per word
           # shellcheck disable=SC2086
           pixi run -e stress stress "${args[@]}" $STRESS_TARGETS

@@ -34,6 +34,7 @@ on:
       - ".github/workflows/gen-config.yaml"
       - "zigbuild/tools/gen-subst.sh"
       - "zigbuild/tools/configure-only.sh"
+      - "zigbuild/tools/rzig/build.zig"
 
 jobs:
   gen-config:

@@ -1,0 +1,186 @@
+name: release
+
+# The standalone and PyPI release (backlog L1; b13-env-ci): the archives
+# and wheels one build-r run made, as a GitHub Release, and the wheels on
+# PyPI. GATED OFF. It does nothing unless both hold:
+# - the repository variable R_ZIG_RELEASE is `true` (unset by default;
+#   `gh variable set R_ZIG_RELEASE --body true` for one release, then
+#   `gh variable delete R_ZIG_RELEASE`, as CONDA_PUBLISH in build.yaml);
+# - the run is a manual dispatch on main (no push, tag or pull request
+#   trigger exists, and every job checks the ref).
+# PyPI needs a third switch, the `pypi` input, and a trusted publisher
+# that does not exist yet: the four names (r-zig, r-zig-compilers,
+# r-zig-build-tools, r-zig-toolchain) are not registered on PyPI, and no
+# token or secret is stored for it (the user's decision D7 in
+# docs-backlog-hygiene/PLAN.md: conda only until the parity gate, M7).
+# The publish uses PyPI's trusted publishing (OIDC, as prefix.dev's in
+# build.yaml): register this repository and workflow, with the `pypi`
+# environment, as each project's trusted publisher first.
+#
+# Input: a build-r run on main that ran the full tier, i.e. a dispatch
+# of build.yaml on main (a push to main runs the core tier; a `full-ci`
+# pull request's run is on its branch), checked by six platforms of each
+# artifact, whose artifacts are still kept: the standalone base
+# archives (standalone-<env>-<os>, 7 days), the toolchain groups (toolchain-<os>-<arch>) and the wheels
+# (r-zig-wheel-<os>, every OS since b13-env-ci L2). Nothing is rebuilt:
+# what is released is what that run verified (verify-package,
+# wheel-test). Each archive's .sha256 is checked before anything is
+# published.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'The build-r run (build.yaml) on main whose artifacts are released: its databaseId'
+        type: string
+        required: true
+      tag:
+        description: 'The release tag, v<R version>-<build number>, e.g. v4.6.2-13 (the conda build number of the same code)'
+        type: string
+        required: true
+      draft:
+        description: 'Create the GitHub Release as a draft (publish it by hand after a look)'
+        type: boolean
+        default: true
+      pypi:
+        description: 'Also upload the wheels to PyPI (needs the trusted publishers; see the header)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The run's artifacts, checked: the run is build-r's, on main, at this
+  # dispatch's commit, and succeeded; every archive matches its .sha256;
+  # one wheel of each name per platform. Uploaded as one artifact for the
+  # publishing jobs.
+  assemble:
+    if: vars.R_ZIG_RELEASE == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check the inputs and the build-r run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::run_id is not a run id: $RUN_ID"; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]] || { echo "::error::tag is not v<R version>-<build>: $TAG"; exit 1; }
+          read -r name branch sha conclusion < <(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" \
+            --jq '[.name, .head_branch, .head_sha, .conclusion] | @tsv')
+          echo "run $RUN_ID: $name on $branch at $sha, $conclusion"
+          [ "$name" = build-r ] || { echo "::error::run $RUN_ID is $name, not build-r"; exit 1; }
+          [ "$branch" = main ] || { echo "::error::run $RUN_ID is on $branch, not main"; exit 1; }
+          [ "$sha" = "$GITHUB_SHA" ] || { echo "::error::run $RUN_ID built $sha; this dispatch is at $GITHUB_SHA"; exit 1; }
+          [ "$conclusion" = success ] || { echo "::error::run $RUN_ID concluded $conclusion"; exit 1; }
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::release $TAG exists already"; exit 1
+          fi
+      - name: Download the archives and wheels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -D dl \
+            -p 'standalone-default-*' -p 'standalone-minimal-*' -p 'toolchain-*' -p 'r-zig-wheel-*'
+          # all six platforms: a core-tier run (no full-ci) succeeds with
+          # linux-64's artifacts alone
+          for a in standalone-default standalone-minimal toolchain r-zig-wheel; do
+            n="$(find dl -mindepth 1 -maxdepth 1 -type d -name "$a-*" | wc -l)"
+            [ "$n" = 6 ] || { echo "::error::run $RUN_ID has $n $a-* artifacts, not 6 (not a full-tier run?)"; exit 1; }
+          done
+          mkdir -p release/files release/wheels
+          # standalone-*/ and toolchain-*/ hold the archives and their
+          # .sha256 (the upstream-zig legs' -upstream artifacts are not
+          # build-r's); r-zig-wheel-*/ the wheels
+          find dl -path 'dl/r-zig-wheel-*' -name '*.whl' -exec cp {} release/wheels/ \;
+          find dl \( -path 'dl/standalone-*' -o -path 'dl/toolchain-*' \) -type f -exec cp {} release/files/ \;
+      - name: Check the archives' sha256 and the wheel set
+        working-directory: release
+        run: |
+          set -euo pipefail
+          (cd files && for s in *.sha256; do sha256sum -c "$s"; done)
+          n="$(find files -type f ! -name '*.sha256' | wc -l)"
+          [ "$n" = "$(find files -name '*.sha256' | wc -l)" ] || { echo "::error::an archive without its .sha256, or the reverse"; exit 1; }
+          # one wheel of each name per platform tag
+          find wheels -name '*.whl' -printf '%f\n' | sed -E 's/^(r_zig[a-z_]*)-[^-]+-py3-none-(.*)\.whl$/\2 \1/' | sort | uniq -c |
+            awk '$1 != 1 {print "::error::" $0; bad = 1} END {exit bad}'
+          for w in wheels/r_zig-*.whl; do
+            t="$(basename "$w" | sed -E 's/.*-py3-none-(.*)\.whl$/\1/')"
+            for n in r_zig_compilers r_zig_build_tools r_zig_toolchain; do
+              ls wheels/"$n"-*-py3-none-"$t".whl > /dev/null || { echo "::error::no $n wheel for $t"; exit 1; }
+            done
+          done
+          (cd wheels && sha256sum ./*.whl) > files/wheels.sha256
+          cp wheels/*.whl files/
+          ls -l files
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-files
+          path: release/
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+
+  # The GitHub Release: the base archives, the group archives, the
+  # wheels and their checksums, at the dispatch's commit. A draft by
+  # default.
+  github-release:
+    needs: assemble
+    if: vars.R_ZIG_RELEASE == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: release
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          RUN_ID: ${{ inputs.run_id }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+          {
+            echo "R ${TAG#v} built with zig (r-zig-pixi), from build-r run $RUN_ID at $GITHUB_SHA."
+            echo
+            echo "- R-<version>-<variant>-<platform>: the base, R itself (slim and minimal)."
+            echo "- R-<version>-<platform>-{compilers,build-tools,extras}: the toolchain groups; extract them where you extracted R."
+            echo "- r_zig*.whl: the pip wheels (minimal profile); also on PyPI when that step ran."
+            echo
+            echo "Every archive has a .sha256; wheels.sha256 lists the wheels'."
+          } > notes.md
+          flags=()
+          if [ "$DRAFT" = true ]; then flags+=(--draft); fi
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "R ${TAG#v} (r-zig)" \
+            --notes-file notes.md "${flags[@]}" release/files/*
+
+  # PyPI, a separate switch: the wheels through trusted publishing (OIDC,
+  # the `pypi` environment). Fails until the publishers are registered;
+  # no token is used or stored.
+  pypi:
+    needs: assemble
+    if: vars.R_ZIG_RELEASE == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: release
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release/wheels/
