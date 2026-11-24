@@ -2345,11 +2345,11 @@ fn installLibraryWindows(ctx: *Ctx, io: std.Io, pkg_libs: []const WinPkgLib, win
     // unix, installed under the Windows R_HOME layout.
     installCommonPayload(ctx);
 
-    // utils iconvlist (basepkg iconvlist target: `iconv -l`) — same as
-    // unix; conda-forge's Windows env also ships iconv.exe.
-    const iconv_run = b.addSystemCommand(&.{ "iconv", "-l" });
-    const iconv_out = iconv_run.captureStdOut(.{});
-    _ = libstage.addCopyFile(iconv_out, "utils/iconvlist");
+    // No utils/iconvlist on Windows, as upstream (utils/Makefile.win has
+    // no iconvlist target, unlike Makefile.in's `iconv -l`): config.h's
+    // HAVE_ICONVLIST makes iconvlist() return Riconv.dll's own list, and R
+    // reads the file only when that list is empty (base's New-Internal.R).
+    // No recipe package has an iconv.exe (b13-leftovers item 1).
 
     return libstage;
 }
@@ -2772,7 +2772,11 @@ fn winCmdFrontend(ctx: *Ctx, libR: *std.Build.Step.Compile, rgraphapp: *std.Buil
 /// does not look for a program in bin. So rhome.c and shext.c are compiled
 /// in, as gnuwin32 does, and the Windows libraries are named here:
 /// advapi32 (rhome.c's registry lookup), shell32 (shext.c's Documents
-/// folder), user32 (MessageBox), ole32 and uuid.
+/// folder), user32 (MessageBox), ole32 and uuid. In a conda environment
+/// that is not activated, R.dll's DLLs (<env>\Library\bin) are not on
+/// PATH, so Rfe puts that directory on PATH first (patch 0016; b13-hosts
+/// PLAN.md decision 4b): R.exe and Rscript.exe here start with no
+/// activation, bin/x64's programs do not.
 fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
     const b = ctx.b;
     const mod = newCMod(ctx);
@@ -2877,12 +2881,26 @@ fn winRfe(ctx: *Ctx) *std.Build.Step.Compile {
 ///     $(R_TOOLS_SOFT)/share/gdal and share/proj, which zig-gdal and
 ///     zig-proj ship. Without zig-* packages the directory does not exist:
 ///     pkgconf skips a missing directory, and R_TOOLS_SOFT was empty
-///     before. A nested R CMD reads the file again and prepends the
+///     before. LOCAL_SOFT defaults to it too, as on CRAN, where it
+///     names the library tree (Rtools45's x86_64-w64-mingw32.static.posix)
+///     and packages read it: jpeg 0.1-11's configure.win asks
+///     `make -f Makeconf print VAR=LOCAL_SOFT` for its include and lib
+///     directories and fails on the empty value (r-zig build 12, win-64;
+///     libs-zig-pixi's zig-libjpeg). Makeconf.win turns it into
+///     LOCAL_CPPFLAGS=-I"$(LOCAL_SOFT)/include" on every compile and
+///     LOCAL_LIBS=-L"$(LOCAL_SOFT)/lib": rzig turns an -I under zig-libs
+///     into -idirafter and drops LOCAL_LIBS' missing lib/x64
+///     (windows.demoteZigLibs), where its environment
+///     flags already put zig-libs' include/, and none of the published
+///     zig-* packages' headers has a name of zig's MinGW or libc++ headers
+///     (b13-fixes finding F7). It was empty only to keep CRAN's Rtools45
+///     sysroot out of the -I (feat-winarm-gaps W5, finding 22), which
+///     R_ZIG_FALLBACK_SOFT now brings as -idirafter. A nested R CMD reads the file again and prepends the
 ///     directory once more, which only repeats a search. Renviron expands
 ///     a nested default only when it is one whole ${...} term, hence
 ///     R_ZIG_PKG_CONFIG_LIBDIR.
 /// CMAKE_GENERATOR, RC, UserNM, PKG_CONFIG_PATH's tail, PKG_CONFIG_LIBDIR,
-/// R_TOOLS_SOFT and CMAKE_TOOLCHAIN_FILE are defaults:
+/// R_TOOLS_SOFT, LOCAL_SOFT and CMAKE_TOOLCHAIN_FILE are defaults:
 /// one set in the environment wins (`${VAR-default}`), in double quotes:
 /// unquoted, R's environ reader (Renviron.c) takes each `\` of the
 /// expanded value as an escape, and a user's `C:\x\nm.exe` or
@@ -2921,9 +2939,13 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
         "## package that sets PKG_CONFIG_PATH itself still finds: s2's Makevars.win).",
         "R_ZIG_PKG_CONFIG_LIBDIR=${R_ZIG_LIBS}/lib/pkgconfig;${R_ZIG_PKG_CONFIG_PATH}",
         "PKG_CONFIG_LIBDIR=\"${PKG_CONFIG_LIBDIR-${R_ZIG_PKG_CONFIG_LIBDIR}}\"",
-        "## r-zig: Makeconf's R_TOOLS_SOFT (?= LOCAL_SOFT, empty), unless set: zig-libs",
+        "## r-zig: Makeconf's R_TOOLS_SOFT (?= LOCAL_SOFT), unless set: zig-libs",
         "## (sf, terra and gdalraster copy its share/gdal and share/proj).",
         "R_TOOLS_SOFT=\"${R_TOOLS_SOFT-${R_ZIG_LIBS}}\"",
+        "## r-zig: Makeconf's LOCAL_SOFT (?= empty), unless set: zig-libs, CRAN's meaning",
+        "## (the library tree; jpeg's configure.win reads it). rzig turns its -I into",
+        "## -idirafter, so its headers never shadow zig's MinGW and libc++ ones.",
+        "LOCAL_SOFT=\"${LOCAL_SOFT-${R_ZIG_LIBS}}\"",
         "## r-zig: CMake's default toolchain file: it searches R's env and R_ZIG_EXTRA_ENV's first.",
         "R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake",
         "CMAKE_TOOLCHAIN_FILE=\"${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}\"",

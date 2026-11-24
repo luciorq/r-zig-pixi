@@ -2806,8 +2806,9 @@ CONFIGURE
     # R's env's Library/lib/pkgconfig and Library/share/pkgconfig
     # (R_HOME/../..); one the user set is kept. Either way after the
     # zig-libs .pc directory (libs-zig-pixi DESIGN 7, item 2). Its
-    # PKG_CONFIG_LIBDIR and R_TOOLS_SOFT defaults: unset, zig-libs' .pc
-    # directory then R's env's, and zig-libs; ones the user set are kept.
+    # PKG_CONFIG_LIBDIR, R_TOOLS_SOFT and LOCAL_SOFT defaults: unset,
+    # zig-libs' .pc directory then R's env's, and zig-libs (b13-fixes:
+    # LOCAL_SOFT); ones the user set are kept.
     cat > "$tw/pcpath.R" <<'RCODE'
 a <- commandArgs(trailingOnly = TRUE)
 rh <- Sys.getenv("R_HOME")
@@ -2815,7 +2816,8 @@ zl <- paste0(rh, "/../../zig-libs/", R.version$arch, "-windows-gnu")
 envpc <- paste0(rh, "/../../lib/pkgconfig;", rh, "/../../share/pkgconfig")
 want <- c(PKG_CONFIG_PATH = paste0(zl, "/lib/pkgconfig;", if (a[1L] == "env") envpc else a[1L]),
           PKG_CONFIG_LIBDIR = if (a[1L] == "env") paste0(zl, "/lib/pkgconfig;", envpc) else a[2L],
-          R_TOOLS_SOFT = if (a[1L] == "env") zl else a[3L])
+          R_TOOLS_SOFT = if (a[1L] == "env") zl else a[3L],
+          LOCAL_SOFT = if (a[1L] == "env") zl else a[4L])
 for (v in names(want)) {
     p <- Sys.getenv(v, NA)
     if (is.na(p) || p != want[[v]]) stop(v, " is '", p, "', not ", want[[v]])
@@ -2823,10 +2825,10 @@ for (v in names(want)) {
 }
 RCODE
     (cd "$tw" && env -i "${base_env[@]}" PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla pcpath.R env) ||
-      { echo "error: under R CMD with no PKG_CONFIG_PATH, PKG_CONFIG_LIBDIR and R_TOOLS_SOFT, they are not Rcmd_environ's defaults (zig-libs' .pc then R's env's Library/lib/pkgconfig and Library/share/pkgconfig; zig-libs)" >&2; exit 1; }
-    (cd "$tw" && env -i "${base_env[@]}" PKG_CONFIG_PATH='C:\r-zig-user\pkg config' PKG_CONFIG_LIBDIR='C:\r-zig-user\pc libdir' R_TOOLS_SOFT='C:\r-zig-user\soft' PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla pcpath.R 'C:\r-zig-user\pkg config' 'C:\r-zig-user\pc libdir' 'C:\r-zig-user\soft') ||
-      { echo "error: under R CMD, a PKG_CONFIG_PATH (after zig-libs'), PKG_CONFIG_LIBDIR or R_TOOLS_SOFT the user set is not kept (Rcmd_environ's \${VAR-...})" >&2; exit 1; }
-    echo "== PKG_CONFIG_PATH, PKG_CONFIG_LIBDIR and R_TOOLS_SOFT under R CMD: zig-libs' .pc first, R's env's .pc directories when unset (Rcmd_environ), the user's kept"
+      { echo "error: under R CMD with no PKG_CONFIG_PATH, PKG_CONFIG_LIBDIR, R_TOOLS_SOFT and LOCAL_SOFT, they are not Rcmd_environ's defaults (zig-libs' .pc then R's env's Library/lib/pkgconfig and Library/share/pkgconfig; zig-libs)" >&2; exit 1; }
+    (cd "$tw" && env -i "${base_env[@]}" PKG_CONFIG_PATH='C:\r-zig-user\pkg config' PKG_CONFIG_LIBDIR='C:\r-zig-user\pc libdir' R_TOOLS_SOFT='C:\r-zig-user\soft' LOCAL_SOFT='C:\r-zig-user\local soft' PATH="$bt_path" "$R_EXE" CMD Rscript.exe --vanilla pcpath.R 'C:\r-zig-user\pkg config' 'C:\r-zig-user\pc libdir' 'C:\r-zig-user\soft' 'C:\r-zig-user\local soft') ||
+      { echo "error: under R CMD, a PKG_CONFIG_PATH (after zig-libs'), PKG_CONFIG_LIBDIR, R_TOOLS_SOFT or LOCAL_SOFT the user set is not kept (Rcmd_environ's \${VAR-...})" >&2; exit 1; }
+    echo "== PKG_CONFIG_PATH, PKG_CONFIG_LIBDIR, R_TOOLS_SOFT and LOCAL_SOFT under R CMD: zig-libs' .pc first, R's env's .pc directories when unset (Rcmd_environ), the user's kept"
 
     # R CMD check's nm (PHASE7 open point H a): sotools.R reads an object's
     # symbols with UserNM, else an nm on PATH, which has none: under R

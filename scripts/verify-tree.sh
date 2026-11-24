@@ -397,6 +397,7 @@ if [ "$OS" = windows ]; then
     'R_ZIG_PKG_CONFIG_LIBDIR=${R_ZIG_LIBS}/lib/pkgconfig;${R_ZIG_PKG_CONFIG_PATH}' \
     'PKG_CONFIG_LIBDIR="${PKG_CONFIG_LIBDIR-${R_ZIG_PKG_CONFIG_LIBDIR}}"' \
     'R_TOOLS_SOFT="${R_TOOLS_SOFT-${R_ZIG_LIBS}}"' \
+    'LOCAL_SOFT="${LOCAL_SOFT-${R_ZIG_LIBS}}"' \
     'UserNM="${UserNM-${R_ZIG_NM}}"' 'RC="${RC-${R_ZIG_RC}}"' \
     'R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake' \
     'CMAKE_TOOLCHAIN_FILE="${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}"'; do
