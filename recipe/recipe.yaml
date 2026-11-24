@@ -273,7 +273,11 @@ build:
   # -lgfortran/-lquadmath from flang links (fix-rzig-quick); expat,
   # fontconfig and freetype leave the Windows host and run deps
   # (chore-env-ci Q12); Windows' R_HOME/include is CRAN's header set
-  # (test-stress-rows H2). Record: .github/devdocs/chore-release-12/PLAN.md.
+  # (test-stress-rows H2). Build-12 wave 2 (#55): licence files in every
+  # package, R's bootstrap skipped when its inputs are unchanged, tier-2
+  # cflags/cxxflags in rzig, base packages linked to libR (embedded R),
+  # verify-tree allows SSE4.1 on macOS. Published 2026-11-24, build.yaml
+  # run 45381914199 on main 7e3648e. Record: .github/devdocs/chore-release-12/PLAN.md.
   number: 12
 
 outputs:
