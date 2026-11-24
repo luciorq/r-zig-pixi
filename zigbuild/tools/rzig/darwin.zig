@@ -13,6 +13,9 @@ pub const Target = struct {
     before: Args,
     /// Last on a link line: the SDK's usr/lib.
     link_last: Args,
+    /// No SDK answered (no Command Line Tools): compiler.zig warns on a
+    /// link (`no_sdk`).
+    no_sdk: bool = false,
 };
 
 /// The same floor idea as linux's glibc pin, as a deployment target
@@ -32,7 +35,11 @@ pub const Target = struct {
 /// Rosetta an x86_64 rzig compiles for x86_64, as `uname -m` said there.
 pub fn target(ctx: *Ctx) !Target {
     const triple = rzig_target.zig(.macos, ctx.arch).?;
-    const sdk = sdkPath(ctx) orelse return .{ .before = try ctx.arena.dupe([]const u8, &.{ "-target", triple }), .link_last = &.{} };
+    const found = sdkPath(ctx);
+    const sdk = switch (found) {
+        .path => |p| p,
+        .none, .not_run => return .{ .before = try ctx.arena.dupe([]const u8, &.{ "-target", triple }), .link_last = &.{}, .no_sdk = found == .none },
+    };
     return .{
         .before = try ctx.arena.dupe([]const u8, &.{ "-target", triple, try ctx.fmt("-F{s}/System/Library/Frameworks", .{sdk}) }),
         .link_last = try ctx.arena.dupe([]const u8, &.{try ctx.fmt("-L{s}/usr/lib", .{sdk})}),
@@ -42,11 +49,31 @@ pub fn target(ctx: *Ctx) !Target {
 /// The installed SDK, asked the way zig itself asks
 /// (std.zig.system.darwin.getSdk) and build.zig asks for R: `xcrun --sdk
 /// macosx --show-sdk-path`. Whatever it prints, its exit status aside, as
-/// the shim's `$(...)` took it; null when it prints nothing or cannot run.
-fn sdkPath(ctx: *Ctx) ?[]const u8 {
+/// the shim's `$(...)` took it; `none` when it ran and printed nothing
+/// (no Command Line Tools: "xcrun: error: invalid active developer path"
+/// on stderr), `not_run` when it could not run (no /usr/bin/xcrun, which
+/// every macOS has: a dry run on another OS, the unit tests' fixture).
+fn sdkPath(ctx: *Ctx) union(enum) { path: []const u8, none, not_run } {
     const res = ctx.capture(&.{ ctx.xcrun, "--sdk", "macosx", "--show-sdk-path" });
-    return if (res.stdout.len == 0) null else res.stdout;
+    if (res.stdout.len > 0) return .{ .path = res.stdout };
+    return if (res.not_run != null) .not_run else .none;
 }
+
+/// What a link says when xcrun named no SDK (backlog M-28): the Command
+/// Line Tools are not installed, or DEVELOPER_DIR names a directory
+/// without them (xcrun ran and named none; an xcrun that cannot run says
+/// nothing: not macOS, `sdkPath`). zig then compiles and links
+/// with its own macOS headers and libSystem stubs (checked on omicron
+/// with zig 0.17.1, DEVELOPER_DIR at an empty directory: a plain C
+/// program builds and runs), so the build goes on; what only the SDK
+/// has fails later, and this line says why first: an SDK library
+/// (-lz, -liconv, -lcurl, -lresolv) or a framework. Links only, where
+/// those are needed: one line per package link, not one per object.
+pub const no_sdk =
+    "warning: no macOS SDK (`xcrun --sdk macosx --show-sdk-path` named none): " ++
+    "linking with zig's own macOS headers and libSystem only; an SDK library " ++
+    "(-lz, -liconv, -lcurl) or a -framework will not be found. " ++
+    "Install the Command Line Tools: xcode-select --install";
 
 /// dyld (macOS 12+) refuses a Mach-O that names the same library twice
 /// ("duplicate linked dylib"), and R makes that easy: R CMD SHLIB appends
@@ -96,10 +123,19 @@ test "target: native.13.0, SDK frameworks before, SDK usr/lib for links" {
     var t = try target(ctx);
     try expectArgs(&.{ "-target", triple }, t.before);
     try expectArgs(&.{}, t.link_last);
+    // no xcrun at all (not macOS): no SDK, nothing to say about it
+    try testing.expect(!t.no_sdk);
 
     try f.write("bin/xcrun", "#!/bin/sh\n[ \"$*\" = '--sdk macosx --show-sdk-path' ] && echo /SDKs/MacOSX.sdk; echo; echo; exit 1\n", .fromMode(0o755));
     ctx.xcrun = f.path("bin/xcrun");
     t = try target(ctx);
     try expectArgs(&.{ "-target", triple, "-F/SDKs/MacOSX.sdk/System/Library/Frameworks" }, t.before);
     try expectArgs(&.{"-L/SDKs/MacOSX.sdk/usr/lib"}, t.link_last);
+    try testing.expect(!t.no_sdk);
+    // an xcrun that fails and prints nothing on stdout, as without the
+    // Command Line Tools ("xcrun: error: invalid active developer path")
+    try f.write("bin/xcrun", "#!/bin/sh\necho 'xcrun: error: invalid active developer path' >&2; exit 1\n", .fromMode(0o755));
+    t = try target(ctx);
+    try expectArgs(&.{ "-target", triple }, t.before);
+    try testing.expect(t.no_sdk);
 }

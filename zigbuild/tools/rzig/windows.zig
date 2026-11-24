@@ -31,9 +31,10 @@ pub const iec_60559_types = "-D__STDC_WANT_IEC_60559_TYPES_EXT__";
 /// are for DLLs it does not install. Such an -l then fails the link, not
 /// the DLL's load.
 /// RZIG_TRACE (not 0): one line per -l, `lib -l<n> <file>`, the file the
-/// first -L directory with one of its names has (`resolved`), or `(none)`
-/// (zig's own MinGW libraries): which link bound a zig-libs archive, an
-/// environment's library or the fallback tree's (stress.R's report).
+/// first -L directory with one of its names has (`resolved`), `(zig)` for
+/// a name zig serves itself whatever -L holds (`zigServes`), or `(none)`:
+/// which link bound a zig-libs archive, an environment's library or the
+/// fallback tree's (stress.R's report).
 pub fn libs(ctx: *Ctx, args: Args) !Args {
     const a = ctx.arena;
     const dirs = try cmdline.libDirs(a, args);
@@ -51,7 +52,7 @@ pub fn libs(ctx: *Ctx, args: Args) !Args {
             l = try ctx.fmt("-l{s}", .{n});
         }
         try out.append(a, (try importLib(ctx, dirs.items, name, tree)) orelse l);
-        if (trace) ctx.warn("lib -l{s} {s}", .{ name, (try resolved(ctx, dirs.items, name)) orelse "(none)" });
+        if (trace) ctx.warn("lib -l{s} {s}", .{ name, if (try zigServes(ctx, name)) "(zig)" else (try resolved(ctx, dirs.items, name)) orelse "(none)" });
     }
     // GNU gcc's -mwindows also links the GDI/shell set; zig only sets the
     // subsystem. gnuwin32's makefiles rely on the implicit libraries.
@@ -252,6 +253,49 @@ fn importLib(ctx: *Ctx, dirs: Args, name: []const u8, tree: ?[]const u8) !?[]con
 /// The first of GNU ld's names for -l<name> in the first directory of
 /// `dirs` that has one (any of them, the fallback tree's import libraries
 /// too: a trace says where the name is, importLib what is linked).
+/// Whether zig links its own -l<name> on a windows-gnu link, before any
+/// -L directory: a non-archive lib<name>.a first on -L links for these
+/// (b13-stress F11, both zigs 0.17.1, x86_64 and aarch64, delta
+/// 2026-11-24), while an unknown name reads the file and fails. Its libc,
+/// C++ and unwinder runtimes by name (`zig_runtimes`), and every name
+/// with a MinGW .def in zig's lib dir (lib-common, then the arch's
+/// lib64/libarm64; conda-forge's has more, msvcrt and synchronization):
+/// ws2_32, ole32, psapi, shell32, kernel32 and the like. zig's lib dir:
+/// ZIG_LIB_DIR, else beside the zig rzig runs (<dir>/lib, upstream's and
+/// the wheel's; <dir>/../lib/zig, conda's); `python3 -m ziglang` names
+/// none, so only the runtimes count there. For the trace only.
+fn zigServes(ctx: *Ctx, name: []const u8) !bool {
+    if (zig_runtimes.has(name)) return true;
+    const lib = (try zigLibDir(ctx)) orelse return false;
+    const arch_dir = switch (ctx.arch) {
+        .x86_64 => "lib64",
+        .aarch64 => "libarm64",
+    };
+    for ([_][]const u8{ "lib-common", arch_dir }) |d| for ([_][]const u8{ "def", "def.in" }) |ext| {
+        if (ctx.isFile(try ctx.fmt("{s}/libc/mingw/{s}/{s}.{s}", .{ lib, d, name, ext }))) return true;
+    };
+    return false;
+}
+
+const zig_runtimes = std.StaticStringMap(void).initComptime(.{
+    .{"c"},      .{"m"},      .{"pthread"}, .{"winpthread"}, .{"mingw32"}, .{"mingwex"},
+    .{"uuid"},   .{"dxguid"}, .{"c++"},     .{"stdc++"},     .{"c++abi"},  .{"supc++"},
+    .{"unwind"}, .{"gcc"},    .{"gcc_s"},   .{"gcc_eh"},
+});
+
+fn zigLibDir(ctx: *Ctx) !?[]const u8 {
+    if (ctx.getenv("ZIG_LIB_DIR")) |d| return d;
+    const argv = ctx.zig orelse return null;
+    if (argv.len != 1) return null;
+    const p = argv[0];
+    const dir = if (mem.lastIndexOfAny(u8, p, "/\\")) |i| p[0..i] else ".";
+    const up = try ctx.fmt("{s}/lib", .{dir});
+    if (ctx.isFile(try ctx.fmt("{s}/std/std.zig", .{up}))) return up;
+    const conda = try ctx.fmt("{s}/../lib/zig", .{dir});
+    if (ctx.isFile(try ctx.fmt("{s}/std/std.zig", .{conda}))) return conda;
+    return null;
+}
+
 fn resolved(ctx: *Ctx, dirs: Args, name: []const u8) !?[]const u8 {
     for (dirs) |d| {
         const names = [_][]const u8{
@@ -305,6 +349,42 @@ test "RZIG_TRACE: where each -l is, zig-libs' archive first" {
     try testing.expectEqualStrings(f.fmt("rzig-test: lib -lgdal {s}\nrzig-test: lib -lz {s}\nrzig-test: lib -lzlib {s}\nrzig-test: lib -lkernel32 (none)\n", .{
         f.path("z/libgdal.a"), f.path("z/libz.a"), f.path("e/zlib.lib"),
     }), f.takeWarnings());
+}
+
+test "RZIG_TRACE: (zig) for a name zig serves itself, whatever -L holds" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    // a fallback tree's lib/ with MinGW's import libraries and a libc++.a
+    for ([_][]const u8{ "t/libc++.a", "t/libws2_32.a", "t/libole32.a", "t/libaclui.a", "t/libgdal.a" }) |p| try f.touch(p);
+    // upstream's layout: <dir>/zig, <dir>/lib/std/std.zig
+    for ([_][]const u8{ "up/zig", "up/lib/std/std.zig", "up/lib/libc/mingw/lib-common/ws2_32.def.in", "up/lib/libc/mingw/lib-common/ole32.def", "up/lib/libc/mingw/lib64/aclui.def" }) |p| try f.touch(p);
+    try f.env.put("RZIG_TRACE", "1");
+    const in: Args = &.{ f.fmt("-L{s}", .{f.path("t")}), "-lc++", "-lws2_32", "-lole32", "-laclui", "-lgdal" };
+    const want = "rzig-test: lib -lc++ (zig)\nrzig-test: lib -lws2_32 {s}\nrzig-test: lib -lole32 {s}\nrzig-test: lib -laclui {s}\nrzig-test: lib -lgdal {s}\n";
+    // no zig known: the runtimes alone
+    try expectArgs(in, try libs(&f.ctx, in));
+    try testing.expectEqualStrings(f.fmt(want, .{ f.path("t/libws2_32.a"), f.path("t/libole32.a"), f.path("t/libaclui.a"), f.path("t/libgdal.a") }), f.takeWarnings());
+    // the zig rzig runs: its .def names too, lib64's on x86_64 only
+    f.ctx.zig = &.{f.path("up/zig")};
+    f.ctx.arch = .x86_64;
+    try expectArgs(in, try libs(&f.ctx, in));
+    try testing.expectEqualStrings(f.fmt(want, .{ "(zig)", "(zig)", "(zig)", f.path("t/libgdal.a") }), f.takeWarnings());
+    f.ctx.arch = .aarch64;
+    _ = try libs(&f.ctx, in);
+    try testing.expectEqualStrings(f.fmt(want, .{ "(zig)", "(zig)", f.path("t/libaclui.a"), f.path("t/libgdal.a") }), f.takeWarnings());
+    // conda's layout, <env>/bin/zig and <env>/lib/zig; ZIG_LIB_DIR first
+    for ([_][]const u8{ "env/bin/zig", "env/lib/zig/std/std.zig", "env/lib/zig/libc/mingw/lib-common/ole32.def" }) |p| try f.touch(p);
+    f.ctx.zig = &.{f.path("env/bin/zig")};
+    _ = try libs(&f.ctx, in);
+    try testing.expectEqualStrings(f.fmt(want, .{ f.path("t/libws2_32.a"), "(zig)", f.path("t/libaclui.a"), f.path("t/libgdal.a") }), f.takeWarnings());
+    // python3 -m ziglang: no lib dir
+    f.ctx.zig = &.{ "python3", "-m", "ziglang" };
+    _ = try libs(&f.ctx, in);
+    try testing.expectEqualStrings(f.fmt(want, .{ f.path("t/libws2_32.a"), f.path("t/libole32.a"), f.path("t/libaclui.a"), f.path("t/libgdal.a") }), f.takeWarnings());
+    try f.env.put("ZIG_LIB_DIR", f.path("up/lib"));
+    _ = try libs(&f.ctx, in);
+    try testing.expectEqualStrings(f.fmt(want, .{ "(zig)", "(zig)", f.path("t/libaclui.a"), f.path("t/libgdal.a") }), f.takeWarnings());
 }
 
 test "defaultLibs: -lws2_32 last on a DLL link, as gcc's LIB_SPEC applies; nothing elsewhere" {

@@ -259,7 +259,9 @@ const env_bin: Sub = .{ .unix = "bin", .windows = "bin" };
 
 /// `what`, the line for a tool PATH does not have, saying so when R's
 /// own environment has it where its group's package installs it (PHASE4 open
-/// point I a): unix <dir>/bin (conda-forge's make and cmake), Windows m2's
+/// point I a): unix <dir>/bin (conda-forge's cmake; since build 13 the
+/// unix build-tools group's make is its own, in R_HOME/bin/toolchain/usr/bin,
+/// which etc/Renviron's PATH line names), Windows m2's
 /// <dir>/usr/bin (make and sh) and <dir>/bin (cmake; <dir> is
 /// <root>/Library there). That is an
 /// environment used without activation: an IDE pointed at <env>/bin/R, or
@@ -269,11 +271,20 @@ const env_bin: Sub = .{ .unix = "bin", .windows = "bin" };
 /// outside R. Finding the tool stays PATH's (B34's note); this only says
 /// why it was not found. The standalone tree and the wheel have none
 /// there.
+/// The environment R_ZIG_TOOLCHAIN_ENV names (backlog L6) the same way:
+/// rzig finds zig and flang there by itself, make and cmake stay PATH's.
 fn notOnPath(ctx: *Ctx, what: []const u8, name: []const u8, sub: Sub) ![]const u8 {
-    const e = (try environment.own(ctx)) orelse return what;
-    const bin = try ctx.fmt("{s}/{s}", .{ e.dir, if (ctx.os == .windows) sub.windows else sub.unix });
-    const p = (try find_zig.inDir(ctx, bin, name)) orelse return what;
-    return ctx.fmt("{s}; {s} is installed in R's environment, which is not on PATH: activate it (pixi shell, conda activate) or start R with pixi run", .{ what, try display(ctx, p) });
+    const rel = if (ctx.os == .windows) sub.windows else sub.unix;
+    if (try environment.own(ctx)) |e| {
+        if (try find_zig.inDir(ctx, try ctx.fmt("{s}/{s}", .{ e.dir, rel }), name)) |p|
+            return ctx.fmt("{s}; {s} is installed in R's environment, which is not on PATH: activate it (pixi shell, conda activate) or start R with pixi run", .{ what, try display(ctx, p) });
+    }
+    if (try environment.toolchainEnv(ctx)) |e| {
+        const bin = try ctx.fmt("{s}/{s}", .{ e.dir, rel });
+        if (try find_zig.inDir(ctx, bin, name)) |p|
+            return ctx.fmt("{s}; {s} is installed in R_ZIG_TOOLCHAIN_ENV, which is not on PATH: put {s} on PATH", .{ what, try display(ctx, p), bin });
+    }
+    return what;
 }
 
 fn extras(ctx: *Ctx) !Result {
@@ -856,6 +867,22 @@ test "package: every missing group in one stop, the compilers' text first" {
     const w = f.takeWarnings();
     try testing.expect(mem.find(u8, w, "\nCompiling needs the r-zig compilers for R ") != null);
     try testing.expect(mem.find(u8, w, "Building packages needs") == null);
+}
+
+test "build-tools: installed in R_ZIG_TOOLCHAIN_ENV, not on PATH, named as such (L6)" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const c = &f.ctx;
+    const text = try groups.text(c.arena, .build_tools, groups.this);
+    try f.env.put("PATH", f.path("nothing"));
+    try f.tmp.dir.createDirPath(testing.io, "env/lib/R/bin/toolchain");
+    c.self_exe = f.path("env/lib/R/bin/toolchain/zig-cc");
+    try f.tmp.dir.createDirPath(testing.io, "tc/bin");
+    try f.env.put("R_ZIG_TOOLCHAIN_ENV", f.path("tc"));
+    const make = try f.touchProgram("tc/bin/make");
+    try testing.expectEqual(127, (try run(c, .build_tools)).code);
+    try testing.expectEqualStrings(f.fmt("rzig-test: no make on PATH; {s} is installed in R_ZIG_TOOLCHAIN_ENV, which is not on PATH: put {s} on PATH\n{s}", .{ make, f.path("tc/bin"), text }), f.takeWarnings());
 }
 
 test "build-tools: installed in R's environment, not on PATH, named as such" {

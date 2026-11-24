@@ -4,8 +4,7 @@
 # It tests zig and rzig's link object: `zig build object` installs the
 # object rzig adds to a Windows link (build.zig's linkObject), and the
 # links run `$ZIG cc` directly. It does not run rzig, so it does not test
-# that rzig picks the object (compiler.zig's unit tests and
-# parity-test.sh do that).
+# that rzig picks the object (compiler.zig's unit tests do that).
 #
 # Each arch must link with its object: x86_64 with cfguard.o (zig's MinGW
 # lacks __guard_dispatch_icall_dummy, cfguard.zig), aarch64 with

@@ -1,6 +1,6 @@
 //! rzig on its own: `zig build --build-file zigbuild/tools/rzig/build.zig`
 //! needs no pixi env, R source or vendored config, and cross-builds with
-//! -Dtarget (parity-test.sh and smoke-test.sh use it). The repo's build.zig
+//! -Dtarget (check-test.sh and smoke-test.sh use it). The repo's build.zig
 //! reuses `add` to build the rzig it installs into R_HOME/bin/toolchain,
 //! for R's own target, and for its `rzig`/`rzig-test` steps. Both install
 //! rzig's link object beside it (`linkObject`), and on linux the

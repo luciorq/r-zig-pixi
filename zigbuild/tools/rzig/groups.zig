@@ -135,7 +135,7 @@ pub fn text(a: mem.Allocator, g: Group, p: Platform) ![]const u8 {
     const conda = try std.fmt.allocPrint(a, "  conda, pixi: pixi add {s} (or conda install {s}){s}\n", .{ pkg, pkg, all });
     // the compilers wheel brings zig (on linux with libstdc++'s headers)
     // alone: say what pip cannot give (PHASE4 Cg3)
-    const pip = if (p.windows) "  pip:         no wheels for Windows\n" else switch (g) {
+    const pip = switch (g) {
         .compilers => if (p.linux)
             "  pip:         pip install r-zig-compilers (zig and libstdc++'s headers: PyPI has no Fortran compiler)" ++ all ++ "\n"
         else
@@ -219,7 +219,7 @@ test "one text per group, the same on every channel" {
     // other scripts grep these: verify-bundle.sh and hermetic-check.sh the
     // first lines' beginnings, verify-bundle.sh the compilers' standalone
     // line up to the archive it extracts, wheel-test.sh "flang and the
-    // OpenMP files" and the pip line, parity-test.sh the first lines and
+    // OpenMP files" and the pip line, check-test.sh the first lines and
     // unix's standalone lines
     try testing.expectEqualStrings(
         \\Compiling needs the r-zig compilers for R 4.6.2 on linux-64: zig 0.17, libstdc++'s headers for C++, and flang for Fortran.
@@ -240,7 +240,7 @@ test "one text per group, the same on every channel" {
         \\Compiling needs the r-zig compilers for R 4.6.2 on win-64: zig 0.17, and flang for Fortran.
         \\  standalone:  extract R-4.6.2-win-64-compilers.tar.xz where you extracted R (zig 0.17, flang and the OpenMP files)
         \\  conda, pixi: pixi add r-zig-compilers (or conda install r-zig-compilers); r-zig-toolchain installs every group
-        \\  pip:         no wheels for Windows
+        \\  pip:         pip install r-zig-compilers (zig only: PyPI has no Fortran compiler); r-zig-toolchain installs every group
         \\
     , try text(a, .compilers, win));
     try testing.expectEqualStrings(
@@ -261,7 +261,7 @@ test "one text per group, the same on every channel" {
         \\Building packages needs the r-zig build tools for R 4.6.2 on win-64: sh, make and the tools R's makefiles run.
         \\  standalone:  extract R-4.6.2-win-64-build-tools.zip where you extracted R
         \\  conda, pixi: pixi add r-zig-build-tools (or conda install r-zig-build-tools); r-zig-toolchain installs every group
-        \\  pip:         no wheels for Windows
+        \\  pip:         pip install r-zig-build-tools; r-zig-toolchain installs every group
         \\
     , try text(a, .build_tools, win));
     try testing.expectEqualStrings(
@@ -275,7 +275,7 @@ test "one text per group, the same on every channel" {
         \\Packages that build a bundled library with CMake need the r-zig extras for R 4.6.2 on win-64: cmake.
         \\  standalone:  extract R-4.6.2-win-64-extras.zip where you extracted R, or put cmake on PATH
         \\  conda, pixi: pixi add r-zig-extras (or conda install r-zig-extras); r-zig-toolchain installs every group
-        \\  pip:         no wheels for Windows
+        \\  pip:         pip install cmake
         \\
     , try text(a, .extras, win));
 }
@@ -287,6 +287,6 @@ test report {
     try report(&f.ctx, no_zig, .compilers);
     const w = f.takeWarnings();
     try testing.expect(mem.startsWith(u8, w, "rzig-test: no zig (ZIG_BIN, R_HOME/bin/toolchain/zig, the environment's bin, PATH, python3 -m ziglang)\nCompiling needs the r-zig compilers for R "));
-    const pip = if (this.windows) "no wheels for Windows" else if (this.linux) "pip install r-zig-compilers (zig and libstdc++'s headers: PyPI has no Fortran compiler); r-zig-toolchain installs every group" else "pip install r-zig-compilers (zig only: PyPI has no Fortran compiler); r-zig-toolchain installs every group";
+    const pip = if (this.linux) "pip install r-zig-compilers (zig and libstdc++'s headers: PyPI has no Fortran compiler); r-zig-toolchain installs every group" else "pip install r-zig-compilers (zig only: PyPI has no Fortran compiler); r-zig-toolchain installs every group";
     try testing.expect(mem.endsWith(u8, w, "\n  pip:         " ++ pip ++ "\n"));
 }

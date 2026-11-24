@@ -33,8 +33,9 @@
 //! before PATH (CMakeFindBinUtils): Windows has ar.exe and ranlib.exe
 //! beside gcc.exe, R CMD config CC, where MinGW's were before phase 3.
 //!
-//! zig is found by find_zig.zig: ZIG_BIN, the compilers group's zig/ in
-//! rzig's own directory, the environment's bin, PATH, python3 -m ziglang.
+//! zig is found by find_zig.zig: ZIG_BIN, R_ZIG_TOOLCHAIN_ENV's bin, the
+//! compilers group's zig/ in rzig's own directory, the environment's bin,
+//! PATH, python3 -m ziglang.
 //! None: rzig names the compilers group and how to install it (groups.zig)
 //! and exits 127. `<name> --rzig-check[=fortran|build-tools|extras|package]`
 //! checks a group's tools instead of compiling (check.zig): the install
@@ -70,6 +71,20 @@
 //!                      aarch64-w64-mingw32.static.posix (stress.R sets
 //!                      it); never R's LOCAL_SOFT, whose -I breaks libc++
 //!                      compiles. RZIG_TRACE marks it `(fallback)`.
+//!   R_ZIG_TOOLCHAIN_ENV=<root>  the environment that holds the
+//!                      toolchain, when it is not R's own (backlog L6): zig
+//!                      and flang in its bin/ (Library/bin on Windows),
+//!                      before the compilers group's; on linux libstdc++'s
+//!                      headers in its lib/gcc. No headers or libraries for
+//!                      packages (that is R_ZIG_EXTRA_ENV). make and cmake
+//!                      stay PATH's; the check names its bin when they are
+//!                      only there.
+//!   R_ZIG_SYSTEM_LIBS=1  linux only (ignored elsewhere):
+//!                      compile and link against the distribution's
+//!                      libraries in /usr (system_libs.zig, M-29): the
+//!                      host's include roots as -idirafter, also where the
+//!                      caller passed them as -I or -isystem (distro .pc
+//!                      files), and its library directories as the last -L.
 //!   _LINK_             rzig puts /OPT:NOICF first in it for zig on every
 //!                      Windows image link (windows.noIcf, lld's ICF off,
 //!                      finding 35); the caller's words follow.
@@ -721,6 +736,7 @@ test {
     _ = find_zig;
     _ = libcxx_mirror;
     _ = @import("libstdcxx.zig");
+    _ = @import("system_libs.zig");
 }
 
 test "rzig's root panic and debug are crash.zig's (K4)" {

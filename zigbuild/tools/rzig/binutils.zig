@@ -1305,6 +1305,18 @@ fn usage(ctx: *Ctx, msg: []const u8) Usage {
     return error.Usage;
 }
 
+/// windres --version. Its second line names GNU windres, as meson's
+/// windows module detects a windres by that text in --version's output
+/// (regex `^.*GNU windres.*$`, mesonbuild/modules/windows.py) and then
+/// calls it as GNU's: its include args as -I<dir>, the module's args,
+/// the input and output as positionals, and
+/// `--preprocessor-arg=-MD -MQ<out> -MF<depfile>`, which zig rc has no
+/// make-style form of: dropped with the rest of the preprocessor's (no
+/// depfile; ninja takes a missing one as no dependencies). The first
+/// line is what every rzig binutil says (verify-bundle.sh).
+const windres_version = "GNU-compatible windres (rzig, zig rc, " ++ build_name ++ ")\n" ++
+    "Takes GNU windres options; zig rc compiles.\n";
+
 /// `zig rc` for GNU windres' arguments.
 pub fn windresArgv(ctx: *Ctx, args: []const []const u8) ![]const []const u8 {
     const a = ctx.arena;
@@ -1348,7 +1360,7 @@ pub fn windresArgv(ctx: *Ctx, args: []const []const u8) ![]const []const u8 {
         } else if (mem.startsWith(u8, x, "--preprocessor=") or mem.startsWith(u8, x, "--preprocessor-arg=") or
             mem.eql(u8, x, "--use-temp-file") or mem.eql(u8, x, "--no-use-temp-file") or mem.eql(u8, x, "-v") or mem.eql(u8, x, "--verbose"))
         {} else if (mem.eql(u8, x, "--version")) {
-            stdio.writeAll(ctx.io, .stdout(), "GNU-compatible windres (rzig, zig rc, " ++ build_name ++ ")\n") catch {};
+            stdio.writeAll(ctx.io, .stdout(), windres_version) catch {};
             return error.Usage;
         } else {
             return usage(ctx, try ctx.fmt("unsupported argument {s} (rzig's windres: -i, -o, -O, -J, -F, -I, -D, -U, -l, -c)", .{x}));
@@ -1656,9 +1668,20 @@ test "windres: GNU's options as zig rc's, the gcc preprocessor dropped" {
     try expectArgs(&.{ "rc", "/:output-format", "coff", "/:target", t, "/:auto-includes", "gnu", "/d", "TBB=1", "/i", "C:/x y/include", "/fo", "obj/r.rc.obj", "--", "src/r.rc" }, try windresArgv(&f.ctx, &.{ "-O", "coff", "-DTBB=1", "-I", "C:/x y/include", "src/r.rc", "obj/r.rc.obj" }));
     // a .res output; a target; a language in hex
     try expectArgs(&.{ "rc", "/:output-format", "res", "/:target", "arm64", "/:auto-includes", "gnu", "/l", "409", "/fo", "r.res", "--", "r.rc" }, try windresArgv(&f.ctx, &.{ "-F", "pe-aarch64-little", "-l", "0x409", "--input=r.rc", "--output=r.res" }));
+    // meson's windows.compile_resources: -I<dir> joined, the module's
+    // args, input and output, then its depfile request
+    try expectArgs(&.{ "rc", "/:output-format", "coff", "/:target", t, "/:auto-includes", "gnu", "/i", "../src", "/i", ".", "/d", "X=1", "/fo", "prog_app.rc_app.o", "--", "../src/app.rc" }, try windresArgv(&f.ctx, &.{ "-I../src", "-I.", "--define=X=1", "../src/app.rc", "prog_app.rc_app.o", "--preprocessor-arg=-MD", "--preprocessor-arg=-MQprog_app.rc_app.o", "--preprocessor-arg=-MFprog_app.rc_app.o.d" }));
+    try expectArgs(&.{ "rc", "/:output-format", "coff", "/:target", t, "/:auto-includes", "gnu", "/i", "inc", "/fo", "a.o", "--", "a.rc" }, try windresArgv(&f.ctx, &.{ "--include-dir=inc", "a.rc", "a.o" }));
     try testing.expectError(error.Usage, windresArgv(&f.ctx, &.{"r.rc"}));
     try testing.expectError(error.Usage, windresArgv(&f.ctx, &.{ "-O", "rc", "r.rc", "r.txt" }));
     _ = f.takeWarnings();
+    // meson's detection: a line matching ^.*GNU windres.*$; the first
+    // line is the binutils' common one
+    try testing.expect(mem.startsWith(u8, windres_version, "GNU-compatible windres (rzig"));
+    var lines = mem.splitScalar(u8, windres_version, '\n');
+    var gnu = false;
+    while (lines.next()) |l| gnu = gnu or mem.find(u8, l, "GNU windres") != null;
+    try testing.expect(gnu);
 }
 
 test "as: zig cc -target <R's> -c -x assembler" {

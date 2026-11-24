@@ -2,16 +2,20 @@
 //! that is there:
 //! 1. $ZIG_BIN, when it names an executable (the r-zig wheel points it at
 //!    the PyPI `ziglang` package's binary);
-//! 2. the compilers group's zig, <rzig dir>/zig/zig (R_HOME/bin/toolchain/
+//! 2. zig in the bin/ of the environment R_ZIG_TOOLCHAIN_ENV names
+//!    (environment.toolchainEnv; backlog L6): the toolchain installed in
+//!    an environment of its own, named on purpose, so before the places R's
+//!    own install offers; the same names as 4;
+//! 3. the compilers group's zig, <rzig dir>/zig/zig (R_HOME/bin/toolchain/
 //!    zig/zig in the standalone tree);
-//! 3. zig in the bin/ of the environment R is installed in
+//! 4. zig in the bin/ of the environment R is installed in
 //!    (environment.zig): a conda env used without activation, such as an
 //!    IDE pointed at <env>/bin/R. On Windows conda-forge installs the real
 //!    binary only as <arch>-w64-mingw32-zig (`zig` is a .bat; x86_64 on
 //!    win-64, aarch64 on win-arm64), so those
 //!    names too, after zig;
-//! 4. zig on PATH, then x86_64- and aarch64-w64-mingw32-zig;
-//! 5. `python3 -m ziglang`, when the python3 on PATH has ziglang (the
+//! 5. zig on PATH, then x86_64- and aarch64-w64-mingw32-zig;
+//! 6. `python3 -m ziglang`, when the python3 on PATH has ziglang (the
 //!    wheel with ziglang outside R's own site-packages).
 //! None: null, and the compile names the compilers group (groups.zig).
 const std = @import("std");
@@ -37,6 +41,10 @@ pub const Zig = struct {
 pub fn find(ctx: *Ctx) !?Zig {
     if (ctx.getenv("ZIG_BIN")) |bin| {
         if (try executable(ctx, bin)) |p| return try one(ctx, p);
+    }
+    if (try environment.toolchainEnv(ctx)) |e| {
+        const bin = try ctx.fmt("{s}/bin", .{e.dir});
+        for (names) |n| if (try inDir(ctx, bin, n)) |p| return try one(ctx, p);
     }
     if (environment.toolchain(ctx)) |tc| {
         if (try inDir(ctx, try ctx.fmt("{s}/zig", .{tc}), "zig")) |p| return try one(ctx, p);
@@ -155,6 +163,50 @@ test "the toolchain's zig/ wins over the environment's bin and PATH; ZIG_BIN ove
     try expectZig(path_zig, try find(ctx));
     const bare_zig = try f.touchProgram("bare/zig/zig");
     try expectZig(bare_zig, try find(ctx));
+}
+
+test "R_ZIG_TOOLCHAIN_ENV's bin wins over the toolchain's zig/, the environment's bin and PATH; ZIG_BIN over it (L6)" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const ctx = &f.ctx;
+    try f.tmp.dir.createDirPath(testing.io, "tree/lib/R/bin/toolchain");
+    ctx.self_exe = f.path("tree/lib/R/bin/toolchain/zig-cc");
+    const path_zig = try f.touchProgram("p/zig");
+    _ = try f.touchProgram("tree/bin/zig");
+    const tc_zig = try f.touchProgram("tree/lib/R/bin/toolchain/zig/zig");
+    try f.env.put("PATH", f.path("p"));
+    // an environment without zig: the next places, as before
+    try f.tmp.dir.createDirPath(testing.io, "tcenv/bin");
+    try f.env.put("R_ZIG_TOOLCHAIN_ENV", f.path("tcenv"));
+    try expectZig(tc_zig, try find(ctx));
+    // conda-forge's linux name (x86_64-conda-linux-gnu-zig) comes with a
+    // plain zig too; the mingw names as on PATH
+    const env_zig = try f.touchProgram("tcenv/bin/zig");
+    try expectZig(env_zig, try find(ctx));
+    try f.env.put("ZIG_BIN", path_zig);
+    try expectZig(path_zig, try find(ctx));
+    _ = f.env.swapRemove("ZIG_BIN");
+    // a path that does not resolve: ignored, with a warning
+    try f.env.put("R_ZIG_TOOLCHAIN_ENV", f.path("nowhere"));
+    try expectZig(tc_zig, try find(ctx));
+    try testing.expect(mem.startsWith(u8, f.takeWarnings(), f.fmt("rzig-test: warning: R_ZIG_TOOLCHAIN_ENV={s}: ", .{f.path("nowhere")})));
+}
+
+test "R_ZIG_TOOLCHAIN_ENV on Windows: <root>/Library/bin, conda-forge's mingw name (L6)" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const ctx = &f.ctx;
+    try f.tmp.dir.createDirPath(testing.io, "env/Library/lib/R/bin/toolchain");
+    ctx.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
+    const own = try f.touchProgram("env/Library/bin/x86_64-w64-mingw32-zig");
+    try expectZig(own, try find(ctx));
+    try f.env.put("R_ZIG_TOOLCHAIN_ENV", f.path("tcenv"));
+    try f.tmp.dir.createDirPath(testing.io, "tcenv/Library/bin");
+    try expectZig(own, try find(ctx));
+    const tc = try f.touchProgram("tcenv/Library/bin/x86_64-w64-mingw32-zig");
+    try expectZig(tc, try find(ctx));
 }
 
 test "the environment's bin: zig, then the mingw name, before PATH; R's own only" {
