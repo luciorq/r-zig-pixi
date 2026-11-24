@@ -9,6 +9,16 @@
             .hash = "N-V-__8AAJtPLQBQRtMEFFcqeOXniFMTNbPL0IjGxYpEnFw1",
             .lazy = true,
         },
+        // unix: GNU make's release tarball, which the build-tools group's
+        // usr/bin/make is built from (make.zig; zigbuild/make/build.zig
+        // compiles it, the r_zig_make path dependency). The conda build
+        // passes its own unpacked copy as -Dmake instead.
+        .make = .{
+            .url = "https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz",
+            .hash = "N-V-__8AAO76hQBfZsum_DO5EZUzn1Bhfyix3mKAatVWJH40",
+            .lazy = true,
+        },
+        .r_zig_make = .{ .path = "../make" },
         // The extras group's cmake/ (feat-extras-group): Kitware's release
         // archives (cmake.zig pins them with Kitware's sha256; the test
         // step checks these URLs are its). Each .hash is what a build's own

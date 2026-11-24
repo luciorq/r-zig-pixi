@@ -387,7 +387,7 @@ if [ "$OS" = windows ]; then
   # zig-libs (libs-zig-pixi's zig-* packages): R's triple's directory
   zl_triple=x86_64-windows-gnu
   [ "$PLAT" = win-arm64 ] && zl_triple=aarch64-windows-gnu
-  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin' \
+  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin;${R_ZIG_TOOLCHAIN_ENV}/Library/usr/bin' \
     'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"' \
     'R_ZIG_RC=${R_HOME}/bin/toolchain/windres.exe' \
     'R_ZIG_NM=${R_HOME}/bin/toolchain/nm.exe' \

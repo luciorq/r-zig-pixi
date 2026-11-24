@@ -146,14 +146,11 @@ same_dir() {
 # build-tools group's usr/bin (B25). Under build/, not dist/: it
 # never ships.
 COMPILE_TREE="$BUILD_DIR/compile-tree/$FLAVOR/$TOP"
-# The bash compiler shims, for configure-only.sh's capture (gen-subst.sh
-# turns this path into @ZR_TOOLCHAIN@). What gets installed is rzig
-# (zigbuild/tools/rzig/), which parity-test.sh holds to these.
-TOOLCHAIN="$ROOT/toolchain"
-TARBALL="$BUILD_DIR/R-$R_VERSION.tar.gz"
-CRAN_URL="https://cran.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
-CRAN_CDN_URL="https://cloud.r-project.org/src/base/R-4/R-$R_VERSION.tar.gz"
-CHECKSUM_FILE="$ROOT/scripts/checksums/R-$R_VERSION.sha256"
+# The compilers configure-only.sh's capture runs: rzig, built there on its
+# own, as zig-cc, zig-cxx, zig-ar and zig-ranlib (backlog M-17). gen-subst.sh
+# turns this path into @ZR_TOOLCHAIN@; it must not be below OBJ_DIR,
+# SRC_DIR or PREFIX, which gen-subst.sh replaces first.
+TOOLCHAIN="$BUILD_DIR/capture-rzig/bin"
 
 # macOS defaults to 256 open files; zig's linker opens every object of
 # libR at once (~300+) and fails with ProcessFdQuotaExceeded without this.
@@ -242,7 +239,7 @@ njobs() {
   nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4
 }
 
-# macOS deployment target: build.zig's macos_min, the shims'
+# macOS deployment target: build.zig's macos_min, rzig's
 # "<arch>-native.13.0". The checks assert every Mach-O is at or below it.
 MACOS_MIN=13.0
 # zig's own floor: zig 0.17 supports macOS 15 and later (std.Target's

@@ -17,13 +17,25 @@
 zig_lib="$("$ZIG" env | sed -n 's/^ *\.lib_dir = "\(.*\)",$/\1/p' | sed 's/\\\\/\\/g')"
 echo "r-zig: zig = $ZIG ($("$ZIG" version); lib dir $zig_lib)"
 
+# R's source (backlog M-20): `zig build fetch` (zigbuild/tools/fetch.zig:
+# CRAN, then its CDN, sha256 against scripts/checksums/, extracted with
+# the empty patch stamp) when the tree is missing. `zig-build.sh fetch`
+# (pixi's fetch task) does only that. The check here and not in zig
+# build: build.zig's configure step reads the tree, so a `zig build
+# fetch` with one present would configure the whole build for nothing.
+if [ "${1:-}" = fetch ]; then
+  if [ -f "$SRC_DIR/configure" ]; then echo "R $R_VERSION source already present at $SRC_DIR"; exit 0; fi
+  exec "$ZIG" build fetch
+fi
+[ -f "$SRC_DIR/configure" ] || "$ZIG" build fetch
+
 # --- R source patches (feat-no-host-paths PLAN.md, phase F2) ---------------
 # zigbuild/patches/R-<version>/*.patch, one file per concern, each saying
 # what it changes and why. They change code the build compiles (libR, the
 # internet module, base/tools/utils' .rdb files) and the bin/R and R CMD
 # templates, so they go in before zig build: in order, with no fuzz, to a
 # pristine source. The stamp records what the tree carries: empty after
-# extraction (fetch-r.sh, recipe/build.sh), the series' sha256 list once
+# extraction (zig build fetch, recipe/build.sh), the series' sha256 list once
 # applied. Anything else, no stamp included (a tree patched in place by an
 # older zig-build.sh, an interrupted run, another series), is extracted
 # again from the tarball first, so a changed patch never meets an old one.
@@ -36,7 +48,7 @@ if [ "$applied" != "$series" ]; then
   if [ -n "$applied" ]; then
     echo "r-zig: $SRC_DIR does not carry this patch series; extracting it again"
     rm -rf "$SRC_DIR"
-    bash "$(dirname "$0")/fetch-r.sh"
+    "$ZIG" build fetch
   fi
   # no stamp while applying: an interrupted run extracts again next time
   rm -f "$stamp"

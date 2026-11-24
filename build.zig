@@ -32,7 +32,9 @@
 //!
 //! Prerequisites: run inside the pixi env (`pixi run zig-build`, or
 //! `pixi run -e full`/`-e openblas` for the other profiles) with the R
-//! source tree fetched at build/R-<version> (`pixi run fetch`).
+//! source tree fetched at build/R-<version> (`zig build fetch`, which
+//! scripts/zig-build.sh runs when the tree is missing: CRAN's tarball,
+//! sha256-checked against scripts/checksums/, zigbuild/tools/fetch.zig).
 //!
 //! Everything installs directly into the final prefix (zig build --prefix):
 //! <prefix>/lib/R is R_HOME, <prefix>/bin holds the launchers — the same
@@ -184,7 +186,8 @@ const Ctx = struct {
     // only libR/libRblas/libRlapack use this. Packages/modules always use
     // SHLIB_EXT, which is ".so" on every platform R supports.
     variant: Variant,
-    feat: Features, // variantFeatures(variant, os)
+    feat: Features, // variantFeatures(variant, os); tcltk also with -Dtcltk (addTcltk)
+    tcltk_addon: bool, // -Dtcltk: Tcl/Tk on top of the variant (addTcltk)
     blas: Blas,
     conda: []const u8,
     src_abs: []const u8, // absolute path of R source tree
@@ -229,8 +232,10 @@ const Ctx = struct {
     mk_subst: std.StringHashMap([]const u8),
     geninc: std.Build.LazyPath, // generated headers dir (config.h, Rconfig.h, ...)
     libR: *std.Build.Step.Compile,
-    rblas: ?*std.Build.Step.Compile, // null when blas == .openblas
-    rlapack: ?*std.Build.Step.Compile, // null when blas == .openblas
+    // libRblas/libRlapack (Rblas.dll/Rlapack.dll): R's own, or in the
+    // openblas flavor forwarders to openblas (blasForwarder, backlog M-23)
+    rblas: ?*std.Build.Step.Compile,
+    rlapack: ?*std.Build.Step.Compile,
     // rzig for R's target: the compilers Makeconf names (installRzig)
     rzig: std.Build.LazyPath, // rzig_build.Artifacts.bin
     rzig_object: ?rzig_build.LinkObject, // installed beside it (installRzig)
@@ -270,7 +275,8 @@ const Ctx = struct {
         for (rel) |r| mod.addRPathSpecial(ctx.b.fmt("{s}{s}", .{ origin, r }));
     }
 
-    /// Link the BLAS provider: internal libRblas.so or system openblas.
+    /// Link the BLAS provider: internal libRblas.so or system openblas
+    /// (R's own libraries link openblas itself, not the forwarders).
     fn linkBlas(ctx: *const Ctx, mod: *std.Build.Module) void {
         if (ctx.blas == .openblas) {
             mod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no });
@@ -362,6 +368,42 @@ pub fn build(b: *std.Build) !void {
     const arena = b.allocator;
     const io = b.graph.io;
 
+    // `zig build fetch` (backlog M-20): R's source tarball from CRAN, then
+    // its CDN, its sha256 checked against scripts/checksums/, extracted to
+    // build/R-<ver> with the empty patch stamp (zigbuild/tools/fetch.zig).
+    // Before everything else: the rest of this configure step reads that
+    // tree, so with no tree only this step (and the error below) exists.
+    const fetch_step = b.step("fetch", "Download R's source (CRAN, then its CDN), check its sha256 and extract it to build/R-" ++ r_version);
+    {
+        const fetch_exe = b.addExecutable(.{ .name = "fetch", .root_module = b.createModule(.{
+            .root_source_file = b.path("zigbuild/tools/fetch.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }) });
+        const run = b.addRunArtifact(fetch_exe);
+        run.setName("fetch R " ++ r_version);
+        run.has_side_effects = true;
+        const tar_name = "R-" ++ r_version ++ ".tar.gz";
+        run.addArgs(&.{
+            rootPath(b, "build/" ++ tar_name),
+            rootPath(b, "scripts/checksums/R-" ++ r_version ++ ".sha256"),
+            rootPath(b, "build/R-" ++ r_version),
+            "https://cran.r-project.org/src/base/R-4/" ++ tar_name,
+            "https://cloud.r-project.org/src/base/R-4/" ++ tar_name,
+        });
+        fetch_step.dependOn(&run.step);
+    }
+    const have_src = if (std.Io.Dir.cwd().access(io, rootPath(b, "build/R-" ++ r_version ++ "/VERSION"), .{})) |_| true else |_| false;
+    if (!have_src) {
+        // Only `zig build fetch` can succeed; any other step says why.
+        const fail = b.addFail("R source tree not found at build/R-" ++ r_version ++ ": run `zig build fetch` first (scripts/zig-build.sh does)");
+        b.getInstallStep().dependOn(&fail.step);
+        _ = b.option([]const u8, "prefix", "The same directory as --prefix (zig 0.17's configure step does not see --prefix): R's install tree");
+        _ = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal");
+        _ = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas");
+        return;
+    }
+
     const conda = b.graph.environ_map.get("CONDA_PREFIX") orelse {
         std.debug.print("error: CONDA_PREFIX not set — run through pixi (`pixi run zig-build`)\n", .{});
         return error.MissingCondaPrefix;
@@ -392,13 +434,14 @@ pub fn build(b: *std.Build) !void {
     // argument is passed that way); a no-op on unix, which has no
     // backslashes to replace.
     const src_abs = std.mem.replaceOwned(u8, b.allocator, b.fmt("{s}/{s}", .{ root_abs, src_rel }), "\\", "/") catch @panic("OOM");
-    std.Io.Dir.cwd().access(io, b.fmt("{s}/VERSION", .{src_abs}), .{}) catch {
-        std.debug.print("error: R source tree not found at {s} — run `pixi run fetch` first\n", .{src_abs});
-        return error.MissingRSource;
-    };
 
     const variant = b.option(Variant, "variant", "R build variant: slim (default), full, or minimal") orelse .slim;
     const blas = b.option(Blas, "blas", "BLAS/LAPACK flavor: internal (default) or openblas") orelse .internal;
+    // The conda build's add-on r-zig-tcltk (recipe/recipe.yaml): the
+    // variant's R with Tcl/Tk on top (HAVE_TCLTK, the tcltk package's DLL
+    // and its real R code), from the full config's Tcl/Tk keys
+    // (addTcltk). The full variant has it already.
+    const tcltk = b.option(bool, "tcltk", "Tcl/Tk on top of the variant (the conda build's r-zig-tcltk add-on)") orelse false;
     const cairo_dir = b.option([]const u8, "cairo", "cairo's source tarball, unpacked (the conda build's; else build.zig.zon's cairo): Windows' winCairo.dll");
 
     // R's platform is the native one of the zig that runs this build,
@@ -462,7 +505,7 @@ pub fn build(b: *std.Build) !void {
     // the wheel tag from exactly that). 13.0 was zig 0.16's own supported
     // floor; zig 0.17 runs on macOS 15 and later but still builds for 13.0
     // (floors.zig). The query names no OS tag, only
-    // os_version_min (the "<arch>-native.13.0" the shims pass): zig then
+    // os_version_min (the "<arch>-native.13.0" rzig passes): zig then
     // treats the OS as non-native, so it stamps 13.0 and records no rpath
     // per -L directory, while the ABI still counts as native, so headers
     // and libSystem come from the installed SDK (std.Target.Query's
@@ -578,6 +621,7 @@ pub fn build(b: *std.Build) !void {
         .dylib_ext = dylib_ext,
         .variant = variant,
         .feat = variantFeatures(variant, os),
+        .tcltk_addon = tcltk,
         .blas = blas,
         .conda = conda,
         .src_abs = src_abs,
@@ -650,18 +694,13 @@ pub fn build(b: *std.Build) !void {
     try ctx.mk_subst.put("CPPFLAGS", "");
     try ctx.mk_subst.put("LDFLAGS", "");
     // openblas has no vendored config of its own (F3.2: a link-time swap),
-    // so it inherits the internal-BLAS S-table — and with it a Makeconf
-    // telling packages `-lRblas`/`-lRlapack`, libraries this flavor never
-    // builds. Every package with CRAN's `PKG_LIBS = $(LAPACK_LIBS)
-    // $(BLAS_LIBS) $(FLIBS)` failed to link ("unable to find dynamic system
-    // library 'Rblas'", quadprog on the CI openblas legs). Replay what a
-    // real `configure --with-blas=-lopenblas --with-lapack=-lopenblas`
-    // writes (build/obj-*-slim-openblas/config.status): LAPACK is found
-    // inside openblas, so LAPACK_LIBS is empty and BLAS_LIBS carries both.
-    if (blas == .openblas) {
-        try ctx.subst.put("BLAS_LIBS", "-lopenblas");
-        try ctx.subst.put("LAPACK_LIBS", "");
-    }
+    // so it inherits the internal-BLAS S-table, and with it Makeconf's
+    // BLAS_LIBS `-lRblas` and LAPACK_LIBS `-lRlapack`: since backlog M-23
+    // the openblas flavor ships both libraries too, as forwarders to
+    // openblas (blasForwarder), so that a package's binary links the same
+    // two names in every flavor and moves between them. (Before, this
+    // replayed configure --with-blas=-lopenblas: a bare -lopenblas, which
+    // a tree without openblas cannot load.)
     try applyVariantConfig(&ctx, io);
     // FC is the toolchain's Fortran front, rzig's zig-fc (feat-no-host-
     // paths F3c, zigbuild/tools/rzig/fortran.zig), as CC and CXX are its
@@ -682,7 +721,7 @@ pub fn build(b: *std.Build) !void {
         // The vendored config.h, with the two lines that name the
         // capture's compilers rewritten for this build's (setDefine).
         const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/config.h", .{config_dir})), b.allocator, .limited(4 * 1024 * 1024));
-        _ = geninc.add("config.h", try setDefine(b, try setDefine(b, raw, "CC_VER", ctx.cc_ver), "FC_VER", ctx.fc_ver));
+        _ = geninc.add("config.h", try setDefine(b, try setDefine(b, try tcltkConfigH(&ctx, raw), "CC_VER", ctx.cc_ver), "FC_VER", ctx.fc_ver));
     }
     _ = geninc.addCopyFile(b.path(b.fmt("{s}/Rconfig.h", .{config_dir})), "Rconfig.h");
     _ = geninc.add("Rversion.h", try genRversionH(&ctx, io));
@@ -697,11 +736,13 @@ pub fn build(b: *std.Build) !void {
     const stats_f = fortranGroup(&ctx, "src/library/stats/src", &rspec.stats_f, &.{});
 
     // ------------------------------------------------------------------
-    // libRblas.so / libRlapack.so — internal reference implementation
-    // only; openblas (F3.2) skips compiling these entirely and every
-    // linkBlas()/linkLapack() call below links -lopenblas instead. Same
-    // Fortran-callable ABI either way, so no source-level branching
-    // anywhere else in the compile graph needs to know which flavor this is.
+    // libRblas.so / libRlapack.so — internal reference implementation;
+    // openblas (F3.2) skips compiling them, links R's own libraries
+    // (linkBlas()/linkLapack() below) with -lopenblas, and installs both
+    // names as forwarders to openblas for packages (blasForwarder, backlog
+    // M-23). Same Fortran-callable ABI either way, so no source-level
+    // branching anywhere else in the compile graph needs to know which
+    // flavor this is.
     // ------------------------------------------------------------------
     ctx.rblas = null;
     ctx.rlapack = null;
@@ -737,6 +778,9 @@ pub fn build(b: *std.Build) !void {
         linkFortranRt(&ctx, rlapack_mod);
         ctx.relRPaths(rlapack_mod, .rlib);
         ctx.rlapack = addSharedLib(&ctx, "Rlapack", rlapack_mod);
+    } else {
+        ctx.rblas = blasForwarder(&ctx, "Rblas");
+        ctx.rlapack = blasForwarder(&ctx, "Rlapack");
     }
 
     // ------------------------------------------------------------------
@@ -1099,7 +1143,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const geninc = b.addWriteFiles();
     {
         const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/config.h", .{ctx.config_dir})), b.allocator, .limited(4 * 1024 * 1024));
-        _ = geninc.add("config.h", try substitute(ctx, raw));
+        _ = geninc.add("config.h", try substitute(ctx, try tcltkConfigH(ctx, raw)));
     }
     _ = geninc.addCopyFile(b.path(b.fmt("{s}/Rconfig.h", .{ctx.config_dir})), "Rconfig.h");
     _ = geninc.add("Rversion.h", try genRversionH(ctx, io));
@@ -1118,13 +1162,15 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     ctx.geninc = geninc.getDirectory();
 
     // ------------------------------------------------------------------
-    // Fortran: BLAS (internal only — no ATLAS/OpenBLAS on Windows yet)
-    // and LAPACK (dlapack.f is one aggregated file, unlike unix's
-    // per-routine split; the la_constants->la_xisnan module chain is the
-    // one place Windows' LAPACK layout still matches unix's shape).
+    // Fortran: BLAS (the internal one; -Dblas=openblas makes Rblas.dll a
+    // forwarder instead, winBlasForwarder) and LAPACK (dlapack.f is one
+    // aggregated file, unlike unix's per-routine split; the
+    // la_constants->la_xisnan module chain is the one place Windows'
+    // LAPACK layout still matches unix's shape).
     // ------------------------------------------------------------------
-    const blas_f = fortranGroup(ctx, "src/extra/blas", &rspec.blas_f, &.{});
-    const blas_f90 = fortranGroup(ctx, "src/extra/blas", &rspec.blas_f90, &.{});
+    const internal_blas = ctx.blas == .internal;
+    const blas_f = if (internal_blas) fortranGroup(ctx, "src/extra/blas", &rspec.blas_f, &.{}) else &.{};
+    const blas_f90 = if (internal_blas) fortranGroup(ctx, "src/extra/blas", &rspec.blas_f90, &.{}) else &.{};
 
     var lapack_mods = std.ArrayList(std.Build.LazyPath).empty;
     var lapack_objs = std.ArrayList(std.Build.LazyPath).empty;
@@ -1310,12 +1356,14 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // the symbol staying unresolved until runtime, when libR is already
     // loaded; PE/COFF does not.
     // ------------------------------------------------------------------
-    const rblas_mod = newCMod(ctx);
-    for (blas_f) |o| rblas_mod.addObjectFile(o);
-    for (blas_f90) |o| rblas_mod.addObjectFile(o);
-    rblas_mod.addObjectFile(r_stub);
-    linkFortranRt(ctx, rblas_mod);
-    const rblas = addSharedLib(ctx, "Rblas", rblas_mod);
+    const rblas = if (ctx.blas == .openblas) try winBlasForwarder(ctx, io) else blk: {
+        const rblas_mod = newCMod(ctx);
+        for (blas_f) |o| rblas_mod.addObjectFile(o);
+        for (blas_f90) |o| rblas_mod.addObjectFile(o);
+        rblas_mod.addObjectFile(r_stub);
+        linkFortranRt(ctx, rblas_mod);
+        break :blk addSharedLib(ctx, "Rblas", rblas_mod);
+    };
 
     // ------------------------------------------------------------------
     // Rlapack.dll — one-directional (needs R.dll + Rblas.dll, but R.dll
@@ -2852,8 +2900,9 @@ fn rcmdEnviron(ctx: *const Ctx, io: std.Io) ![]u8 {
     for ([_][]const u8{
         "## r-zig: the build tools first on PATH (feat-standalone-toolchain B25): R's",
         "## installer line, with the build-tools group's usr/bin in Rtools' place,",
-        "## then the extras group's cmake, then a conda env's MSYS dir (Library/usr/bin; PHASE7 F2 b).",
-        "R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin",
+        "## then the extras group's cmake, then a conda env's MSYS dir (Library/usr/bin; PHASE7 F2 b),",
+        "## then that of the env R_ZIG_TOOLCHAIN_ENV names, if any.",
+        "R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin;${R_ZIG_TOOLCHAIN_ENV}/Library/usr/bin",
         "PATH=\"${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/\"",
         "## r-zig: CMake for packages that build a bundled library with it.",
         "CMAKE_GENERATOR=\"${CMAKE_GENERATOR-MSYS Makefiles}\"",
@@ -3008,6 +3057,82 @@ fn addSharedLib(ctx: *const Ctx, name: []const u8, mod: *std.Build.Module) *std.
     // can't bring them back.
     lib.each_lib_rpath = false;
     macHeaderpad(ctx, lib);
+    return lib;
+}
+
+/// The BLAS link contract for binary packages (backlog M-23,
+/// .github/devdocs/b13-build/PLAN.md): every flavor ships libRblas and
+/// libRlapack (Rblas.dll and Rlapack.dll), and Makeconf's BLAS_LIBS and
+/// LAPACK_LIBS name them (`-lRblas`, `-lRlapack`) in every flavor, so a
+/// package's binary names the same libraries whichever flavor built it and
+/// loads in the other. In the openblas flavor they hold no BLAS of their
+/// own: on linux and macOS each is an empty library that needs openblas's
+/// (DT_NEEDED / LC_LOAD_DYLIB, kept by referencing one of its functions),
+/// so a package's BLAS and LAPACK symbols resolve in openblas, which the
+/// library loads. Windows' Rblas.dll is buildWindows' (forwarded exports).
+fn blasForwarder(ctx: *const Ctx, name: []const u8) *std.Build.Step.Compile {
+    const b = ctx.b;
+    const mod = newCMod(ctx);
+    mod.root_source_file = b.addWriteFiles().add("blas_forward.zig",
+        \\//! A BLAS/LAPACK library of R's openblas flavor: no code of its own,
+        \\//! a dependency on openblas (build.zig, blasForwarder).
+        \\extern fn openblas_get_config() callconv(.c) [*:0]const u8;
+        \\export const r_zig_blas_provider: *const fn () callconv(.c) [*:0]const u8 = &openblas_get_config;
+        \\
+    );
+    mod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no, .needed = true });
+    ctx.relRPaths(mod, .rlib);
+    return addSharedLib(ctx, name, mod);
+}
+
+/// Windows' Rblas.dll in the openblas flavor (backlog M-7; the contract:
+/// blasForwarder): every export of R's own (src/extra/blas/Rblas.def, the
+/// names packages import from Rblas.dll) forwarded to the same name in
+/// conda-forge's openblas DLL, so R.dll, Rlapack.dll and every package keep
+/// importing Rblas.dll and the loader binds those imports to openblas, in
+/// every flavor's binaries. R's own USE_OPENBLAS build (MkRules) swaps
+/// Rblas.dll alone the same way and keeps Rlapack.dll R's LAPACK; so does
+/// this. A forwarder needs no import, so the DLL also imports one function
+/// of openblas's: its DLL is then in Rblas.dll's import table, which the
+/// tree's DLL closure (vendor-libs.sh, verify-tree.sh) follows.
+fn winBlasForwarder(ctx: *Ctx, io: std.Io) !*std.Build.Step.Compile {
+    const b = ctx.b;
+    const conda_lib = b.fmt("{s}/Library", .{ctx.conda});
+    // conda-forge's win-64 libopenblas ships Library/bin/openblas.dll and
+    // its openblas (dev) package Library/lib/openblas.lib.
+    const dll = for ([_][]const u8{ "openblas", "libopenblas" }) |cand| {
+        if (std.Io.Dir.cwd().access(io, b.fmt("{s}/bin/{s}.dll", .{ conda_lib, cand }), .{})) |_| break cand else |_| {}
+    } else {
+        std.debug.print("error: -Dblas=openblas: no openblas.dll or libopenblas.dll in {s}/bin (pixi's openblas feature)\n", .{conda_lib});
+        return error.MissingOpenblas;
+    };
+    const rdef = try std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/src/extra/blas/Rblas.def", .{ctx.src_abs}), b.allocator, .limited(64 * 1024));
+    var def: std.ArrayList(u8) = .empty;
+    try def.appendSlice(b.allocator, "LIBRARY Rblas.dll\nEXPORTS\n");
+    var lines = std.mem.tokenizeAny(u8, rdef, "\r\n");
+    var n: usize = 0;
+    while (lines.next()) |line| {
+        const name = std.mem.trim(u8, line, " \t");
+        if (name.len == 0 or std.mem.startsWith(u8, name, "LIBRARY") or std.mem.eql(u8, name, "EXPORTS") or name[0] == ';') continue;
+        try def.print(b.allocator, " {s} = {s}.{s}\n", .{ name, dll, name });
+        n += 1;
+    }
+    if (n == 0) return error.EmptyRblasDef;
+    const wf = b.addWriteFiles();
+    const def_file = wf.add("Rblas.def", def.items);
+    const mod = newCMod(ctx);
+    mod.root_source_file = wf.add("blas_forward.zig",
+        \\//! Rblas.dll of R's openblas flavor: forwarded exports (Rblas.def) and
+        \\//! one import of openblas, so its DLL is in the import table
+        \\//! (build.zig, winBlasForwarder).
+        \\extern fn openblas_get_config() callconv(.c) [*:0]const u8;
+        \\export const r_zig_blas_provider: *const fn () callconv(.c) [*:0]const u8 = &openblas_get_config;
+        \\
+    );
+    mod.linkSystemLibrary("openblas", .{ .use_pkg_config = .no, .needed = true });
+    const lib = addSharedLib(ctx, "Rblas", mod);
+    lib.win32_module_definition = def_file;
+    def_file.addStepDependencies(&lib.step);
     return lib;
 }
 
@@ -3337,6 +3462,52 @@ fn applyVariantConfig(ctx: *Ctx, io: std.Io) !void {
     ctx.openmp_pkgs = (try substKey(ctx, "SHLIB_OPENMP_CFLAGS")).len > 0;
     ctx.devcairo = (try substKey(ctx, "BUILD_DEVCAIRO_TRUE")).len == 0;
     try checkVariantConfig(ctx, io);
+    if (ctx.tcltk_addon and !ctx.feat.tcltk) try addTcltk(ctx, io);
+}
+
+/// -Dtcltk: the variant (slim) with Tcl/Tk on top, for the conda build's
+/// r-zig-tcltk add-on. The Tcl/Tk keys of the same platform's full config
+/// (use_tcltk, TCL_CONFIG, TK_CONFIG, TCLTK_CPPFLAGS, TCLTK_LIBS; Windows'
+/// subst.txt has TCLTK_LIBS only) replace the variant's empty ones, and
+/// config.h defines HAVE_TCLTK (tcltkConfigH); Makeconf takes their
+/// env-relative form (makeconfValue). Everything else follows
+/// ctx.feat.tcltk, as for full. Run after checkVariantConfig, which
+/// compares the vendored dir with the variant itself.
+fn addTcltk(ctx: *Ctx, io: std.Io) !void {
+    const b = ctx.b;
+    const dash = std.mem.lastIndexOfScalar(u8, ctx.config_dir, '-').?;
+    const full_dir = b.fmt("{s}-full", .{ctx.config_dir[0..dash]});
+    const raw = try std.Io.Dir.cwd().readFileAlloc(io, rootPath(b, b.fmt("{s}/subst.txt", .{full_dir})), b.allocator, .limited(4 * 1024 * 1024));
+    var lines = std.mem.splitScalar(u8, raw, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        inline for (.{ "use_tcltk", "TCL_CONFIG", "TK_CONFIG", "TCLTK_CPPFLAGS", "TCLTK_LIBS" }) |key| {
+            const head = "S[\"" ++ key ++ "\"]=\"";
+            if (std.mem.startsWith(u8, line, head) and std.mem.endsWith(u8, line, "\"")) {
+                const val = line[head.len .. line.len - 1];
+                try ctx.subst.put(key, try std.mem.replaceOwned(u8, b.allocator, val, "@ZR_CONDA@", ctx.conda));
+                // Makeconf's form, as loadSubstFile's: $(R_HOME)/../.. for the env
+                if (std.mem.indexOf(u8, val, "@ZR_CONDA@") != null) try ctx.mk_subst.put(key, try makeconfValue(ctx, val));
+            }
+        }
+    }
+    if (std.mem.trim(u8, ctx.subst.get("TCLTK_LIBS") orelse "", " ").len == 0) {
+        std.debug.print("error: -Dtcltk: {s}/subst.txt has no TCLTK_LIBS\n", .{full_dir});
+        return error.MissingSubstKey;
+    }
+    ctx.feat.tcltk = true;
+}
+
+/// config.h with HAVE_TCLTK defined when -Dtcltk added Tcl/Tk (addTcltk):
+/// capabilities("tcltk") and R --gui=Tk, as full's.
+fn tcltkConfigH(ctx: *const Ctx, raw: []const u8) ![]const u8 {
+    if (!ctx.tcltk_addon or !ctx.feat.tcltk or hasDefine(raw, "HAVE_TCLTK")) return raw;
+    const undef = "/* #undef HAVE_TCLTK */";
+    if (std.mem.indexOf(u8, raw, undef) == null) {
+        std.debug.print("error: -Dtcltk: no '{s}' line in {s}/config.h\n", .{ undef, ctx.config_dir });
+        return error.NoSuchDefine;
+    }
+    return std.mem.replaceOwned(u8, ctx.b.allocator, raw, undef, "#define HAVE_TCLTK 1");
 }
 
 /// A key subst.txt must have; a missing one stops the build by name
