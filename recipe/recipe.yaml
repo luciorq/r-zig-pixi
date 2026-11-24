@@ -842,6 +842,16 @@ outputs:
             - Library/lib/R/bin/toolchain/usr/**
           else:
             - lib/R/bin/toolchain/usr/**
+      # The files go in as the toolchain build made them, as usr/SOURCES
+      # records them (its sha256s): no relinking. These tools link the
+      # system's libc alone and need no rpath, and patchelf's rewrite of
+      # zig's make (it has no RUNPATH, so patchelf moves the headers and
+      # .dynamic into a new segment below the image) leaves lld's
+      # __dso_handle (the old image base) unmapped on linux-aarch64's 64K
+      # segment alignment: atexit() read it and make crashed (SIGSEGV,
+      # b13-make-aarch64 F1).
+      dynamic_linking:
+        binary_relocation: false
     requirements:
       run:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
@@ -895,6 +905,9 @@ outputs:
             # a configure script that unpacks its sources (duckdb 2.0.0:
             # `tar xf duckdb.tar`; chore-release-11 finding 34)
             - m2-tar
+            # tar xzf runs gzip (jpeg's configure.win fallback: "tar (child):
+            # gzip: Cannot exec"; b13-fixes F10)
+            - m2-gzip
     tests:
       - package_contents:
           files:

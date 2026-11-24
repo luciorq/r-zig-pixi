@@ -113,6 +113,25 @@ if (!windows) {
     narrow(usr_bin = TRUE)
     stopifnot(r$status == 0L, same_path(shown(dirname(r$out[1L])), make_dir))
     cat("build tools: R's session finds the group's make: OK\n")
+    ## the group's make is the file the toolchain build made, as usr/SOURCES
+    ## records it (the package does not relink it: patchelf's rewrite
+    ## crashed it on linux-aarch64, b13-make-aarch64 F1), and it runs a
+    ## makefile with $(shell) and a recipe
+    ub <- file.path(R.home(), "bin", "toolchain", "usr")
+    src <- readLines(file.path(ub, "SOURCES"))
+    blk <- src[match("package: make", src):length(src)]
+    blk <- blk[cumsum(blk == "") == 0L]
+    fl <- grep("^file: make -> bin/make ", blk, value = TRUE)
+    ver <- sub("^version: ", "", grep("^version: ", blk, value = TRUE))
+    mk <- file.path(ub, "bin", "make")
+    stopifnot(length(fl) == 1L, length(ver) == 1L, unname(tools::sha256sum(mk)) == sub("^.* ", "", fl))
+    mf <- file.path(d, "Makefile.t")
+    writeLines(c("x := $(patsubst %.c,%.o,a.c b.c) $(shell echo s)",
+                 "all: ; @echo \"make $(MAKE_VERSION) $(x)\""), mf)
+    r <- run_to(mk, c("-f", mf))
+    cat(r$out, sep = "\n")
+    stopifnot(r$status == 0L, identical(r$out, paste("make", ver, "a.o b.o s")))
+    cat("build tools: the group's make is SOURCES' file and runs a makefile: OK\n")
 }
 if (windows) {
     Sys.setenv(PATH = paste(c(empty, env_bin, file.path(Sys.getenv("SystemRoot"), "System32")), collapse = ";"))
@@ -170,8 +189,8 @@ if (windows) {
     ## zig-* packages, feat-zig-libs) then this env's Library/lib/pkgconfig
     ## and Library/share/pkgconfig, where pkg-config finds this env's .pc
     ## files (conda-forge's pkg-config, whose activation set it, is no
-    ## longer a dependency); PKG_CONFIG_LIBDIR and R_TOOLS_SOFT, unset,
-    ## their zig-libs defaults (as scripts/verify-bundle.sh's pcpath.R)
+    ## longer a dependency); PKG_CONFIG_LIBDIR, R_TOOLS_SOFT and LOCAL_SOFT,
+    ## unset, their zig-libs defaults (as scripts/verify-bundle.sh's pcpath.R)
     pcs <- sub("[.]pc$", "", list.files(file.path(env_bin, "..", "lib", "pkgconfig"), pattern = "[.]pc$"))
     pc <- if ("zlib" %in% pcs) "zlib" else pcs[1L]
     rs <- file.path(d, "pc.R")
@@ -180,12 +199,12 @@ if (windows) {
                  'envpc <- paste0(rh, "/../../lib/pkgconfig;", rh, "/../../share/pkgconfig")',
                  'want <- c(PKG_CONFIG_PATH = paste0(zl, "/lib/pkgconfig;", envpc),',
                  '          PKG_CONFIG_LIBDIR = paste0(zl, "/lib/pkgconfig;", envpc),',
-                 '          R_TOOLS_SOFT = zl)',
+                 '          R_TOOLS_SOFT = zl, LOCAL_SOFT = zl)',
                  'for (v in names(want)) { p <- Sys.getenv(v, NA); if (is.na(p) || p != want[[v]]) stop(v, " is \'", p, "\', not ", want[[v]]) }',
                  'cat("pkg-config:", Sys.which("pkg-config"), "\\n")',
                  'a <- commandArgs(TRUE)',
                  'if (length(a) && !is.na(a[1L])) quit(status = system2("pkg-config", c("--exists", "--print-errors", a[1L])))'), rs)
-    vs <- c("PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR", "R_TOOLS_SOFT")
+    vs <- c("PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR", "R_TOOLS_SOFT", "LOCAL_SOFT")
     old <- Sys.getenv(vs, NA, names = TRUE)
     Sys.unsetenv(vs)
     r <- run_to(file.path(R.home("bin"), "Rcmd.exe"), c("Rscript.exe", "--vanilla", shQuote(rs), if (!is.na(pc)) pc))
@@ -193,7 +212,7 @@ if (windows) {
     cat(r$out, sep = "\n")
     w <- sub("^pkg-config: ", "", grep("^pkg-config: ", r$out, value = TRUE))
     stopifnot(r$status == 0L, length(w) == 1L, same_path(shown(dirname(w)), shown(file.path(ub, "bin"))))
-    cat("build tools: under R CMD, PKG_CONFIG_PATH is zig-libs' then this env's .pc directories, PKG_CONFIG_LIBDIR and R_TOOLS_SOFT their zig-libs defaults",
+    cat("build tools: under R CMD, PKG_CONFIG_PATH is zig-libs' then this env's .pc directories, PKG_CONFIG_LIBDIR, R_TOOLS_SOFT and LOCAL_SOFT their zig-libs defaults",
         if (is.na(pc)) "(this env has no .pc file to look up)" else paste0("and pkg-config finds ", pc),
         ": OK\n")
 
