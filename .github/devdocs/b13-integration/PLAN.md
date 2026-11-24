@@ -98,3 +98,13 @@ b13-design; each record in `.github/devdocs/<topic>/PLAN.md` with its
 
 Suggested commit (chain group's own fixes):
 `fix: set file times on Windows through a handle in fetch, match the Windows tools path in verify-tree`
+
+## User decisions (2026-11-24)
+
+| id | question | choice | follow-up |
+|---|---|---|---|
+| U1 | L4 native Windows build tools without MSYS2 | b: busybox-w32 plus zig-built make as an opt-in in build 14, default later (b13-design) | build 14 |
+| U2 | L5 binary package repository | b: a curated linux repository, CRAN-like layout on GitHub Release assets (b13-design) | build 14 |
+| U3 | L9 rzig pkg-config mode | b: design record only; pkgconf keeps serving (b13-rzig D5/F7) | none |
+| U4 | unactivated R.exe on Windows (b13-hosts F4/N3) | b: R's front ends put the env's DLL dir (`<R_HOME>\..\..\bin`, when it exists) first on PATH | implemented in this PR (b13-hosts PLAN, Decision 4b) |
+| U5 | Q20 flang-pixi note and r-zig 4.6.1 builds | a: note sent to the flang-pixi session (2026-11-24, b13-recipe F11 text); r-zig 4.6.1 builds stay on universe | none |
