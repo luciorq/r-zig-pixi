@@ -127,6 +127,11 @@ the environment (`pixi shell`, `conda activate`) or start R with
   still find `find`, `sort`, `expand`, `hostname`, `timeout`, `whoami`,
   `tar` and `bash` (WSL's) in System32, as with R's own installer and
   Rtools; sh, make and configure scripts get the build tools'.
+- On Windows, R's DLLs come from the environment's `Library\bin`.
+  Without activation, start R as `<env>\Library\lib\R\bin\R.exe` or
+  `Rscript.exe`, which put `Library\bin` on `PATH` first; `bin\x64\`'s
+  programs (`R.exe`, `Rterm.exe`, `Rscript.exe`) and `Library\bin\R.bat`
+  need activation or `Library\bin` on `PATH`.
 - On Windows, a package DLL links Winsock (`ws2_32`) by default, after
   the package's own libraries: a package that calls `htons` without
   naming `-lws2_32` (ragg with a conda environment's libraries) links

@@ -3,7 +3,8 @@
 Worktree from main 7e3648e (build 12's source; build 12 published by
 build-r run 45381914199). Items: H3, H4, H5, H6, CI8, CI10, CI12, CI13
 (chore-release-12/BACKLOG.md). H2 was done in batch 1; H1 is b13-rzig's.
-No repo source file changes. Records annotated: feat-zig-017/ZIG-FETCH-CACHE.md
+No repo source file changes, but decision 4b's (patch 0016, build.zig's
+winRfe comment, README). Records annotated: feat-zig-017/ZIG-FETCH-CACHE.md
 (status row), feat-r-home-link-objects, feat-winarm-gaps, feat-shlib-rzig-build,
 feat-config-rzig (dated update lines).
 
@@ -27,6 +28,10 @@ record what holds, what does not, and what is left over on the hosts.
 | D5 | omicron cannot resolve hostnames with conda's curl (F25) | **(a) download with /usr/bin/curl and install from files**; (b) fix the host's DNS | no host changes; recorded instead | default, 2026-11-24 |
 | D6 | H6 (b) on omicron | (a) run there too; **(b) delta only** | the defect is in zig's package fetch code, not OS-specific in the record; omicron's resolver issue (F25) would confound it | default, 2026-11-24 |
 | D7 | own scratch dirs | **deleted after the runs** (kappa rz-b13-hosts 9.8 GB, omicron ~/rz-b13-hosts 6.3 GB, delta ~/rz/scratch-b13-hosts); logs copied to T/scratch-b13-hosts first | kappa had 32 GB free | default, 2026-11-24 |
+| D8 | N3 (F4): an unactivated env's R cannot start | (a) document activation only; **(b) R's own front ends put `<env>\Library\bin` first on PATH** | decision 4b | user, 2026-11-24 |
+| D9 | 4b: where | **(a) Rfe.c (R_HOME\bin\R.exe, Rscript.exe), patch 0016**; (b) also bin\x64's programs by delay-loading R.dll | Rfe links no R.dll and starts bin\x64's program through system(), whose children inherit PATH (F26). bin\x64's programs import R.dll and its data symbols at load, before any code runs: (b) needs delay-load support in zig's linker and no data imports. bin\x64's programs left as they are (F29) | default, 2026-11-24 |
+| D10 | 4b: when | (a) whenever R_HOME\..\..\bin exists; **(b) when it exists, `<env>\conda-meta` exists and it is not on PATH yet** | the standalone tree has Library\bin too (R.bat, Rscript.bat only; its DLLs are in bin\x64): (a) would change its PATH. (b) leaves the standalone tree, the wheel (R_HOME r_zig/R/lib/R) and an activated env as they were (F28) | default, 2026-11-24 |
+| D11 | 4b: test | **(a) Rfe alone cross-compiled with zig cc on gamma from the patched source (as winRfe: same files, defines, libraries, R's manifest), put into a build-12 env on kappa**; (b) a full Windows build | Rfe is 5 C files and system libraries; nothing else changed. A full build is CI's (PR #57) | default, 2026-11-24 |
 
 ## Findings
 
@@ -255,6 +260,60 @@ Proposed cleanup (user runs it; all are leftovers of finished work):
    deciding whether the cited evidence is still wanted (or keep only
    the cited files).
 
+### Decision 4b: R_HOME\bin\R.exe and Rscript.exe without activation (kappa)
+
+Patch zigbuild/patches/R-4.6.2/0016-rfe-env-dll-path.patch (build.zig
+winRfe). N3 resolved: the user chose (b). Logs: T/scratch-b13-4b/kappa
+(v1.log, v2.log, w.log; t.log, u1.log, u2.log are the runs before the
+fixes in F30).
+
+- F26 (V) R_HOME\bin\R.exe and Rscript.exe (Rfe) import ADVAPI32,
+  SHELL32, USER32, ole32, KERNEL32 and the UCRT only, no R.dll
+  (`objdump -p` of build 12's and of the patched one: the same list,
+  both 308224 bytes); Rfe runs `bin\x64\R.exe` or `Rscript.exe` with
+  system(), whose children inherit its environment. R CMD already
+  prepends R_HOME\bin\x64 to PATH the same way (rcmdfn.c, its
+  `PATH=%s\\%s;%s` putenv before it runs Rterm.exe).
+- F27 (V) r-zig-slim hb04b5bb_12 env, PATH `C:\Windows\System32;C:\Windows`,
+  not activated. Build 12's Rfe: `R.exe --version`, `Rscript.exe -e
+  "cat(1)"`, `R.exe CMD config CC` rc -1073741515 each. Patched Rfe: rc 0
+  each (R 4.6.2 banner, `1`, `<env>/Library/lib/R/bin/toolchain/gcc.exe`).
+  In R, PATH is the build tools' three directories, then
+  `<env>\Library\bin`, then the two given. `system2(R.home("bin")/R, CMD
+  config CC)` from that session: rc 0; a nested Rscript sees Library\bin
+  once (w.log). The same under `C:\Users\admin\rz-b13-4b\sp ace\`
+  (R_HOME's 8.3 form inside R).
+- F28 (V) Activated (`pixi run`): Rscript.bat, `bin\Rscript.exe`,
+  `bin\R.exe CMD config CC`, `bin\R.exe --version`, `bin\R.exe -e` rc 0;
+  Library\bin is on R's PATH once (pixi writes `<env>\Library/bin`; the
+  check takes `/` as `\` and the long path form). With conda-meta
+  renamed (the standalone tree's case: no conda-meta), PATH is not
+  changed and `R.exe --version` gives the old -1073741515.
+- F29 (V) Not covered: `bin\x64\R.exe` (and Rterm.exe, Rscript.exe,
+  Rcmd.exe) started directly, not activated: -1073741515, as before;
+  `Library\bin\R.bat` and `Rscript.bat` run bin\x64's programs, so they
+  too need activation or Library\bin on PATH (README's Windows notes).
+  Started from R (system(), R CMD), they inherit Library\bin.
+- F30 (V) Two fixes found by the kappa runs: (1) pixi's activation
+  writes `<env>\Library/bin`, so a plain compare added Library\bin a
+  second time in an activated env (u1.log, "entries: 2"); (2) R.home()
+  is the 8.3 form under a path with a space, so a nested run compared
+  the short form. Both fixed in the patch (separator- and case-blind
+  compare; GetLongPathName).
+- F31 (V) Host incident, repaired: the env's bin\R.exe and Rscript.exe
+  are hardlinks into the rattler cache (`fsutil hardlink list`:
+  `%LOCALAPPDATA%\rattler\cache\pkgs\r-zig-slim-4.6.2-hb04b5bb_12`),
+  and the first runs replaced them with `copy /y`, which writes through
+  the link. Restored from the saved original; both cache files' sha256
+  is 5025d6f3...9dc3, the value in that package's info/paths.json. No
+  other env linked them (fsutil lists the cache and the two scratch
+  envs). Later runs delete before copying.
+- F32 (V) The series applies to a pristine R-4.6.2 tarball (`patch -p1
+  -F0`, 0001-0016); Rfe.c compiles with `-Wall -Wextra` and no warning
+  for x86_64-windows-gnu and aarch64-windows-gnu (zig 0.17.1). The
+  patch changes `.r-zig-patches`' series, so zig-build.sh extracts an
+  older tree again.
+
 ## Tests run
 
 | where | command | result |
@@ -270,6 +329,8 @@ Proposed cleanup (user runs it; all are leftovers of finished work):
 | omicron | ar-test.sh, ar-test2.sh (re-run of ar-test.sh in Review) | conda-forge fails (logged), upstream ok (not logged) (F14) |
 | delta | fetch-repro.sh (both zigs) | reproduced on both (F15) |
 | gamma | gh run view --log (publish 45381914199, 19 jobs; stress 45305358893, 4 jobs); stress-45305358893 reports | F13, F16-F20 |
+| gamma | zig cc -target x86_64/aarch64-windows-gnu: Rfe.c rcmdfn.c rhome.c shext.c Renviron.c + Rcmd64.exe.manifest, from 0001-0016 applied to R-4.6.2.tar.gz | builds, no warning (F32) |
+| kappa | u.bat (env, and env under "sp ace"): build 12's Rfe vs patched Rfe, not activated and activated; w.bat (nested PATH) | F27-F29 |
 
 Upstream zig: F14 and F15 ran with both zigs. H3, H4, CI10 and CI12 ran
 the build-12 envs' conda-forge zig only (no compile or link behaviour
@@ -277,6 +338,9 @@ changed here).
 
 ## Not verified
 
+- 4b in a full Windows build (CI on PR #57 builds it) and on win-arm64
+  (cross-compiled only); `R CMD SHLIB` with 4b (the kappa env had no
+  r-zig-compilers; R CMD config reached rzig).
 - osx-64 (Rosetta) for CI12 (b)/(c) and H4; win-arm64 on a host.
 - An R_HOME with a space on a volume without 8.3 names (F5).
 - Which extractor stress used (F16), until N2 lands.
@@ -306,7 +370,7 @@ changed here).
   `<env>\Library\bin` on PATH" in README's Windows notes; or the front
   `bin\R.exe`/`Rscript.exe` prepends `<R_HOME>\..\..\bin` (Library\bin)
   to PATH before starting x64\R.exe, as R already does for the build
-  tools. Not decided here.
+  tools. Resolved: the user chose (b) (D8-D11, "Decision 4b" above).
 - N4 (b13-stress, any topic running on omicron): set XDG_CACHE_HOME
   (and ZIG_GLOBAL_CACHE_DIR) to its scratch dir; its run wrote
   ~/.cache/r-zig/zig-lib-971555147 on omicron (F11). And omicron's
