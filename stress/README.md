@@ -16,7 +16,7 @@ package does not fail the run.
 | `stress.R` | the one entry script. Base R only. `--help` prints its options. |
 | `smoke/<name>.R` | a smoke call longer than one line: a row whose smoke is `@<name>.R` runs this file (its last value is the result), copied into the run's smoke file. |
 | `local/<name>/` | a `local` row's package source (zigcmake), copied into the run directory before each install. |
-| `pixi.toml`, `[feature.stress]` | the `stress` environment: the system libraries the rows need (GDAL, GEOS, PROJ, cmake, ...), plus the default feature's zig and flang. All six platforms; on win-arm64 without the libraries conda-forge has no build of there (libgdal-core, udunits2, imagemagick, harfbuzz, hdf5, libnetcdf, gsl, mpfr, gmp, libpq, glpk, nlopt; 2026-11-15) and without libprotobuf (protolite takes r-windows' protobuf bundle there; chore-env-ci M-3), which the report lists as sysdeps missing from the env. |
+| `pixi.toml`, `[feature.stress]` | the `stress` environment: the system libraries the rows need (GDAL, GEOS, PROJ, cmake, ...), plus the default feature's zig and flang. All six platforms. On Windows the rows' C libraries are libs-zig-pixi's `zig-*` packages (sysdeps `zig-<name>@windows`; slice 2, 2026-11-25: udunits2, harfbuzz, hdf5, netcdf, gsl, mpfr, gmp, libpq, glpk, nlopt, libxml2 and the image libraries), so win-64 keeps only conda-forge's libprotobuf and imagemagick; win-arm64 has neither (conda-forge has no build there; protolite takes r-windows' protobuf bundle, chore-env-ci M-3, magick its own bundle), which the report lists as sysdeps missing from the env. |
 | `.github/workflows/stress.yaml` | the manual CI workflow. |
 
 The groups follow the brief:
@@ -371,7 +371,7 @@ package cannot link (the abi rows: s2, terra, gdalraster). With zig-libs:
 
 The rows name them as `zig-gdal@windows` and the like (unix keeps
 conda-forge's libgdal-core, geos, proj, openssl). They are on universe
-since 2026-11-23 (libs-zig-pixi M5), so the stress env has them on both
+since 2026-11-23 (libs-zig-pixi M5; slice 2 since 2026-11-25, b13-slice2), so the stress env has them on both
 Windows platforms (pixi.toml), a tree run takes them from there and a
 conda run's env gets them from universe with the rows' other sysdeps.
 
