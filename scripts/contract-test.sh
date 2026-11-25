@@ -37,6 +37,9 @@
 #                straight into that compiled code; on linux/windows ps
 #                has no Objective-C to exercise, so only the plain
 #                load + a basic call is asserted there.
+#   BLAS_LIBS  — R CMD SHLIB of C calling dgemm_ with $(BLAS_LIBS): the
+#                link has no runtime pseudo relocation and it computes
+#                (Windows openblas links libRblas.dll.a; b13-fixes F13).
 #   cpp11, callr, processx, R6 — for the no-make program below: cpp11's
 #                headers and callr::rcmd, cpp_source's own SHLIB call.
 #                They install here, with the build tools, as ps and pak
@@ -192,6 +195,27 @@ cat > "$LIB/contract.R" <<'RCODE'
   # d = (2, 6): the solution is x = (1, 3).
   qp <- solve.QP(Dmat = diag(2, 2), dvec = c(2, 6), Amat = diag(2), bvec = c(0, 0))
   stopifnot(max(abs(qp$solution - c(1, 3))) < 1e-8)
+  # BLAS from C through Makeconf's BLAS_LIBS, as irlba and RcppArmadillo
+  # link it: no runtime pseudo relocation at the link (Windows openblas:
+  # -lRblas must take libRblas.dll.a, not the forwarder Rblas.dll;
+  # b13-fixes F13), and dgemm_ computes
+  bd <- file.path(lib, "blas-shlib"); unlink(bd, recursive = TRUE); dir.create(bd)
+  writeLines(c("#define USE_FC_LEN_T", "#include <R.h>", "#include <R_ext/BLAS.h>",
+               "#ifndef FCONE", "# define FCONE", "#endif",
+               "void rzig_dgemm(double *a, double *b, double *c) {",
+               "  const char n = 'N'; const int k = 2; const double one = 1.0, zero = 0.0;",
+               "  F77_CALL(dgemm)(&n, &n, &k, &k, &k, &one, a, &k, b, &k, &zero, c, &k FCONE FCONE);", "}"),
+             file.path(bd, "blas.c"))
+  writeLines("PKG_LIBS = $(BLAS_LIBS) $(FLIBS)", file.path(bd, "Makevars"))
+  owd <- setwd(bd)
+  out <- tools::Rcmd(c("SHLIB", "-o", paste0("rzigblas", .Platform$dynlib.ext), "blas.c"), stdout = TRUE, stderr = TRUE)
+  setwd(owd)
+  if (!is.null(attr(out, "status")) || any(grepl("pseudo relocation", out))) {
+    cat(out, sep = "\n"); stop("contract: R CMD SHLIB with BLAS_LIBS failed or left a runtime pseudo relocation")
+  }
+  dyn.load(file.path(bd, paste0("rzigblas", .Platform$dynlib.ext)))
+  a <- matrix(c(1, 2, 3, 4), 2); b2 <- matrix(c(5, 6, 7, 8), 2)
+  stopifnot(identical(.C("rzig_dgemm", a, b2, c = double(4))$c, as.vector(a %*% b2)))
   # pak: no network calls here (this test is about the compiled-code
   # toolchain contract, not pak own package-manager functionality) —
   # loading it successfully already proves its compiled sub-packages
@@ -239,6 +263,7 @@ cat > "$LIB/contract.R" <<'RCODE'
   cat("data.table (make) grouped aggregation: OK\n")
   cat("minqa (Rcpp-dependent + package Fortran;", builders[["minqa"]], ") bobyqa: OK\n")
   cat("quadprog (pure Fortran: zig-fc compile, FLIBS link through rzig; rzig build) solve.QP: OK\n")
+  cat("BLAS_LIBS (R CMD SHLIB, C calling dgemm_): no pseudo relocation, computes: OK\n")
   cat("R CMD config FC:", fc1, "OK\n")
   cat("pak (recursive R.exe invocation + mbedtls quoted -D flags): OK\n")
   cat("ps (process introspection", if (ps::ps_os_type()[["MACOS"]]) "+ apps.m Objective-C ps_apps()" else "", "): OK\n")

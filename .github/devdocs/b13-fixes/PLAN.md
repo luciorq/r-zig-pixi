@@ -16,6 +16,7 @@ scratch-b13-fix/ beside the worktrees.
 | 3 | LOCAL_SOFT (libs-zig-pixi: CRAN jpeg 0.1-11 on build 12 win-64) | done: Rcmd_environ default, rzig demotes the -I, scan, stress row |
 | 5 | rzig windres: -D/--define values unescaped as GNU windres' shell does (libs-zig-pixi: libiconv 1.17) | done |
 | 4 | delta: rzig-test (both zigs), fetch, build, verify-tree, smoke, contract, conda-package | see Tests |
+| 6 | Windows openblas: packages linking BLAS fail to load, "32 bit pseudo relocation ... out of range" (stress 45548393985) | done: Rblas.dll's import library libRblas.dll.a in bin/x64 (F13, D12) |
 
 ## Changes
 
@@ -60,6 +61,18 @@ scratch-b13-fix/ beside the worktrees.
   stress env's zig-libs when it has one (a tree's Rcmd_environ knows only
   R's own); `stress/README.md`: LOCAL_SOFT note.
 - `.github/devdocs/b13-leftovers/PLAN.md`: item 1 marked done here.
+- Item 6 (F13, D12). `build.zig`: winBlasForwarder also writes the
+  plain names of R's Rblas.def (no forwards) and makes Rblas.dll's
+  import library from them with rzig's dlltool (`winDlltool`, split out
+  of winMakeImportStub); installed as `bin/x64/libRblas.dll.a` in the
+  openblas flavor only. R.dll, Rlapack.dll, modules/lapack.dll and
+  stats.dll link that import library instead of the forwarder
+  (`linkRblas`); the internal flavor links Rblas.dll as before.
+  `scripts/verify-tree.sh` (Windows): openblas needs libRblas.dll.a with
+  `T dgemm_` (the tree's nm.exe), internal must not have one.
+  `scripts/contract-test.sh` (every OS and flavor): R CMD SHLIB of C
+  calling dgemm_ with `PKG_LIBS = $(BLAS_LIBS) $(FLIBS)`, no "pseudo
+  relocation" in its output, and the result equals `%*%`.
 
 ## Decisions (defaults, 2026-11-24; who: defaults chosen in this track, user may revisit)
 
@@ -76,6 +89,7 @@ scratch-b13-fix/ beside the worktrees.
 | D9 | LOCAL_LIBS' `-L<zig-libs>/lib/x64` | **(a) rzig drops a missing zig-libs -L dir**; (b) keep (zig warns on every link) | (a) | F9: "unable to open library directory" on every package link otherwise |
 | D10 | jpeg row's windows expect | **(a) `windows=ok`, sysdep `zig-libjpeg@windows`**; (b) a fail class | (a) | the README's rule for zig-* rows: the expect assumes the zig-* sysdep; stress.R reports `?` while it is missing (zig-libjpeg is libs PR #8, unpublished); pixi.toml's stress feature gets `zig-libjpeg` once it is on universe (not added now: the lock would not solve) |
 | D11 | windres unescaping | **(a) `\"` and `\\` only, in -D/--define values**; (b) a full shell unquote | (a) | the coordinator's spec; a Windows path's backslashes (C:\x) stay |
+| D12 | packages' -lRblas on Windows openblas (F13) | **(a) an import library libRblas.dll.a from Rblas.def's plain names (rzig dlltool), beside Rblas.dll**; (b) Rblas.dll exports real jump thunks to openblas instead of forwards; (c) rzig rewrites -lRblas to an import library of its own | (a) | rzig and GNU ld take lib<n>.dll.a before <n>.dll, so Makeconf's BLAS_LIBS stays as it is (the M-23 contract); the code is one dlltool run like the R.dll stub; (b) adds code and a call per BLAS function; (c) puts flavor knowledge in rzig. Who: default (2026-11-25) |
 
 ## Findings
 
@@ -185,6 +199,27 @@ scratch-b13-fix/ beside the worktrees.
   Note: zig build caches a passed test run and does not track the recipe
   file, so a local re-run proves nothing unless make.zig changed.
 
+- **F13 (V) Windows openblas: forwarded exports become data imports.**
+  stress 45548393985 (e26b5ff, windows-latest, tree, openblas): irlba,
+  rsvd, ScaledMatrix, beachmat, edgeR and RcppArmadillo fail at load
+  ("lld-link: warning: runtime pseudo relocation in irlb.o against
+  symbol dgemm_ is too narrow (only 32 bits wide)", then "Mingw-w64
+  runtime failure: 32 bit pseudo relocation at 0x00007ff817a4c2f2 out
+  of range"); Matrix had the same warnings (expm.o, matmult.o) and
+  loaded by chance. Makeconf.win's BLAS_LIBS is `-L$(R_HOME)/bin/x64
+  -lRblas` and bin/x64 had only Rblas.dll, the forwarder, so lld linked
+  the DLL itself and took its forwarded exports as data (auto-import).
+  gamma (zig 0.17.1, x86_64-windows-gnu, a toy forwarder): linking the
+  DLL directly warns; an import library from `zig dlltool -m i386:x86-64
+  -d plain.def -D Rblas.dll` (names only) beside it gives no warning
+  (nm: `T dgemm_`, `I __imp_dgemm_`), and rzig's -l search takes
+  lib<n>.dll.a first (windows.zig importLib). Fix: D12.
+  R's own DLLs (R.dll, Rlapack.dll, modules/lapack.dll, stats.dll)
+  linked the forwarder through zig's linkLibrary. gamma, the same toy:
+  lld's own `--out-implib` of the forwarder lists `T dgemm_` and links
+  with no warning, so they were likely not affected; they link the new
+  import library anyway, one import library for every consumer.
+
 ## Tests
 
 | where | command | result |
@@ -204,8 +239,17 @@ scratch-b13-fix/ beside the worktrees.
 | delta | `pixi run fetch` (fresh, final tree) | rc 0; 16 symlinks kept, stamp written, tar times (VERSION 1793260804) |
 | delta | `pixi run build`, `verify-tree`, `smoke`, `toolchain`, `contract`, final tree | all rc 0 ("Smoke test passed (linux/slim)", "Contract test passed (slim/linux)") |
 | delta | `pixi run -e pkg conda-package` (linux-64), final tree | rc 0: 7 packages (_13), 7 "all tests passed" |
+| delta | item 6: `zig build -l` (build.zig compiles), conda-forge zig and upstream ziglang 0.17.1 | configure reached (stops at MissingPrefix / MissingCondaPrefix outside pixi, as before) |
+| delta | item 6: `pixi run rzig-test`, `pixi run toolchain-test`, each with conda-forge zig and with `ZIG_BIN=$(pixi run fetch-zig)` | rc 0 all four (243/243 unit, fetch 5/5, check-test 60 passed) |
+| delta | item 6: contract's new BLAS block alone, compile tree slim (linux, internal BLAS) | computes, no pseudo relocation |
+| kappa | item 6, own scratch copy (removed after): `pixi run -e openblas build`, `verify-tree`, `toolchain`, `contract` (conda-forge zig) | rc 0 all; bin/x64 has libRblas.dll.a; "BLAS link verified: ... imports dgemm_ as code"; "BLAS_LIBS (R CMD SHLIB, C calling dgemm_): no pseudo relocation, computes: OK"; "Contract test passed" |
+| kappa | item 6: irlba 2.4.1 (+ Matrix, lattice) from CRAN with the compile tree (slim-openblas) | installs; 0 "pseudo relocation" lines in the three install logs; irlba(A, 3)$d equals svd(A)$d[1:3] |
+| kappa | item 6, negative: the contract BLAS block with libRblas.dll.a moved away | lld's pseudo relocation warning; the block stops (rc 1); moved back: passes |
 
 ## Not covered
+
+- Item 6: Windows on ARM (win-arm64 has no openblas flavor); the
+  upstream-zig leg on Windows (kappa ran conda-forge zig only).
 
 - Windows on ARM: fetch-arm64.exe cross-builds; not run (no arm64 host).
 - A Windows host without developer mode (std.tar cannot make links):

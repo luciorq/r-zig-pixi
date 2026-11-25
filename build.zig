@@ -1356,7 +1356,14 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // the symbol staying unresolved until runtime, when libR is already
     // loaded; PE/COFF does not.
     // ------------------------------------------------------------------
-    const rblas = if (ctx.blas == .openblas) try winBlasForwarder(ctx, io) else blk: {
+    // openblas: the forwarder and its import library (rblas_implib), which
+    // R's own DLLs link here and packages through bin/x64/libRblas.dll.a.
+    var rblas_implib: ?std.Build.LazyPath = null;
+    const rblas = if (ctx.blas == .openblas) blk: {
+        const fwd = try winBlasForwarder(ctx, io);
+        rblas_implib = fwd.implib;
+        break :blk fwd.dll;
+    } else blk: {
         const rblas_mod = newCMod(ctx);
         for (blas_f) |o| rblas_mod.addObjectFile(o);
         for (blas_f90) |o| rblas_mod.addObjectFile(o);
@@ -1364,6 +1371,11 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         linkFortranRt(ctx, rblas_mod);
         break :blk addSharedLib(ctx, "Rblas", rblas_mod);
     };
+    const linkRblas = struct {
+        fn f(mod: *std.Build.Module, dll: *std.Build.Step.Compile, implib: ?std.Build.LazyPath) void {
+            if (implib) |l| mod.addObjectFile(l) else mod.linkLibrary(dll);
+        }
+    }.f;
 
     // ------------------------------------------------------------------
     // Rlapack.dll — one-directional (needs R.dll + Rblas.dll, but R.dll
@@ -1373,7 +1385,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const rlapack_mod = newCMod(ctx);
     for (lapack_objs.items) |o| rlapack_mod.addObjectFile(o);
     rlapack_mod.addObjectFile(r_stub);
-    rlapack_mod.linkLibrary(rblas);
+    linkRblas(rlapack_mod, rblas, rblas_implib);
     linkFortranRt(ctx, rlapack_mod);
     const rlapack = addSharedLib(ctx, "Rlapack", rlapack_mod);
 
@@ -1435,7 +1447,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     // symbol the stub only pretended to.
     // ------------------------------------------------------------------
     const r_final_mod = r_core_mod;
-    r_final_mod.linkLibrary(rblas);
+    linkRblas(r_final_mod, rblas, rblas_implib);
     r_final_mod.linkLibrary(rgraphapp);
     r_final_mod.linkLibrary(riconv);
     // gdi32/user32 not in gnuwin32's own R-DLLLIBS either, for the same
@@ -1494,7 +1506,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     lapmod.addIncludePath(ctx.path("src/include"));
     addCGroup(ctx, lapmod, "src/modules/lapack", &rspec.win_lapack_module_c, .{ .openmp = true });
     lapmod.linkLibrary(rlapack);
-    lapmod.linkLibrary(rblas);
+    linkRblas(lapmod, rblas, rblas_implib);
     lapmod.linkLibrary(libR);
     linkFortranRt(ctx, lapmod);
     linkOmp(ctx, lapmod);
@@ -1671,6 +1683,9 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
     const modules_dir: std.Build.InstallDir = ctx.rhomeInstallDir("modules/x64");
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(libR.getEmittedBin(), bin_dir, "R.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rblas.getEmittedBin(), bin_dir, "Rblas.dll").step);
+    // Makeconf's BLAS_LIBS (-L$(R_HOME)/bin/x64 -lRblas) then links the
+    // import library, not the forwarder (rzig takes lib<n>.dll.a first)
+    if (rblas_implib) |l| b.getInstallStep().dependOn(&b.addInstallFileWithDir(l, bin_dir, "libRblas.dll.a").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rlapack.getEmittedBin(), bin_dir, "Rlapack.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(rgraphapp.getEmittedBin(), bin_dir, "Rgraphapp.dll").step);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(riconv.getEmittedBin(), bin_dir, "Riconv.dll").step);
@@ -1885,7 +1900,7 @@ fn buildWindows(ctx: *Ctx, io: std.Io) !void {
         for (stats_f_win) |o| m.addObjectFile(o);
         m.linkLibrary(libR);
         m.linkLibrary(rlapack);
-        m.linkLibrary(rblas);
+        linkRblas(m, rblas, rblas_implib);
         linkFortranRt(ctx, m);
         linkOmp(ctx, m);
         try win_pkg_libs.append(b.allocator, .{ .pkg = "stats", .lib = addSharedLib(ctx, "pkg_stats", m) });
@@ -2377,8 +2392,15 @@ fn winMakeImportStub(ctx: *const Ctx, obj: std.Build.LazyPath, dllname: []const 
     def_run.addArgs(&.{ "def", "-o" });
     const def = def_run.addOutputFileArg(b.fmt("{s}.def", .{out_stem}));
     def_run.addFileArg(obj);
+    return winDlltool(ctx, def, dllname, out_stem);
+}
+
+/// The import library of `dllname` for the names in `def`, by rzig's
+/// dlltool (`zig dlltool` with the machine of rzig's target).
+fn winDlltool(ctx: *const Ctx, def: std.Build.LazyPath, dllname: []const u8, out_stem: []const u8) std.Build.LazyPath {
+    const b = ctx.b;
     const lib_run = b.addRunFile(ctx.rzig);
-    lib_run.setName(b.fmt("win import stub for {s}", .{dllname}));
+    lib_run.setName(b.fmt("win import library for {s}", .{dllname}));
     // the zig that runs this build: rzig's dlltool runs `zig dlltool`
     lib_run.setEnvironmentVariable("ZIG_BIN", b.graph.zig_exe);
     lib_run.addArgs(&.{ "dlltool", "--dllname", dllname, "--input-def" });
@@ -3117,7 +3139,13 @@ fn blasForwarder(ctx: *const Ctx, name: []const u8) *std.Build.Step.Compile {
 /// this. A forwarder needs no import, so the DLL also imports one function
 /// of openblas's: its DLL is then in Rblas.dll's import table, which the
 /// tree's DLL closure (vendor-libs.sh, verify-tree.sh) follows.
-fn winBlasForwarder(ctx: *Ctx, io: std.Io) !*std.Build.Step.Compile {
+/// Also its import library, from the same names without the forwards
+/// (b13-fixes F13): lld marks the forwarded exports of a DLL it links
+/// directly as data, so a call to one becomes a 32-bit runtime pseudo
+/// relocation, which fails when openblas.dll loads more than 2 GB away
+/// ("32 bit pseudo relocation ... out of range"). The plain names give
+/// code imports (a jump thunk), as for any DLL.
+fn winBlasForwarder(ctx: *Ctx, io: std.Io) !struct { dll: *std.Build.Step.Compile, implib: std.Build.LazyPath } {
     const b = ctx.b;
     const conda_lib = b.fmt("{s}/Library", .{ctx.conda});
     // conda-forge's win-64 libopenblas ships Library/bin/openblas.dll and
@@ -3130,13 +3158,16 @@ fn winBlasForwarder(ctx: *Ctx, io: std.Io) !*std.Build.Step.Compile {
     };
     const rdef = try std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/src/extra/blas/Rblas.def", .{ctx.src_abs}), b.allocator, .limited(64 * 1024));
     var def: std.ArrayList(u8) = .empty;
+    var plain: std.ArrayList(u8) = .empty;
     try def.appendSlice(b.allocator, "LIBRARY Rblas.dll\nEXPORTS\n");
+    try plain.appendSlice(b.allocator, "LIBRARY Rblas.dll\nEXPORTS\n");
     var lines = std.mem.tokenizeAny(u8, rdef, "\r\n");
     var n: usize = 0;
     while (lines.next()) |line| {
         const name = std.mem.trim(u8, line, " \t");
         if (name.len == 0 or std.mem.startsWith(u8, name, "LIBRARY") or std.mem.eql(u8, name, "EXPORTS") or name[0] == ';') continue;
         try def.print(b.allocator, " {s} = {s}.{s}\n", .{ name, dll, name });
+        try plain.print(b.allocator, " {s}\n", .{name});
         n += 1;
     }
     if (n == 0) return error.EmptyRblasDef;
@@ -3155,7 +3186,8 @@ fn winBlasForwarder(ctx: *Ctx, io: std.Io) !*std.Build.Step.Compile {
     const lib = addSharedLib(ctx, "Rblas", mod);
     lib.win32_module_definition = def_file;
     def_file.addStepDependencies(&lib.step);
-    return lib;
+    const implib = winDlltool(ctx, wf.add("Rblas-imports.def", plain.items), "Rblas.dll", "libRblas");
+    return .{ .dll = lib, .implib = implib };
 }
 
 /// macOS: reserve load-command headroom (`-headerpad_max_install_names`,
