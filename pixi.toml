@@ -726,8 +726,6 @@ platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64", "win-
 # on all six platforms (libboost-headers below is noarch)
 [feature.stress.dependencies]
 cmake = "<4.5"          # nloptr, s2 (linux), RcppParallel, Rhdf5lib, arrow:source; <4.5: finding 33
-geos = "*"              # sf, terra, lwgeom
-proj = "*"              # sf, terra, lwgeom
 libxml2-devel = "*"     # xml2, igraph (xml2-config, libxml-2.0.pc)
 openssl = "*"           # openssl, s2
 libgit2 = "*"           # gert
@@ -757,6 +755,12 @@ zstd = "*"              # qs2
 # protoc.exe (bin/) but stress.R does not put the tree's bin/ on PATH.
 [feature.stress.target.unix.dependencies]
 libgdal-core = "*"      # sf, terra, gdalraster (gdal-config, gdal.pc)
+# geos and proj: unix only since b13-slice2 F11. On Windows zig-geos and
+# zig-proj serve sf, terra, gdalraster and lwgeom, and conda-forge proj's
+# activation sets PROJ_DATA to its own data and PROJ_NETWORK=ON (no
+# proj-data), so zig-proj (no curl) chose a CDN grid and failed.
+geos = "*"              # sf, terra, lwgeom
+proj = "*"              # sf, terra, lwgeom
 libprotobuf = "*"       # protolite (protoc, protobuf.pc; brings libabseil)
 udunits2 = "*"          # units
 imagemagick = "*"       # magick (Magick++.pc)
