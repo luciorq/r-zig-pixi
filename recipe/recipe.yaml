@@ -63,7 +63,11 @@ source:
   # its test checks; Windows keeps m2-make.
   - if: unix
     then:
-      - url: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+      # Mirrors: ftp.gnu.org timed out in stress 45512789892 (b13-fixes F12)
+      - url:
+          - https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+          - https://mirrors.kernel.org/gnu/make/make-4.4.1.tar.gz
+          - https://ftpmirror.gnu.org/gnu/make/make-4.4.1.tar.gz
         sha256: dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3
         target_directory: make-src
   # Windows: cairo's source, which R's build compiles and links statically

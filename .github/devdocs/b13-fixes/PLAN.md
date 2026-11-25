@@ -168,6 +168,15 @@ scratch-b13-fix/ beside the worktrees.
   object with "1.17" in its version strings, byte-identical to the one
   from the unescaped options (`windres-options 1.17`).
 
+- **F12 (V) make's source download is a single point of failure.** stress
+  45512789892 (a4d7737), macos-15-intel conda, "Build the conda packages":
+  "Failed to fetch from https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz ...
+  Request failed after 3 retries"; R's build passed. Fix: the recipe's url
+  is a mirror list (ftp.gnu.org first, then mirrors.kernel.org and
+  ftpmirror.gnu.org; both mirrors give sha256 dd16fb1d..., gamma 2026-11-24).
+  conda.zig's recipeSources reads the first mirror, so usr/SOURCES is
+  unchanged. zigbuild's build.zig.zon keeps one url (zon has no mirrors).
+
 ## Tests
 
 | where | command | result |
