@@ -176,6 +176,14 @@ scratch-b13-fix/ beside the worktrees.
   ftpmirror.gnu.org; both mirrors give sha256 dd16fb1d..., gamma 2026-11-24).
   conda.zig's recipeSources reads the first mirror, so usr/SOURCES is
   unchanged. zigbuild's build.zig.zon keeps one url (zon has no mirrors).
+  Follow-up: 126320b broke make.zig's test "recipe.yaml's unix source is
+  this url and sha256" (it matched `url: <url>` only; upstream-zig
+  45533499941, all 6 toolchain jobs, and the 6 default jobs then found no
+  toolchain artifact). The test now also takes a mirror list whose first
+  entry is make.zig's url. gamma: with a forced test run, a recipe with a
+  different first mirror fails and the real recipe passes, with both zigs.
+  Note: zig build caches a passed test run and does not track the recipe
+  file, so a local re-run proves nothing unless make.zig changed.
 
 ## Tests
 

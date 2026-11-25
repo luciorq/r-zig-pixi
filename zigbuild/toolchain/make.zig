@@ -29,9 +29,18 @@ test "recipe.yaml's unix source is this url and sha256" {
     const io = std.testing.io;
     const yaml = try std.Io.Dir.cwd().readFileAlloc(io, recipe_path, std.testing.allocator, .limited(1024 * 1024));
     defer std.testing.allocator.free(yaml);
-    const at = mem.indexOf(u8, yaml, "url: " ++ url ++ "\n") orelse return error.RecipeHasNoMakeUrl;
+    // `url: <url>`, or a mirror list whose first entry is `url`
+    // (`url:`, `- <url>`, `- <mirror>`...), then `sha256:`.
+    const scalar = mem.indexOf(u8, yaml, "url: " ++ url ++ "\n");
+    const item = mem.indexOf(u8, yaml, "- " ++ url ++ "\n");
+    const at = scalar orelse item orelse return error.RecipeHasNoMakeUrl;
+    if (scalar == null) {
+        const prev = mem.trimEnd(u8, yaml[0..at], " ");
+        try std.testing.expect(mem.endsWith(u8, prev, "url:\n"));
+    }
     var lines = mem.splitScalar(u8, yaml[at..], '\n');
     _ = lines.next();
-    const next = mem.trim(u8, lines.next() orelse "", " \r");
-    try std.testing.expectEqualStrings("sha256: " ++ sha256, next);
+    var line = mem.trim(u8, lines.next() orelse "", " \r");
+    while (mem.startsWith(u8, line, "- https://")) line = mem.trim(u8, lines.next() orelse "", " \r");
+    try std.testing.expectEqualStrings("sha256: " ++ sha256, line);
 }
