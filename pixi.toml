@@ -742,9 +742,11 @@ zstd = "*"              # qs2
 
 # Not on win-arm64, where conda-forge has none of these (win-arm64
 # repodata, 2026-11-15); pixi has no "all but one platform" target, so
-# the list is in unix's table and in win-64's. Keep the two the same,
-# but for libgdal-core (unix only: on Windows zig-gdal serves sf, terra
-# and gdalraster, below) and tbb-devel and nlopt (their comments).
+# the list is in unix's table and in win-64's. win-64 keeps only
+# libprotobuf and imagemagick: on Windows zig-* (below) serve the rest
+# (libgdal-core since slice 1; udunits2, harfbuzz, hdf5, libnetcdf, gsl,
+# mpfr, gmp, libpq and glpk since slice 2), tbb-devel is unix only (its
+# comment), and win-64's nlopt became zig-nlopt.
 # libprotobuf is here, not on all six, since chore-env-ci (M-3): on
 # win-arm64 its protoc (conda-forge's libprotobuf 7.36) was the one on
 # PATH while protolite's `pkg-config protobuf` took the headers from the
@@ -773,29 +775,21 @@ tbb-devel = "*"
 
 [feature.stress.target.win-64.dependencies]
 libprotobuf = "*"
-udunits2 = "*"
 imagemagick = "*"
-harfbuzz = "*"
-hdf5 = "*"
-libnetcdf = "*"
-gsl = "*"
-mpfr = "*"
-gmp = "*"
-libpq = "*"
-glpk = "*"
-# nloptr has no configure.win: its Makevars.ucrt links -lnlopt. Not on
-# unix, where nloptr then builds its bundled NLopt with cmake. None for
-# win-arm64 on conda-forge (2026-11-10).
-nlopt = "*"
 
 # RPostgres includes Rtools' boost headers (round 1's S1, decision 18).
-# zig-*: libs-zig-pixi's zig-built static libraries (universe, published
-# 2026-11-23), the packages.tsv rows' `zig-*@windows` sysdeps (sf, terra,
-# gdalraster, lwgeom, s2). conda-forge's GDAL, abseil and oneTBB for
-# Windows are MSVC C++ builds that a zig-built package cannot link; these
-# install into Library/zig-libs/<triple>, which rzig searches first
-# (stress/README.md, "Windows: zig-libs"). Their own zig-* dependencies
-# (zig-sqlite, zig-zlib, zig-expat) come with them.
+# zig-*: libs-zig-pixi's zig-built static libraries (universe: slice 1
+# published 2026-11-23, slice 2 on 2026-11-25, libs run 45603825536), the
+# packages.tsv rows' `zig-*@windows` sysdeps. conda-forge's Windows
+# libraries are MSVC builds that a zig-built package cannot link (GDAL,
+# abseil, oneTBB; gsl's MKL gslcblas.lib; libpq.a), and conda-forge has
+# none of slice 2's for win-arm64; these install into
+# Library/zig-libs/<triple>, which rzig searches first (stress/README.md,
+# "Windows: zig-libs"). Their own zig-* dependencies (zig-zlib,
+# zig-sqlite, zig-expat, zig-libaec, zig-libcurl, zig-brotli, ...) come
+# with them. Since slice 2 the win-64 table above no longer lists
+# conda-forge's udunits2, harfbuzz, hdf5, libnetcdf, gsl, mpfr, gmp,
+# libpq, glpk and nlopt (b13-slice2 PLAN.md D1).
 [feature.stress.target.win.dependencies]
 libboost-headers = "*"
 zig-abseil = "*"        # s2
@@ -804,6 +798,23 @@ zig-geos = "*"          # sf, terra, gdalraster, lwgeom
 zig-onetbb = "*"        # terra
 zig-openssl = "*"       # s2
 zig-proj = "*"          # sf, terra, gdalraster, lwgeom
+zig-udunits2 = "*"      # units (sf, lwgeom)
+zig-freetype = "*"      # systemfonts, textshaping, ragg
+zig-fribidi = "*"       # textshaping
+zig-harfbuzz = "*"      # textshaping
+zig-libpng = "*"        # ragg
+zig-libtiff = "*"       # ragg
+zig-libjpeg = "*"       # ragg, jpeg
+zig-libwebp = "*"       # ragg
+zig-hdf5 = "*"          # hdf5r
+zig-netcdf = "*"        # ncdf4
+zig-gsl = "*"           # gsl
+zig-mpfr = "*"          # Rmpfr
+zig-gmp = "*"           # Rmpfr, igraph
+zig-libpq = "*"         # RPostgres
+zig-glpk = "*"          # igraph
+zig-libxml2 = "*"       # xml2, igraph
+zig-nlopt = "*"         # nloptr (lme4)
 
 # conda-forge's libheif 1.23.4 to 1.23.6 for osx-arm64 link a Homebrew
 # path (/opt/homebrew/.../libsharpyuv), so magick could not load (round
