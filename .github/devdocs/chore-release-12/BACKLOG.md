@@ -36,6 +36,8 @@ Build 12 is no longer a separate release step. It is the final batch after every
   - wave2-fixes: verify-tree allows SSE4.1 on macOS (flang's penryn
     default; build-r 45275675601); stress/README notes the first r-zig
     build with zig-libs (12).
+- **Build 12 published 2026-11-24** (run 45381914199; chore-release-12
+  PLAN.md R12-F4). Everything still open below is build 13.
 - **New item M-29 (from M-13):** rzig and distro libraries on linux:
   `/usr/include` and `/usr/lib` as `-idirafter`/last `-L` behind an
   opt-in, and distro `.pc` files' `-I/usr/include/<triple>` kept from

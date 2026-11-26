@@ -61,31 +61,50 @@ protolite's windows-aarch64 expect). No macOS stress since 44259183592
 `CONDA_PUBLISH` not set. The publish is CI OIDC, so no local credential
 is involved.
 
+**R12-F4 V. Build 12 published 2026-11-24.** build.yaml 45381914199
+(workflow_dispatch, main 7e3648e = #55 merged, CONDA_PUBLISH set).
+Post-publish on delta (fresh pixi cache, universe before conda-forge):
+all six outputs at `_12` on all six subdirs; linux-64 env installs
+r-zig-slim h3e03716_12 and r-zig-toolchain hc78f3be_12, `R CMD config
+CC` is zig-cc, `R CMD SHLIB` builds a C and a C++ library and both load
+and return the right values; 70 Mach-O files in the osx-64 and osx-arm64
+packages, every minos 13.0. Build strings (r-zig-slim, r-zig-toolchain,
+the other four):
+
+| subdir | r-zig-slim | r-zig-toolchain | compilers, build-tools, extras, recommended |
+|---|---|---|---|
+| linux-64 | h3e03716_12 | hc78f3be_12 | h7072f15_12 |
+| linux-aarch64 | h0122563_12 | h1fb4297_12 | hebdf983_12 |
+| osx-64 | h9825941_12 | h12c1ef1_12 | h19bf20d_12 |
+| osx-arm64 | ha6b6fea_12 | h25e8f55_12 | h3ae0fae_12 |
+| win-64 | hb04b5bb_12 | h3946dc3_12 | h6a289e5_12 |
+| win-arm64 | he73fba8_12 | h3af3256_12 | h29a55db_12 |
+
+Sent to the libs-zig-pixi session the same day (it drops its build-12
+emulation, D114). A C++ test that includes `<R.h>` before `<vector>`
+fails on libc++ (R's `length` remap): the check uses `R_NO_REMAP` and
+C++ headers first, as R's manual says; not a package fault.
+
 ## Gates
 
 | Gate | Run | Result |
 |---|---|---|
-| build-r full tier on this branch | | |
-| upstream-zig on this branch | | |
-| stress, 6 runners, tree + conda, conda-forge zig | | |
-| stress, upstream zig, tree | | |
+| build-r full tier on the release sha (#55, d58dc2c) | 45299747894 | 32 success, 1 skipped (packaging) |
+| upstream-zig on d58dc2c | 45299747858 | 12/12 success |
+| stress, 6 runners, tree + conda, conda-forge zig | 45305358893 | 0 unexpected on linux and macOS; Rhdf5lib newly ok on Windows (expect updated, 909a5f2; wave2-fixes X-F3) |
+| stress, upstream zig, tree | not run | the upstream-zig label run is the both-zigs gate (RELEASE.md); left for build 13 |
 | publish preflight | R12-F3 | go |
-| publish dispatch on main | | |
-| post-publish: six outputs x six subdirs at `_12`; fresh universe env compiles and loads a C and a C++ SHLIB | | |
+| publish dispatch on main 7e3648e | 45381914199 | success; publish step in every conda-package job |
+| post-publish: six outputs x six subdirs at `_12`; fresh universe env compiles and loads a C and a C++ SHLIB; osx minos | R12-F4 | ok |
 
 ## Not verified
 
-- An upload of build 12 (feat-linux-libstdcxx/PLAN.md: file names
-  differ from `_11`, finding 67).
 - Old-glibc hosts and the other LATER items of the merged branches'
   records (feat-linux-libstdcxx, feat-winarm-gaps, feat-zig-libs): not
   release gates.
 
 ## Next steps
 
-1. The user commits, pushes, opens the PR with the labels `full-ci` and
-   `upstream-zig`, and dispatches the two stress runs.
-2. Read every job and every stress row; fill the Gates table.
-3. Merge; `gh variable set CONDA_PUBLISH --body true`; dispatch
-   build.yaml on main; read the publish; post-publish checks;
-   `gh variable delete CONDA_PUBLISH`.
+Done 2026-11-24: build 12 published (R12-F4), `CONDA_PUBLISH` deleted.
+The rest of BACKLOG.md goes to build 13 (user, 2026-11-23). `_11` files
+stay on universe (RELEASE.md: delete only if ever needed).
