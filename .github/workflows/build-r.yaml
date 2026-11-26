@@ -140,6 +140,43 @@ jobs:
         run: pixi run -e ${{ inputs.env }} pkg-parity
       - name: Regression suite (Examples/Specific/Reg)
         run: pixi run -e ${{ inputs.env }} check
+      # Windows openblas only, after a failed step: stats' ar.ols example
+      # died with no R error on x86_64_v4 (AVX-512) runners and passed on
+      # x86_64_v3 ones (b13-fixes F14). Runs the example in the installed
+      # tree three ways (as is, one thread, OpenBLAS's Haswell core), prints
+      # the CPU and the core OpenBLAS picks (OPENBLAS_VERBOSE=2), then the
+      # Application log's crash events (1000, 1001), which name the faulting
+      # module. Reports only: the leg stays failed by the step that failed.
+      - name: openblas crash diagnostics (Windows, after a failure)
+        if: failure() && runner.os == 'Windows' && inputs.env == 'openblas'
+        shell: pwsh
+        run: |
+          $start = (Get-Date).AddHours(-4)
+          (Get-CimInstance Win32_Processor).Name
+          $r = Get-ChildItem dist -Recurse -Filter Rscript.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'slim-openblas\\R-[^\\]+-zig\\Library\\lib\\R\\bin\\x64\\Rscript\.exe$' } |
+            Select-Object -First 1
+          if (-not $r) { "no installed openblas Rscript.exe under dist"; exit 0 }
+          $r.FullName
+          $code = 'x <- diff(log(EuStockMarkets)); for (i in 1:20) invisible(ar.ols(x, order.max = 6, demean = FALSE, intercept = TRUE)); cat("ar.ols x20 ok\n")'
+          $cases = [ordered]@{
+            'as is'   = @{ OPENBLAS_VERBOSE = '2' }
+            '1 thread' = @{ OPENBLAS_VERBOSE = '2'; OPENBLAS_NUM_THREADS = '1' }
+            'Haswell' = @{ OPENBLAS_VERBOSE = '2'; OPENBLAS_CORETYPE = 'Haswell' }
+          }
+          foreach ($name in $cases.Keys) {
+            $vars = $cases[$name]
+            foreach ($k in $vars.Keys) { Set-Item "env:$k" $vars[$k] }
+            "== ar.ols, $name"
+            & $r.FullName -e $code 2>&1 | Out-Host
+            $rc = $LASTEXITCODE
+            "== ar.ols, ${name}: exit $rc (0x{0:X8})" -f $rc
+            foreach ($k in $vars.Keys) { Remove-Item "env:$k" }
+          }
+          "== Application crash events since $start"
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1001; StartTime = $start } -ErrorAction SilentlyContinue |
+            Format-List TimeCreated, Id, Message | Out-String -Width 400
+          exit 0
       # R's 15 recommended packages, by their own zig build with the
       # compile tree's R (contract made it), into a tree of their own,
       # dist/recommended/<flavor>/R-<ver>-zig; then its static checks and
