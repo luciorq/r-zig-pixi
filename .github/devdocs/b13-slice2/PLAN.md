@@ -92,6 +92,14 @@ rebuilt at build 1 (zig-zlib, -sqlite, -expat, -openssl, -abseil,
   87b58a42ca62 -> 54e77c422af4, only stress win-64 (geos, proj, sqlite out) and win-arm64 (geos, proj, sqlite, libsqlite out) change.
   Proof is the next Windows stress round's libs smoke (I until then).
 
+- F12 (V) S1 on 21fee4e (stress 45714066676, lock 54e77c422af4): windows-11-arm tree and conda, Rhtslib `lld-link: error: undefined
+  symbol: if_nametoindex` (libcurl.a(url.c.obj):(zonefrom_url)), Rsamtools skipped; ok before slice 2 (45548386803). Rhtslib's
+  Makevars.win hard-codes Rtools' curl closure (no -liphlpapi) and -lcurl now resolves to zig-libcurl. Owner libs-zig-pixi: zig-libcurl
+  build 1 (libs D128, curl's HAVE_IF_NAMETOINDEX=0; it loads if_nametoindex from iphlpapi.dll at run time), win-64 zig_38b206d_1,
+  win-arm64 zig_12f6e5a_1, pending publish; then relock and rerun windows-11-arm. The libs smoke is 21/21 on all six Windows legs of
+  45714066676 and 45714071892 (F11's fix holds). S3 (45714071892, `rtools_libs=false`): 166 ok; only Rhtslib (regex.h) and Rsamtools
+  still need the tree, so F4's nanoarrow (lz4) no longer does.
+
 ## Tests
 
 | host | command | result |

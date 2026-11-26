@@ -90,6 +90,7 @@ scratch-b13-fix/ beside the worktrees.
 | D10 | jpeg row's windows expect | **(a) `windows=ok`, sysdep `zig-libjpeg@windows`**; (b) a fail class | (a) | the README's rule for zig-* rows: the expect assumes the zig-* sysdep; stress.R reports `?` while it is missing (zig-libjpeg is libs PR #8, unpublished); pixi.toml's stress feature gets `zig-libjpeg` once it is on universe (not added now: the lock would not solve) |
 | D11 | windres unescaping | **(a) `\"` and `\\` only, in -D/--define values**; (b) a full shell unquote | (a) | the coordinator's spec; a Windows path's backslashes (C:\x) stay |
 | D12 | packages' -lRblas on Windows openblas (F13) | **(a) an import library libRblas.dll.a from Rblas.def's plain names (rzig dlltool), beside Rblas.dll**; (b) Rblas.dll exports real jump thunks to openblas instead of forwards; (c) rzig rewrites -lRblas to an import library of its own | (a) | rzig and GNU ld take lib<n>.dll.a before <n>.dll, so Makeconf's BLAS_LIBS stays as it is (the M-23 contract); the code is one dlltool run like the R.dll stub; (b) adds code and a call per BLAS function; (c) puts flavor knowledge in rzig. Who: default (2026-11-25) |
+| D13 | Windows openblas crash at ar.ols on x86_64_v4 runners (F14; attempts 1 and 2 of build-r 45713987773, both x86_64_v4) | **(G) a diagnostics step after a failed step on the Windows openblas leg** (build-r.yaml: CPU, OpenBLAS core, ar.ols as is / one thread / Haswell core, Application events 1000 and 1001); (A) rerun and ship; (B) OPENBLAS_CORETYPE=Haswell in CI only; (C) Haswell core for users; (D) pin libopenblas; (E) revert f406624; (F) hold the release; (H) ship with the leg failing | (G) | one run names the faulting module and shows whether one thread or the Haswell core avoids it; then C or a narrower workaround, and an upstream report. A alone cannot pass while windows-latest gives x86_64_v4 runners | user, 2026-11-26 |
 
 ## Findings
 
@@ -220,6 +221,33 @@ scratch-b13-fix/ beside the worktrees.
   with no warning, so they were likely not affected; they link the new
   import library anyway, one import library for every consumer.
 
+- **F14 (I, about 80%) Windows openblas: an intermittent crash that
+  depends on the runner's CPU, in conda-forge's openblas.dll, not f406624.**
+  build-r 45713987773 (21fee4e), job 139562688139 "windows-latest /
+  openblas", regression suite: stats-Ex.R dies with no R error at
+  `ar.ols(diff(log(EuStockMarkets)), order.max = 6, demean = FALSE,
+  intercept = TRUE)`.
+  - It is the only Windows openblas job that ran on an x86_64_v4
+    runner (`__archspec=1=x86_64_v4`; AVX-512).
+  - With f406624 the same job passed on x86_64_v3 runners: 139284972100
+    (f406624) and 139496865380 (f243dc7). Its 93 conda packages match the
+    failing job's (libopenblas 0.3.34 pthreads_h952cde7_2), on the same
+    image (win25-vs2026 20261116.315.1).
+  - On x86_64_v4 runners the internal-BLAS Windows legs pass (runs
+    45713987773, 45634367824 and 45695030400).
+  - kappa (i7-8850H, Haswell core), 21fee4e: 350 fresh ar.ols processes
+    under 7 core and thread settings, 25 stats-example runs and the check
+    task: no failure.
+  - A binding fault would fail at load and would not depend on the CPU;
+    Rblas.dll forwards every name to openblas.dll.
+  - Gap: no run of f406624 on an AVX-512 runner has passed or failed;
+    the only AVX-512 pass (icelake, 138988769306, e26b5ff) is older. The
+    faulting module was not captured.
+  - The slim-openblas tree ships the same openblas.dll, so users on that
+    CPU class may see it.
+  - Rerun attempt 2 (job 139650740888, x86_64_v4): the same crash at the
+    same example. Next: D13.
+
 ## Tests
 
 | where | command | result |
@@ -245,6 +273,7 @@ scratch-b13-fix/ beside the worktrees.
 | kappa | item 6, own scratch copy (removed after): `pixi run -e openblas build`, `verify-tree`, `toolchain`, `contract` (conda-forge zig) | rc 0 all; bin/x64 has libRblas.dll.a; "BLAS link verified: ... imports dgemm_ as code"; "BLAS_LIBS (R CMD SHLIB, C calling dgemm_): no pseudo relocation, computes: OK"; "Contract test passed" |
 | kappa | item 6: irlba 2.4.1 (+ Matrix, lattice) from CRAN with the compile tree (slim-openblas) | installs; 0 "pseudo relocation" lines in the three install logs; irlba(A, 3)$d equals svd(A)$d[1:3] |
 | kappa | item 6, negative: the contract BLAS block with libRblas.dll.a moved away | lld's pseudo relocation warning; the block stops (rc 1); moved back: passes |
+| kappa (Windows PowerShell 5.1) | D13's step script against a stand-in Rscript.exe (whoami.exe) in a fake dist tree | parses; finds the tree's Rscript.exe; three cases run with their env and are removed after; exit codes printed; event query runs; script exits 0. Not run: pwsh 7 (the runner's), a real crash |
 
 ## Not covered
 
