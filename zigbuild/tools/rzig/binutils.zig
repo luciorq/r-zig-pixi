@@ -41,7 +41,10 @@
 //!             machine, /:auto-includes gnu (zig's MinGW headers, the same
 //!             on every machine, never an installed Visual Studio's). zig
 //!             rc preprocesses itself and defines RC_INVOKED, so windres'
-//!             --preprocessor, which named rzig's gcc.exe, is dropped.
+//!             --preprocessor, which named rzig's gcc.exe, is dropped, and
+//!             of its args only the depfile request is kept
+//!             (`-MD -MQ<target> -MF<file>`, meson's): zig rc writes its
+//!             JSON list (/:depfile), which rzig turns into make's form.
 //!   as        `zig cc -target <R's> -c -x assembler`, for a .s file.
 //!
 //! Each takes `@file` for the words in it (main.zig, response.zig), as
@@ -1305,10 +1308,56 @@ fn usage(ctx: *Ctx, msg: []const u8) Usage {
     return error.Usage;
 }
 
-/// `zig rc` for GNU windres' arguments.
-pub fn windresArgv(ctx: *Ctx, args: []const []const u8) ![]const []const u8 {
+/// windres --version. Its second line names GNU windres, as meson's
+/// windows module detects a windres by that text in --version's output
+/// (regex `^.*GNU windres.*$`, mesonbuild/modules/windows.py) and then
+/// calls it as GNU's: its include args as -I<dir>, the module's args,
+/// the input and output as positionals, and
+/// `--preprocessor-arg=-MD --preprocessor-arg=-MQ<out>
+/// --preprocessor-arg=-MF<depfile>` (meson 1.12.1, depfile_type gcc:
+/// ninja reads it as make's rule), which `Depfile` writes. The first
+/// line is what every rzig binutil says (verify-bundle.sh).
+const windres_version = "GNU-compatible windres (rzig, zig rc, " ++ build_name ++ ")\n" ++
+    "Takes GNU windres options; zig rc compiles.\n";
+
+/// The dependency file GNU windres' preprocessor writes when its args ask
+/// for one (-MD or -MMD, and -MF<file>; -MQ<t> and -MT<t> name the
+/// target, else the output): `<target>: <input> <included files>`, the
+/// make rule gcc -MD writes, which ninja (deps = gcc) and make read. zig
+/// rc has no make form: it writes a JSON array of the same files
+/// (/:depfile, relative as given; the input first) to `json`, and
+/// rzig, once zig rc exited 0, writes `file` from it and removes `json`
+/// (main.zig, `writeDepfile`). -MMD's leaving out of system headers is
+/// not kept: zig rc lists every file it read, a superset, which only
+/// rebuilds more often.
+pub const Depfile = struct { file: []const u8, json: []const u8, target: []const u8 };
+
+pub const Windres = struct { argv: []const []const u8, depfile: ?Depfile = null };
+
+/// A -D/--define value as GNU windres' preprocessor gets it: windres runs
+/// it through a shell (popen), which turns `\"` into `"` and `\\` into
+/// `\` there; zig rc takes its /d literally. libiconv 1.17's
+/// windows/windres-options --escape writes -DPACKAGE_VERSION_STRING=\"1.17\",
+/// which zig rc then read as `\"1.17\"` ("expected '<'}' or END>', got
+/// '\'": libs-zig-pixi, b13-fixes item 5). Other backslashes stay (a
+/// Windows path, C:\x).
+fn unescapeDefine(a: std.mem.Allocator, v: []const u8) ![]const u8 {
+    if (mem.findScalar(u8, v, '\\') == null) return v;
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < v.len) : (i += 1) {
+        if (v[i] == '\\' and i + 1 < v.len and (v[i + 1] == '"' or v[i + 1] == '\\')) i += 1;
+        try out.append(a, v[i]);
+    }
+    return out.items;
+}
+
+/// `zig rc` for GNU windres' arguments, and the depfile they ask for.
+pub fn windres(ctx: *Ctx, args: []const []const u8) !Windres {
     const a = ctx.arena;
     var opts: std.ArrayList([]const u8) = .empty;
+    // the preprocessor's args, for the depfile request
+    var pp: std.ArrayList([]const u8) = .empty;
     var input: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var out_format: ?[]const u8 = null;
@@ -1333,7 +1382,8 @@ pub fn windresArgv(ctx: *Ctx, args: []const []const u8) ![]const []const u8 {
         } else if (isOpt(x, "-I", "--include-dir")) {
             try opts.appendSlice(a, &.{ "/i", optValue(args, &i, "-I", "--include-dir") orelse return usage(ctx, "--include-dir needs a directory") });
         } else if (isOpt(x, "-D", "--define")) {
-            try opts.appendSlice(a, &.{ "/d", optValue(args, &i, "-D", "--define") orelse return usage(ctx, "--define needs a symbol") });
+            const d = optValue(args, &i, "-D", "--define") orelse return usage(ctx, "--define needs a symbol");
+            try opts.appendSlice(a, &.{ "/d", try unescapeDefine(a, d) });
         } else if (isOpt(x, "-U", "--undefine")) {
             try opts.appendSlice(a, &.{ "/u", optValue(args, &i, "-U", "--undefine") orelse return usage(ctx, "--undefine needs a symbol") });
         } else if (isOpt(x, "-l", "--language")) {
@@ -1342,13 +1392,15 @@ pub fn windresArgv(ctx: *Ctx, args: []const []const u8) ![]const []const u8 {
         } else if (isOpt(x, "-c", "--codepage")) {
             const cp = optValue(args, &i, "-c", "--codepage") orelse return usage(ctx, "--codepage needs a value");
             try opts.appendSlice(a, &.{ "/c", cp });
-        } else if (mem.eql(u8, x, "--preprocessor") or mem.eql(u8, x, "--preprocessor-arg")) {
+        } else if (isOpt(x, null, "--preprocessor-arg")) {
+            try pp.append(a, optValue(args, &i, null, "--preprocessor-arg") orelse return usage(ctx, "--preprocessor-arg needs a value"));
+        } else if (mem.eql(u8, x, "--preprocessor")) {
             // zig rc preprocesses itself, with RC_INVOKED defined
             i += 1;
-        } else if (mem.startsWith(u8, x, "--preprocessor=") or mem.startsWith(u8, x, "--preprocessor-arg=") or
+        } else if (mem.startsWith(u8, x, "--preprocessor=") or
             mem.eql(u8, x, "--use-temp-file") or mem.eql(u8, x, "--no-use-temp-file") or mem.eql(u8, x, "-v") or mem.eql(u8, x, "--verbose"))
         {} else if (mem.eql(u8, x, "--version")) {
-            stdio.writeAll(ctx.io, .stdout(), "GNU-compatible windres (rzig, zig rc, " ++ build_name ++ ")\n") catch {};
+            stdio.writeAll(ctx.io, .stdout(), windres_version) catch {};
             return error.Usage;
         } else {
             return usage(ctx, try ctx.fmt("unsupported argument {s} (rzig's windres: -i, -o, -O, -J, -F, -I, -D, -U, -l, -c)", .{x}));
@@ -1364,8 +1416,88 @@ pub fn windresArgv(ctx: *Ctx, args: []const []const u8) ![]const []const u8 {
         if (std.ascii.eqlIgnoreCase(f, "res")) try argv.appendSlice(a, &.{ "/:input-format", "res" }) else if (!std.ascii.eqlIgnoreCase(f, "rc")) return usage(ctx, try ctx.fmt("input format {s}: rzig's windres reads rc or res", .{f}));
     }
     try argv.appendSlice(a, opts.items);
+    const dep = try depfileRequest(ctx, pp.items, out);
+    if (dep) |d| try argv.appendSlice(a, &.{ "/:depfile", d.json });
     try argv.appendSlice(a, &.{ "/fo", out, "--", in });
-    return argv.items;
+    return .{ .argv = argv.items, .depfile = dep };
+}
+
+/// The depfile the preprocessor's args ask for (Depfile), or none; the
+/// other args (-E, -xc, -D..., gcc's) are zig rc's own business.
+fn depfileRequest(ctx: *Ctx, pp: []const []const u8, out: []const u8) !?Depfile {
+    const a = ctx.arena;
+    var md = false;
+    var file: ?[]const u8 = null;
+    var targets: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < pp.len) : (i += 1) {
+        const x = pp[i];
+        if (mem.eql(u8, x, "-MD") or mem.eql(u8, x, "-MMD")) {
+            md = true;
+        } else if (mem.startsWith(u8, x, "-MF") or mem.startsWith(u8, x, "-MQ") or mem.startsWith(u8, x, "-MT")) {
+            // joined, or the value in the next arg
+            const v = if (x.len > 3) x[3..] else if (i + 1 < pp.len) blk: {
+                i += 1;
+                break :blk pp[i];
+            } else return usage(ctx, try ctx.fmt("--preprocessor-arg={s} needs a value", .{x}));
+            if (x[2] == 'F') {
+                file = v;
+            } else {
+                if (targets.items.len > 0) try targets.append(a, ' ');
+                // -MQ quotes for make, as gcc does; -MT is as given
+                if (x[2] == 'Q') try appendMakeQuoted(a, &targets, v) else try targets.appendSlice(a, v);
+            }
+        }
+    }
+    if (!md) return null;
+    const f = file orelse return null;
+    if (targets.items.len == 0) try appendMakeQuoted(a, &targets, out);
+    return .{ .file = f, .json = try ctx.fmt("{s}.json", .{f}), .target = targets.items };
+}
+
+/// `x` as gcc writes a file name into a make rule: a space or tab and a
+/// `#` after a backslash, `$` doubled.
+fn appendMakeQuoted(a: mem.Allocator, w: *std.ArrayList(u8), x: []const u8) !void {
+    for (x) |c| switch (c) {
+        ' ', '\t', '#' => try w.appendSlice(a, &.{ '\\', c }),
+        '$' => try w.appendSlice(a, "$$"),
+        else => try w.append(a, c),
+    };
+}
+
+/// The make rule for `d` from zig rc's JSON list (Depfile): read
+/// d.json, write d.file, remove d.json. 1 after a line saying why when
+/// the list cannot be read or the rule written.
+pub fn writeDepfile(ctx: *Ctx, d: Depfile) u8 {
+    const cwd = Io.Dir.cwd();
+    defer cwd.deleteFile(ctx.io, d.json) catch {};
+    const text = cwd.readFileAlloc(ctx.io, d.json, ctx.arena, .limited(16 << 20)) catch |err| {
+        ctx.warn("cannot read zig rc's dependency list {s}: {t}", .{ d.json, err });
+        return 1;
+    };
+    const rule = depfileRule(ctx.arena, d.target, text) catch |err| {
+        ctx.warn("zig rc's dependency list {s}: {t}", .{ d.json, err });
+        return 1;
+    };
+    cwd.writeFile(ctx.io, .{ .sub_path = d.file, .data = rule }) catch |err| {
+        ctx.warn("cannot write {s}: {t}", .{ d.file, err });
+        return 1;
+    };
+    return 0;
+}
+
+/// `<target>: <file> ...` from a JSON array of file names, one line.
+fn depfileRule(a: mem.Allocator, target: []const u8, json: []const u8) ![]const u8 {
+    const files = try std.json.parseFromSliceLeaky([]const []const u8, a, json, .{});
+    var w: std.ArrayList(u8) = .empty;
+    try w.appendSlice(a, target);
+    try w.append(a, ':');
+    for (files) |f| {
+        try w.append(a, ' ');
+        try appendMakeQuoted(a, &w, f);
+    }
+    try w.append(a, '\n');
+    return w.items;
 }
 
 /// `zig cc -c -x assembler` for GNU as' arguments.
@@ -1651,14 +1783,93 @@ test "windres: GNU's options as zig rc's, the gcc preprocessor dropped" {
     defer f.deinit();
     const t = Machine.own.rc();
     // Makeconf.win's %.o: %.rc rule and R's RCFLAGS of before
-    try expectArgs(&.{ "rc", "/:output-format", "coff", "/:target", t, "/:auto-includes", "gnu", "/fo", "r.o", "--", "r.rc" }, try windresArgv(&f.ctx, &.{ "--preprocessor=C:/tc/gcc.exe", "--preprocessor-arg=-E", "--preprocessor-arg=-xc", "--preprocessor-arg=-DRC_INVOKED", "-i", "r.rc", "-o", "r.o" }));
+    try expectArgs(&.{ "rc", "/:output-format", "coff", "/:target", t, "/:auto-includes", "gnu", "/fo", "r.o", "--", "r.rc" }, (try windres(&f.ctx, &.{ "--preprocessor=C:/tc/gcc.exe", "--preprocessor-arg=-E", "--preprocessor-arg=-xc", "--preprocessor-arg=-DRC_INVOKED", "-i", "r.rc", "-o", "r.o" })).argv);
     // CMake's: -O coff, defines, includes, then the source and the object
-    try expectArgs(&.{ "rc", "/:output-format", "coff", "/:target", t, "/:auto-includes", "gnu", "/d", "TBB=1", "/i", "C:/x y/include", "/fo", "obj/r.rc.obj", "--", "src/r.rc" }, try windresArgv(&f.ctx, &.{ "-O", "coff", "-DTBB=1", "-I", "C:/x y/include", "src/r.rc", "obj/r.rc.obj" }));
+    try expectArgs(&.{ "rc", "/:output-format", "coff", "/:target", t, "/:auto-includes", "gnu", "/d", "TBB=1", "/i", "C:/x y/include", "/fo", "obj/r.rc.obj", "--", "src/r.rc" }, (try windres(&f.ctx, &.{ "-O", "coff", "-DTBB=1", "-I", "C:/x y/include", "src/r.rc", "obj/r.rc.obj" })).argv);
     // a .res output; a target; a language in hex
-    try expectArgs(&.{ "rc", "/:output-format", "res", "/:target", "arm64", "/:auto-includes", "gnu", "/l", "409", "/fo", "r.res", "--", "r.rc" }, try windresArgv(&f.ctx, &.{ "-F", "pe-aarch64-little", "-l", "0x409", "--input=r.rc", "--output=r.res" }));
-    try testing.expectError(error.Usage, windresArgv(&f.ctx, &.{"r.rc"}));
-    try testing.expectError(error.Usage, windresArgv(&f.ctx, &.{ "-O", "rc", "r.rc", "r.txt" }));
+    try expectArgs(&.{ "rc", "/:output-format", "res", "/:target", "arm64", "/:auto-includes", "gnu", "/l", "409", "/fo", "r.res", "--", "r.rc" }, (try windres(&f.ctx, &.{ "-F", "pe-aarch64-little", "-l", "0x409", "--input=r.rc", "--output=r.res" })).argv);
+    // meson's windows.compile_resources: -I<dir> joined, the module's
+    // args, input and output, then its depfile request: zig rc's JSON
+    // list beside it, made into make's rule after
+    const m = try windres(&f.ctx, &.{ "-I../src", "-I.", "--define=X=1", "../src/app.rc", "prog_app.rc_app.o", "--preprocessor-arg=-MD", "--preprocessor-arg=-MQprog_app.rc_app.o", "--preprocessor-arg=-MFprog_app.rc_app.o.d" });
+    try expectArgs(&.{ "rc", "/:output-format", "coff", "/:target", t, "/:auto-includes", "gnu", "/i", "../src", "/i", ".", "/d", "X=1", "/:depfile", "prog_app.rc_app.o.d.json", "/fo", "prog_app.rc_app.o", "--", "../src/app.rc" }, m.argv);
+    try testing.expectEqualStrings("prog_app.rc_app.o.d", m.depfile.?.file);
+    try testing.expectEqualStrings("prog_app.rc_app.o.d.json", m.depfile.?.json);
+    try testing.expectEqualStrings("prog_app.rc_app.o", m.depfile.?.target);
+    try expectArgs(&.{ "rc", "/:output-format", "coff", "/:target", t, "/:auto-includes", "gnu", "/i", "inc", "/fo", "a.o", "--", "a.rc" }, (try windres(&f.ctx, &.{ "--include-dir=inc", "a.rc", "a.o" })).argv);
+    try testing.expectError(error.Usage, windres(&f.ctx, &.{"r.rc"}));
+    try testing.expectError(error.Usage, windres(&f.ctx, &.{ "-O", "rc", "r.rc", "r.txt" }));
     _ = f.takeWarnings();
+    // meson's detection: a line matching ^.*GNU windres.*$; the first
+    // line is the binutils' common one
+    try testing.expect(mem.startsWith(u8, windres_version, "GNU-compatible windres (rzig"));
+    var lines = mem.splitScalar(u8, windres_version, '\n');
+    var gnu = false;
+    while (lines.next()) |l| gnu = gnu or mem.find(u8, l, "GNU windres") != null;
+    try testing.expect(gnu);
+}
+
+test "windres: -D/--define values unescaped as GNU windres' shell does: backslash-quote and double backslash only" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const t = Machine.own.rc();
+    const head: []const []const u8 = &.{ "rc", "/:output-format", "coff", "/:target", t, "/:auto-includes", "gnu" };
+    const tail: []const []const u8 = &.{ "/fo", "a.o", "--", "a.rc" };
+    const C = struct { args: []const []const u8, want: []const u8 };
+    for ([_]C{
+        // libiconv 1.17's windres-options --escape, each spelling
+        .{ .args = &.{"-DPACKAGE_VERSION_STRING=\\\"1.17\\\""}, .want = "PACKAGE_VERSION_STRING=\"1.17\"" },
+        .{ .args = &.{ "-D", "PACKAGE_VERSION_STRING=\\\"1.17\\\"" }, .want = "PACKAGE_VERSION_STRING=\"1.17\"" },
+        .{ .args = &.{"--define=PACKAGE_VERSION_STRING=\\\"1.17\\\""}, .want = "PACKAGE_VERSION_STRING=\"1.17\"" },
+        .{ .args = &.{ "--define", "PACKAGE_VERSION_STRING=\\\"1.17\\\"" }, .want = "PACKAGE_VERSION_STRING=\"1.17\"" },
+        // \\ becomes one
+        .{ .args = &.{"-DSEP=\\\"\\\\\\\""}, .want = "SEP=\"\\\"" },
+        // nothing to unescape: unchanged
+        .{ .args = &.{"-DPACKAGE_VERSION_STRING=\"1.17\""}, .want = "PACKAGE_VERSION_STRING=\"1.17\"" },
+        .{ .args = &.{ "-D", "VER=1" }, .want = "VER=1" },
+        // a Windows path's backslashes stay
+        .{ .args = &.{"-DDIR=C:\\x\\y"}, .want = "DIR=C:\\x\\y" },
+        .{ .args = &.{ "--define", "DIR=\\\"C:\\tmp\\\"" }, .want = "DIR=\"C:\\tmp\"" },
+    }) |c| {
+        const args = try mem.concat(f.ctx.arena, []const u8, &.{ c.args, &.{ "a.rc", "a.o" } });
+        try expectArgs(try mem.concat(f.ctx.arena, []const u8, &.{ head, &.{ "/d", c.want }, tail }), (try windres(&f.ctx, args)).argv);
+    }
+}
+
+test "windres: the preprocessor's depfile request, as make's rule from zig rc's list" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const a = f.ctx.arena;
+    // none without -MD (or -MMD) and -MF; the gcc preprocessor's other
+    // args stay dropped
+    try testing.expectEqual(null, (try windres(&f.ctx, &.{ "--preprocessor-arg=-MFx.d", "a.rc", "a.o" })).depfile);
+    try testing.expectEqual(null, (try windres(&f.ctx, &.{ "--preprocessor-arg=-MD", "a.rc", "a.o" })).depfile);
+    // separate values (`--preprocessor-arg -MF --preprocessor-arg x.d`),
+    // -MMD, the output as the target when none is named, make-quoted
+    var d = (try windres(&f.ctx, &.{ "--preprocessor-arg", "-MMD", "--preprocessor-arg=-MF", "--preprocessor-arg=dir/x.d", "a.rc", "my obj$.o" })).depfile.?;
+    try testing.expectEqualStrings("dir/x.d", d.file);
+    try testing.expectEqualStrings("my\\ obj$$.o", d.target);
+    // -MT as given, -MQ quoted, several targets in order
+    d = (try windres(&f.ctx, &.{ "--preprocessor-arg=-MD", "--preprocessor-arg=-MTa b", "--preprocessor-arg=-MQc d", "--preprocessor-arg=-MFx.d", "a.rc", "a.o" })).depfile.?;
+    try testing.expectEqualStrings("a b c\\ d", d.target);
+    try testing.expectError(error.Usage, windres(&f.ctx, &.{ "--preprocessor-arg=-MD", "--preprocessor-arg=-MF", "a.rc", "a.o" }));
+    _ = f.takeWarnings();
+    // the rule: the input first, as zig rc lists it; spaces, # and $
+    try testing.expectEqualStrings("o.o: ../app.rc ../inc/ver.h ../my\\ data\\#1$$.bin\n", try depfileRule(a, "o.o", "[\"../app.rc\", \"../inc/ver.h\", \"../my data#1$.bin\"]"));
+    try testing.expectEqualStrings("o.o:\n", try depfileRule(a, "o.o", "[]"));
+    try testing.expectError(error.UnexpectedToken, depfileRule(a, "o.o", "{}"));
+    // writeDepfile: the rule written, the list removed
+    try f.write("x.d.json", "[\"a.rc\"]", .default_file);
+    const cwd_file = f.path("x.d");
+    const json_file = f.path("x.d.json");
+    try testing.expectEqual(0, writeDepfile(&f.ctx, .{ .file = cwd_file, .json = json_file, .target = "a.o" }));
+    try testing.expectEqualStrings("a.o: a.rc\n", try f.tmp.dir.readFileAlloc(testing.io, "x.d", a, .limited(1024)));
+    try testing.expect(!f.ctx.isFile(json_file));
+    // no list (zig rc wrote none): 1 and why
+    try testing.expectEqual(1, writeDepfile(&f.ctx, .{ .file = cwd_file, .json = json_file, .target = "a.o" }));
+    try testing.expect(mem.startsWith(u8, f.takeWarnings(), "rzig-test: cannot read zig rc's dependency list "));
 }
 
 test "as: zig cc -target <R's> -c -x assembler" {

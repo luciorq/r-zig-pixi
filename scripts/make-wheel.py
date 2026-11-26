@@ -52,6 +52,19 @@ declares. One tag set, from r-zig's and r-zig-build-tools' files
 together, for all four wheels (B29): make alone would tag an older macOS
 than R. Python-independent (`py3-none`): nothing here links libpython.
 
+Windows (win-64 and win-arm64; b13-env-ci L2): the tree is conda's
+layout, everything under Library/ (Library/lib/R is R_HOME), and the
+wheel takes Library/'s contents, so r_zig/R/lib/R is R_HOME on every OS
+and Rcmd_environ's ${R_HOME}/../.. paths keep their meaning. The tag is
+win_amd64 or win_arm64, from the machine field of the R tree's PE files
+alone: the build tools are MSYS2's x86_64 programs on both arches (they
+run under emulation on win-arm64). The tree is recognised by its
+Library/lib/R/bin/x64/R.dll, not by the host, so a Windows tree (a CI
+artifact) can be wrapped on linux too. r-zig-build-tools takes the
+build-tools group's usr/ and etc/ (MSYS's fstab). The Windows tree has
+no ssl/cacert.pem to check (wheel-test-windows.py makes an HTTPS
+request through R's libcurl instead).
+
 Usage (from the `wheel` pixi env, which sets R_VERSION/R_BUILD_VARIANT):
     pixi run -e wheel wheel [--prefix DIR] [--toolchain-prefix DIR]
                             [--out-dir DIR] [--build-tag N]
@@ -83,6 +96,15 @@ TOOLCHAIN_PREFIX = "lib/R/bin/toolchain/"  # inside both trees; rzig's names in 
 # What r-zig-build-tools takes from the toolchain tree: the build-tools
 # group's usr/ (GNU make, its SOURCES and LICENSES/).
 TOOLCHAIN_USR = TOOLCHAIN_PREFIX + "usr/"
+# and on Windows its etc/: MSYS2's fstab, which its programs read
+TOOLCHAIN_ETC = TOOLCHAIN_PREFIX + "etc/"
+# rzig's names in the R tree's R_HOME/bin/toolchain on Windows
+# (verify-helpers.sh's rzig_names) and the link object beside them
+# (link_object: win-64's cfguard.o, win-arm64's clear_cache.o)
+WINDOWS_RZIG_NAMES = ("gcc.exe", "g++.exe", "zig-fc.exe", "zig-ar.exe", "zig-ranlib.exe", "gcc-ar.exe",
+                      "gcc-ranlib.exe", "ar.exe", "ranlib.exe", "nm.exe", "objdump.exe", "strip.exe",
+                      "dlltool.exe", "windres.exe", "as.exe", "rzig.exe")
+WINDOWS_LINK_OBJECTS = {"win_amd64": "cfguard.o", "win_arm64": "clear_cache.o"}
 # What r-zig-compilers takes from it on linux: the compilers group's
 # libstdcxx/ (libstdc++'s headers, their SOURCES and LICENSES/;
 # feat-linux-libstdcxx). The base's own libstdc++ shims sit beside rzig
@@ -195,6 +217,36 @@ def macos_min_version(data: bytes) -> tuple[int, int] | None:
     return found
 
 
+PE_MACHINES = {0x8664: "win_amd64", 0xAA64: "win_arm64"}
+
+
+def pe_machine(data: bytes) -> int | None:
+    """IMAGE_FILE_HEADER.Machine of a PE file (an .exe or .dll), else None."""
+    if data[:2] != b"MZ" or len(data) < 0x40:
+        return None
+    off = struct.unpack_from("<I", data, 0x3C)[0]
+    if off + 6 > len(data) or data[off:off + 4] != b"PE\0\0":
+        return None
+    return struct.unpack_from("<H", data, off + 4)[0]
+
+
+def windows_tags(files: list[tuple[str, bytes]]) -> list[str]:
+    """win_amd64 or win_arm64, from every PE file of the R tree: one
+    machine, or the tree is not one platform's."""
+    seen: dict[int, str] = {}
+    for rel, data in files:
+        m = pe_machine(data)
+        if m is not None:
+            seen.setdefault(m, rel)
+    tags = {PE_MACHINES.get(m, hex(m)) for m in seen}
+    if len(tags) != 1 or not tags <= set(PE_MACHINES.values()):
+        die("the R tree's PE files are not one Windows platform's: "
+            + ", ".join(f"{PE_MACHINES.get(m, hex(m))} ({rel})" for m, rel in sorted(seen.items())))
+    tag = tags.pop()
+    print(f"make-wheel: Windows platform {tag} (the R tree's PE files)")
+    return [tag]
+
+
 def platform_tags(files: list[tuple[str, bytes]]) -> list[str]:
     system, machine = platform.system(), platform.machine()
     if system == "Linux":
@@ -228,7 +280,7 @@ def platform_tags(files: list[tuple[str, bytes]]) -> list[str]:
         if major >= 11 and minor > 0:
             major, minor = major + 1, 0
         return [f"macosx_{major}_{minor}_{arch}"]
-    die(f"no wheel platform tag for {system} (no Windows wheel yet: the wheel is linux/macOS only, although the minimal build also runs on Windows)")
+    die(f"no wheel platform tag for {system} (a Windows tree is recognised by its Library/lib/R/bin/x64/R.dll)")
     return []
 
 
@@ -279,9 +331,10 @@ def leak_scan(files: list[tuple[str, bytes]], needles: list[bytes]) -> None:
         die("build-machine paths in run-time files (not a packaged tree?): " + ", ".join(fatal))
 
 
-def renviron_site(existing: bytes | None) -> bytes:
+def renviron_site(existing: bytes | None, windows: bool = False) -> bytes:
     # R_HOME is <site-packages>/r_zig/R/lib/R; ziglang installs its binary
-    # as <site-packages>/ziglang/zig. Renviron expands a nested default
+    # as <site-packages>/ziglang/zig (zig.exe on Windows, where R reads
+    # this file as R_HOME/etc/Renviron.site too). Renviron expands a nested default
     # only when it is a whole ${...} term, hence the helper variable. When
     # ziglang lives elsewhere this names a missing file and rzig looks
     # further (zigbuild/tools/rzig/find_zig.zig): PATH, then
@@ -289,7 +342,7 @@ def renviron_site(existing: bytes | None) -> bytes:
     add = (
         "## r-zig wheel: compile packages with the PyPI ziglang package\n"
         "## installed next to this one (see r_zig/__init__.py).\n"
-        "R_ZIG_ZIGLANG=${R_HOME}/../../../../ziglang/zig\n"
+        "R_ZIG_ZIGLANG=${R_HOME}/../../../../ziglang/zig" + (".exe" if windows else "") + "\n"
         "ZIG_BIN=${ZIG_BIN-${R_ZIG_ZIGLANG}}\n"
     ).encode()
     return (existing.rstrip(b"\n") + b"\n\n" + add) if existing else add
@@ -388,6 +441,27 @@ R_HOME/bin/toolchain/usr/bin, which r-zig's etc/Renviron puts first on
 PATH: `usr/SOURCES` names its package and where its source is, and
 `usr/LICENSES/` holds its licence, the GPL version 3 or later.
 """,
+    BUILD_TOOLS_DIST + "-windows": """\
+# r-zig-build-tools
+
+The build tools for the [`r-zig`](https://pypi.org/project/r-zig/) wheel
+(R {r_version}) on Windows: sh, GNU make and the tools R's makefiles run
+(MSYS2's bash, make, coreutils, sed, grep, gawk, findutils, tar, patch,
+which, and pkgconf), for configure scripts, Makevars rules and
+installing pkgbuild, pak or devtools from source. It requires exactly
+the `r-zig` it was built with. To compile packages, add
+r-zig-toolchain (r-zig-compilers and r-zig-build-tools):
+
+```sh
+pip install r-zig-toolchain
+```
+
+The programs are conda-forge's m2-* packages, unchanged, in
+R_HOME/bin/toolchain/usr/bin, which r-zig's etc/Rcmd_environ puts first
+on PATH (MSYS2's etc/fstab beside it): `usr/SOURCES` names each package
+and where its source is, and `usr/LICENSES/` holds the licence files
+each package ships.
+""",
     TOOLCHAIN_DIST: """\
 # r-zig-toolchain
 
@@ -406,7 +480,8 @@ flang on PATH.
 }
 
 
-def metadata(dist: str, version: str, r_version: str, cxx: bool = False) -> str:
+def metadata(dist: str, version: str, r_version: str, cxx: bool = False, windows: bool = False,
+             bt_license: str = MAKE_LICENSE) -> str:
     """A wheel's METADATA, from one table for the four (B29 a): its
     summary, licence (PHASE4 open point E a) and requirements, each group
     on exactly this r-zig and r-zig-toolchain on exactly both groups
@@ -417,7 +492,9 @@ def metadata(dist: str, version: str, r_version: str, cxx: bool = False) -> str:
         COMPILERS_DIST: (f"The r-zig compilers for R {r_version}: zig, from the PyPI ziglang package"
                          + (", and libstdc++'s C++ headers" if cxx else ""),
                          CXX_LICENSE if cxx else R_LICENSE, [f"{DIST_NAME}=={version}", ZIGLANG_REQUIREMENT]),
-        BUILD_TOOLS_DIST: (f"The r-zig build tools for R {r_version}: GNU make", MAKE_LICENSE, [f"{DIST_NAME}=={version}"]),
+        BUILD_TOOLS_DIST: (f"The r-zig build tools for R {r_version}: "
+                           + ("sh, GNU make and MSYS2's tools" if windows else "GNU make"),
+                           bt_license, [f"{DIST_NAME}=={version}"]),
         TOOLCHAIN_DIST: (f"The r-zig toolchain for R {r_version}: r-zig-compilers and r-zig-build-tools",
                          R_LICENSE, [f"{COMPILERS_DIST}=={version}", f"{BUILD_TOOLS_DIST}=={version}"]),
     }[dist]
@@ -429,13 +506,14 @@ def metadata(dist: str, version: str, r_version: str, cxx: bool = False) -> str:
         "Home-page: https://github.com/luciorq/r-zig-pixi\n"
         f"License: {license_}\n"
         "Classifier: Programming Language :: R\n"
-        + "".join(f"Classifier: License :: OSI Approved :: {c}\n" for c in LICENSE_CLASSIFIERS[license_])
-        + "Classifier: Operating System :: POSIX :: Linux\n"
-        "Classifier: Operating System :: MacOS\n"
-        "Requires-Python: >=3.8\n"
+        + "".join(f"Classifier: License :: OSI Approved :: {c}\n" for c in LICENSE_CLASSIFIERS.get(license_, []))
+        + ("Classifier: Operating System :: Microsoft :: Windows\n" if windows else
+           "Classifier: Operating System :: POSIX :: Linux\n"
+           "Classifier: Operating System :: MacOS\n")
+        + "Requires-Python: >=3.8\n"
         + "".join(f"Requires-Dist: {r}\n" for r in requires)
         + "Description-Content-Type: text/markdown\n"
-        "\n" + DESCRIPTIONS[dist].replace("{r_version}", r_version)
+        "\n" + DESCRIPTIONS.get(dist + "-windows" if windows else dist, DESCRIPTIONS[dist]).replace("{r_version}", r_version)
     )
 
 
@@ -464,24 +542,37 @@ def main() -> None:
     tc_prefix = os.path.abspath(args.toolchain_prefix)
     if variant != "minimal" and not args.any_variant:
         die(f"R_BUILD_VARIANT is {variant!r}; the wheel wraps the minimal variant (--any-variant to override)")
-    if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "exec", "R")):
+    # A Windows tree is conda's layout: its contents are under Library/,
+    # which is what the wheel takes (the module docstring), in both trees.
+    windows = os.path.isfile(os.path.join(prefix, "Library", "lib", "R", "bin", "x64", "R.dll"))
+    if windows:
+        prefix, tc_prefix = os.path.join(prefix, "Library"), os.path.join(tc_prefix, "Library")
+    exe = ".exe" if windows else ""
+    if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", *(("x64", "R.dll") if windows else ("exec", "R")))):
         die(f"no R build at {prefix} — run `pixi run -e minimal build` first")
     # rzig, under CC's name and under the name install.R's hook runs it by
     # (patch 0013): the base's (B19)
-    for name in ("zig-cc", "rzig"):
+    for name in ("gcc.exe", "rzig.exe") if windows else ("zig-cc", "rzig"):
         if not os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "toolchain", name)):
             die(f"{prefix} has no R_HOME/bin/toolchain/{name} — run `pixi run -e minimal build` first")
-    if not any(re.search(r"\.(so(\.\d+)*|dylib)$", f) for f in os.listdir(os.path.join(prefix, "lib"))):
-        die(f"no vendored libraries in {prefix}/lib — run `pixi run -e minimal build` first")
-    with open(os.path.join(prefix, "lib", "R", "etc", "Renviron"), "rb") as f:
-        has_ca = b"\nR_ZIG_CA_BUNDLE=" in b"\n" + f.read()
-    if not (has_ca and os.path.isfile(os.path.join(prefix, "ssl", "cacert.pem"))):
-        die(f"{prefix} has no CA bundle (ssl/cacert.pem, R_ZIG_CA_BUNDLE) — run `pixi run -e minimal build` first")
+    # the vendored conda libraries: lib/ on unix, beside R.dll on Windows
+    # (zlib.dll is one in every variant)
+    if windows:
+        vendored = os.path.isfile(os.path.join(prefix, "lib", "R", "bin", "x64", "zlib.dll"))
+    else:
+        vendored = any(re.search(r"\.(so(\.\d+)*|dylib)$", f) for f in os.listdir(os.path.join(prefix, "lib")))
+    if not vendored:
+        die(f"no vendored libraries in {prefix} — run `pixi run -e minimal build` first")
+    if not windows:
+        with open(os.path.join(prefix, "lib", "R", "etc", "Renviron"), "rb") as f:
+            has_ca = b"\nR_ZIG_CA_BUNDLE=" in b"\n" + f.read()
+        if not (has_ca and os.path.isfile(os.path.join(prefix, "ssl", "cacert.pem"))):
+            die(f"{prefix} has no CA bundle (ssl/cacert.pem, R_ZIG_CA_BUNDLE) — run `pixi run -e minimal build` first")
     if not os.path.isfile(os.path.join(prefix, "share", "licenses", "SOURCES")):
         die(f"{prefix} has no records (share/licenses/SOURCES) — run `pixi run -e minimal build` first")
-    if not os.path.isfile(os.path.join(tc_prefix, "lib", "R", "bin", "toolchain", "usr", "bin", "make")):
+    if not os.path.isfile(os.path.join(tc_prefix, "lib", "R", "bin", "toolchain", "usr", "bin", "make" + exe)):
         die(f"no GNU make in the toolchain tree {tc_prefix} — run `pixi run -e minimal toolchain` first")
-    linux = platform.system() == "Linux"
+    linux = not windows and platform.system() == "Linux"
     if linux and not os.path.isfile(os.path.join(tc_prefix, TOOLCHAIN_CXX, "SOURCES")):
         die(f"no libstdc++ headers in the toolchain tree {tc_prefix} ({TOOLCHAIN_CXX}) — run `pixi run -e minimal toolchain` first")
     if args.build_tag and not args.build_tag[0].isdigit():
@@ -490,9 +581,11 @@ def main() -> None:
     base = f"{IMPORT_NAME}/R/"
     tree = collect_tree(prefix)
     print(f"make-wheel: {len(tree)} files from {prefix}")
+    # the build-tools group's usr/; on Windows also its etc/ (MSYS's fstab)
+    bt_dirs = (TOOLCHAIN_USR, TOOLCHAIN_ETC) if windows else (TOOLCHAIN_USR,)
     tc_tree = [(rel, path) for rel, path in collect_tree(tc_prefix)
-               if rel.startswith(TOOLCHAIN_USR) or (linux and rel.startswith(TOOLCHAIN_CXX))]
-    print(f"make-wheel: {len(tc_tree)} files from {tc_prefix}/{TOOLCHAIN_USR}" + (f" and {TOOLCHAIN_CXX}" if linux else ""))
+               if rel.startswith(bt_dirs) or (linux and rel.startswith(TOOLCHAIN_CXX))]
+    print(f"make-wheel: {len(tc_tree)} files from {tc_prefix}/{' and '.join(bt_dirs)}" + (f" and {TOOLCHAIN_CXX}" if linux else ""))
     files: list[tuple[str, bytes]] = []  # (path inside the trees, content)
     modes: dict[str, int] = {}
     for rel, path in tree + tc_tree:
@@ -511,10 +604,17 @@ def main() -> None:
     # older build, since zig's install never removes a file, and would
     # ship in r-zig (a usr/ there, beside the toolchain tree's in
     # r-zig-build-tools). The R tree's files come first in `files`.
-    rzig = dict(files)[TOOLCHAIN_PREFIX + "zig-cc"]
-    link_object = TOOLCHAIN_PREFIX + "dso_fini.o" if linux else None
+    rzig = dict(files)[TOOLCHAIN_PREFIX + ("gcc.exe" if windows else "zig-cc")]
+    if windows:
+        win_tags = windows_tags(files[:len(tree)])
+        link_object = TOOLCHAIN_PREFIX + WINDOWS_LINK_OBJECTS[win_tags[0]]
+        missing = [n for n in WINDOWS_RZIG_NAMES if dict(files[:len(tree)]).get(TOOLCHAIN_PREFIX + n) != rzig]
+        if missing:
+            die(f"{prefix}'s R_HOME/bin/toolchain lacks rzig as {', '.join(missing)} — run `pixi run -e minimal build` first")
+    else:
+        link_object = TOOLCHAIN_PREFIX + "dso_fini.o" if linux else None
     if link_object and link_object not in dict(files[:len(tree)]):
-        die(f"{prefix} has no R_HOME/bin/toolchain/dso_fini.o, rzig's link object — run `pixi run -e minimal build` first")
+        die(f"{prefix} has no R_HOME/bin/{link_object[len('lib/R/bin/'):]}, rzig's link object — run `pixi run -e minimal build` first")
     shims = {TOOLCHAIN_SHIM + "bits/c++config.h", TOOLCHAIN_SHIM + "sys/single_threaded.h"} if linux else set()
     if not shims <= set(dict(files[:len(tree)])):
         die(f"{prefix} has no R_HOME/bin/toolchain/libstdcxx-shim/ headers — run `pixi run -e minimal build` first")
@@ -525,23 +625,39 @@ def main() -> None:
     needles = [ROOT.encode()]
     if os.environ.get("CONDA_PREFIX"):
         needles.append(os.environ["CONDA_PREFIX"].encode())
+    # Windows paths are written with either slash
+    needles += [n.replace(b"\\", b"/") for n in needles if b"\\" in n]
     leak_scan(files, needles)
 
     renv = "lib/R/etc/Renviron.site"
     existing = dict(files).get(renv)
-    files = [(r, d) for r, d in files if r != renv] + [(renv, renviron_site(existing))]
+    files = [(r, d) for r, d in files if r != renv] + [(renv, renviron_site(existing, windows))]
     modes.setdefault(renv, 0o644)
 
     # r-zig-build-tools' files: the toolchain tree's usr/. Everything else,
     # rzig under each of its names included, is r-zig's (B19, B29 a).
-    bt_files = [(r, d) for r, d in files if r.startswith(TOOLCHAIN_USR)]
+    bt_files = [(r, d) for r, d in files if r.startswith(bt_dirs)]
     cc_files = [(r, d) for r, d in files if r.startswith(TOOLCHAIN_CXX)]
-    files = [(r, d) for r, d in files if not r.startswith(TOOLCHAIN_USR) and not r.startswith(TOOLCHAIN_CXX)]
-    make_copying = dict(bt_files).get(TOOLCHAIN_USR + "LICENSES/make/COPYING")
-    if make_copying is None:
-        die(f"no {TOOLCHAIN_USR}LICENSES/make/COPYING in {tc_prefix} — run `pixi run -e minimal toolchain` first")
+    files = [(r, d) for r, d in files if not r.startswith(bt_dirs) and not r.startswith(TOOLCHAIN_CXX)]
+    if windows:
+        # MSYS2's userland: the licence is every package's in the group's
+        # SOURCES, and the dist-info's licences are the texts its LICENSES/
+        # hold (conda-forge's m2-* ship their recipe's licence only)
+        bt_licenses = sorted({line[len("license: "):].strip() for r, d in bt_files if r.endswith("/SOURCES")
+                              for line in d.decode("utf-8", "replace").splitlines() if line.startswith("license: ")})
+        if not bt_licenses:
+            die(f"no license lines in {tc_prefix}'s {TOOLCHAIN_USR}SOURCES — run `pixi run -e minimal toolchain` first")
+        bt_license = " AND ".join(f"({x})" if " " in x else x for x in bt_licenses)
+        bt_dist_licenses = [(r[len(TOOLCHAIN_USR + "LICENSES/"):], d) for r, d in sorted(bt_files)
+                            if r.startswith(TOOLCHAIN_USR + "LICENSES/")]
+    else:
+        make_copying = dict(bt_files).get(TOOLCHAIN_USR + "LICENSES/make/COPYING")
+        if make_copying is None:
+            die(f"no {TOOLCHAIN_USR}LICENSES/make/COPYING in {tc_prefix} — run `pixi run -e minimal toolchain` first")
+        bt_license, bt_dist_licenses = MAKE_LICENSE, [("COPYING", make_copying)]
 
-    tags = platform_tags(files + bt_files)
+    # Windows: the R tree's alone (the build tools are x86_64 on both arches)
+    tags = win_tags if windows else platform_tags(files + bt_files)
     build = f"-{args.build_tag}" if args.build_tag else ""
 
     pkg_dir = os.path.join(ROOT, "python", IMPORT_NAME)
@@ -553,7 +669,8 @@ def main() -> None:
             entries.append((f"{IMPORT_NAME}/{name}", src, 0o644))
     entries += [(base + rel, data, modes[rel]) for rel, data in sorted(files)]
 
-    with open(os.path.join(prefix, "lib", "R", "COPYING"), "rb") as f:
+    # R's GPL text: R_HOME/COPYING, on Windows R_HOME/doc/COPYING
+    with open(os.path.join(prefix, "lib", "R", "doc" if windows else "", "COPYING"), "rb") as f:
         copying = f.read()
     # r-zig's licences: R's COPYING, and the tree's records, SOURCES and
     # each vendored package's texts, at their place under share/licenses
@@ -561,22 +678,23 @@ def main() -> None:
     # version 2.1, and License-File is 2.4's.
     records = [(rel[len("share/licenses/"):], data) for rel, data in files if rel.startswith("share/licenses/")]
     entry_points = f"[console_scripts]\nR = {IMPORT_NAME}:main\nRscript = {IMPORT_NAME}:main_rscript\n"
-    write_wheel(args, DIST_NAME, tags, build, entries, metadata(DIST_NAME, args.version, r_version), entry_points,
+    write_wheel(args, DIST_NAME, tags, build, entries, metadata(DIST_NAME, args.version, r_version, windows=windows), entry_points,
                 [("COPYING", copying)] + records)
 
-    # the build tools under make's licence, and two wheels of
-    # requirements alone (E a; B29 a)
+    # the build tools under make's licence (Windows: its packages'), and
+    # two wheels of requirements alone (E a; B29 a)
     bt_entries = [(base + rel, data, modes[rel]) for rel, data in sorted(bt_files)]
     write_wheel(args, BUILD_TOOLS_DIST, tags, build, bt_entries,
-                metadata(BUILD_TOOLS_DIST, args.version, r_version), None, [("COPYING", make_copying)])
+                metadata(BUILD_TOOLS_DIST, args.version, r_version, windows=windows, bt_license=bt_license), None,
+                bt_dist_licenses)
     # r-zig-compilers: on linux libstdc++'s headers, with R's COPYING and
     # gcc's texts (their LICENSES/, also in the wheel at their place)
     cc_entries = [(base + rel, data, modes[rel]) for rel, data in sorted(cc_files)]
     cc_licenses = [(f"libstdcxx/{rel[len(TOOLCHAIN_CXX + 'LICENSES/'):]}", data)
                    for rel, data in sorted(cc_files) if rel.startswith(TOOLCHAIN_CXX + "LICENSES/")]
     write_wheel(args, COMPILERS_DIST, tags, build, cc_entries,
-                metadata(COMPILERS_DIST, args.version, r_version, bool(cc_files)), None, [("COPYING", copying)] + cc_licenses)
-    write_wheel(args, TOOLCHAIN_DIST, tags, build, [], metadata(TOOLCHAIN_DIST, args.version, r_version), None, [("COPYING", copying)])
+                metadata(COMPILERS_DIST, args.version, r_version, bool(cc_files), windows), None, [("COPYING", copying)] + cc_licenses)
+    write_wheel(args, TOOLCHAIN_DIST, tags, build, [], metadata(TOOLCHAIN_DIST, args.version, r_version, windows=windows), None, [("COPYING", copying)])
 
 
 def write_wheel(args: argparse.Namespace, dist: str, tags: list[str], build: str,

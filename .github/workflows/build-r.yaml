@@ -54,9 +54,9 @@ jobs:
           # binary, so each pixi release would also drop every cached env.
           # The other workflows pin the same version.
           pixi-version: v0.84.2
-          # minimal on unix also needs the python-only `wheel` env for its
-          # last steps (no Windows wheel yet)
-          environments: ${{ (inputs.env == 'minimal' && !startsWith(inputs.os, 'windows')) && 'minimal wheel' || inputs.env }}
+          # minimal also needs the python-only `wheel` env for its last
+          # steps (Windows too since b13-env-ci L2)
+          environments: ${{ inputs.env == 'minimal' && 'minimal wheel' || inputs.env }}
           # No cache, as toolchain.yaml: the build's last step (-Dbase)
           # copies the licence files of the packages the tree takes files
           # from, out of pixi's package cache. An env restored from
@@ -96,8 +96,8 @@ jobs:
         if: inputs.env == 'minimal'
         run: pixi run -e minimal minimal-check
       # rzig, the compilers zig build installs into R_HOME/bin/toolchain
-      # (feat-no-host-paths F3): unit tests on this OS; on linux also the
-      # parity test against the bash shims for every OS's command lines.
+      # (feat-no-host-paths F3): unit tests on this OS; on linux also
+      # link-objects-test.sh (Windows links of CFG code, cross-built).
       - name: rzig tests
         run: pixi run -e ${{ inputs.env }} rzig-test
       # `zig build` installs the tree that ships (feat-no-host-paths F1,
@@ -118,10 +118,11 @@ jobs:
       # R_HOME/Tcl and libintl.h, so without it nothing in CI checks them
       # (feat-win-variants). One rule for every OS: the check is cheap,
       # and linux-64 full passed it and hermetic locally (feat-zig-017);
-      # macOS full runs them first in CI. openblas differs from default
-      # only in BLAS, so it is skipped.
+      # macOS full runs them first in CI. openblas too: its BLAS
+      # forwarders (libRblas/libRlapack, Windows Rblas.dll) and the
+      # vendored openblas library are in the closure (b13-build M-7, M-23).
       - name: Verify the installed tree (Makeconf, rzig, libraries, floors)
-        if: inputs.env == 'default' || inputs.env == 'minimal' || inputs.env == 'full'
+        if: inputs.env == 'default' || inputs.env == 'minimal' || inputs.env == 'full' || inputs.env == 'openblas'
         run: pixi run -e ${{ inputs.env }} verify-tree
       - name: Smoke test
         run: pixi run -e ${{ inputs.env }} smoke
@@ -139,6 +140,43 @@ jobs:
         run: pixi run -e ${{ inputs.env }} pkg-parity
       - name: Regression suite (Examples/Specific/Reg)
         run: pixi run -e ${{ inputs.env }} check
+      # Windows openblas only, after a failed step: stats' ar.ols example
+      # died with no R error on x86_64_v4 (AVX-512) runners and passed on
+      # x86_64_v3 ones (b13-fixes F14). Runs the example in the installed
+      # tree three ways (as is, one thread, OpenBLAS's Haswell core), prints
+      # the CPU and the core OpenBLAS picks (OPENBLAS_VERBOSE=2), then the
+      # Application log's crash events (1000, 1001), which name the faulting
+      # module. Reports only: the leg stays failed by the step that failed.
+      - name: openblas crash diagnostics (Windows, after a failure)
+        if: failure() && runner.os == 'Windows' && inputs.env == 'openblas'
+        shell: pwsh
+        run: |
+          $start = (Get-Date).AddHours(-4)
+          (Get-CimInstance Win32_Processor).Name
+          $r = Get-ChildItem dist -Recurse -Filter Rscript.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'slim-openblas\\R-[^\\]+-zig\\Library\\lib\\R\\bin\\x64\\Rscript\.exe$' } |
+            Select-Object -First 1
+          if (-not $r) { "no installed openblas Rscript.exe under dist"; exit 0 }
+          $r.FullName
+          $code = 'x <- diff(log(EuStockMarkets)); for (i in 1:20) invisible(ar.ols(x, order.max = 6, demean = FALSE, intercept = TRUE)); cat("ar.ols x20 ok\n")'
+          $cases = [ordered]@{
+            'as is'   = @{ OPENBLAS_VERBOSE = '2' }
+            '1 thread' = @{ OPENBLAS_VERBOSE = '2'; OPENBLAS_NUM_THREADS = '1' }
+            'Haswell' = @{ OPENBLAS_VERBOSE = '2'; OPENBLAS_CORETYPE = 'Haswell' }
+          }
+          foreach ($name in $cases.Keys) {
+            $vars = $cases[$name]
+            foreach ($k in $vars.Keys) { Set-Item "env:$k" $vars[$k] }
+            "== ar.ols, $name"
+            & $r.FullName -e $code 2>&1 | Out-Host
+            $rc = $LASTEXITCODE
+            "== ar.ols, ${name}: exit $rc (0x{0:X8})" -f $rc
+            foreach ($k in $vars.Keys) { Remove-Item "env:$k" }
+          }
+          "== Application crash events since $start"
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1001; StartTime = $start } -ErrorAction SilentlyContinue |
+            Format-List TimeCreated, Id, Message | Out-String -Width 400
+          exit 0
       # R's 15 recommended packages, by their own zig build with the
       # compile tree's R (contract made it), into a tree of their own,
       # dist/recommended/<flavor>/R-<ver>-zig; then its static checks and
@@ -200,14 +238,20 @@ jobs:
       # zipped with the r_zig Python package, then pip-installed into a
       # fresh venv (ziglang from PyPI) and used with the pixi env scrubbed
       # away — including R CMD INSTALL of a C/C++ package through ziglang.
-      # unix only: there is no Windows wheel yet (make-wheel.py).
+      # Every OS since b13-env-ci (L2): on Windows make-wheel.py wraps the
+      # Library/ tree (win_amd64, win_arm64) and wheel-test runs
+      # scripts/wheel-test-windows.py, the same scenarios in Python. The
+      # Windows minimal legs are in build-full (the full tier).
       - name: Build + test the r-zig wheel
-        if: inputs.env == 'minimal' && !startsWith(inputs.os, 'windows')
+        if: inputs.env == 'minimal'
+        # bash on Windows too: pwsh would run the second line after a
+        # failed first one
+        shell: bash
         run: |
           pixi run -e wheel wheel
           pixi run -e wheel wheel-test
       - name: Upload the r-zig wheel
-        if: inputs.env == 'minimal' && !startsWith(inputs.os, 'windows')
+        if: inputs.env == 'minimal'
         uses: actions/upload-artifact@v7
         with:
           name: r-zig-wheel-${{ inputs.os }}

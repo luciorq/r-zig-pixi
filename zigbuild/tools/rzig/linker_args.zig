@@ -2,7 +2,7 @@
 //! take, which GNU ld, lld and ld64 do (stress round 1, Z2, Z3, Z8). One
 //! rule each, for every spelling: inside -Wl, (as one item, or two:
 //! `-Wl,-L,dir`), after -Xlinker (`-Xlinker -L -Xlinker dir`), and for
-//! -z also on its own (`-z muldefs`).
+//! -z and --disable-auto-import also on its own (`-z muldefs`).
 //!
 //! - -L<dir> and --library-path=<dir>: "error: unsupported linker arg:
 //!   -L...". RcppParallel's `-Wl,-Ltbb/build/lib_release`, on every OS.
@@ -20,9 +20,13 @@
 //!   (StanHeaders' Makevars.win). Dropped: with nothing defined twice the
 //!   link is the same, and a real duplicate now fails loudly instead of
 //!   linking one of the two.
-//!
-//! The bash shims do the same (toolchain/zig-cc, zig-cxx), but for -l:
-//! rzig's alone (the shims are parity-test's reference only).
+//! - --disable-auto-import (and -disable-auto-import): "unsupported
+//!   linker arg" (in -Wl, and after -Xlinker; on its own zig cc says
+//!   "unknown clang option"), zig 0.17.1, conda-forge's and upstream's
+//!   (delta, 2026-11-24); a request from libs-zig-pixi's Windows
+//!   builds. Dropped: a safety flag only, which makes a link fail where
+//!   it would auto-import data from a DLL; without it lld does what its
+//!   MinGW default is, auto-import on, as GNU ld's.
 const std = @import("std");
 const mem = std.mem;
 const Ctx = @import("Ctx.zig");
@@ -55,6 +59,8 @@ pub fn rewrite(ctx: *Ctx, args: Args) !Args {
             i += 2 * it.items - 1;
         } else if (mem.eql(u8, x, "-z") and i + 1 < args.len and mem.eql(u8, args[i + 1], "muldefs")) {
             i += 1;
+        } else if (disableAutoImport(x)) {
+            continue;
         } else {
             try out.append(a, x);
         }
@@ -137,8 +143,13 @@ fn item(x: []const u8, next: ?[]const u8) Item {
     if (cmdline.flagValue(x, "--library-path=")) |d| return .{ .what = .lib_dir, .value = d };
     if (mem.eql(u8, x, "--allow-multiple-definition") or
         mem.eql(u8, x, "-allow-multiple-definition") or
-        mem.eql(u8, x, "-zmuldefs")) return .{ .what = .drop };
+        mem.eql(u8, x, "-zmuldefs") or
+        disableAutoImport(x)) return .{ .what = .drop };
     return .{ .what = .keep };
+}
+
+fn disableAutoImport(x: []const u8) bool {
+    return mem.eql(u8, x, "--disable-auto-import") or mem.eql(u8, x, "-disable-auto-import");
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +227,19 @@ test "--allow-multiple-definition and -z muldefs dropped, in every spelling" {
     try expectArgs(&.{"a.o"}, try rewrite(c, &.{ "-Xlinker", "--allow-multiple-definition", "-Xlinker", "-z", "-Xlinker", "muldefs", "-z", "muldefs", "a.o", "-Xlinker", "-zmuldefs" }));
     // other -z keywords stay, in each form
     const others: Args = &.{ "-z", "now", "-Wl,-z,relro", "-Xlinker", "-z", "-Xlinker", "defs", "-Wl,-z", "-z" };
+    try expectArgs(others, try rewrite(c, others));
+}
+
+test "--disable-auto-import dropped, in every spelling" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    try expectArgs(&.{ "-shared", "-o", "p.dll", "a.o" }, try rewrite(c, &.{ "-shared", "-Wl,--disable-auto-import", "-o", "p.dll", "a.o" }));
+    try expectArgs(&.{"-Wl,--enable-auto-image-base,-s"}, try rewrite(c, &.{"-Wl,--enable-auto-image-base,-disable-auto-import,-s"}));
+    try expectArgs(&.{ "a.o", "-Wl,-s" }, try rewrite(c, &.{ "-Xlinker", "--disable-auto-import", "a.o", "--disable-auto-import", "-disable-auto-import", "-Xlinker", "-disable-auto-import", "-Wl,-s" }));
+    // its opposite and the runtime pseudo-relocations are lld's to take
+    const others: Args = &.{ "-Wl,--enable-auto-import", "-Xlinker", "--disable-runtime-pseudo-reloc" };
     try expectArgs(others, try rewrite(c, others));
 }
 

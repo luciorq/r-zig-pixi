@@ -7,8 +7,9 @@
 //! feedstock links macOS zig against conda's shared libc++, the classic
 //! setup for two error_category instances that compare unequal): osx-64's
 //! 0.16.0 (omicron under Rosetta, 2026-09-19), and both osx-64's and
-//! osx-arm64's 0.17.0 (omicron, 2026-11-09; upstream 0.17.1 creates
-//! archives on both). Appending to an existing archive works. It bit jsonlite's
+//! osx-arm64's 0.17.0 (omicron, 2026-11-09) and 0.17.1 (omicron,
+//! 2026-11-24); upstream 0.17.1 creates archives on both. Appending to
+//! an existing archive works. It bit jsonlite's
 //! bundled yajl (`$(AR) rcs yajl/libstatyajl.a ...`) on macos-15-intel.
 //! So on macOS, when an insert-mode call (r or q) names a missing archive,
 //! seed it with the 8-byte empty-archive header, `!<arch>\n`, valid and

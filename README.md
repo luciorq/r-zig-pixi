@@ -92,6 +92,17 @@ included. It needs no group to use:
 pixi add r-zig-recommended
 ```
 
+R's tcltk package is the add-on `r-zig-tcltk` (build 13 on; every
+platform but win-arm64, where conda-forge has no Tk 8.6), pinned the
+same way and bringing conda-forge's `tk`:
+
+```bash
+pixi add r-zig-tcltk
+```
+
+Without it `capabilities("tcltk")` is still `TRUE` and `library(tcltk)`
+says the package is not installed.
+
 Without a group, an install that needs it stops with a message naming the
 package to add; without cmake it is only a note, since whether a
 package's build runs cmake is not known before it runs (its configure
@@ -116,6 +127,11 @@ the environment (`pixi shell`, `conda activate`) or start R with
   still find `find`, `sort`, `expand`, `hostname`, `timeout`, `whoami`,
   `tar` and `bash` (WSL's) in System32, as with R's own installer and
   Rtools; sh, make and configure scripts get the build tools'.
+- On Windows, R's DLLs come from the environment's `Library\bin`.
+  Without activation, start R as `<env>\Library\lib\R\bin\R.exe` or
+  `Rscript.exe`, which put `Library\bin` on `PATH` first; `bin\x64\`'s
+  programs (`R.exe`, `Rterm.exe`, `Rscript.exe`) and `Library\bin\R.bat`
+  need activation or `Library\bin` on `PATH`.
 - On Windows, a package DLL links Winsock (`ws2_32`) by default, after
   the package's own libraries: a package that calls `htons` without
   naming `-lws2_32` (ragg with a conda environment's libraries) links
@@ -137,7 +153,9 @@ the environment (`pixi shell`, `conda activate`) or start R with
   characters R and make stop finding files).
 - From Git Bash on Windows (`MSYSTEM=MINGW64`), configure scripts see
   the build system `x86_64-pc-mingw64`, not `x86_64-pc-msys`; packages
-  build either way.
+  build either way. Running the toolchain's make directly from Git for
+  Windows' bash is not supported on Windows on ARM (it segfaults); run
+  builds from R (`R CMD INSTALL`, `install.packages()`).
 - A TMB installed by an earlier r-zig build (universe's build 8 or before)
   keeps make, as it keeps a copy of R's own SHLIB code: reinstall it.
   TMB's `precompile()` speeds up only the recompiles of one model name:
@@ -150,6 +168,21 @@ the environment (`pixi shell`, `conda activate`) or start R with
 `R_ZIG_PKG_BUILDER=make` sends every `R CMD INSTALL` and `R CMD SHLIB`
 to make (the build tools then are needed). Details:
 `.github/devdocs/feat-shlib-rzig-build/PLAN.md`.
+
+`R_ZIG_TOOLCHAIN_ENV=<env root>` (build 13 on) names an environment
+that holds the toolchain when it is not R's own: rzig takes zig and
+flang from its `bin/` (`Library\bin` on Windows) before the compilers
+group's, and on linux libstdc++'s headers from its `lib/gcc`. It gives
+no headers or libraries to packages (that is `R_ZIG_EXTRA_ENV`); make
+and cmake stay `PATH`'s, so put that environment's `bin/` on `PATH` for
+packages that need them.
+
+`R_ZIG_SYSTEM_LIBS=1` (build 13 on, linux only; ignored elsewhere)
+compiles and links against the distribution's libraries in `/usr`: the
+host's include directories come after R's environment ones
+(`-idirafter`), and its library directories are the last `-L`, so a
+package such as magick or terra builds against `apt`'s ImageMagick or
+GDAL (`libmagick++-dev`, `libgdal-dev`).
 
 `R_ZIG_FALLBACK_SOFT=<dir>` is opt-in, for Windows on ARM only (an
 aarch64 R; elsewhere rzig ignores it with a warning), and read by rzig
@@ -204,7 +237,7 @@ CI), not run by hand for `universe`; for a channel of your own, change
 For iterating on the build itself rather than consuming a package:
 
 ```bash
-pixi run build         # zig build, no autoconf/make/gnuwin32
+pixi run build         # zig build, no autoconf/make/gnuwin32 (fetches R's sha256-pinned source first: zig build fetch)
 pixi run verify-tree   # static checks of the installed tree (Makeconf, rpaths, floors)
 pixi run smoke         # quick sanity check
 pixi run check         # R's own regression suite
@@ -264,7 +297,7 @@ config disagrees with it:
 |---|---|---|---|
 | cairo devices, `png()` | yes | yes | no |
 | `jpeg()`, `tiff()` | no | yes | no |
-| tcltk | no | yes | no |
+| tcltk | no (conda: the `r-zig-tcltk` add-on) | yes | no |
 | translations (NLS) | no | yes | no |
 | ICU, libdeflate | yes | yes | no |
 | OpenMP for packages | yes | yes | no |
@@ -283,7 +316,7 @@ devices (`svg()`, `cairo_pdf()`, `cairo_ps()`, `type = "cairo"`) use a
 cairo that R's build compiles from source and links into winCairo.dll,
 the same on x86_64 and ARM; its licence texts are in
 `R_HOME/share/licenses/cairo`. `minimal` is the variant the Python
-wheel wraps (unix only; no Windows wheel yet). minimal has no OpenMP: a
+wheel wraps (every OS; Windows since build 13). minimal has no OpenMP: a
 Fortran `use omp_lib` compiles but does not link.
 
 ### Build with upstream zig
@@ -329,8 +362,9 @@ pixi run -e wheel wheel-test           # pip-install them into fresh venvs, a gr
 so it needs `pixi run -e minimal toolchain` first (`package-toolchain`
 runs it, and `verify-package` needs the group archives it makes).
 
-The four wheels split as the conda packages do, for Linux and macOS (no
-Windows wheels yet), less the extras group and the recommended packages,
+The four wheels split as the conda packages do, for Linux, macOS and
+Windows (win_amd64 and win_arm64 since build 13; there `wheel-test` runs
+`scripts/wheel-test-windows.py`), less the extras group and the recommended packages,
 which have no wheel yet. `r-zig` (import name `r_zig`) is the whole
 relocatable `minimal` tree, rzig included, plus console scripts
 `R`/`Rscript` and `r_zig.r_home()` for embedders such as rpy2; it
@@ -495,7 +529,8 @@ machine's (an emulated one, such as win-64 on Windows on ARM).
 Everything runs on GitHub-hosted runners: `toolchain` (the toolchain
 groups, once per platform), `build` (ubuntu-latest,
 ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest,
-windows-11-arm × slim/full/minimal, plus the linux openblas variants;
+windows-11-arm × slim/full/minimal, plus openblas on linux and
+windows-latest;
 the same steps in the same order on
 every OS, on the installed tree, which is the tree the standalone base
 archive packs), and `conda-package` for all six subdirs (linux-64,

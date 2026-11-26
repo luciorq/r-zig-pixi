@@ -49,6 +49,12 @@
 #   --trace       RZIG_TRACE=1: rzig prints its commands into the logs, and
 #                 `rzig build` (patch 0013) its tier; R_ZIG_PKG_BUILDER=make
 #                 in the environment makes every install take the make path
+#   --libs-smoke[=REF]  after the rows, run libs-zig-pixi's tests/r/smoke.R
+#                 (REF: a git ref of github.com/luciorq/libs-zig-pixi, main by
+#                 default, or a local file) for those of sf, terra, gdalraster
+#                 and s2 that installed and passed here; its log is
+#                 logs/libs-smoke.log, its result report.md's libs smoke line.
+#                 Opt-in: meant for Windows' zig-libs, runs on any OS
 #   --list        print the install plan and stop
 #   --sysdeps     print the sysdeps of the rows the run installs on this OS
 #                 (the selected ones and their dependencies' rows) and stop
@@ -67,7 +73,7 @@ opt <- function(name, default = NULL) {
 }
 flag <- function(name) isTRUE(opt(name))
 known <- c("skip", "tree", "conda", "out", "jobs", "resume", "keep-path", "msys-from-tree", "no-rtools-libs", "trace", "list",
-           "sysdeps", "strict", "help")
+           "sysdeps", "strict", "help", "libs-smoke")
 bad <- setdiff(sub("=.*", "", sub("^--", "", grep("^--", argv, value = TRUE))), known)
 if (length(bad)) stop("unknown option: --", paste(bad, collapse = " --"), " (see --help)", call. = FALSE)
 ca <- commandArgs()                                             # Rscript passes -f FILE (R 4.6) or --file=FILE
@@ -142,6 +148,10 @@ rows <- tab[vapply(tab$oses, function(x) any(words(x) %in% c("all", os)), NA), ]
 if (length(targets_arg) && !"all" %in% targets_arg) rows <- rows[named(rows, targets_arg), ]
 rows <- rows[!named(rows, skip), ]
 if (!nrow(rows)) stop("no rows of ", tsv, " left for ", os, ": ", paste(argv, collapse = " "), call. = FALSE)
+# a smoke `@<file>.R` names stress/smoke/<file>.R: a missing one stops here, not in the row
+sm <- sub("^@", "", grep("^@", rows$smoke, value = TRUE))
+sm <- sm[!file.exists(file.path(dirname(script), "smoke", sm))]
+if (length(sm)) stop("no smoke file ", paste(file.path(dirname(script), "smoke", sm), collapse = " "), call. = FALSE)
 
 # --- what to install, in order ------------------------------------------------
 retry <- function(f, tries = 3, wait = c(5, 30)) {
@@ -430,6 +440,12 @@ rzig_cache_old <- list.files(rzig_cache, all.files = TRUE, no.. = TRUE)
 zig_libs <- if (win && nzchar(envdir)) file.path(envdir, "zig-libs", zig_triple) else ""
 if (!nzchar(zig_libs) || !dir.exists(zig_libs)) zig_libs <- ""
 if (win && nzchar(envdir)) Sys.setenv(R_TOOLS_SOFT = if (nzchar(zig_libs)) zig_libs else envdir)
+# LOCAL_SOFT (jpeg's configure.win reads it): the env's zig-libs, as
+# Rcmd_environ's default is R's own (b13-fixes). Only zig-libs: rzig turns
+# its -I (Makeconf.win's LOCAL_CPPFLAGS) into -idirafter, which it does
+# not for another tree (the Rtools45 one's MinGW headers would shadow
+# zig's: feat-winarm-gaps finding 22)
+if (nzchar(zig_libs)) Sys.setenv(LOCAL_SOFT = zig_libs)
 if (nzchar(zig_libs) && dist == "tree") {
   pcp <- Sys.getenv("PKG_CONFIG_PATH")
   pcp <- if (nzchar(pcp)) strsplit(pcp, ";", fixed = TRUE)[[1]] else file.path(envdir, c("lib/pkgconfig", "share/pkgconfig"))
@@ -490,7 +506,8 @@ info <- list(
   }),
   builder = builder,
   sysdeps_missing = paste(sysdeps_missing, collapse = " "), tsv = tsv, out = out, rzig_cache = rzig_cache,
-  rzig_cache_removed = "", rtools_libs = "", args = paste(argv, collapse = " "), minutes = 0, finished = FALSE, error = "")
+  rzig_cache_removed = "", rtools_libs = "", libs_smoke = "", args = paste(argv, collapse = " "), minutes = 0, finished = FALSE,
+  error = "")
 
 # --- the report (written after every package, so a killed run keeps one) ------
 results <- list()
@@ -512,7 +529,8 @@ write_report <- function(final = FALSE) {
                   info$minutes, jobs, info$path),
           sprintf("zig %s; CC `%s`; cmake `%s`; libraries env `%s`%s.", info$zig, info$cc, info$cmake, sysroot,
                   if (dist == "conda") sprintf(" (%s from %s)", info$r_zig, info$channel) else ""),
-          sprintf("Builder %s (R_ZIG_PKG_BUILDER).", builder),
+          # R_HOME names the tree, so the variant stress.yaml built (b13-leftovers CI5)
+          sprintf("Builder %s (R_ZIG_PKG_BUILDER); R_HOME `%s`.", builder, rhome),
           if (win)
             sprintf("zig-libs `%s` (%s).", if (nzchar(info$zig_libs)) info$zig_libs else "none",
                     if (nzchar(info$zig_pkgs)) info$zig_pkgs else "no zig-* package"),
@@ -520,6 +538,7 @@ write_report <- function(final = FALSE) {
           if (nzchar(info$rtools_libs)) sprintf("Fallback: %s.", info$rtools_libs),
           if (nzchar(info$rzig_cache_removed)) sprintf("The run added to rzig's cache `%s`, and removed at its end: %s.",
                                                        info$rzig_cache, info$rzig_cache_removed),
+          if (nzchar(info$libs_smoke)) sprintf("libs smoke (`logs/libs-smoke.log`): %s.", info$libs_smoke),
           if (nzchar(info$error)) c("", sprintf("**The harness stopped: %s**", cell(info$error))), "",
           sprintf("Targets: %s. Unexpected (!): %d. Dependencies: %s.", count(tg$status), sum(tg$unexpected), count(deps$status)))
   # the zig-libs column on Windows only (the zig-* packages are Windows')
@@ -606,7 +625,10 @@ rtools_libs <- function(dir, cmake, tar, pkgconf, zig) {
       if (is.null(t)) next
       how <- c(how, basename(t[1]))
       st <- suppressWarnings(system2(t[1], c(t[-1], shQuote(tb), members), stdout = FALSE, stderr = FALSE))
-      if (st == 0 && dir.exists(file.path(tree, "lib", "pkgconfig"))) break
+      if (st == 0 && dir.exists(file.path(tree, "lib", "pkgconfig"))) {
+        message("stress: Rtools45 tree extracted with ", basename(t[1]))
+        break
+      }
       unlink(tree, recursive = TRUE)
     }
     setwd(owd)
@@ -819,13 +841,20 @@ tarball <- function(p) {
   r[1, 2]
 }
 # A row tagged local is no CRAN package: stress.R writes it, a fresh copy
-# before each of its STRESS_REPEAT installs, as R unpacks a tarball for
-# each. tinyjobs is 64 one-line C files, built at the row's -j: tier1.zig's
-# pool starts and ends many quick jobs, install after install, which
-# guards its lifetime rule, `defer sel.cancelDiscard()` (feat-tier1-engine).
-tiny_pkg <- function(p, n = 64L) {
+# before each of its STRESS_REPEAT installs (the row's env, default 1), as
+# R unpacks a tarball for each. A package with a directory stress/local/<p>
+# is a copy of it; tinyjobs is written here: 64 one-line C files, built at
+# the row's -j: tier1.zig's pool starts and ends many quick jobs, install
+# after install, which guards its lifetime rule, `defer
+# sel.cancelDiscard()` (feat-tier1-engine).
+local_pkg <- function(p, n = 64L) {
   d <- file.path(out, "src", p)
   unlink(d, recursive = TRUE)
+  from <- file.path(dirname(script), "local", p)
+  if (dir.exists(from)) {
+    if (!all(file.copy(from, dirname(d), recursive = TRUE))) stop("could not copy ", from)
+    return(d)
+  }
   dir.create(file.path(d, "src"), recursive = TRUE)
   writeLines(c(paste("Package:", p), "Version: 0.1", "Title: Many Tiny Compiles", "Description: Written by stress.R.",
                "License: GPL-3", "Author: r-zig", "Maintainer: r-zig <r-zig@example.invalid>"), file.path(d, "DESCRIPTION"))
@@ -840,9 +869,12 @@ tiny_pkg <- function(p, n = 64L) {
 # zig-abseil), each with its version and build from conda-meta, "Rtools
 # tree" when the fallback tree stands in for it, or "missing"; then, from a
 # --trace log (rzig's `lib -l<n> <file>` lines, windows.zig), the -l names
-# that resolved into zig-libs and into the fallback tree. A target whose
-# zig-* sysdeps are missing and not served gets the expect ?: its
-# packages.tsv expect assumes them (an env made without them).
+# that resolved into zig-libs and into the fallback tree, and the
+# libraries the log's links took from more than one directory (copies:
+# a -l name's file, and an archive a command names by path, lib<n>.a, by
+# its <n>; M-10's single copy per library). A target whose zig-* sysdeps
+# are missing and not served gets the expect ?: its packages.tsv expect
+# assumes them (an env made without them).
 row_zig <- function(name) {
   d <- c(name, if (name %in% rownames(db)) unlist(tools::package_dependencies(name, db = db, which = hard, recursive = TRUE)))
   r <- tab[tab$name %in% d & vapply(tab$oses, function(x) any(words(x) %in% c("all", os)), NA), ]
@@ -863,9 +895,25 @@ zig_column <- function(z, log) {
   zl <- unique(lib[grepl("/zig-libs/", file, fixed = TRUE)])
   fb <- where(if (is.null(rt_tree)) "" else file.path(rt_tree, "lib"))
   paste0(paste(b, collapse = ", "),
-         if (!length(x)) "; -l: no trace" else sprintf("; -l from zig-libs: %s; from the fallback tree: %s",
+         if (!length(x)) "; -l: no trace" else sprintf("; -l from zig-libs: %s; from the fallback tree: %s; copies: %s",
                                                        if (length(zl)) paste(zl, collapse = " ") else "none",
-                                                       if (length(fb)) paste(fb, collapse = " ") else "none"))
+                                                       if (length(fb)) paste(fb, collapse = " ") else "none",
+                                                       copies(log, lib, file)))
+}
+# the libraries a log's links took from more than one directory: each -l
+# name's file (rzig's trace; `(none)`, zig's own, is no file) and each
+# lib<n>.a a zig command names by an absolute path, by <n>
+copies <- function(log, lib, file) {
+  ok <- grepl("^([A-Za-z]:)?/", file)
+  cmd <- grep("^zig-c(c|xx): .* -shared", read_log(log), value = TRUE)
+  arc <- chartr("\\", "/", unlist(regmatches(cmd, gregexpr("([A-Za-z]:)?/[^ '\"]*/lib[^ /'\"]+\\.a\\b", cmd))))
+  n <- c(lib[ok], sub("^lib(.*)\\.a$", "\\1", basename(arc)))
+  if (!length(n)) return("none")
+  d <- tolower(normalizePath(dirname(c(file[ok], arc)), winslash = "/", mustWork = FALSE))  # one spelling per directory
+  many <- tapply(d, n, function(v) length(unique(v)) > 1)
+  many <- names(many)[many]
+  if (!length(many)) return("none")
+  paste(vapply(many, function(m) sprintf("%s (%s)", m, paste(unique(d[n == m]), collapse = ", ")), ""), collapse = "; ")
 }
 
 # --- the run -----------------------------------------------------------------------
@@ -900,13 +948,13 @@ for (i in seq_len(nrow(items))) {
       rec$status <- "unavailable"; rec$class <- "network"; rec$first_error <- "not in CRAN or Bioconductor for this R"
     } else if (length(bad_deps)) {
       rec$status <- "skipped"; rec$class <- "dependency"; rec$first_error <- paste("failed dependency:", paste(bad_deps, collapse = " "))
-    } else if (is.na(src <- if (local_row) tiny_pkg(it$name) else tarball(it$name))) {
+    } else if (is.na(src <- if (local_row) local_pkg(it$name) else tarball(it$name))) {
       rec$status <- "download-failed"; rec$class <- "network"; rec$first_error <- "download.packages failed 3 times"
     } else {
-      reps <- if (local_row) as.integer(env[["STRESS_REPEAT"]]) else 1L
+      reps <- if (local_row && "STRESS_REPEAT" %in% names(env)) as.integer(env[["STRESS_REPEAT"]]) else 1L
       took <- 0
       for (k in seq_len(reps)) {                               # until the first failure
-        if (k > 1) tiny_pkg(it$name)
+        if (k > 1) local_pkg(it$name)
         for (attempt in 1:3) {                                 # more tries only for a network failure
           r <- run(c("CMD", "INSTALL", shQuote(paste0("--library=", vlib)), shQuote(src)), log, minutes, env)
           fe <- first_error(log)
@@ -938,8 +986,12 @@ for (i in seq_len(nrow(items))) {
       # call's objects run their finalizers while the package's code is
       # still loaded, not after its .onUnload unloaded the DLL (a false
       # crash). The markers (stderr, unbuffered) tell which step failed. In
-      # a file: no quoting issues on any OS.
+      # a file: no quoting issues on any OS. A smoke `@<file>.R` is the
+      # file stress/smoke/<file>.R, its last value the result, copied into
+      # the run's smoke file (a smoke that needs more than one line).
       smoke <- if (nrow(row) && nzchar(row$smoke) && row$smoke != "-") row$smoke else "TRUE"
+      if (startsWith(smoke, "@")) smoke <- paste(c("{", readLines(file.path(dirname(script), "smoke", substring(smoke, 2))), "}"),
+                                                 collapse = "\n")
       marks <- paste("stress:", c("loaded", "smoke ok", "unloaded"))
       sf <- file.path(out, "smoke", paste0(id, ".R"))
       writeLines(c(sprintf("suppressPackageStartupMessages(library(%s))", it$name), sprintf("message(\"%s\")", marks[1]),
@@ -975,6 +1027,29 @@ for (i in seq_len(nrow(items))) {
   # what a build left in TMPDIR (s2's abseil prefix, a killed build's tree)
   unlink(list.files(tmp, full.names = TRUE, all.files = TRUE, no.. = TRUE), recursive = TRUE)
 }
+
+# --libs-smoke: libs-zig-pixi's own smoke test of the R packages that link
+# its zig-* libraries (its tests/r/smoke.R: sf, terra, gdalraster, s2;
+# W9), with this run's library, for those that installed and passed here.
+# REF is a git ref of the public repo (raw.githubusercontent.com) or a
+# local file. One line in report.md; a diagnostic like the rows.
+ls_ref <- opt("libs-smoke")
+if (!is.null(ls_ref)) info$libs_smoke <- tryCatch({
+  if (isTRUE(ls_ref)) ls_ref <- "main"
+  ok <- vapply(results, function(r) if (r$status == "ok") r$package else "", "")
+  pk <- intersect(c("sf", "terra", "gdalraster", "s2"), ok)
+  if (!length(pk)) stop("none of sf, terra, gdalraster, s2 installed and passed in this run")
+  f <- file.path(out, "smoke", "libs-smoke.R")
+  if (file.exists(ls_ref)) file.copy(ls_ref, f, overwrite = TRUE) else
+    download.file(sprintf("https://raw.githubusercontent.com/luciorq/libs-zig-pixi/%s/tests/r/smoke.R", ls_ref), f, quiet = TRUE)
+  s <- run(c("--vanilla", "--no-echo", shQuote(paste0("--file=", f)), "--args", pk),
+           file.path(out, "logs", "libs-smoke.log"), 15, c(R_LIBS = lib))
+  x <- read_log(file.path(out, "logs", "libs-smoke.log"))
+  fails <- gsub(" +", " ", sub("^SMOKE +", "", grep("^SMOKE .* (FAIL|ERROR)", x, value = TRUE)))
+  sprintf("%s (%s, %s; %d checks, exit %s)%s", if (s$status == 0 && any(grepl("^ALL_PASS: TRUE", x))) "pass" else "FAIL",
+          ls_ref, paste(pk, collapse = " "), length(grep("^SMOKE ", x)), s$status,
+          if (length(fails)) paste0(": ", cell(paste(substr(fails, 1, 120), collapse = "; "))) else "")
+}, error = function(e) paste("not run:", conditionMessage(e)))
 
 # what the run added to rzig's cache, and the cache itself if the run made
 # it; unlink() removes a symlink (the libc++ mirror's), not what it points to

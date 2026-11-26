@@ -36,7 +36,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def prefix() -> str:
-    """The installation prefix: ``bin/R``, ``bin/Rscript``, ``lib/``."""
+    """The installation prefix: ``bin/R``, ``bin/Rscript``, ``lib/``
+    (Windows: ``bin/R.bat``, ``lib/R/bin/R.exe``)."""
     return os.path.join(_HERE, "R")
 
 
@@ -66,19 +67,28 @@ def environ(base: dict[str, str] | None = None) -> dict[str, str]:
     if not env.get("ZIG_BIN"):
         zig = zig_bin()
         if zig:
-            env["ZIG_BIN"] = zig
+            # forward slashes on Windows: R reads ZIG_BIN again through
+            # R_HOME/etc/Renviron.site's ${ZIG_BIN-...}, which takes a
+            # backslash as an escape and drops it
+            env["ZIG_BIN"] = zig.replace("\\", "/") if os.name == "nt" else zig
     return env
 
 
 def _exec(name: str, args: list[str]) -> None:
-    if os.name == "nt":
-        raise SystemExit("r-zig: this wheel's R build is unix-only")
-    exe = os.path.join(prefix(), "bin", name)
     env = environ()
-    # bin/R derives R_HOME from its own location and warns ("ignoring
-    # environment value of R_HOME") whenever the environment disagrees —
-    # e.g. a system R's R_HOME left in the shell. Let it derive.
+    # R derives R_HOME from its own location and, on unix, warns
+    # ("ignoring environment value of R_HOME") whenever the environment
+    # disagrees, e.g. a system R's R_HOME left in the shell. Let it derive.
     del env["R_HOME"]
+    if os.name == "nt":
+        # Windows: R_HOME/bin's front ends (R.exe, Rscript.exe), which
+        # start R_HOME/bin/x64's. No exec there: os.execve starts a new
+        # process and returns to the console at once, so wait for it.
+        import subprocess
+
+        exe = os.path.join(r_home(), "bin", name + ".exe")
+        raise SystemExit(subprocess.call([exe, *args], env=env))
+    exe = os.path.join(prefix(), "bin", name)
     os.execve(exe, [exe, *args], env)
 
 

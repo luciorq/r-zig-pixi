@@ -8,7 +8,7 @@
 //! needs no R source and runs no R configure. scripts/zig-toolchain.sh
 //! (pixi run toolchain) installs dist/toolchain/R-<ver>-zig with it, and
 //! package-standalone.sh's toolchain mode archives the groups from there
-//! (B17). `test` runs conda.zig's, wheel.zig's, pkgconf.zig's and
+//! (B17). `test` runs conda.zig's, wheel.zig's, pkgconf.zig's, make.zig's and
 //! cmake.zig's unit tests (pixi run toolchain-test). With -Dbase it writes the R tree's records instead
 //! (PHASE8 open points A a, F a; installBase, below):
 //!   zig build --build-file zigbuild/toolchain/build.zig --prefix <R tree> -Dprefix=<R tree> -Dbase
@@ -41,8 +41,10 @@
 //!                           runtime or archives: packages link the
 //!                           runtime R loads, the base's lib/. macOS and
 //!                           Windows have none (libc++)
-//!   usr/       build-tools  unix: conda-forge's GNU make as usr/bin/make
-//!                           (B7, B23); Windows: B39's tools in usr/bin/,
+//!   usr/       build-tools  unix: GNU make as usr/bin/make, which this
+//!                           build compiles from source (make.zig,
+//!                           zigbuild/make/build.zig, installMake; backlog
+//!                           L7), on both channels; Windows: B39's tools in usr/bin/,
 //!                           every file of conda-forge's m2 packages'
 //!                           usr/bin/ (MSYS2's bash, make, coreutils, sed,
 //!                           grep, gawk, which, findutils, patch) with the MSYS
@@ -91,11 +93,12 @@
 //!
 //! The conda build (recipe/build.sh, from step 3) runs this into the env
 //! itself, with R_TOOLCHAIN_PREFIX=$PREFIX: there conda's own packages
-//! provide every file where it is looked for: only Windows'
-//! usr/bin/pkgconf is installed, which no conda package provides, built
-//! from the recipe's pkgconf
-//! source (-Dpkgconf=<dir>; the standalone build fetches the same tarball
-//! as build.zig.zon's lazy `pkgconf`). No etc/, zig/ or flang/ and no
+//! provide every file where it is looked for: only what this build
+//! compiles is installed, which no conda package provides: Windows'
+//! usr/bin/pkgconf, from the recipe's pkgconf source (-Dpkgconf=<dir>),
+//! and unix usr/bin/make, from the recipe's make source (-Dmake=<dir>;
+//! the standalone build fetches the same tarballs as build.zig.zon's lazy
+//! `pkgconf` and `make`). No etc/, zig/ or flang/ and no
 //! other usr/ file there: the env's MSYS tools are its own m2 packages
 //! (Library/usr/bin), and conda keeps
 //! conda-forge's zig and flang-pixi's flang-zig, through r-zig-compilers
@@ -108,6 +111,7 @@ const mem = std.mem;
 const conda = @import("conda.zig");
 const wheel = @import("wheel.zig");
 const pkgconf = @import("pkgconf.zig");
+const make = @import("make.zig");
 const cmake = @import("cmake.zig");
 const sources_tool = @import("sources_tool.zig");
 
@@ -133,6 +137,8 @@ const Tree = struct {
     from: []const u8,
     /// Only the files of this base name.
     name: ?[]const u8 = null,
+    /// Not the files of these base names.
+    exclude: []const []const u8 = &.{},
     /// Only the files whose path has this directory in it, below `from`:
     /// libstdcxx-devel's include/c++/ under lib/gcc/<triple>/<version>/,
     /// whose version the record gives, not a constant here.
@@ -189,7 +195,9 @@ fn flangDir(comptime prefix: []const u8, comptime driver: []const u8) Dir {
 const unix_dirs = [_]Dir{
     flangDir("", "bin/flang-" ++ llvm_major),
     .{ .name = "openmp", .copies = &ompHeaders("include/") },
-    .{ .name = "usr", .copies = &.{.{ .from = "bin/make", .to = "bin/make" }} },
+    // usr/bin/make is not a copy: GNU make, built from source (make.zig;
+    // installMake), on both channels (backlog L7).
+    .{ .name = "usr", .copies = &.{} },
 };
 
 /// linux: libstdc++'s C++ headers (the compilers group), from the
@@ -212,10 +220,34 @@ fn usrBin(comptime from: []const u8) Copy {
     return .{ .from = from, .to = "bin/" ++ comptime from[mem.lastIndexOfScalar(u8, from, '/').? + 1 ..] };
 }
 
-/// Every file of an m2 tool package's usr/bin/ (PHASE7 open point C a).
+/// Every file of an m2 tool package's usr/bin/ (PHASE7 open point C a),
+/// less m2_exclude.
 fn m2Tool(comptime package: []const u8) Tree {
-    return .{ .package = package, .from = "Library/usr/bin/", .strip = "Library/usr/" };
+    return .{ .package = package, .from = "Library/usr/bin/", .strip = "Library/usr/", .exclude = &m2_exclude };
 }
+
+/// The m2 packages' files the build-tools group leaves out (backlog M-25,
+/// .github/devdocs/b13-build/PLAN.md D14): no build runs them. Bug-report
+/// scripts (bashbug, gawkbug), gawk's version-named copy of gawk.exe,
+/// findutils' file database (locate, updatedb), tar's backup scripts, and
+/// coreutils' programs for SELinux, terminals, logins, disks and
+/// interactive use. A package's configure.win, cleanup.win and makefiles
+/// ran none of them on kappa (2026-11-24: 15 of the group's 139 files ran
+/// in 50 installs, F11), nor in phase 7's three stress runs (sh, make,
+/// coreutils' common names, sed, awk, grep, find, xargs, tar, patch,
+/// pkg-config). Everything else of each package stays: configure scripts
+/// call coreutils beyond any list (PHASE7 open point C a).
+const m2_exclude = [_][]const u8{
+    "bashbug",       "gawkbug",     "gawk-5.4.1.exe", "locate.exe",
+    "updatedb",      "backup",      "restore",        "chcon.exe",
+    "runcon.exe",    "chroot.exe",  "pinky.exe",      "users.exe",
+    "who.exe",       "stty.exe",    "tty.exe",        "df.exe",
+    "dircolors.exe", "sync.exe",    "logname.exe",    "hostid.exe",
+    "shred.exe",     "stdbuf.exe",  "factor.exe",     "ptx.exe",
+    "numfmt.exe",    "pathchk.exe", "vdir.exe",       "dir.exe",
+    "shuf.exe",      "chgrp.exe",   "chown.exe",      "groups.exe",
+    "b2sum.exe",     "base32.exe",  "basenc.exe",
+};
 
 const windows_dirs = [_]Dir{
     flangDir("Library/", "Library/bin/flang.exe"),
@@ -296,6 +328,7 @@ pub fn build(b: *std.Build) !void {
         b.path("conda.zig"),
         b.path("wheel.zig"),
         b.path("pkgconf.zig"),
+        b.path("make.zig"),
         b.path("cmake.zig"),
         b.graph.cwdRelativePath(b.fmt("{s}/../cairo.zig", .{root_abs})),
     }) |root| {
@@ -308,6 +341,7 @@ pub fn build(b: *std.Build) !void {
     }
     const ziglang = b.option([]const u8, "ziglang", "PyPI's ziglang wheel, unpacked (scripts/fetch-zig.sh's directory): the compilers group's zig/");
     const pkgconf_dir = b.option([]const u8, "pkgconf", "pkgconf's source tarball, unpacked (the conda build's; else build.zig.zon's pkgconf): Windows' usr/bin/pkgconf.exe");
+    const make_dir = b.option([]const u8, "make", "GNU make's source tarball, unpacked (the conda build's; else build.zig.zon's make): unix usr/bin/make");
     const base = b.option(bool, "base", "Write the records of the R tree at --prefix (its files from the env) instead of the toolchain tree") orelse false;
     // zig 0.17's configure step does not see --prefix (the maker installs
     // there): -Dprefix names the same directory, which the toolchain tree's
@@ -340,10 +374,11 @@ pub fn build(b: *std.Build) !void {
 
     const records = try readRecords(b, io, env, try dirNeedles(b, dirs));
     var summary: std.ArrayList(u8) = .empty;
-    // Windows' usr/bin/pkgconf.exe, built (installPkgconf): on both
-    // channels. error.LazyDependencyNeeded, returned from here, makes zig
-    // fetch build.zig.zon's pkgconf and run this configure step again.
-    const built: ?BuiltDir = if (os == .windows) try installPkgconf(b, io, tc, pkgconf_dir) else null;
+    // Windows' usr/bin/pkgconf.exe (installPkgconf), unix usr/bin/make
+    // (installMake), built: on both channels. error.LazyDependencyNeeded,
+    // returned from here, makes zig fetch build.zig.zon's pkgconf or make
+    // and run this configure step again.
+    const built: ?BuiltDir = if (os == .windows) try installPkgconf(b, io, tc, pkgconf_dir) else try installMake(b, io, tc, make_dir);
     // SOURCES' writer, run when a directory's files are made
     // (sources_tool.zig).
     const tool = b.addExecutable(.{ .name = "sources_tool", .root_module = b.createModule(.{
@@ -372,9 +407,13 @@ pub fn build(b: *std.Build) !void {
             if (prefix_is_env) continue;
             var n: usize = 0;
             for (try conda.under(arena, records, t.package, t.from)) |from| {
+                const file_name = from[mem.lastIndexOfScalar(u8, from, '/').? + 1 ..];
                 if (t.name) |name| {
-                    if (!mem.eql(u8, from[mem.lastIndexOfScalar(u8, from, '/').? + 1 ..], name)) continue;
+                    if (!mem.eql(u8, file_name, name)) continue;
                 }
+                if (for (t.exclude) |x| {
+                    if (mem.eql(u8, file_name, x)) break true;
+                } else false) continue;
                 if (t.within) |w| {
                     if (mem.indexOf(u8, from[t.from.len..], w) == null) continue;
                 }
@@ -530,6 +569,47 @@ fn installPkgconf(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !
     const files = try arena.alloc(BuiltFile, 2);
     files[0] = .{ .record = record, .from = "pkgconf.exe", .to = "bin/pkgconf.exe", .file = bin };
     files[1] = .{ .record = record, .from = "pkgconf.exe", .to = "bin/pkg-config.exe", .file = bin };
+    return .{ .dir = "usr", .files = files };
+}
+
+/// unix usr/bin/make: GNU make (make.zig), compiled by
+/// zigbuild/make/build.zig (the r_zig_make path dependency) for this
+/// machine at R's floors (glibc 2.17, macOS 13.0, baseline CPU), on both
+/// channels (backlog L7; Windows keeps m2-make, b13-build D12);
+/// LICENSES/make/COPYING; and the record SOURCES writes for it, as
+/// installPkgconf's. The source: `dir` (-Dmake, the conda build's unpacked
+/// source), else build.zig.zon's lazy `make`.
+fn installMake(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !BuiltDir {
+    const arena = b.allocator;
+    const src = if (dir) |d| d else blk: {
+        const dep = try b.dependencyLazy("make", .{});
+        break :blk dep.builder.root.root_dir.path orelse ".";
+    };
+    const abs = try realPath(b, io, src);
+    const exe = b.dependency("r_zig_make", .{ .source = abs }).artifact("make");
+    const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/usr", .{tc}) };
+    const bin = exe.getEmittedBin();
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(bin, dest, "bin/make").step);
+    const copying = b.fmt("{s}/COPYING", .{abs});
+    if (!pathExists(io, copying)) return fail("make: {s} is missing (LICENSES/make/COPYING)", .{copying});
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.graph.cwdRelativePath(copying), dest, "LICENSES/make/COPYING").step);
+    const host = b.graph.host.result;
+    const record = try arena.create(conda.Record);
+    record.* = .{
+        .name = "make",
+        .version = make.version,
+        .build = b.fmt("zig{s}_{t}-{t}", .{ @import("builtin").zig_version_string, host.cpu.arch, host.os.tag }),
+        .url = make.url,
+        .sha256 = make.sha256,
+        .license = make.license,
+        .upstream = .{
+            .sources = try arena.dupe(conda.Source, &.{.{ .url = make.url, .sha256 = make.sha256 }}),
+            .feedstock = "https://github.com/luciorq/r-zig-pixi",
+            .commit = "zigbuild/make/build.zig",
+        },
+    };
+    const files = try arena.alloc(BuiltFile, 1);
+    files[0] = .{ .record = record, .from = "make", .to = "bin/make", .file = bin };
     return .{ .dir = "usr", .files = files };
 }
 

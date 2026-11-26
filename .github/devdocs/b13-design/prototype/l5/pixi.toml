@@ -1,0 +1,25 @@
+# L5 prototype on delta (b13-design PLAN.md): a CRAN-like binary
+# repository built with published build 12 (linux-64).
+#   build     R, the toolchain, and the -devel libraries packages compile against
+#   consumer  R alone (r-zig-slim: no compilers, no make): installs binaries only
+#   consumer-libs  as consumer, plus the run-time libraries the binaries name
+[workspace]
+name = "l5-binary-repo"
+channels = ["https://prefix.dev/universe", "conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+r-zig-slim = { version = "==4.6.2", build = "*_12" }
+
+[feature.build.dependencies]
+r-zig-toolchain = { version = "==4.6.2", build = "*_12" }
+libxml2-devel = "*"
+
+[feature.libs.dependencies]
+libxml2 = "*"
+
+# one solve group: the consumer's libxml2 is the one the binaries linked
+[environments]
+build = { features = ["build"], solve-group = "rz" }
+consumer = { features = [], solve-group = "rz" }
+consumer-libs = { features = ["libs"], solve-group = "rz" }

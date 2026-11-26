@@ -108,6 +108,9 @@ fn versionLess(a: []const u8, b: []const u8) bool {
 pub fn headersDir(ctx: *Ctx) !?[]const u8 {
     if (try environment.own(ctx)) |e| if (try gccDir(ctx, e.dir)) |d| return d;
     if (environment.toolchain(ctx)) |tc| if (try gccDir(ctx, try ctx.fmt("{s}/libstdcxx", .{tc}))) |d| return d;
+    // conda's r-zig-compilers in R_ZIG_TOOLCHAIN_ENV (L6) brings
+    // libstdcxx-devel there
+    if (try environment.toolchainEnv(ctx)) |e| if (try gccDir(ctx, e.dir)) |d| return d;
     if (try environment.extra(ctx)) |e| if (try gccDir(ctx, e.dir)) |d| return d;
     return null;
 }
@@ -252,7 +255,7 @@ const testing = std.testing;
 const testutil = @import("testutil.zig");
 const expectArgs = testutil.expectArgs;
 
-test "headers: R's own environment first, the highest version, then the group, then R_ZIG_EXTRA_ENV" {
+test "headers: R's own environment first, the highest version, then the group, R_ZIG_TOOLCHAIN_ENV, R_ZIG_EXTRA_ENV" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
@@ -264,7 +267,11 @@ test "headers: R's own environment first, the highest version, then the group, t
     try testutil.libstdcxx(&f, "extra", "15.3.0");
     try f.env.put("R_ZIG_EXTRA_ENV", f.path("extra"));
     try testing.expectEqualStrings(f.fmt("{s}/lib/gcc/{s}/15.3.0", .{ f.path("extra"), t }), (try headersDir(c)).?);
-    // the compilers group's, in rzig's directory, before it
+    // R_ZIG_TOOLCHAIN_ENV's (L6), before it
+    try testutil.libstdcxx(&f, "tcenv", "15.2.0");
+    try f.env.put("R_ZIG_TOOLCHAIN_ENV", f.path("tcenv"));
+    try testing.expectEqualStrings(f.fmt("{s}/lib/gcc/{s}/15.2.0", .{ f.path("tcenv"), t }), (try headersDir(c)).?);
+    // the compilers group's, in rzig's directory, before both
     try f.tmp.dir.createDirPath(testing.io, "tree/lib/R/bin/toolchain");
     c.self_exe = f.path("tree/lib/R/bin/toolchain/zig-cxx");
     try testutil.libstdcxx(&f, "tree/lib/R/bin/toolchain/libstdcxx", "15.3.0");

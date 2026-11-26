@@ -23,6 +23,7 @@ const clear_cache = @import("clear_cache.zig");
 const strip = @import("strip.zig");
 const target = @import("target.zig");
 const libstdcxx = @import("libstdcxx.zig");
+const system_libs = @import("system_libs.zig");
 const Args = cmdline.Args;
 
 pub const Lang = enum { c, cxx };
@@ -38,11 +39,14 @@ pub const Lang = enum { c, cxx };
 ///          [<environments' -L/-rpath>] <environments' headers> [-lomp]
 ///          [Windows DLL link: -lws2_32] [linux C++: libstdc++'s
 ///          headers, -D_GLIBCXX_SYSHDR, its runtime's paths]
-///          [-L<SDK>/usr/lib]
+///          [-L<SDK>/usr/lib | linux, R_ZIG_SYSTEM_LIBS: -idirafter
+///          /usr/include/<multiarch> -idirafter /usr/include, links: the
+///          host's library directories' -L]
 pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     const a = ctx.arena;
     var before: Args = &.{};
     var link_last: Args = &.{};
+    var no_sdk = false;
     // R's target, every OS (target.zig), never zig's native one, which
     // is the platform of the zig that runs: an x64 zig on Windows on ARM
     // compiled for x64 against an arm64 R (finding 29).
@@ -60,6 +64,7 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
             const t = try darwin.target(ctx);
             before = t.before;
             link_last = t.link_last;
+            no_sdk = t.no_sdk;
         },
         .other => {},
     }
@@ -70,10 +75,12 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     args = try archives.rename(ctx, args);
     if (ctx.os == .windows) args = try windows.objSuffix(ctx, args);
     // zig cc --version on macOS writes an empty a.o in the working
-    // directory (conda-forge's zig and upstream 0.16.0; linux's writes
-    // none). R's `make compilers` and rzig build's "using C compiler" line
-    // left it beside R CMD SHLIB's sources, where on make's path it stood
-    // for a source named a.c or a.cpp, and Rcpp's macOS OpenMP plugin in
+    // directory (conda-forge's zig and upstream 0.16.0, and both 0.17.1
+    // on omicron, cc and c++, with and without -target: backlog H1,
+    // b13-rzig PLAN.md; linux's writes none). R's `make compilers` and
+    // rzig build's "using C compiler" line left it beside R CMD SHLIB's
+    // sources, where on make's path it stood for a source named a.c or
+    // a.cpp, and Rcpp's macOS OpenMP plugin in
     // its caller's directory (feat-shlib-rzig-build round 1, omicron). A
     // version query compiles nothing: with -c zig prints the same text
     // and writes nothing.
@@ -95,6 +102,15 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     } else null;
     const g0 = !cmdline.debugOption(args);
     const strip_debug = (ctx.os == .linux or ctx.os == .macos) and strip.wanted(ctx, args);
+    // linux, opt-in: the distribution's libraries (system_libs.zig, M-29):
+    // the caller's host include roots as -idirafter, and the host's
+    // directories last
+    if (system_libs.enabled(ctx)) {
+        args = try system_libs.rewrite(ctx, args);
+        link_last = try system_libs.last(ctx, !cmdline.compileOnly(args));
+    }
+    // Windows: a zig-libs -I (LOCAL_SOFT's) searched after zig's headers
+    if (ctx.os == .windows) args = try windows.demoteZigLibs(ctx, args);
     args = try envFlags(ctx, args);
     // linux: libstdc++ for all C++ (libstdcxx.zig). The caller's
     // -lstdc++ and -lgcc_s become the runtime's paths on every link, C
@@ -123,7 +139,7 @@ pub fn argv(ctx: *Ctx, lang: Lang, caller: Args) !Args {
     }
     if (ctx.os == .macos) {
         args = try darwin.dedupLibs(ctx, args);
-        if (cmdline.compileOnly(args)) link_last = &.{};
+        if (cmdline.compileOnly(args)) link_last = &.{} else if (no_sdk) ctx.warn("{s}", .{darwin.no_sdk});
     }
 
     var out: std.ArrayList([]const u8) = .empty;
@@ -422,7 +438,8 @@ fn envFlags(ctx: *Ctx, args: Args) !Args {
         const include = try ctx.fmt("{s}/include", .{e.dir});
         if (headers and ctx.isDir(include)) {
             if (ctx.os == .windows) {
-                try inc.appendSlice(a, &.{ "-idirafter", include });
+                // not twice: the caller's zig-libs -I is one by now
+                if (!try windows.hasIdirafter(ctx, args, include)) try inc.appendSlice(a, &.{ "-idirafter", include });
             } else {
                 try inc.append(a, try ctx.fmt("-I{s}", .{include}));
             }
@@ -759,6 +776,67 @@ test "Windows: -idirafter, no rpath, -lz and -lomp through the environment's -L"
     );
 }
 
+test "Windows: a zig-libs -I (LOCAL_SOFT's, R_ZIG_LIBS spelled as Rcmd_environ does) becomes -idirafter, in place, not added twice" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    try f.env.put("PATH", f.path("nothing"));
+    const triple = target.zig(.windows, c.arch).?;
+    for ([_][]const u8{ "env/Library/include/zlib.h", "env/Library/lib/R/bin/toolchain/gcc.exe", f.fmt("env/Library/zig-libs/{s}/include/gdal.h", .{triple}), f.fmt("env/Library/zig-libs/{s}/include/nlopt/nlopt.h", .{triple}), f.fmt("env/Library/zig-libs/{s}/lib/libz.a", .{triple}) }) |p| try f.touch(p);
+    c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
+    const inc = f.path("env/Library/include");
+    const zinc = f.path(f.fmt("env/Library/zig-libs/{s}/include", .{triple}));
+    const head: Args = &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", win_target, windows.iec_60559_types };
+    // Rcmd_environ's R_ZIG_LIBS: ${R_HOME}/../../zig-libs/<triple>, and
+    // make's -I"$(LOCAL_SOFT)/include" (a caller may spell it with `\`
+    // and another case)
+    const rzl = f.fmt("{s}/../../zig-libs/{s}", .{ f.path("env/Library/lib/R"), triple });
+    try f.env.put("R_ZIG_LIBS", rzl);
+    const local = f.fmt("{s}/include", .{rzl});
+    const upper = try std.ascii.allocUpperString(c.arena, try mem.replaceOwned(u8, c.arena, local, "/", "\\"));
+    const sub = f.fmt("{s}/include/nlopt", .{rzl});
+    // joined and separate -I, the include dir and one below it; other -I
+    // (a package's own, a name that only starts like zig-libs') kept, in
+    // their places; zig-libs' include/ not added again after them
+    const other = f.fmt("{s}2/include", .{rzl});
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ "-I.", "-idirafter", local, "-Ipkg/inc", "-idirafter", upper, "-idirafter", sub, f.fmt("-I{s}", .{other}), "-c", "a.cpp", "-o", "a.o", "-idirafter", inc } }),
+        try argv(c, .cxx, &.{ "-I.", f.fmt("-I{s}", .{local}), "-Ipkg/inc", "-I", upper, f.fmt("-I{s}", .{sub}), f.fmt("-I{s}", .{other}), "-c", "a.cpp", "-o", "a.o" }),
+    );
+    // LOCAL_LIBS: -L<zig-libs>/lib/x64 (none) dropped, -L<zig-libs>/lib
+    // kept, as an -L elsewhere that does not exist
+    const objects: Args = &.{ "-shared", "-o", "p.dll", "a.o" };
+    const link = try argv(c, .cxx, try mem.concat(c.arena, []const u8, &.{ objects, &.{ f.fmt("-L{s}/lib/x64", .{rzl}), "-L", f.fmt("{s}/lib/x64", .{rzl}), f.fmt("-L{s}/lib", .{rzl}), "-Lnowhere" } }));
+    var lflags: std.ArrayList([]const u8) = .empty;
+    for (link) |x| if (mem.startsWith(u8, x, "-L")) try lflags.append(c.arena, x);
+    try expectArgs(&.{ f.fmt("-L{s}/lib", .{rzl}), "-Lnowhere", f.fmt("-L{s}", .{f.path(f.fmt("env/Library/zig-libs/{s}/lib", .{triple}))}), f.fmt("-L{s}", .{f.path("env/Library/lib")}) }, lflags.items);
+    // no -I of it: zig-libs' include/ first, as before
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ "-c", "a.cpp", "-o", "a.o", "-idirafter", zinc, "-idirafter", inc } }),
+        try argv(c, .cxx, &.{ "-c", "a.cpp", "-o", "a.o" }),
+    );
+    // without R_ZIG_LIBS (outside R CMD): the environment's own zig-libs
+    // still counts, spelled as rzig finds it
+    _ = f.env.swapRemove("R_ZIG_LIBS");
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ "-idirafter", zinc, "-c", "a.cpp", "-o", "a.o", "-idirafter", inc } }),
+        try argv(c, .cxx, &.{ f.fmt("-I{s}", .{zinc}), "-c", "a.cpp", "-o", "a.o" }),
+    );
+    // R_ZIG_LIBS alone (no zig-libs in R's env; a user's LOCAL_SOFT tree)
+    c.self_exe = null;
+    try f.env.put("R_ZIG_LIBS", f.path("soft"));
+    try expectArgs(
+        try mem.concat(c.arena, []const u8, &.{ head, &.{ "-idirafter", f.path("soft/include"), "-I", f.path("softer/include"), "-c", "a.cpp", "-o", "a.o" } }),
+        try argv(c, .cxx, &.{ "-I", f.path("soft/include"), "-I", f.path("softer/include"), "-c", "a.cpp", "-o", "a.o" }),
+    );
+    // linux: never (no zig-libs there)
+    c.os = .linux;
+    c.self_exe = null;
+    const l = try argv(c, .c, &.{ f.fmt("-I{s}", .{f.path("soft/include")}), "-c", "a.c" });
+    for (l) |x| try testing.expect(!mem.eql(u8, x, "-idirafter"));
+}
+
 test "Windows on ARM: R_ZIG_FALLBACK_SOFT after every environment: -idirafter <tree>/include, -L<tree>/lib; an environment's library first" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
@@ -1041,6 +1119,30 @@ test "linux links without a -g option or an object with debug info: --strip-debu
     for ([_]Args{ &.{ "-shared", "-o", "p.so", "a.o" }, &.{ "-o", "prog", "a.o" } }) |args| {
         for (try argv(c, .cxx, args)) |x| try testing.expect(!mem.eql(u8, x, "-Wl,--strip-debug"));
     }
+}
+
+test "macOS without an SDK (no Command Line Tools): a link warns once, a compile and a version query do not (M-28)" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.macos);
+    defer f.deinit();
+    const c = &f.ctx;
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // shell-script stand-in for xcrun
+    // the fixture's xcrun does not exist (a dry run on another OS): no warning
+    _ = try argv(c, .c, &.{ "-dynamiclib", "-o", "p.so", "a.o", "-lz" });
+    try testing.expectEqualStrings("", f.takeWarnings());
+    // /usr/bin/xcrun without the Command Line Tools: an error on stderr,
+    // nothing on stdout, exit 1
+    try f.write("bin/xcrun", "#!/bin/sh\necho 'xcrun: error: invalid active developer path' >&2; exit 1\n", .fromMode(0o755));
+    c.xcrun = f.path("bin/xcrun");
+    _ = try argv(c, .c, &.{ "-c", "a.c", "-o", "a.o" });
+    _ = try argv(c, .c, &.{"--version"});
+    try testing.expectEqualStrings("", f.takeWarnings());
+    _ = try argv(c, .c, &.{ "-dynamiclib", "-o", "p.so", "a.o", "-lz" });
+    try testing.expectEqualStrings(f.fmt("rzig-test: {s}\n", .{darwin.no_sdk}), f.takeWarnings());
+    // with an SDK: no warning
+    try f.write("bin/xcrun", "#!/bin/sh\necho /SDK\n", .fromMode(0o755));
+    _ = try argv(c, .c, &.{ "-dynamiclib", "-o", "p.so", "a.o", "-lz" });
+    try testing.expectEqualStrings("", f.takeWarnings());
 }
 
 test "macOS links without a -g option or an object with debug info: --strip-debug, as on linux" {

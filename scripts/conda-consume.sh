@@ -6,12 +6,14 @@
 # Library/bin/Rscript.bat, which rattler-build's test phase cannot run).
 # CI runs it on every conda-package leg before the publish; each host runs
 # it after conda-package (feat-standalone-toolchain phase 4; PHASE4 Cg8).
-# One manifest, six environments: the base alone, base + compilers,
+# One manifest, seven environments: the base alone, base + compilers,
 # base + build tools, base + extras (cmake, feat-extras-group),
 # r-zig-toolchain, the metapackage of the groups
 # (test-toolchain.R through activation, as a user's `pixi add
 # r-zig-toolchain` gets it; PHASE7 open point P a), and base + R's
-# recommended packages (feat-recommended-packages). Removing a group is
+# recommended packages (feat-recommended-packages), and base + the tcltk
+# add-on (b13-recipe; not on win-arm64, which has no r-zig-tcltk).
+# Removing a group is
 # the package manager's, and the files that move between packages are the
 # upgrade test's.
 . "$(dirname "$0")/env.sh"
@@ -61,9 +63,21 @@ extras = ["extras"]
 toolchain = ["toolchain"]
 recommended = ["recommended"]
 EOF
+tests="default:test-preflight.R compilers:test-compilers.R build-tools:test-build-tools.R extras:test-extras.R toolchain:test-toolchain.R recommended:test-recommended.R"
+if [ "$PLAT" != win-arm64 ]; then
+  cat >> "$T/pixi.toml" << EOF
+
+[feature.tcltk.dependencies]
+r-zig-tcltk = "*"
+
+[environments.tcltk]
+features = ["tcltk"]
+EOF
+  tests="$tests tcltk:test-tcltk.R"
+fi
 # the zig cache conda-package's recipe tests filled (pixi.toml)
 export R_ZIG_TEST_ZIG_CACHE="$cache"
-for t in default:test-preflight.R compilers:test-compilers.R build-tools:test-build-tools.R extras:test-extras.R toolchain:test-toolchain.R recommended:test-recommended.R; do
+for t in $tests; do
   echo "== ${t%%:*}: ${t#*:}"
   "$pixi" run --manifest-path "$T/pixi.toml" -e "${t%%:*}" Rscript "$rec/${t#*:}"
 done

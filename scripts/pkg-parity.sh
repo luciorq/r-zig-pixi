@@ -272,7 +272,7 @@ echo "   smoke: $(grep -c . "$WORK/logs/smoke-zig.out") lines identical on both 
 # operand is there on both, so abs_sources does not apply); the exports
 # are identical; each library loads and returns its value; and the rzig
 # run left no object and no build root (.rzig.*) beside the sources: its
-# root was in that R's session directory, gone with it (parity-test.sh
+# root was in that R's session directory, gone with it (check-test.sh
 # checks the root itself) (Cc5).
 echo "== R CMD SHLIB: through rzig build and through make ($OS/$FLAVOR, the compile tree)"
 SH="$WORK/work/shlib"; rm -rf "$SH"; mkdir -p "$SH"

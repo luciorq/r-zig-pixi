@@ -31,9 +31,10 @@ pub const iec_60559_types = "-D__STDC_WANT_IEC_60559_TYPES_EXT__";
 /// are for DLLs it does not install. Such an -l then fails the link, not
 /// the DLL's load.
 /// RZIG_TRACE (not 0): one line per -l, `lib -l<n> <file>`, the file the
-/// first -L directory with one of its names has (`resolved`), or `(none)`
-/// (zig's own MinGW libraries): which link bound a zig-libs archive, an
-/// environment's library or the fallback tree's (stress.R's report).
+/// first -L directory with one of its names has (`resolved`), `(zig)` for
+/// a name zig serves itself whatever -L holds (`zigServes`), or `(none)`:
+/// which link bound a zig-libs archive, an environment's library or the
+/// fallback tree's (stress.R's report).
 pub fn libs(ctx: *Ctx, args: Args) !Args {
     const a = ctx.arena;
     const dirs = try cmdline.libDirs(a, args);
@@ -51,7 +52,7 @@ pub fn libs(ctx: *Ctx, args: Args) !Args {
             l = try ctx.fmt("-l{s}", .{n});
         }
         try out.append(a, (try importLib(ctx, dirs.items, name, tree)) orelse l);
-        if (trace) ctx.warn("lib -l{s} {s}", .{ name, (try resolved(ctx, dirs.items, name)) orelse "(none)" });
+        if (trace) ctx.warn("lib -l{s} {s}", .{ name, if (try zigServes(ctx, name)) "(zig)" else (try resolved(ctx, dirs.items, name)) orelse "(none)" });
     }
     // GNU gcc's -mwindows also links the GDI/shell set; zig only sets the
     // subsystem. gnuwin32's makefiles rely on the implicit libraries.
@@ -232,6 +233,99 @@ pub fn objSuffix(ctx: *Ctx, args: Args) !Args {
     return mem.concat(ctx.arena, []const u8, &.{ args, &.{ "-o", try ctx.fmt("{s}.o", .{stem}) } });
 }
 
+/// The caller's -I<dir> and -I <dir> where <dir> is zig-libs or below it
+/// become -idirafter <dir>, in place: zig-libs' headers are searched after
+/// zig's own MinGW and libc++ headers, as environment.zig's flags put
+/// them, so none of its names can shadow one of theirs. Makeconf.win's
+/// LOCAL_CPPFLAGS (-I"$(LOCAL_SOFT)/include", on every package compile)
+/// is the one that comes this way: Rcmd_environ defaults LOCAL_SOFT to
+/// zig-libs (build.zig's rcmdEnviron; b13-fixes), as CRAN sets it to its
+/// library tree, and so do a package's -I$(R_TOOLS_SOFT)/include/<dir>
+/// (nloptr). An -I of a whole MinGW sysroot broke every libc++ compile
+/// (feat-winarm-gaps finding 22: "<cstddef> tried including <stddef.h>
+/// but didn't find libc++'s"). zig-libs: each environment's
+/// (environment.zig, item 4) and R_ZIG_LIBS (Rcmd_environ's
+/// R_HOME/../../zig-libs/<triple>); paths compared ignoring case, `/` or
+/// `\`, `.` and `..` (`samePath`). Other -I untouched, -isystem too.
+/// Also an -L<dir> (or -L <dir>) under zig-libs that is not a directory is
+/// dropped: LOCAL_LIBS names -L"$(LOCAL_SOFT)/lib$(R_ARCH)" (lib/x64)
+/// before lib, and zig warned on every link "unable to open library
+/// directory" for it (kappa, b13-fixes).
+pub fn demoteZigLibs(ctx: *Ctx, args: Args) !Args {
+    var roots: std.ArrayList([]const u8) = .empty;
+    for (try environment.list(ctx)) |e| if (e.zig_libs) try roots.append(ctx.arena, e.dir);
+    if (ctx.getenv("R_ZIG_LIBS")) |v| if (v.len > 0) try roots.append(ctx.arena, v);
+    if (roots.items.len == 0) return args;
+    var out: std.ArrayList([]const u8) = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const x = args[i];
+        const lib = mem.startsWith(u8, x, "-L");
+        if (!lib and !mem.startsWith(u8, x, "-I")) {
+            try out.append(ctx.arena, x);
+            continue;
+        }
+        const sep = x.len == 2 and i + 1 < args.len;
+        const dir = if (sep) args[i + 1] else if (x.len > 2) x[2..] else {
+            try out.append(ctx.arena, x);
+            continue;
+        };
+        const zl = for (roots.items) |r| {
+            if (try underPath(ctx, dir, r)) break true;
+        } else false;
+        if (!zl or (lib and ctx.isDir(dir))) {
+            try out.append(ctx.arena, x);
+            continue;
+        }
+        if (!lib) try out.appendSlice(ctx.arena, &.{ "-idirafter", dir });
+        if (sep) i += 1;
+    }
+    return out.items;
+}
+
+/// Whether `args` already has `-idirafter <dir>` (`samePath`): an
+/// environment's include/ is not added twice (compiler.envFlags), as when
+/// demoteZigLibs made the caller's zig-libs -I one.
+pub fn hasIdirafter(ctx: *Ctx, args: Args, dir: []const u8) !bool {
+    var i: usize = 0;
+    while (i + 1 < args.len) : (i += 1) {
+        if (mem.eql(u8, args[i], "-idirafter") and try samePath(ctx, args[i + 1], dir)) return true;
+    }
+    return false;
+}
+
+/// Windows paths `a` and `b` name the same place, lexically: ignoring
+/// case, `/` against `\`, repeated separators, `.` and `..` components.
+pub fn samePath(ctx: *Ctx, a: []const u8, b: []const u8) !bool {
+    return std.ascii.eqlIgnoreCase(try normalPath(ctx, a), try normalPath(ctx, b));
+}
+
+/// `path` is `dir` or below it (`samePath`'s comparison).
+pub fn underPath(ctx: *Ctx, path: []const u8, dir: []const u8) !bool {
+    const p = try normalPath(ctx, path);
+    const d = try normalPath(ctx, dir);
+    if (p.len < d.len or !std.ascii.eqlIgnoreCase(p[0..d.len], d)) return false;
+    return p.len == d.len or p[d.len] == '/' or (d.len > 0 and d[d.len - 1] == '/');
+}
+
+/// `path` with `/` separators, no empty or `.` components and each `..`
+/// applied (not above the root: a drive's `C:` or a leading `/` stays).
+fn normalPath(ctx: *Ctx, path: []const u8) ![]const u8 {
+    var parts: std.ArrayList([]const u8) = .empty;
+    const lead = path.len > 0 and (path[0] == '/' or path[0] == '\\');
+    var it = mem.tokenizeAny(u8, path, "/\\");
+    while (it.next()) |c| {
+        if (mem.eql(u8, c, ".")) continue;
+        if (mem.eql(u8, c, "..")) {
+            if (parts.items.len > 0 and !(parts.items.len == 1 and mem.endsWith(u8, parts.items[0], ":"))) _ = parts.pop();
+            continue;
+        }
+        try parts.append(ctx.arena, c);
+    }
+    const joined = try mem.join(ctx.arena, "/", parts.items);
+    return if (lead) ctx.fmt("/{s}", .{joined}) else joined;
+}
+
 /// GNU ld's order in each directory, against what zig finds by itself.
 /// No import library from the fallback tree's lib/ (`tree`).
 fn importLib(ctx: *Ctx, dirs: Args, name: []const u8, tree: ?[]const u8) !?[]const u8 {
@@ -252,6 +346,49 @@ fn importLib(ctx: *Ctx, dirs: Args, name: []const u8, tree: ?[]const u8) !?[]con
 /// The first of GNU ld's names for -l<name> in the first directory of
 /// `dirs` that has one (any of them, the fallback tree's import libraries
 /// too: a trace says where the name is, importLib what is linked).
+/// Whether zig links its own -l<name> on a windows-gnu link, before any
+/// -L directory: a non-archive lib<name>.a first on -L links for these
+/// (b13-stress F11, both zigs 0.17.1, x86_64 and aarch64, delta
+/// 2026-11-24), while an unknown name reads the file and fails. Its libc,
+/// C++ and unwinder runtimes by name (`zig_runtimes`), and every name
+/// with a MinGW .def in zig's lib dir (lib-common, then the arch's
+/// lib64/libarm64; conda-forge's has more, msvcrt and synchronization):
+/// ws2_32, ole32, psapi, shell32, kernel32 and the like. zig's lib dir:
+/// ZIG_LIB_DIR, else beside the zig rzig runs (<dir>/lib, upstream's and
+/// the wheel's; <dir>/../lib/zig, conda's); `python3 -m ziglang` names
+/// none, so only the runtimes count there. For the trace only.
+fn zigServes(ctx: *Ctx, name: []const u8) !bool {
+    if (zig_runtimes.has(name)) return true;
+    const lib = (try zigLibDir(ctx)) orelse return false;
+    const arch_dir = switch (ctx.arch) {
+        .x86_64 => "lib64",
+        .aarch64 => "libarm64",
+    };
+    for ([_][]const u8{ "lib-common", arch_dir }) |d| for ([_][]const u8{ "def", "def.in" }) |ext| {
+        if (ctx.isFile(try ctx.fmt("{s}/libc/mingw/{s}/{s}.{s}", .{ lib, d, name, ext }))) return true;
+    };
+    return false;
+}
+
+const zig_runtimes = std.StaticStringMap(void).initComptime(.{
+    .{"c"},      .{"m"},      .{"pthread"}, .{"winpthread"}, .{"mingw32"}, .{"mingwex"},
+    .{"uuid"},   .{"dxguid"}, .{"c++"},     .{"stdc++"},     .{"c++abi"},  .{"supc++"},
+    .{"unwind"}, .{"gcc"},    .{"gcc_s"},   .{"gcc_eh"},
+});
+
+fn zigLibDir(ctx: *Ctx) !?[]const u8 {
+    if (ctx.getenv("ZIG_LIB_DIR")) |d| return d;
+    const argv = ctx.zig orelse return null;
+    if (argv.len != 1) return null;
+    const p = argv[0];
+    const dir = if (mem.lastIndexOfAny(u8, p, "/\\")) |i| p[0..i] else ".";
+    const up = try ctx.fmt("{s}/lib", .{dir});
+    if (ctx.isFile(try ctx.fmt("{s}/std/std.zig", .{up}))) return up;
+    const conda = try ctx.fmt("{s}/../lib/zig", .{dir});
+    if (ctx.isFile(try ctx.fmt("{s}/std/std.zig", .{conda}))) return conda;
+    return null;
+}
+
 fn resolved(ctx: *Ctx, dirs: Args, name: []const u8) !?[]const u8 {
     for (dirs) |d| {
         const names = [_][]const u8{
@@ -305,6 +442,42 @@ test "RZIG_TRACE: where each -l is, zig-libs' archive first" {
     try testing.expectEqualStrings(f.fmt("rzig-test: lib -lgdal {s}\nrzig-test: lib -lz {s}\nrzig-test: lib -lzlib {s}\nrzig-test: lib -lkernel32 (none)\n", .{
         f.path("z/libgdal.a"), f.path("z/libz.a"), f.path("e/zlib.lib"),
     }), f.takeWarnings());
+}
+
+test "RZIG_TRACE: (zig) for a name zig serves itself, whatever -L holds" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    // a fallback tree's lib/ with MinGW's import libraries and a libc++.a
+    for ([_][]const u8{ "t/libc++.a", "t/libws2_32.a", "t/libole32.a", "t/libaclui.a", "t/libgdal.a" }) |p| try f.touch(p);
+    // upstream's layout: <dir>/zig, <dir>/lib/std/std.zig
+    for ([_][]const u8{ "up/zig", "up/lib/std/std.zig", "up/lib/libc/mingw/lib-common/ws2_32.def.in", "up/lib/libc/mingw/lib-common/ole32.def", "up/lib/libc/mingw/lib64/aclui.def" }) |p| try f.touch(p);
+    try f.env.put("RZIG_TRACE", "1");
+    const in: Args = &.{ f.fmt("-L{s}", .{f.path("t")}), "-lc++", "-lws2_32", "-lole32", "-laclui", "-lgdal" };
+    const want = "rzig-test: lib -lc++ (zig)\nrzig-test: lib -lws2_32 {s}\nrzig-test: lib -lole32 {s}\nrzig-test: lib -laclui {s}\nrzig-test: lib -lgdal {s}\n";
+    // no zig known: the runtimes alone
+    try expectArgs(in, try libs(&f.ctx, in));
+    try testing.expectEqualStrings(f.fmt(want, .{ f.path("t/libws2_32.a"), f.path("t/libole32.a"), f.path("t/libaclui.a"), f.path("t/libgdal.a") }), f.takeWarnings());
+    // the zig rzig runs: its .def names too, lib64's on x86_64 only
+    f.ctx.zig = &.{f.path("up/zig")};
+    f.ctx.arch = .x86_64;
+    try expectArgs(in, try libs(&f.ctx, in));
+    try testing.expectEqualStrings(f.fmt(want, .{ "(zig)", "(zig)", "(zig)", f.path("t/libgdal.a") }), f.takeWarnings());
+    f.ctx.arch = .aarch64;
+    _ = try libs(&f.ctx, in);
+    try testing.expectEqualStrings(f.fmt(want, .{ "(zig)", "(zig)", f.path("t/libaclui.a"), f.path("t/libgdal.a") }), f.takeWarnings());
+    // conda's layout, <env>/bin/zig and <env>/lib/zig; ZIG_LIB_DIR first
+    for ([_][]const u8{ "env/bin/zig", "env/lib/zig/std/std.zig", "env/lib/zig/libc/mingw/lib-common/ole32.def" }) |p| try f.touch(p);
+    f.ctx.zig = &.{f.path("env/bin/zig")};
+    _ = try libs(&f.ctx, in);
+    try testing.expectEqualStrings(f.fmt(want, .{ f.path("t/libws2_32.a"), "(zig)", f.path("t/libaclui.a"), f.path("t/libgdal.a") }), f.takeWarnings());
+    // python3 -m ziglang: no lib dir
+    f.ctx.zig = &.{ "python3", "-m", "ziglang" };
+    _ = try libs(&f.ctx, in);
+    try testing.expectEqualStrings(f.fmt(want, .{ f.path("t/libws2_32.a"), f.path("t/libole32.a"), f.path("t/libaclui.a"), f.path("t/libgdal.a") }), f.takeWarnings());
+    try f.env.put("ZIG_LIB_DIR", f.path("up/lib"));
+    _ = try libs(&f.ctx, in);
+    try testing.expectEqualStrings(f.fmt(want, .{ "(zig)", "(zig)", f.path("t/libaclui.a"), f.path("t/libgdal.a") }), f.takeWarnings());
 }
 
 test "defaultLibs: -lws2_32 last on a DLL link, as gcc's LIB_SPEC applies; nothing elsewhere" {
@@ -436,4 +609,22 @@ test "exeSuffix: gcc's .exe for an executable named without an extension" {
     try expectArgs(&.{ "-shared", "-o", "ps", "a.o" }, try exeSuffix(&f.ctx, &.{ "-shared", "-o", "ps", "a.o" }));
     try expectArgs(&.{ "-c", "a.c", "-o", "a" }, try exeSuffix(&f.ctx, &.{ "-c", "a.c", "-o", "a" }));
     try expectArgs(&.{ "-Xlinker", "-o", "a.c" }, try exeSuffix(&f.ctx, &.{ "-Xlinker", "-o", "a.c" }));
+}
+
+test "samePath and underPath: case, separators, `.` and `..`, not a longer name" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    const c = &f.ctx;
+    try testing.expect(try samePath(c, "C:/env/Library/lib/R/../../zig-libs/x/include", "c:\\ENV\\library\\zig-libs\\x\\include\\"));
+    try testing.expect(try samePath(c, "C:/a/./b//c", "C:/a/b/c"));
+    try testing.expect(!try samePath(c, "C:/a/b", "C:/a/bc"));
+    try testing.expect(!try samePath(c, "C:/a/b", "D:/a/b"));
+    // `..` never goes above a drive or the root
+    try testing.expect(try samePath(c, "C:/../a", "C:/a"));
+    try testing.expect(try samePath(c, "/../a", "/a"));
+    try testing.expect(try underPath(c, "C:/zl/include/nlopt", "c:\\ZL"));
+    try testing.expect(try underPath(c, "C:/zl", "C:/zl/"));
+    try testing.expect(!try underPath(c, "C:/zl2/include", "C:/zl"));
+    try testing.expect(!try underPath(c, "C:/z", "C:/zl"));
 }

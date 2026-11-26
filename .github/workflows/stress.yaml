@@ -23,6 +23,12 @@ on:
         description: 'rows, groups or tags to leave out, comma-separated (heavy: the longest builds)'
         type: string
         default: ''
+      # b13-leftovers (CI5): the R the tree legs build and run
+      variant:
+        description: 'tree legs: the R variant built and run: slim (pixi env default), full or openblas (their pixi envs; compile tree build/compile-tree/<flavor>); conda legs are slim only'
+        type: choice
+        options: [slim, full, openblas]
+        default: slim
       distribution:
         description: 'tree: the dev tree + the stress env; conda: r-zig-slim + r-zig-toolchain + the rows'' sysdeps; both'
         type: choice
@@ -55,6 +61,17 @@ on:
         description: 'Windows tree legs (stress.R --msys-from-tree): the stress env''s Library/usr/bin and Library/mingw-w64/bin off PATH, so the build-tools group''s usr/bin alone answers for sh, make and the tools R''s makefiles run'
         type: boolean
         default: false
+      # b13-env-ci (CI4): the windows-11-arm rows with and without the
+      # Rtools45 fallback, one dispatch each
+      rtools_libs:
+        description: 'windows-11-arm legs: take the libraries conda-forge lacks from CRAN''s Rtools45 aarch64 tree (stress.R''s default); false: stress.R --no-rtools-libs'
+        type: boolean
+        default: true
+      # b13-stress (W9): libs-zig-pixi's own R smoke test after the rows
+      libs_smoke:
+        description: 'stress.R --libs-smoke=REF: after the rows, libs-zig-pixi''s tests/r/smoke.R at this git ref (empty: off) for sf, terra, gdalraster, s2'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -80,7 +97,7 @@ jobs:
       zig: ${{ inputs.zig }}
 
   stress:
-    name: ${{ matrix.os }} / ${{ matrix.dist }}
+    name: ${{ matrix.os }} / ${{ matrix.dist }}${{ inputs.variant != 'slim' && format(' / {0}', inputs.variant) || '' }}
     needs: toolchain
     # build.yaml's kill switch; !cancelled(), as build.yaml's: one
     # runner's failed toolchain leg fails only that runner's legs (C4).
@@ -96,12 +113,31 @@ jobs:
         dist: ${{ fromJSON(inputs.distribution == 'both' && '["tree","conda"]' || format('["{0}"]', inputs.distribution)) }}
     env:
       STRESS_OUT: build/stress/run
+      # the variant's pixi env, which builds its R (build-r.yaml's env
+      # input): slim is default's
+      STRESS_R_ENV: ${{ inputs.variant == 'slim' && 'default' || inputs.variant }}
     steps:
+      # full and openblas are dev-tree variants: the conda legs install
+      # r-zig-slim (stress.R --conda); pixi.toml's openblas feature has no
+      # win-arm64 (no conda-forge openblas there)
+      - name: Check the inputs
+        if: inputs.variant != 'slim' && (matrix.dist == 'conda' || (inputs.variant == 'openblas' && runner.os == 'Windows' && runner.arch == 'ARM64'))
+        shell: bash
+        env:
+          DIST: ${{ matrix.dist }}
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          if [ "$DIST" = conda ]; then
+            echo "::error::variant=$VARIANT is for the tree legs; the conda legs test r-zig-slim (distribution=tree)"
+          else
+            echo "::error::variant=openblas: pixi.toml's openblas env has no win-arm64"
+          fi
+          exit 1
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.11.3
         with:
           pixi-version: v0.84.2  # as build-r.yaml, which says why
-          environments: ${{ matrix.dist == 'conda' && inputs.channel == 'local' && 'default stress pkg' || 'default stress' }}
+          environments: ${{ matrix.dist == 'conda' && inputs.channel == 'local' && 'default stress pkg' || (inputs.variant == 'slim' && 'default stress' || format('default stress {0}', inputs.variant)) }}
           cache: false  # as build-r.yaml, which says why
       # This runner's toolchain groups, as the toolchain job archived
       # them, into dist/ and from there the toolchain tree (as
@@ -121,7 +157,7 @@ jobs:
       # runner in the conda leg (stress.R --conda makes the conda env and
       # runs itself again with that env's R).
       - name: Build R (the dev tree)
-        run: pixi run build ${{ runner.os == 'Windows' && '-- --verbose' || '' }}
+        run: pixi run -e ${{ env.STRESS_R_ENV }} build ${{ runner.os == 'Windows' && '-- --verbose' || '' }}
       - name: Build the conda packages
         if: matrix.dist == 'conda' && inputs.channel == 'local'
         run: pixi run -e pkg conda-package
@@ -132,7 +168,7 @@ jobs:
       # sha256 and downloads it again when they differ. The key names the
       # pinned file and the start of its sha256.
       - name: Rtools45 aarch64 libraries (cache)
-        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        if: runner.os == 'Windows' && runner.arch == 'ARM64' && inputs.rtools_libs
         uses: actions/cache@v6
         with:
           path: build/rtools45/rtools45-toolchain-libs-full-aarch64-6768.tar.zst
@@ -149,6 +185,8 @@ jobs:
           STRESS_CHANNEL: ${{ matrix.dist == 'conda' && inputs.channel || '' }}
           STRESS_TRACE: ${{ inputs.trace }}
           STRESS_MSYS_FROM_TREE: ${{ inputs.msys_from_tree }}
+          STRESS_RTOOLS_LIBS: ${{ inputs.rtools_libs }}
+          STRESS_LIBS_SMOKE: ${{ inputs.libs_smoke }}
           R_ZIG_PKG_BUILDER: ${{ inputs.builder }}
         run: |
           set -euo pipefail
@@ -157,9 +195,25 @@ jobs:
           if [ -n "$STRESS_SKIP" ]; then args+=("--skip=$STRESS_SKIP"); fi
           if [ "$STRESS_TRACE" = true ]; then args+=("--trace"); fi
           if [ "$STRESS_MSYS_FROM_TREE" = true ] && [ "$RUNNER_OS" = Windows ]; then args+=("--msys-from-tree"); fi
-          # one target per word
-          # shellcheck disable=SC2086
-          pixi run -e stress stress "${args[@]}" $STRESS_TARGETS
+          if [ "$STRESS_RTOOLS_LIBS" = false ] && [ "$RUNNER_OS" = Windows ] && [ "$RUNNER_ARCH" = ARM64 ]; then args+=("--no-rtools-libs"); fi
+          if [ -n "$STRESS_LIBS_SMOKE" ]; then args+=("--libs-smoke=$STRESS_LIBS_SMOKE"); fi
+          if [ "$STRESS_R_ENV" = default ]; then
+            # one target per word
+            # shellcheck disable=SC2086
+            pixi run -e stress stress "${args[@]}" $STRESS_TARGETS
+          else
+            # the variant's compile tree (its env's flavor, scripts/env.sh:
+            # full, slim-openblas), then stress.R with that tree's R in the
+            # stress env, as the stress task runs slim's
+            pixi run -e "$STRESS_R_ENV" compile-tree
+            flavor=$([ "$STRESS_R_ENV" = openblas ] && echo slim-openblas || echo "$STRESS_R_ENV")
+            tree=$(echo "build/compile-tree/$flavor"/R-*-zig)
+            [ -d "$tree" ] || { echo "::error::no compile tree build/compile-tree/$flavor/R-*-zig"; exit 1; }
+            rscript="$tree/bin/Rscript"
+            if [ "$RUNNER_OS" = Windows ]; then rscript="$tree/Library/lib/R/bin/x64/Rscript.exe"; fi
+            # shellcheck disable=SC2086
+            pixi run -e stress "$rscript" stress/stress.R "${args[@]}" $STRESS_TARGETS
+          fi
       # The report is in the job summary already (stress.R appends it to
       # $GITHUB_STEP_SUMMARY); the logs, the smoke files and the conda
       # env's manifest and lock are here.
@@ -167,7 +221,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: stress-${{ matrix.os }}-${{ matrix.dist }}
+          name: stress-${{ matrix.os }}-${{ matrix.dist }}${{ inputs.variant != 'slim' && format('-{0}', inputs.variant) || '' }}
           path: |
             ${{ env.STRESS_OUT }}/report.*
             ${{ env.STRESS_OUT }}/logs/

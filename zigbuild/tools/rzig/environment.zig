@@ -47,6 +47,15 @@
 //!    of that environment. Never the OpenMP provider (none ships omp.h).
 //!    RZIG_TRACE marks it `(zig-libs)`.
 //!
+//! 5. R_ZIG_TOOLCHAIN_ENV, when set (backlog L6; feat-no-host-paths item
+//!    4): the root of an environment that holds the toolchain, zig and
+//!    flang (with its ld.lld beside it) and on linux libstdc++'s headers
+//!    (conda's r-zig-compilers installed there instead of in R's own
+//!    environment: one toolchain env shared by several R envs, as Rtools
+//!    is installed once). Not one more environment of headers and
+//!    libraries for packages: find_zig, flang_rt and libstdcxx look in it
+//!    (`toolchainEnv`), list() does not. Resolved as R_ZIG_EXTRA_ENV.
+//!
 //! An environment's directory is its root on unix and <root>/Library on
 //! Windows (conda-forge's place for everything that is not Python): its
 //! include/ and lib/ are what the flags name. It is a conda environment
@@ -108,14 +117,28 @@ pub fn own(ctx: *const Ctx) !?Env {
 /// The environment R_ZIG_EXTRA_ENV names (unset or empty: none), at its
 /// real path; none, with a warning, when that path does not resolve.
 pub fn extra(ctx: *const Ctx) !?Env {
-    const v = ctx.getenv("R_ZIG_EXTRA_ENV") orelse return null;
+    return named(ctx, "R_ZIG_EXTRA_ENV");
+}
+
+/// The environment root the variable `name` names, at its real path;
+/// none when it is unset or empty, and with a warning when the path does
+/// not resolve.
+fn named(ctx: *const Ctx, comptime name: []const u8) !?Env {
+    const v = ctx.getenv(name) orelse return null;
     var root: []const u8 = Io.Dir.cwd().realPathFileAlloc(ctx.io, v, ctx.arena) catch |err| {
-        ctx.warn("warning: R_ZIG_EXTRA_ENV={s}: {t}; ignored", .{ v, err });
+        ctx.warn("warning: " ++ name ++ "={s}: {t}; ignored", .{ v, err });
         return null;
     };
     if (builtin.os.tag == .windows) root = try mem.replaceOwned(u8, ctx.arena, root, "\\", "/");
     if (ctx.os == .windows) return .{ .dir = try ctx.fmt("{s}" ++ library, .{root}), .conda = false };
     return .{ .dir = root, .conda = try isConda(ctx, root) };
+}
+
+/// The environment R_ZIG_TOOLCHAIN_ENV names (item 5; unset or empty:
+/// none), at its real path; none, with a warning, when that path does not
+/// resolve. Its bin/ (Library/bin on Windows) holds zig and flang.
+pub fn toolchainEnv(ctx: *const Ctx) !?Env {
+    return named(ctx, "R_ZIG_TOOLCHAIN_ENV");
 }
 
 /// The tree R_ZIG_FALLBACK_SOFT names (unset or empty: none), on

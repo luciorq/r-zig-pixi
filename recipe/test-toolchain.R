@@ -11,8 +11,10 @@ d <- tempfile("rzig-"); dir.create(d)
 ## R_ZIG_NO_PREFLIGHT skips 0009; R_ZIG_PKG_BUILDER=make sends tier 1 to
 ## make; RZIG_TRACE changes the logs; a MAKEFLAGS assignment makes rzig
 ## build decline (0013); ZIG_LOCAL_CACHE_DIR defeats N3's per-install
-## cache; R_ZIG_TOOLCHAIN_HINT adds a line
+## cache; R_ZIG_TOOLCHAIN_HINT adds a line; R_ZIG_TOOLCHAIN_ENV names
+## another zig and flang, R_ZIG_SYSTEM_LIBS adds the host's /usr (linux)
 Sys.unsetenv(c("R_ZIG_EXTRA_ENV", "ZIG_BIN", "R_ZIG_TOOLCHAIN_HINT", "R_ZIG_NO_PREFLIGHT",
+               "R_ZIG_TOOLCHAIN_ENV", "R_ZIG_SYSTEM_LIBS",
                "R_ZIG_PKG_BUILDER", "RZIG_TRACE", "MAKEFLAGS", "ZIG_LOCAL_CACHE_DIR"))
 ## a user Makevars switches the preflight off. Unset, R_MAKEVARS_USER lets
 ## R (install.R's makevars_user) and rzig (pkgbuild.zig) fall back to

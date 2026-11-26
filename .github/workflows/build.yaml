@@ -5,7 +5,7 @@ name: build-r
 # - core, on every pull request push and every push to main: the default
 #   leg on all 6 platforms and minimal on linux-64, the wheel's (7 legs);
 # - full, on a pull request labelled `full-ci` and on a manual dispatch,
-#   nothing else: all 20 legs (full, openblas and minimal too, Windows
+#   nothing else: all 21 legs (full, openblas and minimal too, Windows
 #   included).
 # conda-package (6 jobs) runs on every push to main, in the full tier,
 # and on a pull request that changes what it builds from. A push to main
@@ -97,7 +97,7 @@ jobs:
   # calls too (the same legs with upstream zig, F4): one step list. A leg
   # reads "<os> / <env>": this job is named after the runner, the called
   # one after the env. This job runs the core tier's 7 legs, build-full
-  # the full tier's other 13.
+  # the full tier's other 14.
   build:
     name: ${{ matrix.os }}
     needs: toolchain
@@ -131,7 +131,7 @@ jobs:
           # minimal: the r-zig Python wheel's variant (pixi.toml
           # [feature.minimal]). In the core tier on linux-64, whose wheel
           # it builds and tests; the other five platforms are in
-          # build-full. The wheel is unix only (build-r.yaml). linux-
+          # build-full, Windows included (its wheel since b13-env-ci L2). linux-
           # x86_64's vendored config was captured locally, the other
           # three unix ones by gen-config's minimal legs (run
           # 36151245208, 2026-09-25); win-minimal is vendored from
@@ -140,8 +140,8 @@ jobs:
             env: minimal
           # Windows: default (slim) here. full and minimal are in
           # build-full, as on unix (one variant table for every OS since
-          # 2026-11-14: .github/devdocs/feat-win-variants/PLAN.md). No
-          # openblas on Windows yet.
+          # 2026-11-14: .github/devdocs/feat-win-variants/PLAN.md).
+          # openblas on windows-latest is in build-full too.
           # build_args: zig build prints nothing until it finishes, so a
           # hung step leaves an empty log; with --verbose the last command
           # started is the last line, which is the diagnosis.
@@ -173,9 +173,10 @@ jobs:
       # (chore-env-ci M-5).
       recommended: ${{ matrix.env == 'default' && (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
 
-  # The full tier's other 13 legs, on the same runners: full on all six,
-  # openblas (external optimized BLAS/LAPACK, linux only for now, both
-  # archs), and minimal on the five build doesn't run. The Windows legs
+  # The full tier's other 14 legs, on the same runners: full on all six,
+  # openblas (external optimized BLAS/LAPACK: linux, both archs, and
+  # win-64, b13-build M-7; conda-forge has no win-arm64 openblas), and
+  # minimal on the five build doesn't run. The Windows legs
   # take build's Windows build_args and timeouts (see there). Only on
   # a pull request labelled `full-ci` (its `labeled` event, then every
   # push while the label stays) and on a manual dispatch. It needs the
@@ -210,6 +211,10 @@ jobs:
             timeout: 90
           - os: windows-latest
             env: minimal
+            build_args: "-- --verbose"
+            timeout: 90
+          - os: windows-latest
+            env: openblas
             build_args: "-- --verbose"
             timeout: 90
           - os: windows-11-arm

@@ -43,6 +43,37 @@ Build 12 is no longer a separate release step. It is the final batch after every
   opt-in, and distro `.pc` files' `-I/usr/include/<triple>` kept from
   mixing the host's glibc headers into zig's (`__time64_t`); the C++
   ABI part already works (wave2-compat F-M13).
+- **Build 13 wave 1 (2026-11-24, branch build13):** seven topics,
+  records in `.github/devdocs/<topic>/PLAN.md`; integration notes in
+  `b13-integration/`. Rows below carry their b13 state.
+  - b13-build: M-20 (`zig build fetch`, fetch-r.sh gone), M-17 (capture
+    with rzig, toolchain/ shims gone), M-25 (35 unused MSYS2 files left
+    out), M-7 + M-23 (BLAS forwarders; win-64 openblas env and CI leg),
+    L7 (make built with zig). Open: M-23 on macOS (D9, no Mach-O
+    re-export in zig), L7's recipe/toolchain wiring (its N5).
+  - b13-rzig: M-28, M-29 (`R_ZIG_SYSTEM_LIBS`), L6
+    (`R_ZIG_TOOLCHAIN_ENV`); H1 keeps `-c`; M-11 needs no change; M-27
+    recorded as unsupported; M-2 is rstan's own `-std=c++1y` (GCC fails
+    too). Open: L9 (design only).
+  - b13-env-ci: L8, L2 (Windows wheels), L1 (release.yaml, gated off),
+    M-24 (keep "source": Rcpp exceptions break with CRAN binaries),
+    CI9/CI11 explained. New: r-zig-recommended's Windows linking check
+    resolves R.dll from the runner's PATH (b13-env-ci F11).
+  - b13-stress: M-3 (protolite `-j1`), M-6 (arrow's AVX-512 probe flag),
+    M-9 (zigcmake row), M-10 (smoke files, `copies` check), W9
+    (`--libs-smoke`), Q26 (no row change), M-2's smoke shows the
+    compiler error. Open until the CI wave: every row change.
+  - b13-recipe: build number 13, L3's first add-on r-zig-tcltk (not
+    win-arm64), Q20 checked. Open: the note to flang-pixi and whether to
+    delete r-zig 4.6.1 builds (user); `iconv -l` in the Windows conda
+    build (b13-recipe F10).
+  - b13-hosts: H3, H4, H6, CI8, CI10, CI12 done; H5 leftovers listed
+    with the cleanup commands (user). Open: CI13 (dispatch).
+  - b13-design: L4 (busybox-w32 + make with zig) and L5 (binary
+    repository) designed with prototypes. Open: their menus (user).
+  - Still open: the CI wave (CI1, CI3-CI7, CI9, CI13;
+    `b13-integration/CI-WAVE.md`), rows that neither build 12 (above)
+    nor b13 closed, L4, L5 and L9 menus, WAITS-LIBS (W1-W8, W10).
 - **Open after batch 1:** the group 2 CI items (stress on #54), protolite's
   win-arm64 expect once M-3 runs, rstan's `-std=c++1y` (M-2), arrow on
   macos-x86_64 (M-6), licence files in the packages (M12), M-21, host
@@ -77,13 +108,13 @@ Ordered by value.
 | Q17 | `.zig-cache` left in the checkout root after stress (N6) | O-D8 (TODO.md:894; stress.R:403-410) | One local stress run leaves none; box ticked |
 | Q18 | Release rule "never delete `_N` before `_N+1`" belongs in a durable checklist | O-G1 (TODO.md:900; fix-icu-pin/PLAN.md:105-114) | Line in the release checklist |
 | Q19 | icu pin lift check (recipe/variants.yaml:48) | O-G4 (TODO.md:870) | `pixi search libxml2-16` result recorded; lifted if built against icu 79 |
-| Q20 | Notify flang-pixi about retained lld-zig 5 / flang-zig 6 / flang-rt-zig 10 | O-G5 (chore-relock-flang-rt-10/PLAN.md:127-132) | `conda-channel-list` checked; note sent |
+| Q20 (b13: checked, note to flang-pixi is the user's) | Notify flang-pixi about retained lld-zig 5 / flang-zig 6 / flang-rt-zig 10 | O-G5 (chore-relock-flang-rt-10/PLAN.md:127-132) | `conda-channel-list` checked; note sent |
 | Q21 | macOS minos of the `_11` osx packages | O-B13 (feat-wheel-minimal/PLAN.md:154) | `llvm-otool -l` shows 13.0 |
 | Q22 | Is the wheel toolchain mechanism already settled by the group wheels? | O-B7 (feat-no-host-paths/PLAN.md:2765) | Closed with evidence, or moved to the decision menu |
 | Q23 | Document R_ZIG_FALLBACK_SOFT, or record it as stress-only until R-C2 | R-C3 (feat-winarm-gaps/PLAN.md:1197,136-143) | Doc line or a recorded decision |
 | Q24 | CMake mixed C/C++ target, libunwind.a; `-Wl,-lstdc++` not rewritten (L21); a prebuilt libc++ archive inside a package | R-E6, R-E7 (feat-linux-libstdcxx/PLAN.md:966,968) | Probes or unit tests recorded |
 | Q25 | Which 29 rzig unit tests skip on windows-latest | R-E1 (feat-linux-libstdcxx/PLAN.md:956) | List with reasons; un-skip what can run |
-| Q26 | R_TOOLS_SOFT=tree side effects in Makevars (gert, stringi, qs2, fst, Rhdf5lib, V8, duckdb, mlpack, rstan, DESeq2, systemfonts, geos, Rsamtools). M, but source reading only | R-C6 (feat-winarm-gaps/PLAN.md:1161) | Findings per package |
+| Q26 (done b13) | R_TOOLS_SOFT=tree side effects in Makevars (gert, stringi, qs2, fst, Rhdf5lib, V8, duckdb, mlpack, rstan, DESeq2, systemfonts, geos, Rsamtools). M, but source reading only | R-C6 (feat-winarm-gaps/PLAN.md:1161) | Findings per package |
 
 ### 1b. One decision menu (no code; ask once, record in PLAN.md)
 
@@ -106,12 +137,12 @@ Ordered by value.
 
 | # | Item | Sources | Host |
 |---|---|---|---|
-| H1 | macOS `zig cc --version` writes `a.o`; re-check on 0.17 and drop the `-c` workaround (compiler.zig:70-83) | O-A1 | omicron |
+| H1 (done b13) | macOS `zig cc --version` writes `a.o`; re-check on 0.17 and drop the `-c` workaround (compiler.zig:70-83) | O-A1 | omicron |
 | H2 | Windows R_HOME/include parity: iconv.h, graphapp.h, ga.h missing; Rinterface.h extra | O-A14 (feat-win-variants/PLAN.md:299) | kappa |
-| H3 | `pkgbuild::has_rtools(debug=TRUE)` with base + compilers only | O-D3 (feat-config-rzig/PLAN.md:248) | kappa |
-| H4 | `zig-lib-<n>` showing up in the user's `~/.cache/r-zig` | O-D14 | omicron |
-| H5 | Host leftovers (test dirs, gamma runner unit, kappa zig cache, rel11 scratch) | O-G7 | hosts |
-| H6 | Watch on each zig update: conda-forge `zig ar` on osx (ar.zig:1-15); zig fetch cache repro (ZIG-FETCH-CACHE.md) | K5, K6, O-G9 | omicron, gamma |
+| H3 (done b13) | `pkgbuild::has_rtools(debug=TRUE)` with base + compilers only | O-D3 (feat-config-rzig/PLAN.md:248) | kappa |
+| H4 (done b13) | `zig-lib-<n>` showing up in the user's `~/.cache/r-zig` | O-D14 | omicron |
+| H5 (b13: listed, cleanup is the user's) | Host leftovers (test dirs, gamma runner unit, kappa zig cache, rel11 scratch) | O-G7 | hosts |
+| H6 (done b13) | Watch on each zig update: conda-forge `zig ar` on osx (ar.zig:1-15); zig fetch cache repro (ZIG-FETCH-CACHE.md) | K5, K6, O-G9 | omicron, gamma |
 
 ---
 
@@ -121,19 +152,19 @@ Run these as one wave after the code batches merge, to keep round trips down. Or
 
 | # | Item | Sources | Done looks like |
 |---|---|---|---|
-| CI1 | Full Windows stress with zig-* from universe: every group, windows-latest and windows-11-arm, tree and conda. Includes the Q5 RPostgres row and the Q11 libgdal-core drop | R-B6, K25, O-F4 | Every non-ok row listed with its cause |
+| CI1 (b13: CI wave) | Full Windows stress with zig-* from universe: every group, windows-latest and windows-11-arm, tree and conda. Includes the Q5 RPostgres row and the Q11 libgdal-core drop | R-B6, K25, O-F4 | Every non-ok row listed with its cause |
 | CI2 | Stress on macOS after #49 (macos-latest, macos-15-intel); this also sets the arrow:source `macos-x86_64=?` expect | R-B5, K18 | 0 unexpected, every row read |
-| CI3 | Stress with `zig=upstream` on ubuntu and macos | R-B4 (feat-linux-libstdcxx/PLAN.md:947,958) | Every row read |
-| CI4 | windows-11-arm rows outside the 19 targets, with and without `--no-rtools-libs` | R-B7 (feat-winarm-gaps/PLAN.md:1152) | Diff of the row tables |
-| CI5 | Targeted linux stress: RcppParallel:system-tbb, mlpack, full and openblas variants; lwgeom expect (Q4) | R-E2 | Rows read |
-| CI6 | g1 stress with trace (Rcpp cppFunction, rstan stan_model) through rzig SHLIB | O-D2 (TODO.md:1072) | Log shows `rzig build: R CMD SHLIB, tier 1` |
-| CI7 | Run CFG code on win-arm64: the magick SVG smoke. Then O-D11 closes | R-C4, O-D11 | Smoke passes |
-| CI8 | Read-only log checks: extractor and time (R-C9); linux-aarch64 cross-link timings (R-C11); feat-r-home-link-objects UNVERIFIED items (O-D10); ICF off on arrow/duckdb DLLs (R-F11) | as listed | Recorded |
-| CI9 | build.yaml dispatch with `linux_runner=ubuntu-26.04` | O-C9 (build.yaml:43) | Run read |
-| CI10 | pkg-parity run on omicron for Q14 | O-A7 | Green |
-| CI11 | win-64 conda-package "Overlinking against" the pkg env's zstd.dll | O-A17 (chore-deps-ci-checks/PLAN.md:359) | Explained or gone |
-| CI12 | Host chains: R CMD config from cmd.exe and an R_HOME with a space (O-D4); extras group on macOS/Windows (O-D5); recommended packages on macOS/Windows (O-D6) | as listed | Host runs recorded |
-| CI13 | **Final, after publish:** `--conda channel=universe` windows-11-arm leg shows the R_ZIG_FALLBACK_SOFT line as used | R-B2 | Fallback line present |
+| CI3 (b13: CI wave) | Stress with `zig=upstream` on ubuntu and macos | R-B4 (feat-linux-libstdcxx/PLAN.md:947,958) | Every row read |
+| CI4 (b13: CI wave) | windows-11-arm rows outside the 19 targets, with and without `--no-rtools-libs` | R-B7 (feat-winarm-gaps/PLAN.md:1152) | Diff of the row tables |
+| CI5 (b13: CI wave) | Targeted linux stress: RcppParallel:system-tbb, mlpack, full and openblas variants; lwgeom expect (Q4) | R-E2 | Rows read |
+| CI6 (b13: CI wave) | g1 stress with trace (Rcpp cppFunction, rstan stan_model) through rzig SHLIB | O-D2 (TODO.md:1072) | Log shows `rzig build: R CMD SHLIB, tier 1` |
+| CI7 (b13: CI wave) | Run CFG code on win-arm64: the magick SVG smoke. Then O-D11 closes | R-C4, O-D11 | Smoke passes |
+| CI8 (done b13) | Read-only log checks: extractor and time (R-C9); linux-aarch64 cross-link timings (R-C11); feat-r-home-link-objects UNVERIFIED items (O-D10); ICF off on arrow/duckdb DLLs (R-F11) | as listed | Recorded |
+| CI9 (b13: CI wave) | build.yaml dispatch with `linux_runner=ubuntu-26.04` | O-C9 (build.yaml:43) | Run read |
+| CI10 (done b13) | pkg-parity run on omicron for Q14 | O-A7 | Green |
+| CI11 (done b13) | win-64 conda-package "Overlinking against" the pkg env's zstd.dll | O-A17 (chore-deps-ci-checks/PLAN.md:359) | Explained or gone |
+| CI12 (done b13) | Host chains: R CMD config from cmd.exe and an R_HOME with a space (O-D4); extras group on macOS/Windows (O-D5); recommended packages on macOS/Windows (O-D6) | as listed | Host runs recorded |
+| CI13 (b13: CI wave) | **Final, after publish:** `--conda channel=universe` windows-11-arm leg shows the R_ZIG_FALLBACK_SOFT line as used | R-B2 | Fallback line present |
 
 ---
 
@@ -144,33 +175,33 @@ Ordered by value.
 | # | Item | Sources | Where |
 |---|---|---|---|
 | M-1 | Rhdf5lib on Windows (both arches): supply `-D__STDC_WANT_IEC_60559_TYPES_EXT__` through rzig windows.zig or Makeconf. Already shown to work | K9 (packages.tsv:56) | kappa + windows-11-arm |
-| M-2 | rstan on Windows: the tree needs `bin/Rscript`; C++17 against plugin.R's `-std=c++1y` | K10 (packages.tsv:74) | kappa |
-| M-3 | protolite on win-arm64: protoc and headers from one source (tree protoc first on PATH, or drop conda libprotobuf from the win-arm64 stress env) | R-C1, K16, O-F5 | windows-11-arm (cross-build repro on gamma) |
+| M-2 (b13: not r-zig, smoke shows the error) | rstan on Windows: the tree needs `bin/Rscript`; C++17 against plugin.R's `-std=c++1y` | K10 (packages.tsv:74) | kappa |
+| M-3 (b13: fixed, CI wave) | protolite on win-arm64: protoc and headers from one source (tree protoc first on PATH, or drop conda libprotobuf from the win-arm64 stress env) | R-C1, K16, O-F5 | windows-11-arm (cross-build repro on gamma) |
 | M-4 | upstream-zig.yaml: add windows-11-arm, plus linux-aarch64/osx-64 legs or a recorded no | R-B3, O-C5 | CI |
 | M-5 | `recommended` / `verify-recommended` in build-r.yaml's per-OS chain (full tier) | R-F13, O-C8 | CI |
-| M-6 | arrow on macos-x86_64: keep the env's `aws/common/config.h` (AVX-512) out of the bundled aws-checksums build, or use `-mno-avx512` | K17 (chore-release-11 finding 30) | macos-15-intel |
-| M-7 | `-Dblas=openblas` on Windows, if Q13 shows it is ignored | R-F8, O-A15 | kappa |
+| M-6 (b13: fixed, CI wave) | arrow on macos-x86_64: keep the env's `aws/common/config.h` (AVX-512) out of the bundled aws-checksums build, or use `-mno-avx512` | K17 (chore-release-11 finding 30) | macos-15-intel |
+| M-7 (b13: done, CI wave) | `-Dblas=openblas` on Windows, if Q13 shows it is ignored | R-F8, O-A15 | kappa |
 | M-8 | verify-tree baseline-CPU check misses legacy-encoded extensions | O-A11 (fix-rzig-baseline-cpu/PLAN.md:342) | gamma |
-| M-9 | CMake consumer of zig-libs on Windows (abseil, GEOS, TBB, expat configs) | R-D1 (feat-zig-libs/PLAN.md:337) | CI-win |
-| M-10 | Tree runtime smokes on win-arm64 (C++ exceptions across libc++ versions, libomp, proj.db, HDF5 1.12.1); single copy per library in a trace (sf/terra) | R-C7, R-C8 | CI-win |
-| M-11 | /OPT:NOICF native link of clang-aarch64 objects with a broken .llvm_addrsig | R-C5 | CI-win |
+| M-9 (done b13) | CMake consumer of zig-libs on Windows (abseil, GEOS, TBB, expat configs) | R-D1 (feat-zig-libs/PLAN.md:337) | CI-win |
+| M-10 (b13: done, CI wave) | Tree runtime smokes on win-arm64 (C++ exceptions across libc++ versions, libomp, proj.db, HDF5 1.12.1); single copy per library in a trace (sf/terra) | R-C7, R-C8 | CI-win |
+| M-11 (done b13) | /OPT:NOICF native link of clang-aarch64 objects with a broken .llvm_addrsig | R-C5 | CI-win |
 | M-12 | Older libstdc++ hosts (Ubuntu 22.04, RHEL 8) | R-E3 | gamma container |
 | M-13 | Standalone builds against distro GDAL and Magick++ (22.04/24.04) | R-E11 | gamma container |
 | M-14 | rpy2 or another embedder loading an older libstdc++ first | R-E4 | gamma |
 | M-15 | cargo and go in a stress feature (gifski, string2path); the Windows Rust `-lunwind` rule (O-A3) | R-E5, O-A3 | gamma + CI |
 | M-16 | `-isystem` vs `-I` for env dirs on linux | R-F10 | gamma |
-| M-17 | gen-config captures with rzig; remove the 834-line bash shims | R-F6 | gamma + gen-config CI |
+| M-17 (done b13) | gen-config captures with rzig; remove the 834-line bash shims | R-F6 | gamma + gen-config CI |
 | M-18 | Tier-2 `cflags` in rpkg LibraryOptions | O-A2 | gamma |
 | M-19 | Content-stamp the bootstrap Run steps (~1.5 min per `zig build`) | O-A13 (feat-zig-build/TODO.md:117) | gamma |
-| M-20 | `zig build fetch` to retire fetch-r.sh | O-A12 | gamma + CI |
+| M-20 (done b13) | `zig build fetch` to retire fetch-r.sh | O-A12 | gamma + CI |
 | M-21 | Host tools on linux (cmp, find, ldd, bash, dirname) | O-A18 | gamma |
 | M-22 | Reproducible standalone tar (N9) | O-B4 | gamma |
-| M-23 | BLAS link contract for binary packages (forwarding libRblas) | O-B6 | gamma |
-| M-24 | win.binary as the default on win-64 (experiment) | R-F9 | CI-win |
-| M-25 | B39 restricted-PATH run, then trim the build-tools list | O-D7 | gamma + kappa |
+| M-23 (b13: done but macOS) | BLAS link contract for binary packages (forwarding libRblas) | O-B6 | gamma |
+| M-24 (done b13 (keep source)) | win.binary as the default on win-64 (experiment) | R-F9 | CI-win |
+| M-25 (done b13) | B39 restricted-PATH run, then trim the build-tools list | O-D7 | gamma + kappa |
 | M-26 | pip upgrade and uv tests for the wheels (S) | O-B15 | gamma |
-| M-27 | MSYS make started by Git bash crashes on win-arm64: record as unsupported, optionally repro | R-C10 | CI-win |
-| M-28 | macOS without the Command Line Tools (`xcrun` handling) | O-B14 | CI-mac |
+| M-27 (done b13 (unsupported, README)) | MSYS make started by Git bash crashes on win-arm64: record as unsupported, optionally repro | R-C10 | CI-win |
+| M-28 (done b13) | macOS without the Command Line Tools (`xcrun` handling) | O-B14 | CI-mac |
 
 ---
 
@@ -180,15 +211,15 @@ Propose leaving these out of build 12 unless chosen in the menu.
 
 | # | Item | Sources |
 |---|---|---|
-| L1 | Release job: standalone archives, GitHub Release, PyPI (gated by M7) | R-F4, O-B2, O-B3 |
-| L2 | Windows wheel (make-wheel.py win-64/arm64 and a wheel-test leg) | O-B1, R-F2 part |
-| L3 | One base with add-ons, tcltk first | R-F2, O-B10 |
-| L4 | Native Windows build tools without MSYS2 | R-F1 |
-| L5 | Binary package repository | R-F3 |
-| L6 | Toolchain in its own env (`R_ZIG_TOOLCHAIN_ENV`) | O-B8 |
-| L7 | GNU make built with zig | O-B9 |
-| L8 | Split pixi.toml `[dependencies]` into features (re-solves every env) | O-E8, R-F8 part |
-| L9 | rzig `pkg-config` mode (D10). Design first; leans on WAITS-LIBS | R-D3, O-F1 |
+| L1 (done b13 (gated off)) | Release job: standalone archives, GitHub Release, PyPI (gated by M7) | R-F4, O-B2, O-B3 |
+| L2 (b13: done, CI wave) | Windows wheel (make-wheel.py win-64/arm64 and a wheel-test leg) | O-B1, R-F2 part |
+| L3 (b13: tcltk done) | One base with add-ons, tcltk first | R-F2, O-B10 |
+| L4 (b13: designed, menu) | Native Windows build tools without MSYS2 | R-F1 |
+| L5 (b13: designed, menu) | Binary package repository | R-F3 |
+| L6 (done b13) | Toolchain in its own env (`R_ZIG_TOOLCHAIN_ENV`) | O-B8 |
+| L7 (b13: built, not wired) | GNU make built with zig | O-B9 |
+| L8 (done b13) | Split pixi.toml `[dependencies]` into features (re-solves every env) | O-E8, R-F8 part |
+| L9 (b13: design only) | rzig `pkg-config` mode (D10). Design first; leans on WAITS-LIBS | R-D3, O-F1 |
 
 ---
 
@@ -206,7 +237,7 @@ M1 can unblock W3–W6 earlier.
 | W6 | zig-libgnurx and a static curl stack: Rsamtools win-64 | K15, K24 |
 | W7 | Retire R_ZIG_FALLBACK_SOFT (needs nlopt, gsl, mpfr, gmp, glpk, hdf5, netcdf, udunits2, harfbuzz, libpq) | R-C2, O-F2 (CXX-STDLIB.md:203-205) |
 | W8 | zig-libs on linux and macOS | R-D4, O-F3 |
-| W9 | Run libs-zig-pixi's `tests/r/smoke.R` from stress or verify | R-D5 |
+| W9 (done b13) | Run libs-zig-pixi's `tests/r/smoke.R` from stress or verify | R-D5 |
 | W10 | Close the general Windows C++ ABI item once W1–W6 land | O-F6 |
 
 ---

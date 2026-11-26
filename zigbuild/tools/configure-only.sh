@@ -67,7 +67,7 @@ FLIBS_ARGS=("FLIBS=-L$(dirname "$rt") -lflang_rt.runtime -lm")
 # macOS: the flang driver locates the SDK via SDKROOT (falling back to
 # xcrun); without it every *link* it performs dies with "ld: library
 # 'System' not found". R itself never links with flang (packages go
-# through the zig-cc shim + FLIBS), but configure's Fortran probes do
+# through rzig's zig-cc + FLIBS), but configure's Fortran probes do
 # — the OpenMP one in particular — and a failed link there captured
 # SHLIB_OPENMP_FFLAGS/R_OPENMP_FFLAGS/OPENMP_FCFLAGS as empty on the
 # first flang-zig osx-arm64 capture (2026-09-19), silently dropping
@@ -141,6 +141,21 @@ if [ "$BLAS" = openblas ]; then
 fi
 
 
+# The compilers configure runs: rzig (zigbuild/tools/rzig/), the program
+# R's build installs as R_HOME/bin/toolchain's zig-cc, zig-cxx, zig-ar and
+# zig-ranlib, so configure probes what packages will compile with (backlog
+# M-17: the bash shims in toolchain/ it ran before are gone). Built on its
+# own (it needs no R source and no vendored config, which may be the stale
+# one being replaced) into env.sh's $TOOLCHAIN, with its link object and,
+# on linux, its libstdc++ shim headers beside it, then copied under those
+# names: rzig dispatches on its own name. Outside any R tree, so its
+# environment is R_ZIG_EXTRA_ENV's, the pixi env (pixi.toml), as for every
+# dev compile. gen-subst.sh turns $TOOLCHAIN into @ZR_TOOLCHAIN@, which
+# build.zig resolves to R_HOME/bin/toolchain.
+rm -rf "$(dirname "$TOOLCHAIN")"
+"$ZIG" build --build-file "$ROOT/zigbuild/tools/rzig/build.zig" --prefix "$(dirname "$TOOLCHAIN")" "-Dr-version=$R_VERSION"
+for n in zig-cc zig-cxx zig-ar zig-ranlib; do cp -f "$TOOLCHAIN/rzig" "$TOOLCHAIN/$n"; done
+
 mkdir -p "$OBJ_DIR"
 cd "$OBJ_DIR"
 
@@ -166,7 +181,7 @@ if [ "$OS" = macos ]; then
 fi
 
 # OBJC/OBJCXX: without an explicit OBJC=, autoconf falls back to a bare
-# PATH search and finds Xcode's real gcc/clang instead of our zig-cc shim
+# PATH search and finds Xcode's real gcc/clang instead of rzig's zig-cc
 # (OBJCXX happens to end up right anyway, since autoconf's own default for
 # it reuses $CXX — but that's not documented/guaranteed behavior, so set
 # both explicitly). See F7.8 in feat-zig-build/TODO.md for the real

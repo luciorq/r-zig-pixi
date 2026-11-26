@@ -1,0 +1,115 @@
+Rfe.c: put a conda environment's Library\bin first on PATH
+
+R_HOME\bin\R.exe and R_HOME\bin\Rscript.exe are Rfe.exe (gnuwin32's
+front-ends/Makefile; build.zig's winRfe). Rfe.exe does not link R.dll:
+it starts bin\x64\R.exe or bin\x64\Rscript.exe through system(). Those
+link R.dll, and in a conda environment R.dll imports libomp.dll,
+zlib.dll, libbz2.dll, liblzma.dll, zstd.dll, deflate.dll, pcre2-8.dll
+and ICU's DLLs from <env>\Library\bin. Activation puts that directory on
+PATH; in an environment that is not activated bin\x64's programs exit
+0xC0000135 (STATUS_DLL_NOT_FOUND, b13-hosts PLAN.md F4).
+
+Rfe.exe now puts R_HOME\..\..\bin (<env>\Library\bin) first on PATH
+before it starts bin\x64's program, as rcmdfn.c puts R_HOME\bin\x64 on
+PATH for R CMD: only when that directory exists, <env>\conda-meta
+exists (a conda environment), and the directory is not on PATH
+already (an activated environment's PATH is not changed). The
+standalone tree (its DLLs in bin\x64, no conda-meta), the wheel and
+CRAN's layout get no change. bin\x64's programs started directly are
+not changed; started from R (system, R CMD) they inherit the PATH.
+Decision 4b of b13-hosts PLAN.md. Not upstreamable: r-zig layout only.
+
+--- a/src/gnuwin32/front-ends/Rfe.c
++++ b/src/gnuwin32/front-ends/Rfe.c
+@@ -22,6 +22,7 @@
+ #include <stdlib.h>  /* for exit */
+ #include <string.h>
+ #include <stdio.h>
++#include <ctype.h> /* r-zig: tolower */
+ 
+ extern char *getRHOME(int); /* in ../rhome.c */
+ extern void freeRHOME(char *);
+@@ -46,6 +47,75 @@
+ }
+ 
+ #define CMD_LEN 10000
++
++/* r-zig: R.dll imports DLLs from the conda environment's Library\bin
++   (OpenMP, zlib, bzip2, xz, zstd, libdeflate, PCRE2, ICU). A conda
++   environment puts that directory on PATH when activated; without that
++   bin\x64's programs stop with STATUS_DLL_NOT_FOUND. So, as rcmdfn.c
++   puts R_HOME\bin\x64 on PATH for R CMD, put R_HOME\..\..\bin first on
++   PATH for the program started below and its children, when R_HOME is
++   <env>\Library\lib\R of a conda environment (<env>\conda-meta exists)
++   and that directory is not on PATH already. Elsewhere (a tree with its
++   DLLs in bin\x64, CRAN's layout) PATH is not changed. */
++static int isdir(const char *path)
++{
++    DWORD a = GetFileAttributes(path);
++    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
++}
++
++/* PATH entry q[0..m) names dir[0..n): ignoring case, '/' as '\\'
++   (pixi's activation writes <env>\Library/bin) */
++static int samedir(const char *q, size_t m, const char *dir, size_t n)
++{
++    if (m != n) return 0;
++    for (size_t i = 0; i < n; i++) {
++	char c = q[i] == '/' ? '\\' : q[i];
++	if (tolower((unsigned char) c) != tolower((unsigned char) dir[i]))
++	    return 0;
++    }
++    return 1;
++}
++
++static void env_dlls_on_path(const char *rhome)
++{
++    size_t n = strlen(rhome);
++    char *dir = (char *) malloc(n + 16), *p;
++    if (!dir) return;
++    strcpy(dir, rhome);
++    /* <env>\Library\lib\R -> <env>\Library */
++    for (int i = 0; i < 2; i++) {
++	if (!(p = strrchr(dir, '\\'))) { free(dir); return; }
++	*p = '\0';
++    }
++    n = strlen(dir);
++    strcpy(dir + n, "\\..\\conda-meta");
++    int conda = isdir(dir);
++    strcpy(dir + n, "\\bin");
++    if (!conda || !isdir(dir)) { free(dir); return; }
++    /* R_HOME may be in 8.3 form (getRHOME, R.home()); activation writes
++       the long form */
++    DWORD k = GetLongPathName(dir, NULL, 0);
++    char *ldir = k ? (char *) malloc(k) : NULL;
++    if (ldir && GetLongPathName(dir, ldir, k) > 0) { free(dir); dir = ldir; }
++    else free(ldir);
++    n = strlen(dir);
++    const char *old = getenv("PATH");
++    /* on PATH already (an activated environment): leave PATH as it is */
++    for (const char *q = old, *e; q && *q; q = e ? e + 1 : NULL) {
++	e = strchr(q, ';');
++	size_t m = e ? (size_t)(e - q) : strlen(q);
++	if (m && (q[m - 1] == '\\' || q[m - 1] == '/')) m--;
++	if (samedir(q, m, dir, n)) { free(dir); return; }
++    }
++    char *newpath = (char *) malloc(n + (old ? strlen(old) : 0) + 7);
++    if (newpath) {
++	sprintf(newpath, old && *old ? "PATH=%s;%s" : "PATH=%s", dir, old);
++	putenv(newpath);
++	/* no free here: storage remains in use */
++    }
++    free(dir);
++}
++
+ int main (int argc, char **argv)
+ {
+     int cmdarg = 1;
+@@ -80,6 +150,7 @@
+ 	fprintf(stderr, "Invalid R_HOME\n");
+ 	exit(1);
+     }
++    env_dlls_on_path(rhome2);
+     if (stricmp(argv[0] + strlen(argv[0]) - 11, "Rscript.exe") == 0
+ 	|| stricmp(argv[0] + strlen(argv[0]) - 7, "Rscript") == 0)
+ 	snprintf(cmd, CMD_LEN, "\"\"%s\\bin\\%s\\Rscript.exe\"", rhome2, arch);

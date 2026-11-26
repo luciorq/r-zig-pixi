@@ -47,7 +47,8 @@
 #   - Windows (every tree): grDevices.dll imports the bitmap libraries of
 #     its variant (full png, jpeg, tiff; slim png; minimal none); without
 #     tcltk (slim, minimal) there is no tcltk.dll, no R_HOME/Tcl and
-#     Makeconf's TCLTK_LIBS is empty;
+#     Makeconf's TCLTK_LIBS is empty; openblas: bin/x64/libRblas.dll.a
+#     imports dgemm_ as code (the forwarder Rblas.dll is not linked);
 #   - Windows (a tree that is not a conda env): with tcltk (full), the
 #     Tcl/Tk runtime is in R_HOME/Tcl (with Tcl's modules), Makeconf's
 #     TCL_VERSION names its DLLs (tcl86t, tk86t), Tcl/Tk's headers (tcl.h,
@@ -387,7 +388,7 @@ if [ "$OS" = windows ]; then
   # zig-libs (libs-zig-pixi's zig-* packages): R's triple's directory
   zl_triple=x86_64-windows-gnu
   [ "$PLAT" = win-arm64 ] && zl_triple=aarch64-windows-gnu
-  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin' \
+  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin;${R_ZIG_TOOLCHAIN_ENV}/Library/usr/bin' \
     'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"' \
     'R_ZIG_RC=${R_HOME}/bin/toolchain/windres.exe' \
     'R_ZIG_NM=${R_HOME}/bin/toolchain/nm.exe' \
@@ -397,6 +398,7 @@ if [ "$OS" = windows ]; then
     'R_ZIG_PKG_CONFIG_LIBDIR=${R_ZIG_LIBS}/lib/pkgconfig;${R_ZIG_PKG_CONFIG_PATH}' \
     'PKG_CONFIG_LIBDIR="${PKG_CONFIG_LIBDIR-${R_ZIG_PKG_CONFIG_LIBDIR}}"' \
     'R_TOOLS_SOFT="${R_TOOLS_SOFT-${R_ZIG_LIBS}}"' \
+    'LOCAL_SOFT="${LOCAL_SOFT-${R_ZIG_LIBS}}"' \
     'UserNM="${UserNM-${R_ZIG_NM}}"' 'RC="${RC-${R_ZIG_RC}}"' \
     'R_ZIG_CMAKE_TOOLCHAIN_FILE=${R_HOME}/etc/r-zig.cmake' \
     'CMAKE_TOOLCHAIN_FILE="${CMAKE_TOOLCHAIN_FILE-${R_ZIG_CMAKE_TOOLCHAIN_FILE}}"'; do
@@ -869,6 +871,22 @@ if [ "$OS" = windows ]; then
   while IFS= read -r f; do
     [ -f "$f" ] || { echo "error: ${f#$TREE/} is missing" >&2; exit 1; }
   done < "$r_pe"
+
+  # openblas: Rblas.dll forwards its exports, so BLAS_LIBS' -lRblas must
+  # find bin/x64/libRblas.dll.a, whose imports are code (nm's T): a
+  # package linked to the forwarder itself gets 32-bit pseudo relocations
+  # (b13-fixes F13). The internal Rblas.dll has real exports and no
+  # import library.
+  rblas_a="$TREE/$rh/bin/x64/libRblas.dll.a"
+  if [ "$BLAS" = openblas ]; then
+    [ -f "$rblas_a" ] || { echo "error: no $rh/bin/x64/libRblas.dll.a (the openblas Rblas.dll is a forwarder)" >&2; exit 1; }
+    "$TREE/$tc_dir/nm.exe" "$rblas_a" | tr -d '\r' | grep -q ' T dgemm_$' ||
+      { echo "error: $rh/bin/x64/libRblas.dll.a has no code import of dgemm_ (nm: T dgemm_)" >&2; exit 1; }
+    echo "== BLAS link verified: $rh/bin/x64/libRblas.dll.a imports dgemm_ as code"
+  elif [ -e "$rblas_a" ]; then
+    echo "error: $rh/bin/x64/libRblas.dll.a in the internal BLAS flavor (zig's install removes no file: build into a clean prefix)" >&2
+    exit 1
+  fi
 
   # The bitmap formats grDevices.dll links (the variant table: full png,
   # jpeg, tiff; slim png; minimal none), by the DLLs it imports: the -D

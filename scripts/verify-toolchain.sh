@@ -9,9 +9,10 @@
 # ziglang wheel (B4, phase 5), in cmake/, from Kitware's cmake release
 # archive (feat-extras-group), or that package's record, except
 # etc/fstab (Windows), r-zig's own MSYS mount table (PHASE7 open point D),
-# and Windows' usr/bin/pkgconf.exe and pkg-config.exe, pkgconf built from
-# its source tarball by the toolchain build (zigbuild/toolchain/pkgconf.zig),
-# whose SOURCES block has the built file's sha256:
+# and what the toolchain build compiles from a source tarball, whose
+# SOURCES block has the built file's sha256: Windows' usr/bin/pkgconf.exe
+# and pkg-config.exe (zigbuild/toolchain/pkgconf.zig), unix usr/bin/make
+# (zigbuild/make/build.zig; backlog L7):
 #   - layout: group directories under R_HOME/bin/toolchain only (env.sh's
 #     group_dirs), and no file directly in it;
 #   - records: each directory has SOURCES, each package block of it with
@@ -24,11 +25,9 @@
 #     hash of the archive's file), and every such target is there;
 #   - build paths: SOURCES and LICENSES name none of the checkout, the
 #     tree's own place, zig's caches, the env or $HOME (verify-tree.sh's
-#     list), and neither does pkgconf, which r-zig builds. A copy that
-#     names one is listed, not failed: the copies are
-#     third-party bytes as their packages ship them. conda-forge's macOS
-#     make names its build path, /Users/runner/..., which is under $HOME on
-#     GitHub's macOS runners (PHASE3 C18), and every OS's flang driver and
+#     list), and neither do pkgconf and make, which r-zig builds. A copy
+#     that names one is listed, not failed: the copies are
+#     third-party bytes as their packages ship them. Every OS's flang driver and
 #     the darwin and Windows runtimes name flang-pixi's build paths, under
 #     $HOME on omicron and kappa, its build hosts (PHASE6 Cg10);
 #   - closures: a copy loads only the system's libraries or files beside
@@ -53,6 +52,8 @@
 #     m2-make version SOURCES records, etc/fstab is build.zig's two lines,
 #     and MSYS takes R_HOME/bin/toolchain as its root and the temporary
 #     directory (TMP, TEMP) as /tmp;
+#   - unix make (the build-tools group, L7): usr/bin/make runs with
+#     PATH=/usr/bin:/bin and says the make version SOURCES records;
 #   - zig (the compilers group, B4): zig/zig runs and prints the version
 #     SOURCES records for ziglang;
 #   - flang (the compilers group, B9 a): flang/bin/flang runs and says the
@@ -224,10 +225,11 @@ while IFS= read -r f; do
      ${f#"$TREE"/}: $(first_match "$f")"
   n_named=$((n_named + 1))
 done < <([ -s "$WORK/copies.txt" ] && tr '\n' '\0' < "$WORK/copies.txt" | LC_ALL=C xargs -0 grep -laE "${icase[@]}" -e "$re" || true)
-# pkgconf is r-zig's build, not a third-party copy: one that names one
-# fails (pkgconf.zig maps the source directory away).
+# pkgconf and unix make are r-zig's builds, not third-party copies: one
+# that names one fails (pkgconf.zig maps the source directory away; make's
+# build passes no build path in).
 bad=""
-for f in "$TREE/$tc/usr/bin/pkgconf.exe" "$TREE/$tc/usr/bin/pkg-config.exe"; do
+for f in "$TREE/$tc/usr/bin/pkgconf.exe" "$TREE/$tc/usr/bin/pkg-config.exe" "$TREE/$tc/usr/bin/make"; do
   [ -f "$f" ] || continue
   if LC_ALL=C grep -qaE "${icase[@]}" -e "$re" "$f"; then
     bad="$bad
@@ -235,7 +237,7 @@ for f in "$TREE/$tc/usr/bin/pkgconf.exe" "$TREE/$tc/usr/bin/pkg-config.exe"; do
   fi
 done
 if [ -n "$bad" ]; then
-  echo "error: pkgconf, which the toolchain build compiles, names the build machine:$bad" >&2
+  echo "error: pkgconf or make, which the toolchain build compiles, names the build machine:$bad" >&2
   exit 1
 fi
 echo "== build paths verified: SOURCES and LICENSES name none of the checkout, zig's caches, the env, the tree or \$HOME"
@@ -473,6 +475,19 @@ none /tmp usertemp binary,posix=0 0 0" ]; then
     exit 1
   fi
   echo "== usr/ verified: $n tools run with PATH = System32; make $got; MSYS root $root_got, /tmp = TMP and TEMP"
+fi
+
+# unix make (the build-tools group, backlog L7): GNU make, built from its
+# source tarball by the toolchain build; it runs with the system's
+# directories alone and says the make version SOURCES records.
+if [ "$OS" != windows ] && [ -d "$TREE/$tc/usr" ]; then
+  mk="$TREE/$tc/usr/bin/make"
+  [ -x "$mk" ] || { echo "error: ${mk#"$TREE"/} is missing (the build-tools group's make)" >&2; exit 1; }
+  want="$(awk '$1 == "package:" { p = $2 } p == "make" && $1 == "version:" && v == "" { v = $2 } END { print v }' "$TREE/$tc/usr/SOURCES")"
+  got="$(PATH=/usr/bin:/bin "$mk" --version 2>&1 | sed -n '1s/^GNU Make //p')" || true
+  [ -n "$want" ] && [ "$got" = "$want" ] ||
+    { echo "error: ${mk#"$TREE"/} says GNU Make '$got', SOURCES records make '${want:-(none)}'" >&2; exit 1; }
+  echo "== usr/ verified: ${mk#"$TREE"/} $got, the make version SOURCES records"
 fi
 
 # The compilers group's zig (B4, phase 5): upstream zig, PyPI's ziglang

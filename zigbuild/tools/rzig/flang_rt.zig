@@ -75,11 +75,16 @@ fn isFlag(x: []const u8) bool {
 
 /// The flang zig-fc runs, and whose runtime every link resolved here uses,
 /// so the compiler and its runtime stay paired (feat-standalone-toolchain
-/// B2 a, B34 a), the first that is there: the compilers group's,
+/// B2 a, B34 a), the first that is there: the one in the bin/ of the
+/// environment R_ZIG_TOOLCHAIN_ENV names (Library/bin on Windows; backlog
+/// L6, find_zig.zig's order); the compilers group's,
 /// <rzig dir>/flang/bin/flang (flang.exe); the one in the bin/ of the
 /// environment R is installed in (a conda env used without activation);
 /// PATH's.
 pub fn flang(ctx: *Ctx) !?[]const u8 {
+    if (try environment.toolchainEnv(ctx)) |e| {
+        if (try find_zig.inDir(ctx, try ctx.fmt("{s}/bin", .{e.dir}), "flang")) |p| return p;
+    }
     if (environment.toolchain(ctx)) |tc| {
         if (try find_zig.inDir(ctx, try ctx.fmt("{s}/flang/bin", .{tc}), "flang")) |p| return p;
     }
@@ -204,7 +209,7 @@ test "no flang on PATH: every -lflang_rt.runtime dropped; flang never asked with
     try expectArgs(&.{ "a.o", "-lm" }, try resolve(&f.ctx, &.{ "a.o", "-lgfortran", "-lm", "-lquadmath" }));
 }
 
-test "flang: the toolchain's flang/bin, then the environment's bin, then PATH" {
+test "flang: R_ZIG_TOOLCHAIN_ENV's bin, the toolchain's flang/bin, then the environment's bin, then PATH" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
@@ -229,6 +234,12 @@ test "flang: the toolchain's flang/bin, then the environment's bin, then PATH" {
     try testing.expectEqualStrings(on_path, (try flang(c)).?);
     const bare = try f.touchProgram("bare/flang/bin/flang");
     try testing.expectEqualStrings(bare, (try flang(c)).?);
+    // R_ZIG_TOOLCHAIN_ENV's bin (L6) before all of them
+    try f.env.put("R_ZIG_TOOLCHAIN_ENV", f.path("tcenv"));
+    try f.tmp.dir.createDirPath(testing.io, "tcenv/bin");
+    try testing.expectEqualStrings(bare, (try flang(c)).?);
+    const tcenv = try f.touchProgram("tcenv/bin/flang");
+    try testing.expectEqualStrings(tcenv, (try flang(c)).?);
 }
 
 test "the runtime of the flang the lookup chose" {

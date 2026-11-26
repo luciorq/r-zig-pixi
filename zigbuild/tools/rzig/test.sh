@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# rzig's tests (feat-no-host-paths F3): its unit tests on this machine,
-# then, on linux, the parity test against the bash shims in toolchain/
-# (parity-test.sh: every OS's command lines, from one machine). Needs no R
-# build: `pixi run rzig-test`. The repo's build.zig runs the same unit
-# tests as `zig build rzig-test`.
+# rzig's tests (feat-no-host-paths F3): its unit tests on this machine
+# (and those of zigbuild/tools/fetch.zig, `zig build fetch`'s tool), then,
+# on linux, check-test.sh: its check mode, `rzig build` and
+# `rzig build --shlib` end to end, the real binary in a fake installed
+# tree. Needs no R build: `pixi run rzig-test`. The repo's build.zig runs
+# the same unit tests as `zig build rzig-test`.
 #
 # With an installed tree's prefix, `pixi run rzig-test dist/slim/R-4.6.2-zig`,
 # also smoke-test.sh against it, on linux: real compiles through rzig,
@@ -21,8 +22,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 # zig as zig-build.sh runs it: env.sh's $ZIG (ZIG_BIN, else the env's)
 echo "rzig-test: zig = $ZIG ($("$ZIG" version))"
 "$ZIG" build --build-file "$here/build.zig" test --summary all
+(cd "$here/.." && "$ZIG" test fetch.zig)
 if [ "$OS" = linux ]; then
-  ZIG="$ZIG" bash "$here/parity-test.sh"
+  ZIG="$ZIG" bash "$here/check-test.sh"
   ZIG="$ZIG" bash "$here/link-objects-test.sh"
   if [ $# -ge 1 ]; then
     ZIG="$ZIG" bash "$here/smoke-test.sh" "$1"

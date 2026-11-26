@@ -33,8 +33,9 @@
 //! before PATH (CMakeFindBinUtils): Windows has ar.exe and ranlib.exe
 //! beside gcc.exe, R CMD config CC, where MinGW's were before phase 3.
 //!
-//! zig is found by find_zig.zig: ZIG_BIN, the compilers group's zig/ in
-//! rzig's own directory, the environment's bin, PATH, python3 -m ziglang.
+//! zig is found by find_zig.zig: ZIG_BIN, R_ZIG_TOOLCHAIN_ENV's bin, the
+//! compilers group's zig/ in rzig's own directory, the environment's bin,
+//! PATH, python3 -m ziglang.
 //! None: rzig names the compilers group and how to install it (groups.zig)
 //! and exits 127. `<name> --rzig-check[=fortran|build-tools|extras|package]`
 //! checks a group's tools instead of compiling (check.zig): the install
@@ -68,8 +69,29 @@
 //!                      has: -idirafter <dir>/include, -L<dir>/lib, never
 //!                      -I and never OpenMP's provider. CRAN's Rtools45
 //!                      aarch64-w64-mingw32.static.posix (stress.R sets
-//!                      it); never R's LOCAL_SOFT, whose -I breaks libc++
+//!                      it); not R's LOCAL_SOFT (zig-libs by default),
+//!                      whose -I of a MinGW sysroot breaks libc++
 //!                      compiles. RZIG_TRACE marks it `(fallback)`.
+//!   R_ZIG_LIBS=<dir>   Windows (Rcmd_environ sets it: R's env's zig-libs,
+//!                      also LOCAL_SOFT's and R_TOOLS_SOFT's default): a
+//!                      caller's -I of it or below it becomes -idirafter,
+//!                      as each environment's own zig-libs
+//!                      (windows.demoteZigLibs): Makeconf.win's
+//!                      LOCAL_CPPFLAGS never shadows zig's headers.
+//!   R_ZIG_TOOLCHAIN_ENV=<root>  the environment that holds the
+//!                      toolchain, when it is not R's own (backlog L6): zig
+//!                      and flang in its bin/ (Library/bin on Windows),
+//!                      before the compilers group's; on linux libstdc++'s
+//!                      headers in its lib/gcc. No headers or libraries for
+//!                      packages (that is R_ZIG_EXTRA_ENV). make and cmake
+//!                      stay PATH's; the check names its bin when they are
+//!                      only there.
+//!   R_ZIG_SYSTEM_LIBS=1  linux only (ignored elsewhere):
+//!                      compile and link against the distribution's
+//!                      libraries in /usr (system_libs.zig, M-29): the
+//!                      host's include roots as -idirafter, also where the
+//!                      caller passed them as -I or -isystem (distro .pc
+//!                      files), and its library directories as the last -L.
 //!   _LINK_             rzig puts /OPT:NOICF first in it for zig on every
 //!                      Windows image link (windows.noIcf, lld's ICF off,
 //!                      finding 35); the caller's words follow.
@@ -307,6 +329,9 @@ pub fn main(init: std.process.Init) !u8 {
         .strip => return binutils.strip(&ctx, bu_args),
         else => {},
     }
+    // windres' depfile (meson asks for one), written from zig rc's list
+    // once zig rc has run (binutils.Depfile)
+    var depfile: ?binutils.Depfile = null;
     const cmd: Ctx.Command = switch (t) {
         // linux C++ with no libstdc++ headers or runtime: 127, after the
         // compilers group's text (libstdcxx.zig)
@@ -324,7 +349,10 @@ pub fn main(init: std.process.Init) !u8 {
         .dlltool, .windres, .as => .{
             .zig = (switch (t) {
                 .dlltool => binutils.dlltoolArgv(&ctx, bu_args),
-                .windres => binutils.windresArgv(&ctx, bu_args),
+                .windres => if (binutils.windres(&ctx, bu_args)) |w| blk: {
+                    depfile = w.depfile;
+                    break :blk w.argv;
+                } else |err| err,
                 else => binutils.asArgv(&ctx, bu_args),
             }) catch |err| switch (err) {
                 // --version printed its line; anything else, why it stopped
@@ -388,6 +416,15 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
     const zig_env = env_changed or ctx.env_set.items.len > 0;
+    if (depfile) |d| {
+        // spawned, not exec'd: the rule is written after
+        const code = spawnWait(&ctx, blocks.items[0].argv, if (zig_env) env else null);
+        if (code != 0) {
+            Io.Dir.cwd().deleteFile(io, d.json) catch {};
+            return code;
+        }
+        return binutils.writeDepfile(&ctx, d);
+    }
     return switch (cmd) {
         .steps => |st| runSteps(&ctx, blocks.items, st.tmp, if (zig_env) env else null),
         else => run(&ctx, blocks.items[0].argv, if (zig_env) env else null),
@@ -545,19 +582,26 @@ fn runSteps(ctx: *Ctx, blocks: []const Block, tmp: []const u8, env: ?*const std.
     };
     defer Io.Dir.cwd().deleteTree(ctx.io, tmp) catch |err| ctx.warn("cannot remove {s}: {t}", .{ tmp, err });
     for (blocks) |b| {
-        var child = std.process.spawn(ctx.io, .{ .argv = b.argv, .environ_map = if (b.zig) env else null }) catch |err| return cannotRun(ctx, b.argv[0], err);
-        const term = child.wait(ctx.io) catch |err| {
-            ctx.warn("waiting for {s}: {t}", .{ b.argv[0], err });
-            return 1;
-        };
-        const code: u8 = switch (term) {
-            .exited => |c| c,
-            .signal => |sig| if (builtin.os.tag == .windows) 1 else 128 +| @as(u8, @truncate(@backingInt(sig))),
-            else => 1,
-        };
+        const code = spawnWait(ctx, b.argv, if (b.zig) env else null);
         if (code != 0) return code;
     }
     return 0;
+}
+
+/// `argv` spawned and waited for: its exit code, 128+n for one killed by
+/// signal n on unix, 1 for another end; cannotRun's when it would not
+/// start.
+fn spawnWait(ctx: *Ctx, argv: []const []const u8, env: ?*const std.process.Environ.Map) u8 {
+    var child = std.process.spawn(ctx.io, .{ .argv = argv, .environ_map = env }) catch |err| return cannotRun(ctx, argv[0], err);
+    const term = child.wait(ctx.io) catch |err| {
+        ctx.warn("waiting for {s}: {t}", .{ argv[0], err });
+        return 1;
+    };
+    return switch (term) {
+        .exited => |c| c,
+        .signal => |sig| if (builtin.os.tag == .windows) 1 else 128 +| @as(u8, @truncate(@backingInt(sig))),
+        else => 1,
+    };
 }
 
 fn cannotRun(ctx: *Ctx, cmd: []const u8, err: anyerror) u8 {
@@ -721,6 +765,7 @@ test {
     _ = find_zig;
     _ = libcxx_mirror;
     _ = @import("libstdcxx.zig");
+    _ = @import("system_libs.zig");
 }
 
 test "rzig's root panic and debug are crash.zig's (K4)" {

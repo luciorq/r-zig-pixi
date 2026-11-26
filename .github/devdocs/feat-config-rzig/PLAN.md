@@ -249,3 +249,9 @@ PATH = bin\x64 + System32, so no make and no sh). On kappa also:
 item), `R CMD config` with no arguments from cmd.exe (rcmdfn.c's closing
 quote), and an R_HOME path with a space. CI: conda-package (recipe tests
 above) on every leg.
+
+(2026-11-24, b13-hosts H3 and CI12, build 12 from universe on kappa:
+done. has_rtools(debug = TRUE) is TRUE with r-zig-slim and
+r-zig-compilers alone, from "R CMD config CC" once Rtools45 is hidden;
+R CMD config answers from cmd.exe, also in an env under a path with a
+space. Details in b13-hosts/PLAN.md.)
