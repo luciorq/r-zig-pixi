@@ -4422,7 +4422,7 @@ environments:
       - conda: https://prefix.dev/universe/win-64/zig-hdf4-4.2.15-zig_4617172_0.conda
       - conda: https://prefix.dev/universe/win-64/zig-hdf5-1.12.1-zig_f41514d_0.conda
       - conda: https://prefix.dev/universe/win-64/zig-libaec-1.0.6-zig_69fa7dc_0.conda
-      - conda: https://prefix.dev/universe/win-64/zig-libcurl-8.18.0-zig_38b206d_0.conda
+      - conda: https://prefix.dev/universe/win-64/zig-libcurl-8.18.0-zig_38b206d_1.conda
       - conda: https://prefix.dev/universe/win-64/zig-libdeflate-1.25-zig_77896ef_0.conda
       - conda: https://prefix.dev/universe/win-64/zig-libiconv-1.17-zig_4bc333d_0.conda
       - conda: https://prefix.dev/universe/win-64/zig-libjpeg-9f-zig_818e618_0.conda
@@ -4549,7 +4549,7 @@ environments:
       - conda: https://prefix.dev/universe/win-arm64/zig-hdf4-4.2.15-zig_554182d_0.conda
       - conda: https://prefix.dev/universe/win-arm64/zig-hdf5-1.12.1-zig_03c4281_0.conda
       - conda: https://prefix.dev/universe/win-arm64/zig-libaec-1.0.6-zig_26d81c6_0.conda
-      - conda: https://prefix.dev/universe/win-arm64/zig-libcurl-8.18.0-zig_12f6e5a_0.conda
+      - conda: https://prefix.dev/universe/win-arm64/zig-libcurl-8.18.0-zig_12f6e5a_1.conda
       - conda: https://prefix.dev/universe/win-arm64/zig-libdeflate-1.25-zig_6bb1c10_0.conda
       - conda: https://prefix.dev/universe/win-arm64/zig-libiconv-1.17-zig_ba8ed4a_0.conda
       - conda: https://prefix.dev/universe/win-arm64/zig-libjpeg-9f-zig_9aad480_0.conda
@@ -20963,19 +20963,19 @@ packages:
     - zig-libaec >=1.0.6,<2.0a0
   size: 40199
   timestamp: 1795614069373
-- conda: https://prefix.dev/universe/win-64/zig-libcurl-8.18.0-zig_38b206d_0.conda
-  sha256: 60bf5417c973c60ea0016c6155fe4d38fc706d791ba4ceccd74d82d548710059
-  md5: 03c1c81a9dd1c09494af1dfc1a041096
+- conda: https://prefix.dev/universe/win-64/zig-libcurl-8.18.0-zig_38b206d_1.conda
+  sha256: c2f3e95c65876cbd3a0a02967789cfe04ab7cb8ed856b4ac7e7ebbda225e51c6
+  md5: 5197568e4aa5b2682ec8bc186fbcab0a
   depends:
+  - zig-zstd >=1.5.7,<1.6.0a0
   - zig-brotli >=1.2.0,<1.3.0a0
   - zig-zlib >=1.3.1,<1.4.0a0
-  - zig-zstd >=1.5.7,<1.6.0a0
   license: curl
   run_exports:
     weak:
     - zig-libcurl >=8.18.0,<9.0a0
-  size: 661121
-  timestamp: 1795614785767
+  size: 662834
+  timestamp: 1795702079879
 - conda: https://prefix.dev/universe/win-64/zig-libdeflate-1.25-zig_77896ef_0.conda
   sha256: d135581c6b93e469949fd6b488f01819233994c2d9d60ff69f0cf09a9573c256
   md5: ff28ecce3c34e8bb681ae0eb43b8cac0
@@ -21379,19 +21379,19 @@ packages:
     - zig-libaec >=1.0.6,<2.0a0
   size: 38706
   timestamp: 1795608981098
-- conda: https://prefix.dev/universe/win-arm64/zig-libcurl-8.18.0-zig_12f6e5a_0.conda
-  sha256: 630b7271503d83e43ff0405dc60f296e091ed8a07cadd62fed5feb5504120cb1
-  md5: ca8019652c0fa5c7e30ada8f2ac474b7
+- conda: https://prefix.dev/universe/win-arm64/zig-libcurl-8.18.0-zig_12f6e5a_1.conda
+  sha256: 1bd16d889ee8bb400e0fd70e6fca8719877dfaa0fd5079d16ba2a3034ab50a6a
+  md5: 6351cd71ff2cb52153425b3bc18e7566
   depends:
+  - zig-zstd >=1.5.7,<1.6.0a0
   - zig-zlib >=1.3.1,<1.4.0a0
   - zig-brotli >=1.2.0,<1.3.0a0
-  - zig-zstd >=1.5.7,<1.6.0a0
   license: curl
   run_exports:
     weak:
     - zig-libcurl >=8.18.0,<9.0a0
-  size: 646014
-  timestamp: 1795609217283
+  size: 646798
+  timestamp: 1795702074731
 - conda: https://prefix.dev/universe/win-arm64/zig-libdeflate-1.25-zig_6bb1c10_0.conda
   sha256: d962277c53b5b2bdad3e8d60f65f9dea263682e18a10da464816a848f7bae5e9
   md5: 2ea3fadba4d30fc37234b4a5b946aa36

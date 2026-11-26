@@ -99,6 +99,10 @@ rebuilt at build 1 (zig-zlib, -sqlite, -expat, -openssl, -abseil,
   win-arm64 zig_12f6e5a_1, pending publish; then relock and rerun windows-11-arm. The libs smoke is 21/21 on all six Windows legs of
   45714066676 and 45714071892 (F11's fix holds). S3 (45714071892, `rtools_libs=false`): 166 ok; only Rhtslib (regex.h) and Rsamtools
   still need the tree, so F4's nanoarrow (lz4) no longer does.
+- F13 (V) zig-libcurl build 1 on universe (libs run 45834790796, main eee907d; libcurl.pc Libs without -liphlpapi). Relock
+  `pixi update -e stress -p win-64 -p win-arm64 zig-libcurl`: pixi.lock 54e77c422af4 -> cf4b3220532c, only zig-libcurl
+  zig_38b206d_0 -> _1 (stress win-64) and zig_12f6e5a_0 -> _1 (stress win-arm64). Check: S1-style windows-11-arm stress,
+  Rhtslib and Rsamtools rows.
 
 ## Tests
 
@@ -108,6 +112,7 @@ rebuilt at build 1 (zig-zlib, -sqlite, -expat, -openssl, -abseil,
 | gamma | packages.tsv parsed as stress.R does (read.delim, `on_os`) | 46 rows, 10 fields each; Windows sysdeps: the 24 zig-* names, libboost-headers, and the unchanged conda names |
 | kappa | ssh, 12:20 to 13:00 EST | unreachable (F7) |
 | kappa | f243dc7: `pixi run --locked build -- --verbose`, `pixi run --locked toolchain`, `pixi run --locked -e stress stress --libs-smoke=main <F8 targets>` (56 min, scratch dir deleted) | 92/92 ok (F8); libs smoke exit 1 (F9); build runner crash on the ssh pipe (F10) |
+| delta | `pixi update -e stress -p win-64 -p win-arm64 zig-libcurl`, `pixi lock --check` | 54e77c422af4 -> cf4b3220532c, 2 packages changed, check ok (F13) |
 | gamma | stress 45548386803 artifacts (windows-latest tree, windows-11-arm tree) | F1, F2, F3 |
 | delta | `pixi lock --check` (pixi 0.84.2); `Rscript stress/stress.R --sysdeps all` (R 4.6.2 zig build); per-env package sets of pixi.lock vs HEAD | lock up to date (87b58a42ca62); rc 0, 46 rows; only stress win-64 (42 out, 35 in) and win-arm64 (9 out, 35 in) differ, the nine slice-1 build 0 -> 1 swaps included; linux and macos sysdeps of every row unchanged |
 
