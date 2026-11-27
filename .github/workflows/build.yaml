@@ -62,6 +62,11 @@ concurrency:
 
 # Every job starts from a bare runner: the only bootstrap is pixi itself.
 # All compilers, shells, and libraries come from conda-forge via pixi.
+# The token only reads the repository, as in the other workflows. A job
+# that needs more says so itself.
+permissions:
+  contents: read
+
 jobs:
   # The toolchain groups, once per platform (feat-standalone-toolchain
   # B30, B31): toolchain.yaml builds the toolchain tree, archives its three
@@ -349,9 +354,9 @@ jobs:
       # coupling feat-zig-pkg-build's N5 records). For a release: merge
       # the bump, `gh variable set CONDA_PUBLISH --body true`, dispatch
       # this workflow on main, check universe and a fresh env, then
-      # `gh variable delete CONDA_PUBLISH`. `_10` was published this way
-      # on 2026-11-09 (run 42644467377), `_9` on 2026-11-05 (run
-      # 41942729382).
+      # `gh variable delete CONDA_PUBLISH`. The checklist, with the checks
+      # before and after, is .github/devdocs/RELEASE.md; each release's
+      # run is in its chore-release-<N>/PLAN.md.
       - name: Publish to prefix.dev (OIDC trusted publishing)
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CONDA_PUBLISH == 'true'
         run: pixi run -e pkg conda-publish ${{ matrix.name }}

@@ -23,12 +23,10 @@ name: gen-config
 
 on:
   workflow_dispatch:
-  # workflow_dispatch only works once the file exists on the DEFAULT
-  # branch (GitHub doesn't register branch-only workflows for manual
-  # dispatch — hit for real trying `gh workflow run` from the feature
-  # branch). The paths-scoped push trigger is the workaround: pushing a
-  # change to this file OR gen-subst.sh (the script that does the actual
-  # work) runs it from that branch, nothing else does.
+  # A push that changes what the capture runs (this file, the two
+  # scripts, or rzig's build, since the capture builds rzig: b13-build
+  # N6) runs it on that branch, so a change to the capture is tested
+  # before the next platform needs it. Nothing else starts it.
   push:
     paths:
       - ".github/workflows/gen-config.yaml"
@@ -36,9 +34,14 @@ on:
       - "zigbuild/tools/configure-only.sh"
       - "zigbuild/tools/rzig/build.zig"
 
+permissions:
+  contents: read
+
 jobs:
   gen-config:
     name: ${{ matrix.platform }} / ${{ matrix.env }}
+    # build.yaml's kill switch (README, CI).
+    if: vars.ENABLE_HOSTED_JOBS == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
