@@ -47,6 +47,20 @@ publishes.
 | D10 | workflow token permissions | (a) the repository default; (b) `contents: read` at the top of build.yaml, upstream-zig.yaml and gen-config.yaml | (b) | the four other workflows say so already; jobs that need more name it themselves |
 | D11 | publishing on a push to main, and `id-token: write` on the whole conda-package job | (a) change build.yaml now; (b) add the caution to RELEASE.md, ask the user | (b) | it changes the release procedure and cannot be tested before a release: menu M3 |
 
+### User decisions (2026-11-26)
+
+The user, after the menus below: "Pr created, Continue with
+recommended." Pull request #59. Every menu's option (a).
+
+| # | menu | chosen | done where |
+|---|---|---|---|
+| U1 | M1, the m2 licences | (a) only real licence files count; texts retaken; m2-tar and m2-gzip added | here: the 20 `zigbuild/toolchain/licenses/m2-*/` directories and their README (F21). build 14: `hasLicenseFiles`, `windows_dirs` |
+| U2 | M2, `[skip ci]` | (a) allowed only on the merge commit of a pull request whose head ran CI | build 14: CONVENTIONS.md |
+| U3 | M3, the publish step | (a) a dispatch only, in a job of its own | here: build.yaml's `conda-publish`, RELEASE.md (F22). build 14: README.md, pixi.toml's comment |
+| U4 | M4, macOS and the SDK | (a) state the exception | build 14: CONVENTIONS.md, README.md |
+| U5 | M5, the root symlinks | (a) removed | here: `PLAN.md`, `TODO.md` gone (F23). build 14: build.zig's message, pixi.toml:232, README.md |
+| U6 | M6, the unix launchers | (a) the sh launcher follows Rscript.c | build 14, done there before this menu (b14-review PLAN.md: 75 cases against R 4.6.2's compiled Rscript) |
+
 ## Findings fixed in this branch
 
 rzig, the package build engine (all **V**; `zigbuild/tools/rzig/`):
@@ -160,6 +174,28 @@ Workflows and documents:
   three groups; `R CMD config` runs no make); build.yaml's publish
   comment points at RELEASE.md; .gitignore names `python/r_zig`.
 
+After the user's decisions:
+
+- **F21 (V). The m2 licence texts, for the locked builds** (U1). Taken
+  again as the README there says, for the `ha3ae583_11` packages of
+  pixi.lock: each package's source archive is the `.src.tar.zst` of its
+  `rendered_recipe.yaml`, checked against the recipe's sha256, and the
+  files come from the upstream tarball inside it (m2-msys2-runtime: from
+  the archive's git clone, at the PKGBUILD's tag). New: m2-tar and
+  m2-gzip. Every directory's `VERSION` is the lock's version and build.
+  Until build 14's `hasLicenseFiles` change the build does not read
+  them (B1).
+- **F22 (V, by reading). Publishing is a job of its own**, U3.
+  `conda-publish` in build.yaml: only for a dispatch on main with
+  `CONDA_PUBLISH` set, after all six `conda-package` jobs passed, from
+  their artifacts (`conda-<subdir>`); it alone has `id-token: write`.
+  A push no longer publishes, and a release has all six subdirs or
+  none. A dispatch on main without the variable uploads the artifacts
+  and skips the job: a rehearsal. RELEASE.md says so.
+- **F23 (V). The root `PLAN.md` and `TODO.md` symlinks are gone** (U5).
+  contract-test.sh's two bare "TODO.md" citations name
+  feat-zig-build's.
+
 ## Findings sent to build 14
 
 Files build 14 owns (README.md, stress/, CXX-STDLIB.md, CONVENTIONS.md,
@@ -173,8 +209,8 @@ Behaviour:
 - **B1 (V). The MSYS2 programs ship without their licence texts.** The
   locked `m2-*` `ha3ae583_11` packages hold one file in
   `info/licenses/`, `recipe-scripts-license.txt` (conda-forge's
-  BSD-3-Clause for its recipe scripts; m2-bash and m2-tar downloaded
-  and opened). `hasLicenseFiles` (zigbuild/toolchain/build.zig) then
+  BSD-3-Clause for its recipe scripts; all 20 the group copies from
+  were downloaded and opened, F21). `hasLicenseFiles` (zigbuild/toolchain/build.zig) then
   returns true, so `ownLicenses` and the 18 hand-taken
   `zigbuild/toolchain/licenses/m2-*/` directories (VERSION
   `hc364b38_6`, taken 2026-10-20) are never read, and the Windows
@@ -305,6 +341,8 @@ Documents and comments (all **A** unless marked):
 
 ## Menus for the user (recommended first)
 
+Answered on 2026-11-26: option (a) of each (User decisions, above).
+
 - **M1, the m2 licences (B1).** (a) Count only real licence files
   (`recipe-scripts-license.txt` is not one), retake the 18 directories
   for the `_11` builds, add m2-tar and m2-gzip; the build then stops on
@@ -352,16 +390,29 @@ Documents and comments (all **A** unless marked):
 | GNU make 4.3 on the new makefile tests' texts | gamma | `[a] [x z]`; `[-g]`; `[] [] [after] [line]`; `[a.o sub/b.o c.cpp]` twice, `[all.o all.o c.cpp]` |
 | a quoted and an unquoted .def with globals `VERSION` and `DATA`, `zig cc -target x86_64-windows-gnu -shared` and `zig dlltool` | gamma | F5 |
 | `bash -n` on every edited script | gamma | clean |
+| the 20 m2 licence directories (F21): each source archive against its recipe's sha256, each `file:` line's sha256 against the file, each .conda's `info/licenses/` listed | gamma, `take-m2.py` | 20 of 20; every package ships `recipe-scripts-license.txt` alone |
+| the Windows toolchain build with these 20 directories and build 14's `hasLicenseFiles` change (a build14 snapshot; r-zig-pixi-ed, 2026-11-26) | kappa (win-64) | `toolchain`, `verify-toolchain` and `toolchain-test` exit 0; "31 packages, each with its LICENSES/"; `usr/LICENSES/` has all 20 m2 packages, each identical to the directory here; `recipe-scripts-license.txt` nowhere in the tree; no package without a directory |
+| build.yaml after F22: YAML parse, the jobs' `if:`, permissions and steps read back | gamma | `conda-package` has no `id-token`; `conda-publish` has it and the gate |
+| PR #59, first push (949cff0 to f8f8abd): gen-config's four legs with the new capture guard | GitHub, run 45941439403 | linux-arm64 default, full, minimal and osx-arm64 minimal pass (the others: see the pull request) |
+| PR #59 at f8f8abd, labels `full-ci` and `upstream-zig`: every check (read 2026-11-27) | GitHub, runs 45941445437 (build-r), 45941445250 (upstream-zig), 45941439403 (gen-config) | 52 pass, 0 fail. 4 skipped, each as designed: `packaging` (skipped under `full-ci`), and the label events' two duplicate runs 45941445063 and 45941445546 |
+| rzig's tests in that run, both zigs | GitHub: the `default` legs of ubuntu-latest, macos-latest, windows-latest, windows-11-arm; upstream zig (PyPI ziglang 0.17.1) on ubuntu-latest, macos-latest, windows-latest | linux and macOS: 247 of 247, and check-test.sh's 60 of 60 on linux; Windows: 217 of 247 with 30 skipped (the 30 `SkipZigTest` returns for a Windows host, all older than this branch), none failed; the same counts with upstream zig |
+| F12: the consume test on Windows | GitHub, `conda-package / win-64` and `/ win-arm64` | both start with `== default: test-win.R` ("conda R OK"), then preflight, compilers, build-tools, extras, toolchain, recommended (and tcltk on win-64), each to its last OK line. The `native-tools` env did not run: main has no `recipe/test-native-tools.R` (build 14 adds it) |
+| F11, F13 to F16: the script changes in real builds | GitHub, the `default` legs of the four runners above | `contract program ran to the end` on all four; linux "C++ runtime: libstdc++ in every compiled C++ package (Rcpp, minqa), no libc++"; macOS "static in every compiled package"; verify-bundle's first C++ compile "static libc++" on macOS and both Windows legs; `recommended packages verified` and `pkg-parity verified` (windows/slim); no `##[error]` or `##[warning]` line in the eight logs read |
 
 ## Not verified
 
-- No R was built and no conda package made: the script changes (F11 to
-  F16) ran no further than `bash -n`. The first CI run on this branch
-  is their test.
-- Nothing ran on macOS or Windows. F12's two additions to the consume
-  test, F13's Windows branch and F5's quoted .def in a real package
-  install (cross-linked here) are first run by CI's Windows legs.
-- rzig's tests ran with conda-forge zig only, not upstream zig.
-- The workflow edits (F18, F19) are checked by reading alone.
+- The first CI run (the rows above) built R and the packages on all six
+  platforms with both zigs, so F5, F11 to F16 and F12's `test-win.R`
+  are no longer unverified. Still not run: F12's `native-tools` env
+  (until build 14's `recipe/test-native-tools.R` is on main), and
+  `cannot_check` of F15 and the `$BLAS != internal` stop of F11, whose
+  conditions no CI leg meets.
+- I read eight of the 46 job logs line by line (the four `default`
+  legs, four `conda-package` legs) and three upstream-zig legs for
+  their test counts; the other jobs by their status alone.
+- The workflow edits (F18, F19, F22) are checked by reading and a YAML
+  parse alone. `conda-publish` runs first at the next release: a
+  dispatch on main without `CONDA_PUBLISH` before it rehearses the
+  artifact upload, not the download and the upload to prefix.dev.
 - The **A** findings were not re-run by me, apart from the ones this
   record marks **V**.

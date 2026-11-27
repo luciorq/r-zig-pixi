@@ -109,7 +109,7 @@ which are history.
 | Directory | Topic |
 | --- | --- |
 | `feat-initial-setup/` | The first design: R built with zig and pixi |
-| `feat-zig-build/` | Milestone 5: R built by `zig build` alone. The root `PLAN.md` and `TODO.md` are symlinks to this directory's |
+| `feat-zig-build/` | Milestone 5: R built by `zig build` alone. Its `PLAN.md` has "Regenerating the vendored config", which code comments cite (the root `PLAN.md` and `TODO.md` symlinks to it are gone since 2026-11-26) |
 | `feat-prefix-publish/` | Publishing to prefix.dev; the self-hosted CI fleet (decommissioned 2026-09-19) |
 | `feat-legacy-retirement/` | Milestone 7: the autoconf and gnuwin32 builds retired |
 | `feat-cross-platform-standardization/` | Milestone 8: the same build on every platform |
