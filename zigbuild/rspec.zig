@@ -1,8 +1,8 @@
 //! Source inventory for building R with zig build — the "what" extracted
 //! from R 4.6.2's generated Makefiles (see devdocs feat-zig-build).
 //! Every list mirrors the resolved SOURCES/OBJECTS variables of the
-//! milestone-1 autoconf build (captured in make-vars.txt); keep them in
-//! that order so object-link order matches the make build.
+//! milestone-1 autoconf build; keep them in that order so object-link
+//! order matches the make build.
 
 /// C sources of src/main linked into libR.so (Rmain.c is the executable,
 /// listed separately).
@@ -293,20 +293,12 @@ pub const win_tzone_c = [_][]const u8{"registryTZ.c"};
 /// since glibc/macOS libc already have a native mkdtemp.
 pub const win_mkdtemp_c = [_][]const u8{"mkdtemp.c"};
 
-/// src/modules/lapack/*.f90 — same la_constants -> la_xisnan module-
-/// dependency chain as unix's rlapack_f90_ordered (this is the one place
-/// Windows' LAPACK layout still matches unix's shape), in compile order.
-pub const win_lapack_f90_ordered = [_][]const u8{
-    "la_constants.f90", "la_xisnan.f90", "dlassq.f90", "zlassq.f90",
-    "dlartg.f90",       "zlartg.f90",
-};
-/// src/modules/lapack/*.f — dlapack.f is a single file aggregating what
-/// unix splits across ~15 files; dlamch.f needs -ffloat-store (Makefile.win:
-/// `dlamch-FFLAGS = -ffloat-store`, non-LLVM only) and cmplx.f is the
-/// complex-routines file (same family as the gfortran-darwin miscompile
-/// found on macOS — flag this as unverified-on-Windows, check `make check`
-/// there before trusting complex LAPACK).
-pub const win_lapack_f = [_][]const u8{ "dlamch.f", "dlapack.f", "cmplx.f" };
+/// src/modules/lapack's Fortran on Windows: the same files in the same
+/// order as unix's, so one list serves both. (Makefile.win's
+/// `dlamch-FFLAGS = -ffloat-store` is for non-LLVM compilers only; flang
+/// compiles every platform.)
+pub const win_lapack_f90_ordered = rlapack_f90_ordered;
+pub const win_lapack_f = rlapack_f;
 /// modules/lapack.dll (the loadable module, unix's mod_lapack equivalent)
 /// is just Lapack.c — "flexiblas not supported on Windows" per
 /// Makefile.win, so no flexiblas.c counterpart here.

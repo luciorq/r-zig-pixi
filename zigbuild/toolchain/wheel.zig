@@ -234,13 +234,14 @@ test "METADATA: the headers only, the Source Code URL among three" {
     try std.testing.expectEqualStrings("Project-URL", missing);
 }
 
-test "tag: the five pinned wheels' file names" {
+test "tag: the six pinned wheels' file names (scripts/fetch-zig.sh)" {
     const names = [_][2][]const u8{
-        .{ "ziglang-0.16.0-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl", "py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64" },
-        .{ "ziglang-0.16.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl", "py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64" },
-        .{ "ziglang-0.16.0-py3-none-macosx_12_0_arm64.whl", "py3-none-macosx_12_0_arm64" },
-        .{ "ziglang-0.16.0-py3-none-macosx_12_0_x86_64.whl", "py3-none-macosx_12_0_x86_64" },
-        .{ "ziglang-0.16.0-py3-none-win_amd64.whl", "py3-none-win_amd64" },
+        .{ "ziglang-0.17.1-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl", "py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64" },
+        .{ "ziglang-0.17.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl", "py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64" },
+        .{ "ziglang-0.17.1-py3-none-macosx_13_0_arm64.whl", "py3-none-macosx_13_0_arm64" },
+        .{ "ziglang-0.17.1-py3-none-macosx_13_0_x86_64.whl", "py3-none-macosx_13_0_x86_64" },
+        .{ "ziglang-0.17.1-py3-none-win_amd64.whl", "py3-none-win_amd64" },
+        .{ "ziglang-0.17.1-py3-none-win_arm64.whl", "py3-none-win_arm64" },
     };
     for (names) |n| try std.testing.expectEqualStrings(n[1], try tag(n[0]));
     try std.testing.expectError(error.BadWheelName, tag("ziglang-0.16.0.tar.gz"));

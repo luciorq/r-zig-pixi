@@ -42,7 +42,6 @@ pub const url = "https://cairographics.org/releases/cairo-" ++ version ++ ".tar.
 pub const sha256 = "1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4";
 /// COPYING: LGPL 2.1 or MPL 1.1, the user's choice.
 pub const license = "LGPL-2.1-only OR MPL-1.1";
-pub const repository = "https://gitlab.freedesktop.org/cairo/cairo";
 
 /// src/meson.build's cairo_sources plus the png, svg, win32, win32-font,
 /// script, ps and pdf feature sources (under src/, without .c).
