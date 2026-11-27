@@ -38,20 +38,28 @@ keeps its own record (a `chore-release-<N>/PLAN.md`) with the run ids.
 
 ## Publish
 
-1. Merge the release PR (the user).
+1. Merge the release PR (the user). The merge's own push run on main
+   must not publish too: let it finish, or cancel it, before step 2
+   (release 13 cancelled it, chore-release-13/PLAN.md). The publish step
+   also runs on a push while `CONDA_PUBLISH` is set, and two runs on one
+   commit share no concurrency group.
 2. `gh variable set CONDA_PUBLISH --body true`
 3. `gh workflow run build.yaml --ref main` (build.yaml's publish step
    runs only on main, on push or dispatch, with `CONDA_PUBLISH` set:
-   `.github/workflows/build.yaml:345`).
+   the `if:` of the step "Publish to prefix.dev" in
+   `.github/workflows/build.yaml`).
 4. When the run is done: `gh variable delete CONDA_PUBLISH`, success or
    not.
 
 ## After
 
-1. universe has every package at `_N` on all six subdirs (six packages
-   each: r-zig-slim, -compilers, -build-tools, -extras, -toolchain,
-   -recommended), with `conda-channel-list` or the subdir's
-   `repodata.json`.
+1. universe has every package at `_N` on all six subdirs, with
+   `conda-channel-list` or the subdir's `repodata.json`. The packages
+   are the outputs of `recipe/recipe.yaml`, less each output's
+   `build.skip`; count them from the recipe, not from this list. Build
+   13: r-zig-slim, -compilers, -build-tools, -extras, -toolchain,
+   -recommended and -tcltk, seven per subdir, six on win-arm64 (no
+   r-zig-tcltk there). The staging output r-zig-build is not published.
 2. A fresh environment from universe only (no local channel, fresh
    caches), universe listed before conda-forge (README's `--prepend`):
    `pixi add r-zig-slim r-zig-toolchain`, R starts,
