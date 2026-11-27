@@ -58,7 +58,7 @@ stub() {
   chmod +x "$1"
 }
 touchf() { mkdir -p "$(dirname "$1")"; : > "$1"; }
-# prog <path> <sh body>: a stand-in for flang or gfortran
+# prog <path> <sh body>: a stand-in for flang
 prog() { mkdir -p "$(dirname "$1")"; printf '#!/bin/sh\n%s\n' "$2" > "$1"; chmod +x "$1"; }
 
 # zig's stand-in: prints its argv, one per line

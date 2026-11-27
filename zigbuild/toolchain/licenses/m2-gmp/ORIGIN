@@ -1,7 +1,7 @@
-package: m2-gmp 6.3.0.1 hc364b38_6
+package: m2-gmp 6.3.0.2 ha3ae583_11
 license: LGPL-3.0-or-later (conda-meta)
-source: https://repo.msys2.org/msys/sources/gmp-6.3.0-1.src.tar.zst sha256:50d4088a4607fdb01f6639b262cb5c27dbc09eccda11d4157b2664ec7e2cb4b7
-mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20250515/gmp-6.3.0-1.src.tar.zst
+source: https://repo.msys2.org/msys/sources/gmp-6.3.0-2.src.tar.zst sha256:02356ca25ce362edb883ce7c060050de2cec5f2b1227a1c56ef7c0a0f99ff667
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20261029/gmp-6.3.0-2.src.tar.zst
 file: COPYING.LESSERv3 a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c <- gmp/gmp-6.3.0.tar.xz:gmp-6.3.0/COPYING.LESSERv3
 file: COPYINGv2 8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643 <- gmp/gmp-6.3.0.tar.xz:gmp-6.3.0/COPYINGv2
 file: COPYINGv3 e6037104443f9a7829b2aa7c5370d0789a7bda3ca65a0b904cdc0c2e285d9195 <- gmp/gmp-6.3.0.tar.xz:gmp-6.3.0/COPYINGv3

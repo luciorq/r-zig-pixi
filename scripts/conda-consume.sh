@@ -6,16 +6,18 @@
 # Library/bin/Rscript.bat, which rattler-build's test phase cannot run).
 # CI runs it on every conda-package leg before the publish; each host runs
 # it after conda-package (feat-standalone-toolchain phase 4; PHASE4 Cg8).
-# One manifest, seven environments: the base alone, base + compilers,
-# base + build tools, base + extras (cmake, feat-extras-group),
-# r-zig-toolchain, the metapackage of the groups
+# One manifest, one environment per package: the base alone (on Windows
+# also test-win.R, as the recipe's own test of r-zig-slim), base +
+# compilers, base + build tools, base + extras (cmake,
+# feat-extras-group), r-zig-toolchain, the metapackage of the groups
 # (test-toolchain.R through activation, as a user's `pixi add
-# r-zig-toolchain` gets it; PHASE7 open point P a), and base + R's
-# recommended packages (feat-recommended-packages), and base + the tcltk
-# add-on (b13-recipe; not on win-arm64, which has no r-zig-tcltk).
-# Removing a group is
-# the package manager's, and the files that move between packages are the
-# upgrade test's.
+# r-zig-toolchain` gets it; PHASE7 open point P a), base + R's
+# recommended packages (feat-recommended-packages), base + the tcltk
+# add-on (b13-recipe; not on win-arm64, which has no r-zig-tcltk) and, on
+# Windows where the recipe has it (build 14 on, b14-l4), base + compilers
+# + r-zig-native-tools, with no MSYS2 in the environment.
+# Removing a group is the package manager's, and the files that move
+# between packages are the upgrade test's.
 . "$(dirname "$0")/env.sh"
 ch="$ROOT/dist/conda"; rec="$ROOT/recipe"; cache="$ROOT/build/conda-test-zig-cache"
 [ -d "$ch/$PLAT" ] || { echo "error: no $ch/$PLAT: run 'pixi run -e pkg conda-package' first" >&2; exit 1; }
@@ -74,6 +76,24 @@ r-zig-tcltk = "*"
 features = ["tcltk"]
 EOF
   tests="$tests tcltk:test-tcltk.R"
+fi
+if [ "$OS" = windows ]; then
+  # r-zig-slim's Windows recipe test runs test-win.R before the preflight
+  tests="default:test-win.R $tests"
+  # r-zig-native-tools, when this checkout's recipe builds it (its test
+  # file is there): the compilers and the native set, no r-zig-build-tools
+  if [ -f "$rec/test-native-tools.R" ]; then
+    cat >> "$T/pixi.toml" << EOF
+
+[feature.native-tools.dependencies]
+r-zig-compilers = "*"
+r-zig-native-tools = "*"
+
+[environments.native-tools]
+features = ["native-tools"]
+EOF
+    tests="$tests native-tools:test-native-tools.R"
+  fi
 fi
 # the zig cache conda-package's recipe tests filled (pixi.toml)
 export R_ZIG_TEST_ZIG_CACHE="$cache"

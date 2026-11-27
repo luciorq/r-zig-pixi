@@ -548,7 +548,7 @@ test "build: on Windows the .def from the objects, in this process, on the link;
     try testing.expectEqualStrings("", f.takeWarnings());
     // the object's exports (def.zig), no command line of its own
     const d = try f.tmp.dir.readFileAlloc(testing.io, "root/p.def", f.ctx.arena, .limited(4096));
-    try testing.expect(mem.startsWith(u8, d, "EXPORTS\n") and mem.indexOf(u8, d, "\nexported_fn\n") != null);
+    try testing.expect(mem.startsWith(u8, d, "EXPORTS\n") and mem.indexOf(u8, d, "\n\"exported_fn\"\n") != null);
     const tc = f.path("tc");
     try testing.expectEqualStrings(f.fmt("{0s}/ld{2s} -o {1s}/p.dll {1s}/p.def @{1s}/objects.rsp\n", .{ tc, f.path("root"), exe }), f.takeEchoed());
     try testing.expect(f.ctx.isFile(f.path("out/p.dll")));

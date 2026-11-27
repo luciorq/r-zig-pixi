@@ -21,7 +21,7 @@
 #                rzig build, the C++ link through SHLIB_CXXLD with FLIBS;
 #                Windows: make)
 #   pak        — the real-world repro case behind F7.1/F7.6/F7.7 (see
-#                TODO.md): its own configure script recursively
+#                feat-zig-build/TODO.md): its own configure script recursively
 #                re-invokes R.exe/Rterm.exe (the access-violation crash
 #                fixed by F7.6's Windows ReleaseSafe switch), and its
 #                bundled keyring/zip sub-packages compile mbedtls with
@@ -30,7 +30,7 @@
 #                F7.7). Locks in both fixes against regression.
 #   ps         — already pulled in transitively via pak, but listed and
 #                exercised explicitly here since it's the actual origin
-#                of the F7.8 repro (see TODO.md): its src/arch/macos/
+#                of the F7.8 repro (see feat-zig-build/TODO.md): its src/arch/macos/
 #                apps.m is genuine Objective-C (AppKit-based running-app
 #                enumeration), silently compiled as plain C before the
 #                OBJC toolchain-shim fix. ps_apps() (macOS only) calls
@@ -62,23 +62,22 @@
 # stdcxx_wrong, elf_needed: the linux C++ runtime checks
 . "$(dirname "$0")/verify-helpers.sh"
 
+# R_TEST_R_BIN: another tree's Rscript instead of the compile tree's
+# (compile-tree.sh), which is also what zig-contract.sh names. Package
+# builds read CC=$(BINPREF)gcc etc from Windows' etc/x64/Makeconf, and
+# BINPREF names R_HOME/bin/toolchain/ (rzig's gcc.exe and g++.exe).
 if [ "$OS" = windows ]; then
-  # R_TEST_R_BIN: test a different build's Rscript.exe (e.g. the zig-build
-  # prefix's) instead of the in-tree gnuwin32 default.
-  R_BIN="${R_TEST_R_BIN:-$SRC_DIR/bin/x64/Rscript.exe}"
-  test -x "$R_BIN" || R_BIN="$SRC_DIR/bin/Rscript.exe"
-  # package builds read CC=$(BINPREF)gcc etc from etc/x64/Makeconf, and
-  # BINPREF names R_HOME/bin/toolchain/ (rzig's gcc.exe and g++.exe); the
-  # gnuwin32 build's win-toolchain dir below is a leftover, empty today
-  export PATH="$BUILD_DIR/win-toolchain:$PATH"
+  R_BIN="${R_TEST_R_BIN:-$COMPILE_TREE/$RH/bin/x64/Rscript.exe}"
 else
-  # R_TEST_R_BIN: test a different build's Rscript (e.g. the zig-build
-  # prefix's) instead of the autoconf objdir default. See FINALIZATION.md F1.2.
-  R_BIN="${R_TEST_R_BIN:-$OBJ_DIR/bin/Rscript}"
+  R_BIN="${R_TEST_R_BIN:-$COMPILE_TREE/$RH/bin/Rscript}"
 fi
-test -x "$R_BIN" || { echo "error: $R_BIN not built yet — run 'pixi run build'" >&2; exit 1; }
+test -x "$R_BIN" || { echo "error: $R_BIN not there: run 'pixi run compile-tree' (after 'pixi run build' and 'pixi run toolchain')" >&2; exit 1; }
 
-LIB="$BUILD_DIR/testlib-$VARIANT"
+# Per flavor (default and openblas share a variant), and emptied: the
+# check below reads what is installed here, so a package an earlier run
+# left would stand in for one this run failed to install.
+LIB="$BUILD_DIR/testlib-$FLAVOR"
+rm -rf "$LIB"
 mkdir -p "$LIB"
 # rzig build's caches as a user's install has them: tier 1 runs no zig
 # build (tier1.zig), each install's objects and library in its build

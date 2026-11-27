@@ -1,0 +1,5 @@
+package: m2-gzip 1.15.1 ha3ae583_11
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/gzip-1.15-1.src.tar.zst sha256:edf0bbd51c3f366b9d19cf5d6f1f2830caefae68d0fc626ad2befbd25d5f21eb
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20261029/gzip-1.15-1.src.tar.zst
+file: COPYING 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986 <- gzip/gzip-1.15.tar.xz:gzip-1.15/COPYING

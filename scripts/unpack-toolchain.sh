@@ -6,7 +6,8 @@
 # (B31). Each archive's sha256 is checked, and its members must lie under
 # its own group's directories, so the archives fill the tree without
 # touching each other. Then the tree is removed (env.sh's own only, as
-# zig-toolchain.sh does) and both archives are extracted into its parent.
+# zig-toolchain.sh does) and every group's archive is extracted into its
+# parent.
 . "$(dirname "$0")/env.sh"
 . "$(dirname "$0")/verify-helpers.sh"
 # Windows: an override may be C:\...; basename and dirname want /c/... form.

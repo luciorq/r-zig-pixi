@@ -2,7 +2,7 @@
 ## 4): rzig's check finds make (Windows: also sh), names
 ## r-zig-compilers for what is missing, and says when make is installed
 ## in this env but not on PATH (on Windows R CMD then finds them itself,
-## PHASE7 F2 b); R CMD config reads Makeconf through make. On unix the
+## PHASE7 F2 b); R CMD config (rzig's, no make) reads Makeconf. On unix the
 ## package's own make: GNU make built from source into
 ## R_HOME/bin/toolchain/usr/bin (backlog L7). On Windows the
 ## package's own files: pkgconf,

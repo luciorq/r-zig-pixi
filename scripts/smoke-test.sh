@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Quick functional test of the freshly built (not yet installed) R.
+# Quick functional test of the installed tree's R (env.sh's $PREFIX, what
+# `pixi run build` installs).
 # Exercises C paths, Fortran paths (BLAS/LAPACK/fft), and asserts the
 # variant's capability profile, on every OS the same way (build.zig's
 # variant table holds for Windows too, 2026-11-14): capabilities(), and
@@ -16,15 +17,14 @@
 #     field is a library path there).
 . "$(dirname "$0")/env.sh"
 
-# R_TEST_R_BIN: test a different build's R (e.g. the zig-build prefix's
-# bin/R, Windows: R_HOME/bin/x64/Rscript.exe) instead of the autoconf
-# objdir default.
+# R_TEST_R_BIN: another tree's R (unix bin/R; Windows
+# R_HOME/bin/x64/Rscript.exe) instead of the installed tree's, which is
+# also what zig-smoke.sh names.
 if [ "$OS" = windows ]; then
-  R_BIN="${R_TEST_R_BIN:-$SRC_DIR/bin/x64/Rscript.exe}"
-  test -x "$R_BIN" || R_BIN="$SRC_DIR/bin/Rscript.exe"
+  R_BIN="${R_TEST_R_BIN:-$R_HOME_DIR/bin/x64/Rscript.exe}"
   run_r() { "$R_BIN" --vanilla -e "$1"; }
 else
-  R_BIN="${R_TEST_R_BIN:-$OBJ_DIR/bin/R}"
+  R_BIN="${R_TEST_R_BIN:-$R_HOME_DIR/bin/R}"
   run_r() { "$R_BIN" --vanilla --quiet -e "$1"; }
 fi
 test -x "$R_BIN" || { echo "error: $R_BIN not built yet — run 'pixi run build'" >&2; exit 1; }

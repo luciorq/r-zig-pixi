@@ -1,0 +1,5 @@
+package: m2-tar 1.35.3 ha3ae583_11
+license: GPL-3.0-or-later (conda-meta)
+source: https://repo.msys2.org/msys/sources/tar-1.35-3.src.tar.zst sha256:eeef1210f2f3db98bdf301ab72e0e8886b8348938e58dfc58897639143eebf0b
+mirror: https://github.com/conda-forge/m2-binary-packages-feedstock/releases/download/20261029/tar-1.35-3.src.tar.zst
+file: COPYING 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986 <- tar/tar-1.35.tar.xz:tar-1.35/COPYING

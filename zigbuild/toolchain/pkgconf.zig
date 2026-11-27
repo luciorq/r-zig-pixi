@@ -37,7 +37,6 @@ pub const url = "https://distfiles.ariadne.space/pkgconf/pkgconf-" ++ version ++
 pub const sha256 = "d0cd841bc8e55b9da888106c00dc256d05b7d1d8e5a46f4be4eb4c5125bd2dc4";
 /// meson.build's `license`; COPYING is its text.
 pub const license = "ISC";
-pub const repository = "https://github.com/pkgconf/pkgconf";
 
 const sources = [_][]const u8{
     "libpkgconf/argvsplit",  "libpkgconf/audit",    "libpkgconf/buffer",   "libpkgconf/bufferset",

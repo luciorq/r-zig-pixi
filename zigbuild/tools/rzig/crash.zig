@@ -17,7 +17,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 /// rzig's exit status after a crash on Windows: EX_SOFTWARE (sysexits.h).
-/// Not 0, 1, 2, 3 or 127, the statuses rzig gives otherwise.
+/// Not a status rzig gives otherwise: 0, 1, 2, 3, 126, 127, or a child's
+/// own (128 + a signal's number on unix).
 pub const exit_crash: u8 = 70;
 
 const windows = builtin.os.tag == .windows;

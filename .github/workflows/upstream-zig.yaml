@@ -29,6 +29,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}${{ (github.event.action == 'labeled' && github.event.label.name != 'upstream-zig') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
+# The token only reads the repository, as in the other workflows. A job
+# that needs more says so itself.
+permissions:
+  contents: read
+
 jobs:
   # The toolchain groups built with upstream zig (toolchain.yaml; PHASE3
   # C35), one leg per runner of build below, as build.yaml's toolchain

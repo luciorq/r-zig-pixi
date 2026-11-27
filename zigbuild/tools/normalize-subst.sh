@@ -17,8 +17,8 @@
 #           tool), TEXI2DVICMD "texi2dvi", YACC "yacc", ACLOCAL/AUTOCONF/
 #           AUTOHEADER as configure's `missing` wrapper (the value when
 #           autotools are absent), PAGER "less", R_BROWSER/R_PDFVIEWER
-#           the desktop opener (xdg-open, or open on macOS). stage.sh
-#           sets the same Renviron defaults; recording them here keeps
+#           the desktop opener (xdg-open, or open on macOS). build.zig
+#           writes etc/Renviron from this table; recording them here keeps
 #           capture paths such as /usr/bin/firefox out of the configs.
 set -euo pipefail
 os="${1:?usage: normalize-subst.sh <macos|linux> <subst.txt>}"

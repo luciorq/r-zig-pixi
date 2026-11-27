@@ -7,9 +7,9 @@
 if [ "$OS" = windows ]; then
   # R_HOME is <prefix>/Library/lib/R on Windows (NTFS case-collision with
   # Python's Lib — see env.sh); Rscript.exe lives at bin/x64/ under that,
-  # matching gnuwin32's own layout (F6.0: no bin/R front script on
-  # Windows — R.dll's front-end is a compiled Rscript.exe, not a shell
-  # wrapper, and F6.0 also drops the R.exe/Rcmd.exe dispatchers).
+  # matching gnuwin32's own layout (no bin/R front script on Windows: the
+  # front-ends are compiled programs, Rscript.exe, Rterm.exe, R.exe and
+  # Rcmd.exe).
   export R_TEST_R_BIN="$R_HOME_DIR/bin/x64/Rscript.exe"
 else
   export R_TEST_R_BIN="$R_HOME_DIR/bin/R"

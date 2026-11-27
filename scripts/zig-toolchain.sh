@@ -44,8 +44,8 @@ fi
 # does not see (the maker installs there); the build reads the env's
 # records for it and compares it with the env (prefix_is_env). Not for
 # the unit tests: without it the configure step stops before the tree's
-# copies, so `test` fetches no archive (cmake, Windows' pkgconf) and
-# runs offline.
+# copies, so `test` fetches none of the archives of
+# zigbuild/toolchain/build.zig.zon (all lazy) and runs offline.
 prefix=()
 if [ "${1:-}" != test ]; then
   prefix=("-Dprefix=$TOOLCHAIN_PREFIX")

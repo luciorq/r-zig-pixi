@@ -89,7 +89,7 @@ pub const this: Platform = .{
 };
 
 /// conda's subdir names: linux-64, linux-aarch64, osx-64, osx-arm64,
-/// win-64. Any other: <os>-<arch>.
+/// win-64, win-arm64. Any other: <os>-<arch>.
 pub fn platformName(comptime arch: std.Target.Cpu.Arch, comptime os: std.Target.Os.Tag) []const u8 {
     return switch (os) {
         .linux => switch (arch) {
@@ -189,6 +189,7 @@ test platformName {
     try testing.expectEqualStrings("osx-64", platformName(.x86_64, .macos));
     try testing.expectEqualStrings("osx-arm64", platformName(.aarch64, .macos));
     try testing.expectEqualStrings("win-64", platformName(.x86_64, .windows));
+    try testing.expectEqualStrings("win-arm64", platformName(.aarch64, .windows));
     // R's own: what rzig is built for; its zig is the one that built it
     try testing.expectEqualStrings(platformName(builtin.cpu.arch, builtin.os.tag), this.name);
     try testing.expect(this.r.len > 0);

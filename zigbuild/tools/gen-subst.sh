@@ -22,6 +22,14 @@
 # already reflect which pixi environment this runs under.
 . "$(dirname "$0")/../../scripts/env.sh"
 
+# As configure-only.sh: the openblas flavor has no vendored config, and
+# its capture would overwrite the internal-BLAS one ($VARIANT names the
+# directory, not $FLAVOR).
+if [ "$BLAS" != internal ]; then
+  echo "error: no vendored config for R_BLAS=$BLAS: the openblas flavor uses the internal-BLAS config" >&2
+  exit 1
+fi
+
 CONFIG_STATUS="$OBJ_DIR/config.status"
 test -f "$CONFIG_STATUS" || {
   echo "error: $CONFIG_STATUS not found — run 'pixi run configure' first" >&2
