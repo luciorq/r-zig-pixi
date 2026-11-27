@@ -2,7 +2,7 @@
 
 The durable steps of a release. Derived from chore-release-11/PLAN.md
 (build 11, run 44336177906), fix-icu-pin/PLAN.md ("a rebuilt `_8` is
-not universe's `_8`") and build.yaml's publish step. Each release still
+not universe's `_8`") and build.yaml's conda-publish job. Each release still
 keeps its own record (a `chore-release-<N>/PLAN.md`) with the run ids.
 
 ## Rules
@@ -15,7 +15,10 @@ keeps its own record (a `chore-release-<N>/PLAN.md`) with the run ids.
 - **One build number per publish.** Bump `build.number` in
   `recipe/recipe.yaml` once per release, never publish two contents
   under one number. Between releases the `CONDA_PUBLISH` repository
-  variable stays unset, so a merge to main uploads nothing.
+  variable stays unset, so a dispatch on main uploads nothing (a push
+  never does).
+- **All six subdirs together.** One job uploads them, after every
+  subdir's packages passed their tests.
 - **Both zigs.** conda-forge zig and upstream zig (PyPI ziglang) must
   both pass on the release code: the `upstream-zig` label run is a
   release gate, not optional.
@@ -38,18 +41,23 @@ keeps its own record (a `chore-release-<N>/PLAN.md`) with the run ids.
 
 ## Publish
 
-1. Merge the release PR (the user). The merge's own push run on main
-   must not publish too: let it finish, or cancel it, before step 2
-   (release 13 cancelled it, chore-release-13/PLAN.md). The publish step
-   also runs on a push while `CONDA_PUBLISH` is set, and two runs on one
-   commit share no concurrency group.
+1. Merge the release PR (the user). The merge's push run on main
+   publishes nothing: only a dispatch does (build 14 on; until build 13
+   a push with `CONDA_PUBLISH` set published too, and release 13
+   cancelled its push run).
 2. `gh variable set CONDA_PUBLISH --body true`
-3. `gh workflow run build.yaml --ref main` (build.yaml's publish step
-   runs only on main, on push or dispatch, with `CONDA_PUBLISH` set:
-   the `if:` of the step "Publish to prefix.dev" in
-   `.github/workflows/build.yaml`).
+3. `gh workflow run build.yaml --ref main`. The job `conda-publish` of
+   `.github/workflows/build.yaml` uploads all six subdirs, after all six
+   `conda-package` jobs passed: it runs only for a dispatch on main with
+   `CONDA_PUBLISH` set (its `if:`). If a `conda-package` job fails,
+   nothing is uploaded: re-run the failed jobs. If only `conda-publish`
+   fails, re-run it alone.
 4. When the run is done: `gh variable delete CONDA_PUBLISH`, success or
    not.
+
+A dispatch on main without `CONDA_PUBLISH` is a rehearsal: the packages
+are built, tested and kept as the artifacts `conda-<subdir>`, and
+`conda-publish` is skipped.
 
 ## After
 

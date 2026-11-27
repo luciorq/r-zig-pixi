@@ -8,10 +8,12 @@ name: build-r
 #   nothing else: all 21 legs (full, openblas and minimal too, Windows
 #   included).
 # conda-package (6 jobs) runs on every push to main, in the full tier,
-# and on a pull request that changes what it builds from. A push to main
-# publishes only while the repository variable CONDA_PUBLISH is `true`:
-# a release switch, set for a build-number bump's publish and deleted
-# after it (the publish step says why).
+# and on a pull request that changes what it builds from. Only a manual
+# dispatch on main publishes, in the conda-publish job, after all six
+# conda-package jobs passed and while the repository variable
+# CONDA_PUBLISH is `true`: a release switch, set for a build-number
+# bump's publish and deleted after it (that job says why). A push never
+# publishes.
 # Both tiers' legs wait for the toolchain job (6 jobs, one per
 # platform), whose group archives they unpack and test
 # (feat-standalone-toolchain B31). Docs-only changes never touch the
@@ -283,14 +285,10 @@ jobs:
   # catching a recipe regression before a real release. All 6 platforms
   # on GitHub-hosted runners — the self-hosted gamma/omicron/kappa fleet
   # is decommissioned (2026-09-19; see CI_SELF_HOSTED_PLAN.md's closing
-  # note). Publishing uses prefix.dev trusted publishing (OIDC):
-  # `id-token: write` lets rattler-build mint a short-lived token, no
-  # stored credentials on any runner. Requires this repo+workflow to be
-  # registered as a Trusted Publisher in the `universe` channel's
-  # settings on prefix.dev.
-  # It runs on every push to main (publishing needs it, when
-  # CONDA_PUBLISH allows it: the publish step) and every manual
-  # dispatch; on a pull request, with `full-ci` or when packaging says
+  # note). It builds and tests the packages and uploads nothing: the
+  # conda-publish job below does, from this job's artifacts.
+  # It runs on every push to main and every manual dispatch; on a pull
+  # request, with `full-ci` or when packaging says
   # the pull request changes what it builds from. !cancelled(), because
   # packaging is skipped in all the other cases, and a job whose need was
   # skipped is skipped too unless its condition has a status function.
@@ -304,9 +302,6 @@ jobs:
        (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
         (github.event.action != 'labeled' || github.event.label.name == 'full-ci')))
     runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -345,18 +340,80 @@ jobs:
       # which rattler-build's test phase cannot run).
       - name: Fresh-env consume test (each group alone)
         run: pixi run -e pkg conda-consume
-      # A release switch (the user's decision, 2026-10-27, option c of
-      # feat-standalone-toolchain's phase 7 record). CONDA_PUBLISH is
-      # unset between releases, so a merge without a build-number bump
-      # uploads nothing: with --skip-existing it would put a package
-      # whose build string changed beside universe's others at the same
-      # number (a new-hash r-zig-toolchain beside an old r-zig-slim, the
-      # coupling feat-zig-pkg-build's N5 records). For a release: merge
-      # the bump, `gh variable set CONDA_PUBLISH --body true`, dispatch
-      # this workflow on main, check universe and a fresh env, then
-      # `gh variable delete CONDA_PUBLISH`. The checklist, with the checks
-      # before and after, is .github/devdocs/RELEASE.md; each release's
-      # run is in its chore-release-<N>/PLAN.md.
+      # The packages, for conda-publish: on a dispatch on main, the only
+      # run that can publish (with or without CONDA_PUBLISH, so a
+      # dispatch without it rehearses this step). Already compressed.
+      - name: Upload the packages (for conda-publish)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: conda-${{ matrix.name }}
+          path: dist/conda/${{ matrix.name }}/*.conda
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  # The release's upload to prefix.dev's `universe` channel: every subdir
+  # in one job, after all six conda-package jobs passed, so a release
+  # has all six or none (RELEASE.md: all subdirs together), and the only
+  # job with `id-token: write`. That permission lets rattler-build mint a
+  # short-lived token through prefix.dev's trusted publishing (OIDC), with
+  # no stored credential on any runner; this repository and workflow are
+  # registered as a Trusted Publisher in the channel's settings. Before
+  # 2026-11-26 each conda-package job uploaded its own subdir, on a push
+  # to main too, with the permission on every event (chore-review-
+  # consistency M3).
+  # A release switch (the user's decision, 2026-10-27, option c of
+  # feat-standalone-toolchain's phase 7 record). CONDA_PUBLISH is unset
+  # between releases, so a dispatch without a build-number bump uploads
+  # nothing: with --skip-existing it would put a package whose build
+  # string changed beside universe's others at the same number (a
+  # new-hash r-zig-toolchain beside an old r-zig-slim, the coupling
+  # feat-zig-pkg-build's N5 records). For a release: merge the bump, `gh
+  # variable set CONDA_PUBLISH --body true`, dispatch this workflow on
+  # main, check universe and a fresh env, then `gh variable delete
+  # CONDA_PUBLISH`. The checklist, with the checks before and after, is
+  # .github/devdocs/RELEASE.md; each release's run is in its
+  # chore-release-<N>/PLAN.md.
+  # If only this job fails, re-run it alone: the artifacts are kept, and
+  # --skip-existing passes over what a first attempt uploaded.
+  conda-publish:
+    name: conda-publish
+    needs: conda-package
+    if: >-
+      vars.ENABLE_HOSTED_JOBS == 'true' && !cancelled() &&
+      needs.conda-package.result == 'success' &&
+      github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' &&
+      vars.CONDA_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.84.2  # as build-r.yaml, which says why
+          environments: pkg
+          cache: true
+      # each artifact in a directory of its name: conda-<subdir>/
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: conda-*
+          path: dist/conda-artifacts
+      # Every subdir has its packages before the first upload starts (mv
+      # fails on a subdir without one), where the conda-publish task
+      # reads them.
+      - name: The six subdirs' packages
+        run: |
+          for s in linux-64 linux-aarch64 osx-64 osx-arm64 win-64 win-arm64; do
+            mkdir -p "dist/conda/$s"
+            mv "dist/conda-artifacts/conda-$s"/*.conda "dist/conda/$s/"
+            ls -l "dist/conda/$s"
+          done
       - name: Publish to prefix.dev (OIDC trusted publishing)
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.CONDA_PUBLISH == 'true'
-        run: pixi run -e pkg conda-publish ${{ matrix.name }}
+        run: |
+          for s in linux-64 linux-aarch64 osx-64 osx-arm64 win-64 win-arm64; do
+            pixi run -e pkg conda-publish "$s"
+          done
