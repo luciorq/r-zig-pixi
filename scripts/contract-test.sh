@@ -21,7 +21,7 @@
 #                rzig build, the C++ link through SHLIB_CXXLD with FLIBS;
 #                Windows: make)
 #   pak        — the real-world repro case behind F7.1/F7.6/F7.7 (see
-#                TODO.md): its own configure script recursively
+#                feat-zig-build/TODO.md): its own configure script recursively
 #                re-invokes R.exe/Rterm.exe (the access-violation crash
 #                fixed by F7.6's Windows ReleaseSafe switch), and its
 #                bundled keyring/zip sub-packages compile mbedtls with
@@ -30,7 +30,7 @@
 #                F7.7). Locks in both fixes against regression.
 #   ps         — already pulled in transitively via pak, but listed and
 #                exercised explicitly here since it's the actual origin
-#                of the F7.8 repro (see TODO.md): its src/arch/macos/
+#                of the F7.8 repro (see feat-zig-build/TODO.md): its src/arch/macos/
 #                apps.m is genuine Objective-C (AppKit-based running-app
 #                enumeration), silently compiled as plain C before the
 #                OBJC toolchain-shim fix. ps_apps() (macOS only) calls
