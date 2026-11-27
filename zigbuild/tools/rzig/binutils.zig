@@ -59,6 +59,9 @@ const rzig_target = @import("target.zig");
 
 pub const Error = error{ BadFile, OutOfMemory };
 
+/// The largest file nm, objdump, strip and `rzig def` read.
+pub const max_file = 1 << 30;
+
 // --- the machine ------------------------------------------------------
 
 pub const Machine = enum {
@@ -187,7 +190,9 @@ pub const Section = struct {
     const bss = 0x80;
     const lnk_info = 0x200;
     const lnk_remove = 0x800;
-    const discardable = 0x02000000;
+    /// IMAGE_SCN_LNK_NRELOC_OVFL: with NumberOfRelocations 0xffff, the
+    /// first relocation record's VirtualAddress is the real count.
+    const nreloc_ovfl = 0x01000000;
     const mem_write = 0x80000000;
 
     fn isDebug(s: Section) bool {
@@ -558,8 +563,8 @@ fn nmList(a: mem.Allocator, o: NmOpts, out: *std.ArrayList(u8), m: Machine, syms
     }
 }
 
-/// One file's (or archive member's) symbols; null for a file nm does not
-/// read (it names it, as GNU's "file format not recognized").
+/// One file's (or archive member's) symbols; error.BadFile for a file nm
+/// does not read (nm names it, as GNU's "file format not recognized").
 fn symbolsOf(a: mem.Allocator, d: []const u8, out: *std.ArrayList(Sym)) Error!Machine {
     switch (kindOf(d)) {
         .object => {
@@ -695,7 +700,7 @@ pub fn nm(ctx: *Ctx, args: []const []const u8, out: *std.ArrayList(u8)) !u8 {
     var code: u8 = 0;
     const many = files.items.len > 1;
     for (files.items) |f| {
-        const d = Io.Dir.cwd().readFileAlloc(ctx.io, f, a, .limited(1 << 30)) catch |err| {
+        const d = Io.Dir.cwd().readFileAlloc(ctx.io, f, a, .limited(max_file)) catch |err| {
             ctx.warn("'{s}': {t}", .{ f, err });
             code = 1;
             continue;
@@ -781,7 +786,7 @@ fn objdumpHeaders(a: mem.Allocator, c: Coff, out: *std.ArrayList(u8)) !void {
     try out.print(a, "Idx Name          Size      VMA{s}  LMA{s}  File off  Algn\n", .{ if (w == 16) "             " else "     ", if (w == 16) "             " else "     " });
     const base = if (c.image) c.imageBase() else 0;
     for (c.sections, 0..) |s, i| {
-        const size = if (c.image) @max(s.vsize, 0) else s.raw_size;
+        const size = if (c.image) s.vsize else s.raw_size;
         const vma = if (c.image) base + s.va else s.va;
         const align_exp: u32 = if (c.image) 2 else blk: {
             const n = (s.flags >> 20) & 0xf;
@@ -948,7 +953,7 @@ pub fn objdump(ctx: *Ctx, args: []const []const u8, out: *std.ArrayList(u8)) !u8
     if (files.items.len == 0) try files.append(a, "a.out");
     var code: u8 = 0;
     for (files.items) |f| {
-        const d = Io.Dir.cwd().readFileAlloc(ctx.io, f, a, .limited(1 << 30)) catch |err| {
+        const d = Io.Dir.cwd().readFileAlloc(ctx.io, f, a, .limited(max_file)) catch |err| {
             ctx.warn("'{s}': {t}", .{ f, err });
             code = 1;
             continue;
@@ -963,7 +968,13 @@ pub fn objdump(ctx: *Ctx, args: []const []const u8, out: *std.ArrayList(u8)) !u8
             for (ms) |m| {
                 const c = Coff.parse(a, m.data) catch continue;
                 try out.print(a, "\n{s}:     file format pe-{s}\n\n", .{ m.name, c.machine.bfd() });
-                try objdumpFile(a, c, show, out);
+                objdumpFile(a, c, show, out) catch |err| switch (err) {
+                    error.BadFile => {
+                        ctx.warn("{s}({s}): malformed file", .{ f, m.name });
+                        code = 1;
+                    },
+                    else => |e| return e,
+                };
             }
             continue;
         }
@@ -973,7 +984,15 @@ pub fn objdump(ctx: *Ctx, args: []const []const u8, out: *std.ArrayList(u8)) !u8
             continue;
         };
         try out.print(a, "\n{s}:     file format pe{s}-{s}\n\n", .{ f, if (c.image) "i" else "", c.machine.bfd() });
-        try objdumpFile(a, c, show, out);
+        // a truncated import, export or symbol table: this file's error,
+        // with its name, and what was read so far is still printed
+        objdumpFile(a, c, show, out) catch |err| switch (err) {
+            error.BadFile => {
+                ctx.warn("{s}: malformed file", .{f});
+                code = 1;
+            },
+            else => |e| return e,
+        };
     }
     return code;
 }
@@ -1013,9 +1032,10 @@ pub fn stripObject(a: mem.Allocator, c: Coff) Error!?[]u8 {
         }
         if (s.nrelocs != 0) {
             const rp = try rd32(d, h + 24);
-            const n: usize = if (s.nrelocs == 0xffff and s.flags & 0x01000000 != 0) 0xffff else s.nrelocs;
-            // an extended count's first record holds the real one
-            const count: usize = if (n == 0xffff) try rd32(d, rp) else n;
+            // an extended count's first record holds the real one; without
+            // the flag 0xffff is the count itself
+            const overflow = s.nrelocs == 0xffff and s.flags & Section.nreloc_ovfl != 0;
+            const count: usize = if (overflow) try rd32(d, rp) else s.nrelocs;
             if (@as(usize, rp) + count * 10 > d.len) return error.BadFile;
             mem.writeInt(u32, out.items[h + 24 ..][0..4], @intCast(out.items.len), .little);
             try out.appendSlice(a, d[rp..][0 .. count * 10]);
@@ -1133,7 +1153,7 @@ pub fn strip(ctx: *Ctx, args: []const []const u8) !u8 {
     }
     var code: u8 = 0;
     for (files.items) |f| {
-        const d = Io.Dir.cwd().readFileAlloc(ctx.io, f, a, .limited(1 << 30)) catch |err| {
+        const d = Io.Dir.cwd().readFileAlloc(ctx.io, f, a, .limited(max_file)) catch |err| {
             ctx.warn("'{s}': {t}", .{ f, err });
             code = 1;
             continue;
@@ -1222,7 +1242,7 @@ fn stripArchive(ctx: *Ctx, src: []const u8, d: []const u8, dest: []const u8) !?[
         try argv.append(a, p);
     }
     if (!ctx.succeeds(argv.items)) return error.ZigArFailed;
-    return try Io.Dir.cwd().readFileAlloc(ctx.io, out_ar, a, .limited(1 << 30));
+    return try Io.Dir.cwd().readFileAlloc(ctx.io, out_ar, a, .limited(max_file));
 }
 
 // --- dlltool, windres, as: zig commands -------------------------------
@@ -1591,10 +1611,9 @@ const expectArgs = testutil.expectArgs;
 
 // testdata/win-syms.c compiled with `zig cc -target x86_64-windows-gnu -O2 -c`
 const win_syms = @embedFile("testdata/win-syms.o");
-// testdata/bu.c: `zig cc -target <t> -g0 -O2 -c` (bu-x64.o, bu-arm64.o)
-// and -shared (bu-x64.dll, bu-arm64.dll; imports printf from the CRT);
+// testdata/bu.c: `zig cc -target <t> -g0 -O2 -c` (bu-arm64.o) and
+// -shared (bu-x64.dll, bu-arm64.dll; imports printf from the CRT);
 // bu-x64-g.o with -g (its .debug$S and .debug$T)
-const bu_x64_o = @embedFile("testdata/bu-x64.o");
 // testdata/bu-dwarf.c: `zig cc -target <t> -gdwarf-4 -O1 -shared -nostdlib
 // -Wl,--entry=DllMainCRTStartup` (bu-x64-dwarf.dll, bu-arm64-dwarf.dll):
 // lld places the .debug_* sections last, mapped

@@ -243,12 +243,16 @@ pub const Evaluator = struct {
     fn loadLine(e: *Evaluator, line: []const u8, mode: Mode, dir: []const u8, conds: *std.ArrayList(Cond), in_rule_ptr: *bool) Error!void {
         var in_rule = in_rule_ptr.*;
         defer in_rule_ptr.* = in_rule;
-        // a recipe line: belongs to the rule before it
+        // A line that starts with a tab is a recipe line only after a rule
+        // (it belongs to that rule); with no rule before it make reads it
+        // as any other line (read.c: "If there is no preceding rule line,
+        // don't treat this line as a command"), so a tab-indented
+        // assignment inside a site Makevars' ifdef counts. A package's
+        // Makevars has no rule, and no use for such a line: refused.
         if (line.len > 0 and line[0] == '\t') {
             if (in_rule) return;
             if (mem.trim(u8, line, " \t").len == 0) return;
             if (mode == .makevars) return e.fail("a recipe line (starts with a tab)", .{});
-            return;
         }
         const stripped = mem.trim(u8, try stripComment(e.arena, line), " \t");
         if (stripped.len == 0) return;
@@ -261,7 +265,6 @@ pub const Evaluator = struct {
             if (mode == .makevars) return e.fail("a conditional ({s})", .{word});
             const result = if (active) try e.condition(word, stripped[word.len..]) else false;
             try conds.append(e.arena, .{ .active = active and result, .taken = result, .parent = active });
-            in_rule = false;
             return;
         }
         if (mem.eql(u8, word, "else")) {
@@ -280,14 +283,12 @@ pub const Evaluator = struct {
                 c.active = c.parent and !c.taken and result;
                 if (result) c.taken = true;
             }
-            in_rule = false;
             return;
         }
         if (mem.eql(u8, word, "endif")) {
             if (mode == .makevars) return e.fail("a conditional (endif)", .{});
             if (conds.items.len == 0) return e.fail("endif without if", .{});
             _ = conds.pop();
-            in_rule = false;
             return;
         }
         if (!active) return;
@@ -328,6 +329,10 @@ pub const Evaluator = struct {
                 rest = mem.trimStart(u8, rest[w.len..], " \t");
             } else break;
         }
+        // A package's Makevars that exports needs make, in every form
+        // (`export`, `export NAME`, `export NAME = value`): the plan gives
+        // the compilers no environment of make's.
+        if (exporting and mode == .makevars) return e.fail("an export directive", .{});
         if (rest.len == 0) {
             if (exporting) e.export_all = true; // `export` alone: every variable
             return;
@@ -335,8 +340,6 @@ pub const Evaluator = struct {
 
         const asg = findAssignment(rest) orelse {
             if (exporting) {
-                // `export NAME...`: a package's Makevars that exports needs make
-                if (mode == .makevars) return e.fail("an export directive", .{});
                 var it = mem.tokenizeAny(u8, try e.expand(rest), " \t");
                 while (it.next()) |n| try e.exports.put(e.arena, n, true);
                 in_rule = false;
@@ -439,8 +442,11 @@ pub const Evaluator = struct {
         const name = try e.expand(a.name);
         if (name.len == 0 or mem.findAny(u8, name, " \t") != null) return e.fail("bad variable name '{s}'", .{name});
         const old = e.vars.get(name);
-        // the command line wins over every file assignment but `override`
-        if (old) |o| if (o.origin == .command_line and origin != .override) return name;
+        // The command line wins over every file assignment but `override`,
+        // and an `override` value over every later assignment but another
+        // `override` (GNU make's variable.c: "If the old definition is from
+        // a stronger source than this one, don't redefine it").
+        if (old) |o| if ((o.origin == .command_line or o.origin == .override) and origin != .override) return name;
         const where = try e.here();
         switch (a.op) {
             .recursive => try e.vars.put(e.arena, name, .{ .value = a.value, .flavor = .recursive, .origin = origin, .where = where }),
@@ -554,8 +560,13 @@ pub const Evaluator = struct {
                 const name = try e.expand(inner[0..colon]);
                 const from = try e.expand(inner[colon + 1 .. eq]);
                 const to = try e.expand(inner[eq + 1 ..]);
-                const pattern_from = if (mem.findScalar(u8, from, '%') != null) from else try std.fmt.allocPrint(e.arena, "%{s}", .{from});
-                const pattern_to = if (mem.findScalar(u8, to, '%') != null) to else try std.fmt.allocPrint(e.arena, "%{s}", .{to});
+                // As GNU make (expand.c): a pattern without % is a suffix,
+                // and both sides get the %; a pattern with one is used as
+                // written, and so is its replacement ($(V:%.c=all.o) is
+                // "all.o" for each word that matches).
+                if (mem.findScalar(u8, from, '%') != null) return patsubst(e.arena, from, to, try e.value(name));
+                const pattern_from = try std.fmt.allocPrint(e.arena, "%{s}", .{from});
+                const pattern_to = try std.fmt.allocPrint(e.arena, "%{s}", .{to});
                 return patsubst(e.arena, pattern_from, pattern_to, try e.value(name));
             }
         }
@@ -1093,6 +1104,42 @@ test "command line beats files; ?= and environment; override" {
     try testing.expectEqualStrings("-I\"/lib/R/include\" -I'/lib/Rcpp/include'", try e.value("ALL_CPPFLAGS"));
 }
 
+test "override: later plain assignments do not replace it (a Makevars before Makeconf)" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var e = testEvaluator(arena.allocator());
+    try e.load(
+        \\override CFLAGS = a
+        \\override LIBS := x
+        \\
+    , .makevars, ".");
+    try e.load(
+        \\CFLAGS = b
+        \\CFLAGS += c
+        \\CFLAGS ?= d
+        \\LIBS := y
+        \\override LIBS += z
+        \\
+    , .makeconf, ".");
+    try testing.expectEqualStrings("a", try e.value("CFLAGS"));
+    try testing.expectEqualStrings("x z", try e.value("LIBS"));
+}
+
+test "a tab-indented line: a recipe after a rule, any other line without one" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var e = testEvaluator(arena.allocator());
+    try e.load("YES = 1\nifdef YES\n\tCFLAGS += -g\nendif\nifdef NO\n\tCFLAGS += -pg\nendif\n", .makeconf, ".");
+    try testing.expectEqualStrings("-g", try e.value("CFLAGS"));
+    // after a rule it is the rule's, also across a conditional
+    var r = testEvaluator(arena.allocator());
+    try r.load("YES = 1\nall:\n\tX = recipe\nifdef YES\n\tY = recipe\nendif\nZ = after\n\tW = line\n", .makeconf, ".");
+    try testing.expectEqualStrings("", try r.value("X"));
+    try testing.expectEqualStrings("", try r.value("Y"));
+    try testing.expectEqualStrings("after", try r.value("Z"));
+    try testing.expectEqualStrings("line", try r.value("W"));
+}
+
 test "conditionals" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
@@ -1139,6 +1186,8 @@ test "functions and substitution references" {
     try e.load(
         \\SRCS = a.c sub/b.c c.cpp
         \\OBJECTS = $(SRCS:.c=.o)
+        \\OBJP = $(SRCS:%.c=%.o)
+        \\OBJL = $(SRCS:%.c=all.o)
         \\OBJ2 = $(patsubst %.cpp,%.o,$(patsubst %.c,%.o,$(SRCS)))
         \\S = $(subst .c,.o,$(SRCS))
         \\ST = $(strip   a   b  )
@@ -1173,6 +1222,8 @@ test "functions and substitution references" {
         \\
     , .makeconf, ".");
     try testing.expectEqualStrings("a.o sub/b.o c.cpp", try e.value("OBJECTS"));
+    try testing.expectEqualStrings("a.o sub/b.o c.cpp", try e.value("OBJP"));
+    try testing.expectEqualStrings("all.o all.o c.cpp", try e.value("OBJL"));
     try testing.expectEqualStrings("a.o sub/b.o c.o", try e.value("OBJ2"));
     try testing.expectEqualStrings("a.o sub/b.o c.opp", try e.value("S"));
     try testing.expectEqualStrings("a b", try e.value("ST"));
@@ -1373,7 +1424,10 @@ test "export, unexport and the variables make sets itself" {
     try testing.expectError(error.Unsupported, e.load("vpath %.c src\n", .makeconf, "."));
     e.vars_only = true;
     try e.load("vpath %.c src\n", .makeconf, ".");
-    // a package's Makevars that exports a name needs make
-    var p = testEvaluator(arena.allocator());
-    try testing.expectError(error.Unsupported, p.load("export FOO\n", .makevars, "."));
+    // a package's Makevars that exports needs make, in every form
+    for ([_][]const u8{ "export FOO\n", "export CPATH = /x\n", "export\n", "override export FOO := 1\n" }) |text| {
+        var p = testEvaluator(arena.allocator());
+        try testing.expectError(error.Unsupported, p.load(text, .makevars, "."));
+        try testing.expectEqualStrings("an export directive", p.reason);
+    }
 }

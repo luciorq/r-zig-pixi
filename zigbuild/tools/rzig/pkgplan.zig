@@ -275,7 +275,10 @@ pub const Planner = struct {
             makevars_text = Io.Dir.cwd().readFileAlloc(ctx.io, mv_path, a, .limited(4 * 1024 * 1024)) catch |err|
                 return p.needsMake("cannot read {s}{s}: {t}", .{ mv_dir, mv, err });
         }
-        const makevars_objects = class.makevars != null and lineStarting(makevars_text, "OBJECTS") != null;
+        // install.R's grep("^OBJECTS *=", lines): only that form drops R's
+        // command-line OBJECTS. With `OBJECTS +=`, `:=` or `?=` make keeps
+        // the command line's (every top-level source), and so does rzig.
+        const makevars_objects = class.makevars != null and lineAssigning(makevars_text, "OBJECTS") != null;
 
         // install.R's command-line overrides, before the files (the
         // command line wins). R CMD SHLIB's SHLIB is the output as given;
@@ -294,8 +297,11 @@ pub const Planner = struct {
         var use_cxxstd: ?[]const u8 = null;
         if (class.makevars != null) {
             if (cxxStdLine(makevars_text)) |val| {
-                if (isCxxStandard(val)) {
-                    use_cxxstd = val;
+                // install.R strips "CXX_STD = CXX": a value without the CXX
+                // prefix (`CXX_STD = 17`) is unknown to R, and ignored
+                const std_name = if (mem.startsWith(u8, val, "CXX")) val[3..] else "";
+                if (isCxxStandard(std_name)) {
+                    use_cxxstd = std_name;
                     with.insert(.cxx);
                 } else if (opts.warn_cxx_std) ctx.warn("src/{s}: Unknown C++ standard '{s}' was ignored", .{ class.makevars.?, val });
             }
@@ -644,26 +650,37 @@ fn rawValue(text: []const u8, name: []const u8) ?[]const u8 {
     return mem.trim(u8, line[eq + 2 ..], " \t\r");
 }
 
-/// The first line of `text` that starts with `name` followed by spaces
-/// and `=` (install.R's `^NAME *=`), or `name` at the start for
-/// USE_FC_TO_LINK-style greps (`^NAME`) when followed by anything.
+/// The first line of `text` that is `name`, spaces, then `=` (install.R's
+/// `^NAME *=`, its test for OBJECTS): not `NAME +=`, `NAME :=`, `NAME ?=`
+/// or `NAME<TAB>=`.
+fn lineAssigning(text: []const u8, name: []const u8) ?[]const u8 {
+    var it = mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| {
+        if (!mem.startsWith(u8, line, name)) continue;
+        const after = mem.trimStart(u8, line[name.len..], " ");
+        if (after.len > 0 and after[0] == '=') return line;
+    }
+    return null;
+}
+
+/// The first line of `text` that starts with the word `name`: install.R's
+/// bare-prefix greps (`^USE_FC_TO_LINK` in a Makevars, `^SHLIB_EXT` in
+/// Makeconf), which are always followed by a blank or `=` in practice.
 fn lineStarting(text: []const u8, name: []const u8) ?[]const u8 {
     var it = mem.splitScalar(u8, text, '\n');
     while (it.next()) |line| {
         if (!mem.startsWith(u8, line, name)) continue;
         const rest = line[name.len..];
-        // `^NAME *=`: for OBJECTS, CXX_STD, PKG_FCFLAGS; USE_FC_TO_LINK is
-        // grepped as a bare prefix by install.R, and is always followed by
-        // `=` in practice
-        const after = mem.trimStart(u8, rest, " ");
-        if (after.len > 0 and after[0] == '=') return line;
         if (rest.len == 0 or rest[0] == ' ' or rest[0] == '\t' or rest[0] == '=') return line;
     }
     return null;
 }
 
-/// `CXX_STD = CXX17`'s "17" (install.R's gsub chain), when exactly one such
-/// line exists.
+/// The value of the one `CXX_STD =` line, without its comment and trailing
+/// blanks: "CXX17" for `CXX_STD = CXX17` (install.R's gsub chain keeps the
+/// text after `^CXX_STD *= *` for its warning, and takes the standard only
+/// from a value that starts with CXX). Null unless exactly one such line
+/// exists.
 fn cxxStdLine(text: []const u8) ?[]const u8 {
     var found: ?[]const u8 = null;
     var count: usize = 0;
@@ -674,7 +691,6 @@ fn cxxStdLine(text: []const u8) ?[]const u8 {
         if (after.len == 0 or after[0] != '=') continue;
         count += 1;
         var val = mem.trimStart(u8, after[1..], " ");
-        if (mem.startsWith(u8, val, "CXX")) val = val[3..];
         if (mem.findScalar(u8, val, '#')) |h| val = val[0..h];
         found = mem.trimEnd(u8, val, " \t\r");
     }
@@ -1069,9 +1085,36 @@ test "plan.zon round trip" {
     try testing.expect(!back.def);
 }
 
+test lineAssigning {
+    try testing.expect(lineAssigning("PKG_LIBS = x\nOBJECTS = a.o\n", "OBJECTS") != null);
+    try testing.expect(lineAssigning("OBJECTS=a.o\n", "OBJECTS") != null);
+    try testing.expect(lineAssigning("OBJECTS   = a.o\n", "OBJECTS") != null);
+    // not install.R's `^OBJECTS *=`
+    for ([_][]const u8{ "OBJECTS += a.o\n", "OBJECTS := a.o\n", "OBJECTS ?= a.o\n", "OBJECTS\t= a.o\n", "OBJECTS\n", "OBJECTS_X = a.o\n", " OBJECTS = a.o\n" }) |text|
+        try testing.expect(lineAssigning(text, "OBJECTS") == null);
+}
+
+test "OBJECTS += in Makevars: the command line's OBJECTS stay, as under make" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const r = try rHome(&f);
+    try f.write("p/src/Makevars", "OBJECTS += extra.o\nCXX_STD = 17\n", .default_file);
+    try f.touch("p/src/a.c");
+    try f.touch("p/src/b.c");
+    var p: Planner = .{ .ctx = &f.ctx };
+    const plan = try p.plan(.{ .r_home = r, .pkg_dir = f.path("p"), .name = "p", .linkingto = &.{} }, try p.classify(f.path("p"), f.path("p/src")));
+    try testing.expectEqual(2, plan.sources.len);
+    try testing.expectEqualStrings("a.c", plan.sources[0].path);
+    try testing.expectEqualStrings("b.c", plan.sources[1].path);
+    // `CXX_STD = 17` has no CXX prefix: R ignores it, and no C++ link is forced
+    try testing.expectEqualStrings("zig-cc", plan.link_driver);
+}
+
 test cxxStdLine {
-    try testing.expectEqualStrings("17", cxxStdLine("PKG_LIBS = x\nCXX_STD = CXX17\n").?);
-    try testing.expectEqualStrings("20", cxxStdLine("CXX_STD=CXX20 # yes\n").?);
+    try testing.expectEqualStrings("CXX17", cxxStdLine("PKG_LIBS = x\nCXX_STD = CXX17\n").?);
+    try testing.expectEqualStrings("CXX20", cxxStdLine("CXX_STD=CXX20 # yes\n").?);
+    // no CXX prefix: R does not know it (the caller ignores it, with R's warning)
     try testing.expectEqualStrings("17", cxxStdLine("CXX_STD = 17\n").?);
     try testing.expect(cxxStdLine("CXX_STD = CXX17\nCXX_STD = CXX20\n") == null);
     try testing.expect(cxxStdLine("# CXX_STD = CXX17\n") == null);

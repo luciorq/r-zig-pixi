@@ -280,7 +280,9 @@ pub const Inputs = struct {
     c_std: ?[]const u8 = null,
     use_lto: ?bool = null,
     debug: bool = false,
-    /// rzig's own path, for `rzig def` in the plan.
+    /// rzig's own path, for the plan: tier 2's build.zig runs `rzig t1`
+    /// with it, and the dry run prints it (tier 1 makes the .def in
+    /// process, tier1.zig).
     rzig: []const u8,
     /// R CMD SHLIB's call (`rzig build --shlib`), in src_dir, the working
     /// directory. The install preflight (check.zig) never sets it.
@@ -1077,8 +1079,9 @@ test "shlib: the build root, in R's session directory, else beside the output; u
     try f.touch("w/foo.c");
     try f.tmp.dir.createDirPath(testing.io, "sess");
     try f.env.put("R_SESSION_TMPDIR", f.path("sess"));
-    // a zig that zig build cannot run (an empty program), past the version
-    // check (R_ZIG_NO_PREFLIGHT): each call fails, 1, after the root was made
+    // compilers that cannot run (the fixture's empty zig-cc; tier 1 runs
+    // no zig build), past the version check (R_ZIG_NO_PREFLIGHT): each
+    // call fails, 1, after the root was made
     try f.env.put("ZIG_BIN", try f.touchProgram("bin/zig"));
     try f.env.put("R_ZIG_NO_PREFLIGHT", "1");
     var out: Io.Writer.Allocating = .init(c.arena);

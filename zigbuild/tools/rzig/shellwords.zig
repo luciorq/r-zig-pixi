@@ -25,12 +25,6 @@ const Allocator = mem.Allocator;
 
 pub const Error = error{ Unsupported, OutOfMemory };
 
-pub const Result = struct {
-    words: []const []const u8,
-    /// Why the split was refused (error.Unsupported), for the message.
-    reason: []const u8 = "",
-};
-
 pub const Options = struct {
     /// Read as sh does; null: quoting only (split).
     shell: ?*const std.process.Environ.Map = null,

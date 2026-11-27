@@ -11,7 +11,11 @@
 //! lib dir, so zig gets a mirror of it as its lib dir: a directory of
 //! symlinks, nested as <mirror>/lib/zig so that <mirror>/lib has no
 //! libc++. One per zig lib dir under a cache root, made once: creating
-//! the directory is the lock for parallel jobs, `.complete` the marker.
+//! the directory is the lock for parallel jobs, `.complete` the marker,
+//! written when every link exists. A job that finds the directory without
+//! the marker waits for its maker, then finishes the mirror itself: a
+//! maker that was killed, or met a full disk, leaves no mirror that
+//! fails for ever.
 //!
 //! One implementation for packages and for R itself (feat-no-host-paths
 //! F4): rzig (`apply`) points the zig it runs at the mirror through
@@ -87,23 +91,37 @@ pub const Mirror = union(enum) {
 /// The mirror of `lib_dir` (unix) under `cache_root`, made if it is not
 /// there yet, when the zig with that lib dir would link a shared libc++.
 pub fn prepare(io: Io, arena: Allocator, lib_dir: []const u8, cache_root: []const u8) !Mirror {
+    return prepareWaiting(io, arena, lib_dir, cache_root, 100);
+}
+
+/// `prepare`, waiting at most `tries` tenths of a second for another
+/// job's mirror (the tests wait one).
+fn prepareWaiting(io: Io, arena: Allocator, lib_dir: []const u8, cache_root: []const u8, tries: usize) !Mirror {
     if (kind(io, lib_dir) != .directory) return .none;
     if (try sharedLibcxx(io, arena, lib_dir, .unix) == null) return .none;
 
     const real = Io.Dir.cwd().realPathFileAlloc(io, lib_dir, arena) catch return .none;
-    const names = try listing(io, arena, real);
+    // a lib dir that cannot be listed in full gets no mirror: a mirror of
+    // part of it would be marked complete
+    const names = listing(io, arena, real) catch |err| switch (err) {
+        error.OutOfMemory => |e| return e,
+        else => return .{ .failed = real },
+    };
     const m = try std.fmt.allocPrint(arena, "{s}/zig-lib-{d}", .{ cache_root, try key(arena, real, names) });
     const complete = try std.fmt.allocPrint(arena, "{s}/.complete", .{m});
     if (kind(io, complete) == null) {
-        if (lock(io, m)) {
-            populate(io, arena, real, names, m) catch {};
-        } else {
+        if (!lock(io, m)) {
             // another job is making it
             var i: usize = 0;
-            while (kind(io, complete) == null and i < 100) : (i += 1) {
+            while (kind(io, complete) == null and i < tries) : (i += 1) {
                 try io.sleep(.fromMilliseconds(100), .awake);
             }
         }
+        // the lock's holder; or, after the wait, a job whose maker did
+        // not finish: `populate` keeps the links that exist, so two jobs
+        // can do this at once, and each writes the marker only after
+        // every link is there
+        if (kind(io, complete) == null) populate(io, arena, real, names, m) catch {};
     }
     if (kind(io, complete) == null) return .{ .failed = m };
     return .{ .ready = try std.fmt.allocPrint(arena, "{s}/lib/zig", .{m}) };
@@ -132,10 +150,10 @@ fn zigLibDir(ctx: *Ctx, zig0: []const u8) !?[]const u8 {
 /// order, and so the key, followed the locale).
 fn listing(io: Io, arena: Allocator, dir_path: []const u8) ![]const []const u8 {
     var names: std.ArrayList([]const u8) = .empty;
-    var dir = Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch return names.items;
+    var dir = try Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
     var it = dir.iterate();
-    while (it.next(io) catch null) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.name.len == 0 or entry.name[0] == '.') continue;
         try names.append(arena, try arena.dupe(u8, entry.name));
     }
@@ -175,13 +193,18 @@ fn lock(io: Io, m: []const u8) bool {
 }
 
 /// A symlink per entry, then the marker, which is only written once all
-/// links exist (the bash shim checked the last one only).
+/// links exist (the bash shim checked the last one only). A link that is
+/// there already is kept: the mirror's name is a key of the lib dir and
+/// its listing, so it is the same link.
 fn populate(io: Io, arena: Allocator, real: []const u8, names: []const []const u8, m: []const u8) !void {
     const cwd = Io.Dir.cwd();
     const zig_dir = try std.fmt.allocPrint(arena, "{s}/lib/zig", .{m});
     try cwd.createDirPath(io, zig_dir);
     for (names) |n| {
-        try cwd.symLink(io, try std.fmt.allocPrint(arena, "{s}/{s}", .{ real, n }), try std.fmt.allocPrint(arena, "{s}/{s}", .{ zig_dir, n }), .{});
+        cwd.symLink(io, try std.fmt.allocPrint(arena, "{s}/{s}", .{ real, n }), try std.fmt.allocPrint(arena, "{s}/{s}", .{ zig_dir, n }), .{}) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
     }
     try cwd.writeFile(io, .{ .sub_path = try std.fmt.allocPrint(arena, "{s}/.complete", .{m}), .data = "" });
 }
@@ -295,14 +318,27 @@ test "prepare: build.zig's use, any cache root; upstream's layout and Windows' n
     // made once: the same path again, also from a relative lib dir's
     // spelling of it (zig reports a relative one when it can)
     try testing.expectEqualStrings(mirror, (try prepare(io, arena, f.fmt("{s}/env/lib/../lib/zig", .{f.root}), cache_root)).ready);
-    // a mirror left half made (no marker, the lock taken) fails, after
-    // the wait, rather than handing out an incomplete lib dir
+    // a mirror left half made (the lock taken, one link of two, no
+    // marker: its maker was killed) is finished after the wait, never
+    // handed out incomplete
     try f.touch("env2/lib/zig/std/std.zig");
+    try f.touch("env2/lib/zig/zig.h");
     try f.touch("env2/lib/libc++.1.dylib");
     const real2 = try Io.Dir.cwd().realPathFileAlloc(io, f.path("env2/lib/zig"), arena);
     const m2 = f.fmt("{s}/zig-lib-{d}", .{ cache_root, try key(arena, real2, try listing(io, arena, real2)) });
-    try Io.Dir.cwd().createDirPath(io, m2);
-    try testing.expectEqualStrings(m2, (try prepare(io, arena, f.path("env2/lib/zig"), cache_root)).failed);
+    try Io.Dir.cwd().createDirPath(io, f.fmt("{s}/lib/zig", .{m2}));
+    try Io.Dir.cwd().symLink(io, f.fmt("{s}/std", .{real2}), f.fmt("{s}/lib/zig/std", .{m2}), .{});
+    try testing.expectEqualStrings(f.fmt("{s}/lib/zig", .{m2}), (try prepareWaiting(io, arena, f.path("env2/lib/zig"), cache_root, 1)).ready);
+    try testing.expect(f.ctx.isFile(f.fmt("{s}/lib/zig/std/std.zig", .{m2})));
+    try testing.expect(f.ctx.isFile(f.fmt("{s}/lib/zig/zig.h", .{m2})));
+    try testing.expect(f.ctx.isFile(f.fmt("{s}/.complete", .{m2})));
+    // a mirror that cannot be finished (its directory is a file) fails
+    try f.touch("env3/lib/zig/std/std.zig");
+    try f.touch("env3/lib/libc++.so.1");
+    const real3 = try Io.Dir.cwd().realPathFileAlloc(io, f.path("env3/lib/zig"), arena);
+    const m3_rel = f.fmt("build/zig-cache/local/r-zig/zig-lib-{d}", .{try key(arena, real3, try listing(io, arena, real3))});
+    try f.touch(m3_rel);
+    try testing.expectEqualStrings(f.path(m3_rel), (try prepareWaiting(io, arena, f.path("env3/lib/zig"), cache_root, 1)).failed);
 
     // Windows: conda-forge's patch looks for the import library only
     try testing.expect(try sharedLibcxx(io, arena, f.path("env/lib/zig"), .windows) == null);

@@ -27,6 +27,17 @@
 //!   builds. Dropped: a safety flag only, which makes a link fail where
 //!   it would auto-import data from a DLL; without it lld does what its
 //!   MinGW default is, auto-import on, as GNU ld's.
+/// Whether `-l<n>` is a linker option of its own, not a library: ld64's
+/// -lto_library, -lazy-l<name>, -lazy_library, -lazy_framework and
+/// -load_hidden, and GNU ld's long options with one dash
+/// (-large-address-aware, -leading-underscore, -long-plt).
+fn linkerOptionAfterL(n: []const u8) bool {
+    for ([_][]const u8{ "to_", "azy", "oad_hidden", "arge-address-aware", "eading-underscore", "ong-plt" }) |p| {
+        if (mem.startsWith(u8, n, p)) return true;
+    }
+    return false;
+}
+
 const std = @import("std");
 const mem = std.mem;
 const Ctx = @import("Ctx.zig");
@@ -135,12 +146,12 @@ fn item(x: []const u8, next: ?[]const u8) Item {
         if (n.len == 0) return .{ .what = .keep };
         return .{ .what = .lib, .value = n, .items = 2 };
     }
-    if (cmdline.flagValue(x, "--library=")) |n| return .{ .what = .lib, .value = n };
+    if (cmdline.flagValue(x, "--library=") orelse cmdline.flagValue(x, "-library=")) |n| return .{ .what = .lib, .value = n };
+    if (cmdline.flagValue(x, "--library-path=") orelse cmdline.flagValue(x, "-library-path=")) |d| return .{ .what = .lib_dir, .value = d };
     if (cmdline.flagValue(x, "-l")) |n| {
-        if (!mem.startsWith(u8, n, "to_") and !mem.startsWith(u8, n, "azy")) return .{ .what = .lib, .value = n };
+        if (!linkerOptionAfterL(n)) return .{ .what = .lib, .value = n };
     }
     if (cmdline.flagValue(x, "-L")) |d| return .{ .what = .lib_dir, .value = d };
-    if (cmdline.flagValue(x, "--library-path=")) |d| return .{ .what = .lib_dir, .value = d };
     if (mem.eql(u8, x, "--allow-multiple-definition") or
         mem.eql(u8, x, "-allow-multiple-definition") or
         mem.eql(u8, x, "-zmuldefs") or
@@ -192,7 +203,7 @@ test "-l out of -Wl, and -Xlinker, in every spelling (Q24, L21)" {
     // both zigs 0.17.1)
     try expectArgs(&.{ "-Xlinker", "--whole-archive", "-lfoo", "-Xlinker", "--no-whole-archive" }, try rewrite(c, &.{ "-Xlinker", "--whole-archive", "-Xlinker", "-lfoo", "-Xlinker", "--no-whole-archive" }));
     // ld64's -lto_library and -lazy-l<name>, and no value: kept
-    const same: Args = &.{ "-Wl,-lto_library,/x/libLTO.dylib", "-Wl,-lazy-lfoo", "-Wl,-l", "-Wl,-l,", "-Xlinker", "-l" };
+    const same: Args = &.{ "-Wl,-lto_library,/x/libLTO.dylib", "-Wl,-lazy-lfoo", "-Wl,-load_hidden,libx.a", "-Wl,-large-address-aware", "-Wl,-l", "-Wl,-l,", "-Xlinker", "-l" };
     try expectArgs(same, try rewrite(c, same));
 }
 

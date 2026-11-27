@@ -1,9 +1,12 @@
 //! `rzig def -o <pkg>.def <objects>`: the module-definition file
-//! winshlib.mk builds with `nm | sed -n 's/^.* [BCDRT] / /p' $(NM_FILTER)`
-//! for a package DLL, from the objects' COFF symbol tables (binutils.zig's
-//! reader, below). The make path's exports exactly, without nm and sed; lld's
-//! auto-export (`--export-all-symbols`) is not the same set (design
-//! record, step 4).
+//! winshlib.mk builds with `nm | sed -n 's/^.* [BCDRT] / /p' $(NM_FILTER) |
+//! sed $(ADDQU)` for a package DLL, from the objects' COFF symbol tables
+//! (binutils.zig's reader, below). The make path's exports exactly,
+//! without nm and sed; lld's auto-export (`--export-all-symbols`) is not
+//! the same set (design record, step 4). Each name is in double quotes, as
+//! ADDQU writes it: unquoted, a global named DATA, VERSION, NAME, BASE or
+//! PRIVATE is a keyword to the .def reader of lld and of `zig dlltool`
+//! ("identifier expected, but got DATA").
 //!
 //! nm's [BCDRT]: a global symbol defined in a code, data or bss section, or
 //! a common. Not undefined (U), not weak (w: a WEAK_EXTERNAL), not a
@@ -80,7 +83,7 @@ pub fn exports(a: mem.Allocator, data: []const u8, out: *std.ArrayList([]const u
 pub fn text(a: mem.Allocator, objects: []const []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(a, "EXPORTS\n");
-    for (objects) |o| try out.print(a, "{s}\n", .{o});
+    for (objects) |o| try out.print(a, "\"{s}\"\n", .{o});
     return out.items;
 }
 
@@ -109,7 +112,7 @@ pub fn run(ctx: *Ctx, all: []const []const u8) u8 {
     };
     var names: std.ArrayList([]const u8) = .empty;
     for (objs.items) |o| {
-        const data = Io.Dir.cwd().readFileAlloc(ctx.io, o, ctx.arena, .limited(256 * 1024 * 1024)) catch |err| {
+        const data = Io.Dir.cwd().readFileAlloc(ctx.io, o, ctx.arena, .limited(binutils.max_file)) catch |err| {
             ctx.warn("def: cannot read {s}: {t}", .{ o, err });
             return 1;
         };
@@ -157,7 +160,7 @@ test "exports: nm's [BCDRT] set, then CRAN's NM_FILTER" {
     // the same object twice adds nothing (COMDAT duplicates across objects)
     try exports(arena.allocator(), win_syms, &names);
     try testing.expectEqual(expected.len, names.items.len);
-    try testing.expectEqualStrings("EXPORTS\na\nb\n", try text(arena.allocator(), &.{ "a", "b" }));
+    try testing.expectEqualStrings("EXPORTS\n\"a\"\n\"DATA\"\n", try text(arena.allocator(), &.{ "a", "DATA" }));
     try testing.expectError(error.BadObject, exports(arena.allocator(), "not an object", &names));
     // the seds match anywhere in the name, not only at its start
     for ([_][]const u8{ ".refptr.x", "a.refptr.b", ".weak.f.default.g", "x.weak.y" }) |n| try testing.expect(filtered(n));
@@ -252,7 +255,7 @@ test "run: the objects from a response file (rzig build's objects.rsp), as on th
     try testing.expectEqual(0, run(c, &.{ "-o", f.path("argv.def"), f.path("sp ace/ção.o"), f.path("b.o") }));
     try testing.expectEqual(0, run(c, &.{ "-o", f.path("rsp.def"), f.fmt("@{s}", .{f.path("objects.rsp")}) }));
     const want = try f.tmp.dir.readFileAlloc(testing.io, "argv.def", c.arena, .limited(4096));
-    try testing.expect(std.mem.startsWith(u8, want, "EXPORTS\n") and std.mem.indexOf(u8, want, "\nexported_fn\n") != null);
+    try testing.expect(std.mem.startsWith(u8, want, "EXPORTS\n") and std.mem.indexOf(u8, want, "\n\"exported_fn\"\n") != null);
     try testing.expectEqualStrings(want, try f.tmp.dir.readFileAlloc(testing.io, "rsp.def", c.arena, .limited(4096)));
     // a missing response file: kept as a name, which cannot be read
     try testing.expectEqual(1, run(c, &.{ "-o", f.path("x.def"), f.fmt("@{s}", .{f.path("nowhere.rsp")}) }));
