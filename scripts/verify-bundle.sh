@@ -939,11 +939,7 @@ CPP
   cx_s=$((SECONDS - t0))
   test -d "$cx_cache" ||
     { echo "error: after the first C++ compile, zig's cache is not at $cx_cache (a zig cache variable reached the $pass pass?)" >&2; exit 1; }
-  if [ "$OS" = windows ]; then
-    cx_dep="$(needed_of "$cx/$cx_lib" | grep -iE '^(libc\+\+|libstdc\+\+-6)\.dll$' || true)"
-  else
-    cx_dep="$(cxx_runtime_wrong "$cx/$cx_lib")"
-  fi
+  cx_dep="$(cxx_runtime_wrong "$cx/$cx_lib")"
   [ -z "$cx_dep" ] || { echo "error: $cx_lib, the first C++ compile, has the wrong C++ runtime (wanted $(cxx_runtime_word)): $cx_dep" >&2; exit 1; }
   cx_rt="$(cxx_runtime_word)"
   # sizes from ls, not du: du counts blocks, which a compressing

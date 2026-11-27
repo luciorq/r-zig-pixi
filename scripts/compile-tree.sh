@@ -2,9 +2,10 @@
 # The compile tree (PHASE3 open point B (a)), env.sh's COMPILE_TREE,
 # build/compile-tree/<flavor>/R-<ver>-zig: a fresh copy of the flavor's R
 # tree ($PREFIX) with the toolchain tree's group directories in its
-# R_HOME/bin/toolchain, every one but zig/ and flang/ (C12): openmp/, and
-# the build-tools group's directories (unix usr/; Windows usr/ and etc/,
-# phase 7). contract, pkg-parity and stress compile packages
+# R_HOME/bin/toolchain, every one env.sh's group_dirs names but zig/ and
+# flang/ (C12): openmp/, linux libstdcxx/, the build-tools group's usr/
+# (and Windows etc/, phase 7) and the extras group's cmake/. contract,
+# pkg-parity and stress compile packages
 # with it (their pixi tasks depend on compile-tree) [phase3-P3-5], as a
 # user who extracted the base and the group archives into one directory
 # does. On Windows they then run the group's usr/bin first, under R CMD

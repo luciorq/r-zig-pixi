@@ -1,12 +1,14 @@
 # Helpers shared by verify-tree.sh, verify-toolchain.sh, verify-bundle.sh,
-# hermetic-check.sh, unpack-toolchain.sh and vendor-libs.sh (whose Windows
-# walk copies what needed_of names, the imports verify-tree.sh then
-# checks, and which removes what vendored_files names, the files
-# verify-tree.sh counts as conda's), and by pkg-parity.sh and
-# wheel-test.sh (make_recipes). Source this after env.sh (which sets
-# OS and holds MACOS_MIN, macho_minos and version_gt); do not execute it.
+# verify-recommended.sh, hermetic-check.sh, contract-test.sh,
+# unpack-toolchain.sh and vendor-libs.sh (whose Windows walk copies what
+# needed_of names, the imports verify-tree.sh then checks, and which
+# removes what vendored_files names, the files verify-tree.sh counts as
+# conda's), and by pkg-parity.sh and wheel-test.sh (make_recipes). Source
+# this after env.sh (which sets OS and holds MACOS_MIN, macho_minos and
+# version_gt); do not execute it.
 # Each reads what a binary needs and where it looks for it from the file
-# itself: patchelf on linux, otool on macOS, binutils' objdump on Windows.
+# itself: patchelf on linux, otool on macOS, llvm-tools' llvm-objdump on
+# Windows.
 
 # An archive's members that are files or links, one per line, as stored
 # (R-<ver>-zig/...): not its directories, which every archive of a tree
@@ -264,11 +266,12 @@ rpaths_of() {
 # there, decided 2026-09-30, in R's own binaries and in packages compiled
 # with rzig).
 cxx_deps() {
-  if [ "$OS" = linux ]; then
-    libcxx_deps "$1"
-  else
-    needed_of "$1" | grep -E '(^|/)lib(c\+\+|stdc\+\+)[.0-9]*\.dylib$' || true
-  fi
+  case "$OS" in
+    linux) libcxx_deps "$1" ;;
+    # an import table has the DLL's bare name, in any case
+    windows) needed_of "$1" | grep -iE '^(libc\+\+|libstdc\+\+-6)\.dll$' || true ;;
+    *) needed_of "$1" | grep -E '(^|/)lib(c\+\+|stdc\+\+)[.0-9]*\.dylib$' || true ;;
+  esac
 }
 
 # linux: the libraries ELF file $1 names (DT_NEEDED), by readelf, which
@@ -280,11 +283,11 @@ elf_needed() {
 # A shared libc++ among the libraries it names; empty when there is none.
 # Wrong on every OS: static on macOS and Windows, never used on linux.
 libcxx_deps() {
-  if [ "$OS" = linux ]; then
-    elf_needed "$1" | grep -E '^libc\+\+(abi)?\.so' || true
-  else
-    needed_of "$1" | grep -E '(^|/)libc\+\+(abi)?[.0-9]*\.dylib$' || true
-  fi
+  case "$OS" in
+    linux) elf_needed "$1" | grep -E '^libc\+\+(abi)?\.so' || true ;;
+    windows) needed_of "$1" | grep -iE '^libc\+\+\.dll$' || true ;;
+    *) needed_of "$1" | grep -E '(^|/)libc\+\+(abi)?[.0-9]*\.dylib$' || true ;;
+  esac
 }
 
 # linux: the undefined dynamic symbols of ELF file $1, one per line, with

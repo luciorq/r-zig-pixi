@@ -75,6 +75,15 @@ base_has() {
   done
   return 1
 }
+# the glibc ceiling below reads objdump -T (binutils, in the env on linux)
+have_objdump=""
+if [ "$OS" = linux ]; then
+  if command -v objdump > /dev/null 2>&1; then
+    have_objdump=1
+  else
+    cannot_check "no objdump: the recommended packages' glibc ceiling is not checked"
+  fi
+fi
 bad=""; seen=""
 while IFS= read -r f; do
   rel="${f#"$LIB"/}"
@@ -126,7 +135,7 @@ $dep"
   fi
   if [ "$OS" = macos ] && m="$(minos_over_floor "$f")"; then bad="$bad
   $rel: minos $m above $MACOS_MIN"; fi
-  if [ "$OS" = linux ] && command -v objdump > /dev/null 2>&1; then
+  if [ "$OS" = linux ] && [ -n "$have_objdump" ]; then
     ceil=$(objdump -T "$f" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/^GLIBC_//' | sort -uV | tail -1 || true)
     if [ -n "$ceil" ] && [ "$(printf '%s\n' "$ceil" 2.17 | sort -V | tail -1)" != 2.17 ]; then bad="$bad
   $rel: needs GLIBC_$ceil"; fi

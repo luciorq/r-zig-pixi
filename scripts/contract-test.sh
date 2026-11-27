@@ -62,23 +62,22 @@
 # stdcxx_wrong, elf_needed: the linux C++ runtime checks
 . "$(dirname "$0")/verify-helpers.sh"
 
+# R_TEST_R_BIN: another tree's Rscript instead of the compile tree's
+# (compile-tree.sh), which is also what zig-contract.sh names. Package
+# builds read CC=$(BINPREF)gcc etc from Windows' etc/x64/Makeconf, and
+# BINPREF names R_HOME/bin/toolchain/ (rzig's gcc.exe and g++.exe).
 if [ "$OS" = windows ]; then
-  # R_TEST_R_BIN: test a different build's Rscript.exe (e.g. the zig-build
-  # prefix's) instead of the in-tree gnuwin32 default.
-  R_BIN="${R_TEST_R_BIN:-$SRC_DIR/bin/x64/Rscript.exe}"
-  test -x "$R_BIN" || R_BIN="$SRC_DIR/bin/Rscript.exe"
-  # package builds read CC=$(BINPREF)gcc etc from etc/x64/Makeconf, and
-  # BINPREF names R_HOME/bin/toolchain/ (rzig's gcc.exe and g++.exe); the
-  # gnuwin32 build's win-toolchain dir below is a leftover, empty today
-  export PATH="$BUILD_DIR/win-toolchain:$PATH"
+  R_BIN="${R_TEST_R_BIN:-$COMPILE_TREE/$RH/bin/x64/Rscript.exe}"
 else
-  # R_TEST_R_BIN: test a different build's Rscript (e.g. the zig-build
-  # prefix's) instead of the autoconf objdir default. See FINALIZATION.md F1.2.
-  R_BIN="${R_TEST_R_BIN:-$OBJ_DIR/bin/Rscript}"
+  R_BIN="${R_TEST_R_BIN:-$COMPILE_TREE/$RH/bin/Rscript}"
 fi
-test -x "$R_BIN" || { echo "error: $R_BIN not built yet — run 'pixi run build'" >&2; exit 1; }
+test -x "$R_BIN" || { echo "error: $R_BIN not there: run 'pixi run compile-tree' (after 'pixi run build' and 'pixi run toolchain')" >&2; exit 1; }
 
-LIB="$BUILD_DIR/testlib-$VARIANT"
+# Per flavor (default and openblas share a variant), and emptied: the
+# check below reads what is installed here, so a package an earlier run
+# left would stand in for one this run failed to install.
+LIB="$BUILD_DIR/testlib-$FLAVOR"
+rm -rf "$LIB"
 mkdir -p "$LIB"
 # rzig build's caches as a user's install has them: tier 1 runs no zig
 # build (tier1.zig), each install's objects and library in its build

@@ -1,8 +1,9 @@
-## r-zig-toolchain (r-zig-compilers and r-zig-build-tools; feat-no-host-
-## paths PLAN.md, phase T; feat-standalone-toolchain B28): a package with C
-## and C++ code compiles, installs and loads. rzig, r-zig-slim's, is under
-## CC's name, which the install preflight runs (gcc.exe on Windows, B26),
-## in R_HOME/bin/toolchain (R.home("bin") is bin/x64 on Windows).
+## r-zig-toolchain (r-zig-compilers, r-zig-build-tools and r-zig-extras;
+## feat-no-host-paths PLAN.md, phase T; feat-standalone-toolchain B28;
+## feat-extras-group): a package with C and C++ code compiles, installs
+## and loads. rzig, r-zig-slim's, is under CC's name, which the install
+## preflight runs (gcc.exe on Windows, B26), in R_HOME/bin/toolchain
+## (R.home("bin") is bin/x64 on Windows).
 windows <- .Platform$OS.type == "windows"
 d <- tempfile("rzig-"); dir.create(d)
 ## the caller's settings (pixi run, conda run, wheel-test; rattler-build's

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Run R's real `configure` against the pixi environment — nothing else.
 # The sole reason this exists is to produce a config.status for
-# gen-subst.sh to replay (see that script's own header comment and
-# PLAN.md's "Regenerating the vendored config" section). It does NOT
+# gen-subst.sh to replay (see that script's own header comment and the
+# "Regenerating the vendored config" section of
+# .github/devdocs/feat-zig-build/PLAN.md). It does NOT
 # drive a full legacy build the way the old (Milestone 7-retired)
 # scripts/configure-r.sh + scripts/build-r.sh pair did — this project's
 # actual build path is `zig build` (scripts/zig-build.sh), which owns and
@@ -133,11 +134,14 @@ case "$VARIANT" in
     ;;
 esac
 
-# BLAS/LAPACK: internal reference implementation by default; conda-forge
-# openblas (which bundles LAPACK) when the openblas feature is active.
-BLAS_ARGS=()
-if [ "$BLAS" = openblas ]; then
-  BLAS_ARGS+=("--with-blas=-lopenblas" "--with-lapack=-lopenblas")
+# BLAS/LAPACK: R's internal reference implementation only. The openblas
+# flavor has no vendored config: build.zig gives it the internal-BLAS
+# table and makes libRblas and libRlapack forwarders to openblas (backlog
+# M-23). A capture with --with-blas=-lopenblas would write a bare
+# -lopenblas into the slim or full directory gen-subst.sh names.
+if [ "$BLAS" != internal ]; then
+  echo "error: no config capture for R_BLAS=$BLAS: the openblas flavor uses the internal-BLAS config (run this in the default, full or minimal environment)" >&2
+  exit 1
 fi
 
 
@@ -189,7 +193,6 @@ fi
 "$SRC_DIR/configure" \
   --prefix="$PREFIX" \
   "${BUILD_ARGS[@]}" \
-  "${BLAS_ARGS[@]}" \
   --enable-R-shlib \
   --with-x=no \
   --without-aqua \
