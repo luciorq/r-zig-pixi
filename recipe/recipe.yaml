@@ -1061,7 +1061,9 @@ outputs:
               - Library/lib/R/bin/toolchain/native/LICENSES/zip/LICENSE
             not_exists:
               - Library/lib/R/bin/toolchain/{usr,zig,flang,openmp,cmake}/**
-              - Library/lib/R/bin/toolchain/*.exe
+              # r-zig-slim's exes, by name: rattler-build's `*` also matches
+              # `/`, so toolchain/*.exe matched native/bin/ (PR #60 CI F-C4)
+              - Library/lib/R/bin/toolchain/{rzig,gcc,nm,objdump,strip,dlltool,windres,as}.exe
               - Library/lib/R/etc/**
               - Library/usr/**
       - script:
