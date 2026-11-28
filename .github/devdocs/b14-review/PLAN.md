@@ -535,3 +535,23 @@ jobs, read from each job's log:
   tests, build, verify-tree, smoke, contract, parity, regression,
   recommended, hermetic and standalone-archive steps ran green on
   win-arm64 (the native-tools test is conda-package's and stress's).
+
+## PR #60 CI, second round (2026-11-28)
+
+build-r 46171347861 and upstream-zig 46171347880 on 09b457e. All
+toolchain jobs pass, the Windows ones included (D-B1's source), and
+upstream-zig's legs are green. conda-package linux-64, linux-aarch64,
+osx-64, osx-arm64 pass. conda-package win-64 and win-arm64 built and
+tested r-zig-slim, r-zig-compilers and r-zig-build-tools, then failed:
+
+- F-C4 (V) r-zig-native-tools' package content test: `not_exists:
+  Library/lib/R/bin/toolchain/*.exe` matched native/bin/*.exe ("Found
+  matches for files 'not_exists' glob ... files should not exist").
+  rattler-build's `*` also matches `/`. Reproduced on delta with
+  rattler-build 0.80.1 and a two-recipe check: `t/*.exe` fails on
+  t/native/bin/sh.exe, `t/{rzig,gcc,sh}.exe` passes. The entry now names
+  r-zig-slim's exes, `toolchain/{rzig,gcc,nm,objdump,strip,dlltool,
+  windres,as}.exe` (the list its own `exists` test has). The run stopped
+  there, so r-zig-native-tools' script test (test-native-tools.R) and
+  the outputs after it (extras, recommended, tcltk, toolchain) have no
+  Windows evidence yet.
