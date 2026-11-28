@@ -484,3 +484,54 @@ Windows-only parts (busybox-w32, make's BATCH_MODE_ONLY_SHELL, zip,
 patches 0017 and 0018, test-native-tools.R, the conda native-tools env)
 have no local evidence in this round: kappa ran the slice-3 rows (F28 in
 b14-rhtslib), the rest is CI's and the stress dispatches'.
+
+## PR #60 CI, first round (2026-11-28)
+
+build-r 46160406600 and upstream-zig 46160406612 on 56c750d. Failed
+jobs, read from each job's log:
+
+| job | step | cause |
+|---|---|---|
+| build-r windows-latest / toolchain | Build + archive the toolchain tree | F-C1 |
+| upstream-zig windows-11-arm / toolchain | the same | F-C1 |
+| conda-package / win-64, win-arm64 | Build + test conda package | F-C1 (rattler-build's source fetch) |
+| windows-latest / default, full, minimal, openblas; upstream-zig windows-11-arm / default | Download the toolchain groups | no toolchain archive (F-C1) |
+| macos-latest / minimal, macos-15-intel / minimal | Build + test the r-zig wheel | F-C2 |
+
+- F-C1 (V) frippery.org answers busybox-w32-FRP-6354-g5f09fb446.tgz with
+  `403 Forbidden` to some GitHub-hosted runners (both toolchain logs:
+  `build.zig.zon:28:20: error: bad HTTP response code: '403 Forbidden'`;
+  conda-package: `HTTP status client error (403 Forbidden)`). The
+  build-r windows-11-arm toolchain job fetched it, so the refusal depends
+  on the runner's address. From gamma every User-Agent zig and
+  rattler-build send gets 200 (only `Go-http-client/1.1` gets 403). The
+  earlier fetches were on kappa and delta, never on a hosted runner.
+- D-B1 (user, 2026-11-28, option a) busybox-w32's source is GitHub's
+  archive of the release tag,
+  https://github.com/rmyorston/busybox-w32/archive/refs/tags/FRP-6354-g5f09fb446.tar.gz
+  (sha256 b076d55e4aca74d57d4e77c2ca77abc94dd4926f424fa752889414e1b68f6ebc,
+  zig hash N-V-__8AAPEAvgBuQupMj-ICN-yT2RYz3ygu9awV7iCqhFX8), in
+  busybox.zig, both build.zig.zon files and recipe.yaml. Option b
+  (frippery's exact tarball as a release asset of this repository) was
+  not taken: it needs a manual upload. The two unpacked trees are the
+  same (`diff -rq`) except frippery's `.frp_describe`, so
+  zigbuild/busybox/build.zig checks that file only when it is present;
+  the URL and hash pin the release.
+  Evidence (delta, zig 0.17.1): busybox.exe built from each source is
+  byte-identical (x86_64 738,816 B 9749cec02f90, aarch64 656,896 B
+  9a358890c244); `zig fetch` of the frippery tarball gives the old zon
+  hash; zig fmt --check ok; toolchain-test exit 0 (busybox.zig's tests
+  check the zon and recipe pins).
+- F-C2 (V) wheel-test.sh's per-user library check compared R_LIBS_USER
+  with the raw $HOME. R builds the default from `normalizePath("~")`
+  (library.R), and on macOS TMPDIR is under /var, a link to
+  /private/var, so `startsWith` failed although the library was right.
+  The check now normalizes both paths.
+  Evidence (delta, linux-64): `pixi run -e minimal build`, `wheel`, then
+  `wheel-test` pass ("ok: .../home/.local/share/R/linux-64-zig/4.6/
+  rzigUserLib"); macOS is CI's.
+- F-C3 (V) In the same build-r run windows-11-arm / default passed: the
+  toolchain job there fetched frippery's tarball, and that leg's rzig
+  tests, build, verify-tree, smoke, contract, parity, regression,
+  recommended, hermetic and standalone-archive steps ran green on
+  win-arm64 (the native-tools test is conda-package's and stress's).
