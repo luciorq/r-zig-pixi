@@ -24,7 +24,8 @@
 #     are empty; FLIBS is the bare -lflang_rt.runtime; FC is zig-fc;
 #   - Windows (every tree): CRAN's layout, Makeconf's R_ARCH is /x64 and
 #     its NM_FILTER CRAN's, R_HOME/bin has R.exe and Rscript.exe, and
-#     every front-end carries R's UTF-8 manifest;
+#     every front-end carries R's UTF-8 manifest; gnuwin32's doc/html/
+#     index.html (and the CHANGES.html it links), etc/Rdevga, etc/rgb.txt;
 #   - the build tools (every tree): R puts the build-tools group's usr/bin
 #     first on PATH (unix: etc/Renviron, and MAKE is make; Windows:
 #     etc/Rcmd_environ; B25), and Windows' Makeconf runs ar, ranlib and
@@ -118,6 +119,17 @@ test -d "$TREE/$rh" || { echo "error: no R tree at $TREE ($rh missing): run 'pix
 TREE="$(cd "$TREE" && pwd)"
 echo "== verifying the installed tree $TREE ($OS/$FLAVOR)"
 
+# The reader needed_of and rpaths_of use (verify-helpers.sh), as
+# verify-toolchain.sh checks it: without it they print nothing, and the
+# rpath, DT_NEEDED and load command closures below would pass unread
+# (b14-review B9); the libomp check would fail with the wrong cause.
+case "$OS" in linux) tree_reader=patchelf ;; macos) tree_reader=otool ;; *) tree_reader=llvm-objdump ;; esac
+tree_unread=""
+if ! command -v "$tree_reader" > /dev/null 2>&1; then
+  cannot_check "$tree_reader unavailable; the tree's libraries and rpaths not checked"
+  tree_unread=" ($tree_reader unavailable: NOT read)"
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -169,8 +181,8 @@ done
 # And nothing else is there (B19, B30): the toolchain groups' files
 # (openmp/, usr/) are the toolchain tree's (zig-toolchain.sh,
 # verify-toolchain.sh), whose archives a user extracts beside this tree's.
-# A conda env is the exception: on win-64 r-zig-build-tools carries usr/
-# (pkgconf) here. zig's install never removes a file, so a tree
+# A conda env is the exception: on Windows r-zig-build-tools carries usr/
+# (pkgconf) here, and r-zig-native-tools native/ (b14-l4 F27). zig's install never removes a file, so a tree
 # built before phase 3 still has the files that left it (PHASE3 C25).
 # The base's own extra files (base_extra_files: linux's libstdc++ shims
 # in libstdcxx-shim/, feat-linux-libstdcxx) are checked by name below.
@@ -181,7 +193,7 @@ while IFS= read -r f; do
   n="${f##*/}"
   if [ -d "$f" ]; then
     if [ -n "$conda_tree" ] && [ "$OS" = windows ]; then
-      [ "$n" = usr ] && continue
+      case "$n" in usr | native) continue ;; esac
     fi
     case "$extra_dirs" in *" $n "*) continue ;; esac
     bad="$bad $n/"
@@ -193,10 +205,12 @@ if [ -n "$bad" ]; then
   echo "error: $tc_dir holds more than rzig, its link object and $(base_extra_dirs):$bad (the toolchain groups' files are the toolchain tree's now, and zig's install removes no file, so a tree built before phase 3 keeps them): remove the tree and build again" >&2
   exit 1
 fi
-# the base's extra files: exactly these in their directories
+# the base's extra files: exactly these in their directories. `|| true`:
+# a missing directory fails find, and under set -e and pipefail the
+# assignment would end the script before the message below.
 for d in $(base_extra_dirs); do
-  got="$(cd "$TREE/$tc_dir" && find "$d" -type f | LC_ALL=C sort | tr '\n' ' ')"
-  want="$(printf '%s\n' $(base_extra_files) | grep "^$d/" | LC_ALL=C sort | tr '\n' ' ')"
+  got="$(cd "$TREE/$tc_dir" && find "$d" -type f 2> /dev/null | LC_ALL=C sort | tr '\n' ' ')" || true
+  want="$(printf '%s\n' $(base_extra_files) | grep "^$d/" | LC_ALL=C sort | tr '\n' ' ')" || true
   if [ "$got" != "$want" ]; then
     echo "error: $tc_dir/$d holds '$got', not '$want' (base_extra_files; feat-linux-libstdcxx)" >&2
     exit 1
@@ -333,11 +347,18 @@ if [ "$OS" = windows ]; then
   for f in bin/R.exe bin/Rscript.exe bin/x64/R.exe bin/x64/Rcmd.exe bin/x64/Rscript.exe bin/x64/Rterm.exe; do
     grep -aq '<activeCodePage [^>]*>UTF-8</activeCodePage>' "$TREE/$rh/$f" 2>/dev/null || bad="$bad $f(no UTF-8 manifest)"
   done
+  # gnuwin32's fixed/Makefile: html/rwin.html as doc/html/index.html
+  # (help.start() opens it) and the html/CHANGES.html it links (doc/
+  # Makefile.win), etc/'s Rdevga (the windows() device's fonts) and
+  # rgb.txt (chore-review-consistency B3)
+  for f in doc/html/index.html doc/html/CHANGES.html etc/Rdevga etc/rgb.txt; do
+    [ -s "$TREE/$rh/$f" ] || bad="$bad $f(missing)"
+  done
   if [ -n "$bad" ]; then
     echo "error: $rh lacks CRAN's layout:$bad" >&2
     exit 1
   fi
-  echo "== CRAN's layout verified: Makeconf's R_ARCH = /x64 and NM_FILTER, $rh/bin/{R,Rscript}.exe, the front-ends' UTF-8 manifest"
+  echo "== CRAN's layout verified: Makeconf's R_ARCH = /x64 and NM_FILTER, $rh/bin/{R,Rscript}.exe, the front-ends' UTF-8 manifest, doc/html/{index,CHANGES}.html, etc/{Rdevga,rgb.txt}"
 fi
 
 # The build tools (feat-standalone-toolchain B24, B25, B43), every tree:
@@ -388,8 +409,10 @@ if [ "$OS" = windows ]; then
   # zig-libs (libs-zig-pixi's zig-* packages): R's triple's directory
   zl_triple=x86_64-windows-gnu
   [ "$PLAT" = win-arm64 ] && zl_triple=aarch64-windows-gnu
-  for l in 'R_ZIG_TOOLS_PATH=${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin;${R_ZIG_TOOLCHAIN_ENV}/Library/usr/bin' \
-    'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${PATH}/"' \
+  for l in 'R_ZIG_ENV_ROOT=${R_HOME}/../../..' \
+    'R_ZIG_TOOLCHAIN_ROOT="${R_ZIG_TOOLCHAIN_ENV:-${R_ZIG_ENV_ROOT}}"' \
+    'R_ZIG_TOOLS_PATH="${R_HOME}/bin/toolchain/usr/bin;${R_HOME}/bin/toolchain/cmake/bin;${R_HOME}/../../usr/bin;${R_ZIG_TOOLCHAIN_ROOT}/Library/usr/bin"' \
+    'PATH="${R_CUSTOM_TOOLS_PATH:-${R_ZIG_TOOLS_PATH}};${R_ZIG_LIBS}/bin;${PATH}/"' \
     'R_ZIG_RC=${R_HOME}/bin/toolchain/windres.exe' \
     'R_ZIG_NM=${R_HOME}/bin/toolchain/nm.exe' \
     'R_ZIG_PKG_CONFIG_PATH=${R_HOME}/../../lib/pkgconfig;${R_HOME}/../../share/pkgconfig' \
@@ -405,6 +428,13 @@ if [ "$OS" = windows ]; then
     has_line "$TREE/$rh/etc/Rcmd_environ" "$l" || bad="$bad
   $rh/etc/Rcmd_environ lacks: $l"
   done
+  # no variable of r-zig's whose unset value Renviron.c expands to "" in a
+  # path (a bare ${R_ZIG_TOOLCHAIN_ENV} made /Library/usr/bin, a directory
+  # at the drive's root; chore-review-consistency B2)
+  if tr -d '\r' < "$TREE/$rh/etc/Rcmd_environ" | grep -E '^[^#]*[$][{]R_ZIG_TOOLCHAIN_ENV[}]' > /dev/null; then
+    bad="$bad
+  $rh/etc/Rcmd_environ names \${R_ZIG_TOOLCHAIN_ENV} without a default"
+  fi
   # CMake's toolchain file (build.zig's cmakeToolchain, chore-release-11
   # finding 28): R_ZIG_EXTRA_ENV's Library first in CMake's searches
   has_line "$TREE/$rh/etc/r-zig.cmake" '  list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${_r_zig_env}/Library")' ||
@@ -422,11 +452,11 @@ if [ "$OS" = windows ]; then
   zl_own=$(tr -d '\r' < "$TREE/$rh/etc/r-zig.cmake" | grep -nF -- "/zig-libs/$zl_triple\")" | head -1)
   case "$zl_own" in *'${_r_zig_env}/zig-libs/'*) ;; *) bad="$bad
   $rh/etc/r-zig.cmake adds R_ZIG_EXTRA_ENV's zig-libs before R's own env's" ;; esac
-  # and on Windows on ARM R_ZIG_FALLBACK_SOFT's tree last (feat-winarm-gaps)
-  if [ "$PLAT" = win-arm64 ]; then
-    has_line "$TREE/$rh/etc/r-zig.cmake" '  file(TO_CMAKE_PATH "$ENV{R_ZIG_FALLBACK_SOFT}" _r_zig_env)' ||
-      bad="$bad
-  $rh/etc/r-zig.cmake does not add R_ZIG_FALLBACK_SOFT's tree (win-arm64)"
+  # and no R_ZIG_FALLBACK_SOFT tree any more (retired in build 14,
+  # b14-rhtslib U3; a win-arm64 file had it until then)
+  if grep -q R_ZIG_FALLBACK_SOFT "$TREE/$rh/etc/r-zig.cmake" 2>/dev/null; then
+    bad="$bad
+  $rh/etc/r-zig.cmake still reads R_ZIG_FALLBACK_SOFT (retired in build 14)"
   fi
 else
   for l in 'PATH=${R_HOME}/bin/toolchain/usr/bin:${R_HOME}/bin/toolchain/cmake/bin:${PATH}' "MAKE=\${MAKE-'make'}"; do
@@ -1203,7 +1233,8 @@ fi
 # env's lib dir and zig-cache dirs unless told not to, which build.zig
 # does (relRPaths, linkSibling). (That a package compiled with the tree
 # records none, and loads, is verify-bundle.sh's: it compiles with the
-# relocated copy.)
+# relocated copy.) Without the reader ($tree_reader, checked at the top)
+# rpaths_of reads nothing, and the line below says so.
 bad=""
 while IFS= read -r f; do
   for rp in $(rpaths_of "$f"); do
@@ -1215,7 +1246,7 @@ if [ -n "$bad" ]; then
   echo "error: build-machine rpaths in the tree:$bad" >&2
   exit 1
 fi
-echo "== rpaths verified: $n_bins binaries, all relative"
+echo "== rpaths verified: $n_bins binaries, all relative$tree_unread"
 
 # linux: every DT_NEEDED is a bare name, found through those rpaths. lld
 # records the path it was given for a library with no DT_SONAME (zig gives
@@ -1235,7 +1266,7 @@ if [ "$OS" = linux ]; then
     echo "error: libraries named by path in DT_NEEDED:$bad" >&2
     exit 1
   fi
-  echo "== DT_NEEDED verified: $n_bins binaries, every entry a bare name"
+  echo "== DT_NEEDED verified: $n_bins binaries, every entry a bare name$tree_unread"
 fi
 
 # macOS: static libc++ (decided 2026-09-30): none of R's own binaries
@@ -1329,7 +1360,7 @@ if [ "$OS" = macos ]; then
   echo "== macOS floor verified: $n_bins Mach-O files, minos <= $MACOS_MIN"
   bad=""
   while IFS= read -r f; do
-    id="$(otool -D "$f" 2>/dev/null | tail -n +2)"
+    id="$(otool -D "$f" 2>/dev/null | tail -n +2)" || true
     case "$id" in ""|@rpath/*|@loader_path/*|@executable_path/*|[!/]*) ;; *) bad="$bad ${f#$TREE/}:id=$id" ;; esac
     for dep in $(needed_of "$f"); do
       [ "$dep" = "$id" ] && continue
