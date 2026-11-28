@@ -131,7 +131,7 @@ decides the tier the same way, through `--rzig-check=package`.
          ## first report versions of involved compilers
          lines <- system(paste(MAKE, p1(paste("-f", shQuote(makefiles))),
                                "compilers"), intern = TRUE)
-@@ -3472,6 +3496,113 @@
+@@ -3493,6 +3517,113 @@
      m
  }
  

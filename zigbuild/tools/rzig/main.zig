@@ -57,21 +57,17 @@
 //! own path, and of R_ZIG_EXTRA_ENV; Makeconf's CPPFLAGS and LDFLAGS are
 //! empty (environment.zig, compiler.zig). CONDA_PREFIX is never read.
 //!
+//! The on/off switches below (`=1`) follow one rule (onoff.zig, as R's
+//! tools:::.rzig_on): on for 1, true or yes, in any case; off for unset,
+//! empty, 0, false or no; any other value is off, with a warning naming
+//! the variable. R_ZIG_ENV_RPATH has values of its own.
+//!
 //!   R_ZIG_EXTRA_ENV=<root>  one more environment to compile against: a
 //!                      conda env's root, as an absolute path (rzig adds
 //!                      /Library on Windows).
 //!                      pixi.toml sets it to the pixi env for dev and test
 //!                      runs; a standalone R plus an env of libraries is
 //!                      the other use.
-//!   R_ZIG_FALLBACK_SOFT=<dir>  Windows on ARM only (an aarch64 R; ignored
-//!                      elsewhere, with a warning): a static library tree
-//!                      searched after every environment, for what none
-//!                      has: -idirafter <dir>/include, -L<dir>/lib, never
-//!                      -I and never OpenMP's provider. CRAN's Rtools45
-//!                      aarch64-w64-mingw32.static.posix (stress.R sets
-//!                      it); not R's LOCAL_SOFT (zig-libs by default),
-//!                      whose -I of a MinGW sysroot breaks libc++
-//!                      compiles. RZIG_TRACE marks it `(fallback)`.
 //!   R_ZIG_LIBS=<dir>   Windows (Rcmd_environ sets it: R's env's zig-libs,
 //!                      also LOCAL_SOFT's and R_TOOLS_SOFT's default): a
 //!                      caller's -I of it or below it becomes -idirafter,
@@ -86,6 +82,13 @@
 //!                      packages (that is R_ZIG_EXTRA_ENV). make and cmake
 //!                      stay PATH's; the check names its bin when they are
 //!                      only there.
+//!   R_ZIG_ENV_RPATH=0  links get no rpath into a conda env (R's own,
+//!                      R_ZIG_EXTRA_ENV's), only its -L. =origin: only
+//!                      $ORIGIN (macOS @loader_path) in its place: binaries
+//!                      for the package repository, which must not name
+//!                      the build machine's env and carry the libraries
+//!                      they need beside their .so (repo/build-repo.R;
+//!                      b14-l5; experimental).
 //!   R_ZIG_SYSTEM_LIBS=1  linux only (ignored elsewhere):
 //!                      compile and link against the distribution's
 //!                      libraries in /usr (system_libs.zig, M-29): the
@@ -107,8 +110,8 @@
 //!                      children (tier1.zig, also tier 2's `rzig t1`), so
 //!                      the line shows after the command rzig build echoed,
 //!                      as under make. Before it: `self <path>`, each
-//!                      `environment <dir>` (`(conda)`, `(fallback)` or
-//!                      `(zig-libs)` after it), and `cache <dir>`, rzig's
+//!                      `environment <dir>` (`(conda)` or `(zig-libs)`
+//!                      after it), and `cache <dir>`, rzig's
 //!                      cache (cache.zig's root; `(none)` without one),
 //!                      where the harnesses look for what it wrote.
 //!   RZIG_KEEP_ROOT=1   rzig build: keep the build root (the plan, the
@@ -279,7 +282,6 @@ pub fn main(init: std.process.Init) !u8 {
     };
 
     const env = init.environ_map;
-    const dry_run = isSet(env, "RZIG_PRINT_ARGV");
     var ctx: Ctx = .{
         .io = io,
         .arena = arena,
@@ -288,6 +290,7 @@ pub fn main(init: std.process.Init) !u8 {
         .name = t.shimName(),
         .self_exe = selfExe(io, arena, arg0),
     };
+    const dry_run = ctx.on("RZIG_PRINT_ARGV");
     ctx.dry_run = dry_run;
     if (dry_run) {
         if (env.get("RZIG_OS")) |v| ctx.os = std.meta.stringToEnum(Ctx.Os, v) orelse {
@@ -389,11 +392,11 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     if (dry_run) return printArgv(io, .stdout(), env, blocks.items);
-    if (isSet(env, "RZIG_TRACE")) {
+    if (ctx.on("RZIG_TRACE")) {
         // what the environment rule saw: this binary's path, and the
         // environments it chose (environment.zig)
         ctx.warn("self {s}", .{ctx.self_exe orelse "(unknown)"});
-        for (try environment.list(&ctx)) |e| ctx.warn("environment {s}{s}", .{ e.dir, if (e.conda) " (conda)" else if (e.fallback) " (fallback)" else if (e.zig_libs) " (zig-libs)" else "" });
+        for (try environment.list(&ctx)) |e| ctx.warn("environment {s}{s}", .{ e.dir, if (e.conda) " (conda)" else if (e.zig_libs) " (zig-libs)" else "" });
         // and its cache: an empty cache where a harness looks says
         // nothing unless this is the directory (verify-helpers.sh's
         // rzig_cache_odd)
@@ -434,12 +437,6 @@ pub fn main(init: std.process.Init) !u8 {
 /// One command rzig runs or prints: its argv, and whether it is zig's,
 /// the only kind the libc++ mirror's ZIG_LIB_DIR is for.
 const Block = struct { argv: []const []const u8, zig: bool };
-
-/// A switch in the environment: set, not empty, not "0".
-fn isSet(env: *const std.process.Environ.Map, name: []const u8) bool {
-    const v = env.get(name) orelse return false;
-    return v.len > 0 and !mem.eql(u8, v, "0");
-}
 
 /// `argv` as one shell command line, for RZIG_TRACE.
 fn shellCommand(argv: []const []const u8) std.fmt.Alt([]const []const u8, struct {
@@ -766,6 +763,7 @@ test {
     _ = libcxx_mirror;
     _ = @import("libstdcxx.zig");
     _ = @import("system_libs.zig");
+    _ = @import("onoff.zig");
 }
 
 test "rzig's root panic and debug are crash.zig's (K4)" {

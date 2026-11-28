@@ -180,6 +180,36 @@ stopifnot(r$status != 0L, length(comp) == 1L, length(bt) == 1L, comp < bt,
           !dir.exists(file.path(lib, "rzigconf")))
 cat("base: a configure script stops in the preflight with both groups' texts, and does not run: OK\n")
 
+## the on/off rule of every r-zig switch (b14-review B17; patch 0009's
+## .rzig_on, rzig's onoff.zig): 1, true, yes in any case are on; unset,
+## empty, 0, false, no are off; anything else is off with one warning
+## naming the variable. R_ZIG_NO_PREFLIGHT=false keeps the preflight, and
+## so does a value that is neither, with R's warning
+on <- function(v) {
+    Sys.setenv(RZIG_TEST_SWITCH = v); w <- character()
+    r <- withCallingHandlers(tools:::.rzig_on("RZIG_TEST_SWITCH"), warning = function(c) {
+        w <<- c(w, conditionMessage(c)); invokeRestart("muffleWarning") })
+    list(on = r, warnings = w)
+}
+for (v in c("1", "true", "TRUE", "yes", "Yes")) stopifnot(identical(on(v), list(on = TRUE, warnings = character())))
+for (v in c("", "0", "false", "FALSE", "no")) stopifnot(identical(on(v), list(on = FALSE, warnings = character())))
+Sys.unsetenv("RZIG_TEST_SWITCH")
+stopifnot(identical(tools:::.rzig_on("RZIG_TEST_SWITCH"), FALSE))
+msg <- "RZIG_TEST_SWITCH='maybe' is neither on (1, true, yes) nor off (0, false, no, empty): taken as off"
+stopifnot(identical(on("maybe"), list(on = FALSE, warnings = msg)),
+          identical(on("maybe"), list(on = FALSE, warnings = character())))
+Sys.unsetenv("RZIG_TEST_SWITCH")
+for (v in c("false", "maybe")) {
+    Sys.setenv(R_ZIG_NO_PREFLIGHT = v)
+    r <- inst(file.path(d, "rzigsrc"))
+    Sys.unsetenv("R_ZIG_NO_PREFLIGHT")
+    cat(r$out, sep = "\n")
+    stopifnot(r$status != 0L, any(grepl("which is incomplete (see above)", r$out, fixed = TRUE)),
+              v == "false" || any(grepl("R_ZIG_NO_PREFLIGHT='maybe' is neither on (1, true, yes) nor off", r$out, fixed = TRUE)),
+              !dir.exists(file.path(lib, "rzigsrc")))
+}
+cat("base: the on/off rule (.rzig_on); R_ZIG_NO_PREFLIGHT=false and =maybe keep the preflight, maybe with a warning: OK\n")
+
 ## R CMD config with no build tools in this env: rzig answers it, no make
 ## and no sh (patch 0010, feat-config-rzig), on every OS; on Windows
 ## through rcmdfn.c, so cmd.exe has no sh to miss

@@ -26,7 +26,8 @@
 # 2. With an R prefix (an installed tree such as dist/slim/R-4.6.2-zig,
 #    whose bin/toolchain is rzig since F3a): small C, C++, Fortran and
 #    OpenMP packages install from source and load, and with
-#    RZIG_SMOKE_CRAN=1 also CRAN's Rcpp, data.table and quadprog.
+#    RZIG_SMOKE_CRAN=1 (verify-helpers.sh's switch_on: 1, true or yes)
+#    also CRAN's Rcpp, data.table and quadprog.
 #
 # Needs zig on PATH (or ZIG); for 2. also flang and make: run it inside the
 # pixi env the tree was built in.
@@ -267,7 +268,7 @@ elf_needed "$T/lib/rzcxx/libs/rzcxx.so" | grep -qx 'libstdc++\.so\.6' ||
   { echo "error: rzcxx.so does not need libstdc++.so.6" >&2; exit 1; }
 echo "ok: the C++ package needs libstdc++.so.6; no package links libc++ or a shared Fortran runtime"
 
-if [ "${RZIG_SMOKE_CRAN:-}" = 1 ]; then
+if switch_on RZIG_SMOKE_CRAN; then
   R_SMOKE_LIB="$T/lib" "$R" --vanilla -s -e '
     lib <- Sys.getenv("R_SMOKE_LIB"); options(timeout = 300)
     pkgs <- c("Rcpp", "data.table", "quadprog")

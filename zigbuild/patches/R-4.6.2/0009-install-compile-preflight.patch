@@ -40,7 +40,11 @@ build, a zig that is not R's, a path that does not resolve) stops with
 C standard (use_C, the hook's --c-std) goes through R_ZIG_C_STD;
 R_ZIG_PKG_BUILDER=make makes the check ask for the build tools. A user
 Makevars (their own compiler) or R_ZIG_NO_PREFLIGHT skips the check;
-binary packages never reach it. Four inputs differ from the hook's, and
+binary packages never reach it. R_ZIG_NO_PREFLIGHT, as every r-zig
+on/off variable, is read by .rzig_on (b14-review B17): on for 1, true or
+yes, in any case; off for unset, empty, 0, false or no; any other value
+is off, with a warning naming the variable, once per process (rzig's
+onoff.zig is the same rule). Four inputs differ from the hook's, and
 are recorded: CLINK_CPPFLAGS is set only after the preflight, the
 user-Makevars skip stays, and use_LTO and Windows' --debug are not
 passed [preflight-PF-7].
@@ -68,7 +72,7 @@ B26, B35 and phase 4; feat-zig-pkg-build PLAN.md, consolidation M1.
 +             else file.exists("configure"))
 +        if (((install_libs && dir.exists("src") &&
 +              length(dir("src", all.files = TRUE)) > 2L) || configure_runs) &&
-+            !length(makevars_user()) && !nzchar(Sys.getenv("R_ZIG_NO_PREFLIGHT"))) {
++            !length(makevars_user()) && !.rzig_on("R_ZIG_NO_PREFLIGHT")) {
 +            ## (R.home("bin") is bin/x64 on Windows)
 +            rzig <- file.path(R.home(), "bin", "toolchain",
 +                              if (WINDOWS) "gcc.exe" else "zig-cc")
@@ -104,3 +108,31 @@ B26, B35 and phase 4; feat-zig-pkg-build PLAN.md, consolidation M1.
          if (use_configure) {
              if (WINDOWS) {
                  if (file.exists(f <- "./configure.ucrt") ||
+@@ -2974,6 +3022,27 @@
+     res # probably a multiple of 256
+ }
+ 
++## r-zig (patch 0009; b14-review B17): the one rule for r-zig's on/off
++## environment variables (R_ZIG_NO_PREFLIGHT here, R_ZIG_NATIVE_TOOLS in
++## patch 0018), rzig's too (its onoff.zig): on when the value is 1, true
++## or yes, in any case; off when it is unset, empty, 0, false or no. Any
++## other value is off, with a warning naming the variable, once per
++## process (R's own config_val_to_logical differs: it also takes T, F
++## and as.logical's other spellings, and gives NA for any other value).
++.rzig_on <- function(name)
++{
++    v <- Sys.getenv(name)
++    if (tolower(v) %in% c("1", "true", "yes")) return(TRUE)
++    if (!tolower(v) %in% c("", "0", "false", "no") &&
++        is.null(.rzig_warned[[name]])) {
++        assign(name, TRUE, envir = .rzig_warned)
++        warning(gettextf("%s='%s' is neither on (1, true, yes) nor off (0, false, no, empty): taken as off",
++                         name, v), call. = FALSE, domain = NA)
++    }
++    FALSE
++}
++.rzig_warned <- new.env(parent = emptyenv())
++
+ 
+ ## called for base packages from src/Makefile[.win] and from
+ ## .install_packages in this file.  Really *help* indices.

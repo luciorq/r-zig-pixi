@@ -19,19 +19,9 @@
 //!    directory each compile runs in (R CMD INSTALL compiles in the
 //!    package's src/), not the one it was set in.
 //!
-//! 3. R_ZIG_FALLBACK_SOFT, when set, on Windows on ARM only (an aarch64
-//!    R): a static library tree searched after every environment, for the
-//!    libraries none of them has: CRAN's Rtools45 toolchain-libs tree (its
-//!    aarch64-w64-mingw32.static.posix directory; chore-release-11 finding
-//!    26, feat-winarm-gaps). conda-forge's win-arm64 lacks nlopt, gsl,
-//!    GDAL and others. Its include/ and lib/ are the directory's own (no
-//!    Library/). Its include/ holds a whole MinGW-w64 sysroot and libc++
-//!    headers, so it is only ever -idirafter, never -I (an -I would shadow
-//!    zig's own: "<cstddef> tried including <stddef.h> but didn't find
-//!    libc++'s"). It never provides OpenMP (`openmp`): its libomp.dll.a
-//!    imports a libomp.dll nothing installs; nor any other import library
-//!    of it (windows.libs). Elsewhere (unix, x86_64 Windows) it is
-//!    ignored, with one warning per command. Resolved as R_ZIG_EXTRA_ENV.
+//! 3. (Retired in build 14: R_ZIG_FALLBACK_SOFT, CRAN's Rtools45 aarch64
+//!    library tree after every environment on Windows on ARM. zig-*
+//!    packages serve those libraries now; b14-rhtslib.)
 //!
 //! 4. zig-libs, Windows only: an environment's (1, 2) static libraries
 //!    built with zig and libc++ by libs-zig-pixi (its zig-* conda
@@ -88,8 +78,6 @@ pub const Env = struct {
     /// <root>/conda-meta is a directory (never on Windows): links get an
     /// rpath into <dir>/lib.
     conda: bool,
-    /// R_ZIG_FALLBACK_SOFT's tree: never the OpenMP provider.
-    fallback: bool = false,
     /// An environment's <dir>/zig-libs/<triple> (Windows): never the
     /// OpenMP provider.
     zig_libs: bool = false,
@@ -116,57 +104,49 @@ pub fn own(ctx: *const Ctx) !?Env {
 
 /// The environment R_ZIG_EXTRA_ENV names (unset or empty: none), at its
 /// real path; none, with a warning, when that path does not resolve.
-pub fn extra(ctx: *const Ctx) !?Env {
+pub fn extra(ctx: *Ctx) !?Env {
     return named(ctx, "R_ZIG_EXTRA_ENV");
 }
 
 /// The environment root the variable `name` names, at its real path;
 /// none when it is unset or empty, and with a warning when the path does
-/// not resolve.
-fn named(ctx: *const Ctx, comptime name: []const u8) !?Env {
+/// not resolve. The path is resolved once per command for each value
+/// (ctx.env_roots), so the warning is printed once: a compile asks for
+/// the environments up to four times (compiler.envFlags, libstdcxx,
+/// windows.demoteZigLibs, RZIG_TRACE's list; b14-review B7).
+fn named(ctx: *Ctx, comptime name: []const u8) !?Env {
     const v = ctx.getenv(name) orelse return null;
-    var root: []const u8 = Io.Dir.cwd().realPathFileAlloc(ctx.io, v, ctx.arena) catch |err| {
-        ctx.warn("warning: " ++ name ++ "={s}: {t}; ignored", .{ v, err });
-        return null;
+    const real = for (ctx.env_roots.items) |r| {
+        if (mem.eql(u8, r.name, name) and mem.eql(u8, r.value, v)) break r.root;
+    } else blk: {
+        const r = try realRoot(ctx, name, v);
+        try ctx.env_roots.append(ctx.arena, .{ .name = name, .value = v, .root = r });
+        break :blk r;
     };
-    if (builtin.os.tag == .windows) root = try mem.replaceOwned(u8, ctx.arena, root, "\\", "/");
+    const root = real orelse return null;
     if (ctx.os == .windows) return .{ .dir = try ctx.fmt("{s}" ++ library, .{root}), .conda = false };
     return .{ .dir = root, .conda = try isConda(ctx, root) };
 }
 
-/// The environment R_ZIG_TOOLCHAIN_ENV names (item 5; unset or empty:
-/// none), at its real path; none, with a warning, when that path does not
-/// resolve. Its bin/ (Library/bin on Windows) holds zig and flang.
-pub fn toolchainEnv(ctx: *const Ctx) !?Env {
-    return named(ctx, "R_ZIG_TOOLCHAIN_ENV");
-}
-
-/// The tree R_ZIG_FALLBACK_SOFT names (unset or empty: none), on
-/// Windows on ARM only, at its real path. Resolved once per command and
-/// kept in ctx, so a warning is printed once however often list() runs.
-pub fn fallback(ctx: *Ctx) !?Env {
-    if (ctx.fallback_soft == null) ctx.fallback_soft = try fallbackDir(ctx);
-    const dir = ctx.fallback_soft.? orelse return null;
-    return .{ .dir = dir, .conda = false, .fallback = true };
-}
-
-fn fallbackDir(ctx: *const Ctx) !?[]const u8 {
-    const v = ctx.getenv("R_ZIG_FALLBACK_SOFT") orelse return null;
-    if (ctx.os != .windows or ctx.arch != .aarch64) {
-        ctx.warn("warning: R_ZIG_FALLBACK_SOFT is for Windows on ARM (aarch64); ignored", .{});
-        return null;
-    }
+fn realRoot(ctx: *const Ctx, comptime name: []const u8, v: []const u8) !?[]const u8 {
     var root: []const u8 = Io.Dir.cwd().realPathFileAlloc(ctx.io, v, ctx.arena) catch |err| {
-        ctx.warn("warning: R_ZIG_FALLBACK_SOFT={s}: {t}; ignored", .{ v, err });
+        ctx.warn("warning: " ++ name ++ "={s}: {t}; ignored", .{ v, err });
         return null;
     };
     if (builtin.os.tag == .windows) root = try mem.replaceOwned(u8, ctx.arena, root, "\\", "/");
     return root;
 }
 
+/// The environment R_ZIG_TOOLCHAIN_ENV names (item 5; unset or empty:
+/// none), at its real path; none, with a warning, when that path does not
+/// resolve. Its bin/ (Library/bin on Windows) holds zig and flang.
+pub fn toolchainEnv(ctx: *Ctx) !?Env {
+    return named(ctx, "R_ZIG_TOOLCHAIN_ENV");
+}
+
 /// R's own environment (after its zig-libs), the toolchain's OpenMP
-/// files, then the extra one (after its zig-libs) unless it is R's own,
-/// then the fallback tree.
+/// files, then the extra one (after its zig-libs) unless it is R's own.
+/// ctx is mutable for `named`'s memo.
 pub fn list(ctx: *Ctx) ![]const Env {
     var out: std.ArrayList(Env) = .empty;
     const o = try own(ctx);
@@ -182,7 +162,6 @@ pub fn list(ctx: *Ctx) ![]const Env {
             try out.append(ctx.arena, e);
         }
     }
-    if (try fallback(ctx)) |e| try out.append(ctx.arena, e);
     return out.items;
 }
 
@@ -225,11 +204,10 @@ fn toolchainOpenmp(ctx: *const Ctx, base: Env) !?Env {
 /// The environment whose llvm-openmp a -fopenmp link uses: the first with
 /// include/omp.h (R's conda env with llvm-openmp, the toolchain's openmp/,
 /// R_ZIG_EXTRA_ENV's). A standalone base has no omp.h of its own since
-/// phase 3: the compilers group's openmp/ holds it. Never the fallback
-/// tree, whose omp.h and libomp.dll.a are for a DLL it does not install.
+/// phase 3: the compilers group's openmp/ holds it. Never zig-libs.
 pub fn openmp(ctx: *const Ctx, envs: []const Env) !?Env {
     for (envs) |e| {
-        if (e.fallback or e.zig_libs) continue;
+        if (e.zig_libs) continue;
         if (ctx.isFile(try ctx.fmt("{s}/include/omp.h", .{e.dir}))) return e;
     }
     return null;
@@ -335,10 +313,32 @@ test "R_ZIG_EXTRA_ENV: resolved, after R's own, dropped when the same" {
     }
     try f.env.put("R_ZIG_EXTRA_ENV", f.path("tree/lib/.."));
     try expectEnvs(&f, &.{.{ .dir = f.path("tree"), .conda = false }});
-    // a missing one: ignored, with a warning
+    // a missing one: ignored, with one warning however often the
+    // environments are asked for in a command (b14-review B7)
     try f.env.put("R_ZIG_EXTRA_ENV", f.path("nowhere"));
+    try f.env.put("R_ZIG_TOOLCHAIN_ENV", f.path("nowhere2"));
+    for (0..4) |_| {
+        try expectEnvs(&f, &.{.{ .dir = f.path("tree"), .conda = false }});
+        try testing.expect(try extra(&f.ctx) == null);
+        try testing.expect(try toolchainEnv(&f.ctx) == null);
+    }
+    try testing.expectEqualStrings(f.fmt(
+        \\rzig-test: warning: R_ZIG_EXTRA_ENV={s}: FileNotFound; ignored
+        \\rzig-test: warning: R_ZIG_TOOLCHAIN_ENV={s}: FileNotFound; ignored
+        \\
+    , .{ f.path("nowhere"), f.path("nowhere2") }), f.takeWarnings());
+    _ = f.env.swapRemove("R_ZIG_TOOLCHAIN_ENV");
+    // the memo is per value: the conda-meta of a resolved path is looked
+    // at every time, and a new value is resolved again
+    try f.env.put("R_ZIG_EXTRA_ENV", f.path("env2"));
     try expectEnvs(&f, &.{.{ .dir = f.path("tree"), .conda = false }});
     try testing.expect(mem.find(u8, f.takeWarnings(), "R_ZIG_EXTRA_ENV=") != null);
+    try f.tmp.dir.createDirPath(testing.io, "env3");
+    try f.env.put("R_ZIG_EXTRA_ENV", f.path("env3"));
+    try expectEnvs(&f, &.{ .{ .dir = f.path("tree"), .conda = false }, .{ .dir = f.path("env3"), .conda = false } });
+    try f.tmp.dir.createDirPath(testing.io, "env3/conda-meta");
+    try expectEnvs(&f, &.{ .{ .dir = f.path("tree"), .conda = false }, .{ .dir = f.path("env3"), .conda = true } });
+    try testing.expectEqualStrings("", f.takeWarnings());
     try f.env.put("R_ZIG_EXTRA_ENV", "");
     try expectEnvs(&f, &.{.{ .dir = f.path("tree"), .conda = false }});
     try testing.expectEqualStrings("", f.takeWarnings());
@@ -347,56 +347,6 @@ test "R_ZIG_EXTRA_ENV: resolved, after R's own, dropped when the same" {
     f.ctx.self_exe = null;
     try f.env.put("R_ZIG_EXTRA_ENV", f.path("env"));
     try expectEnvs(&f, &.{.{ .dir = f.fmt("{s}/Library", .{f.path("env")}), .conda = false }});
-}
-
-test "R_ZIG_FALLBACK_SOFT: Windows on ARM only, its own include/ and lib/, after every environment, never OpenMP" {
-    var f: testutil.Fixture = undefined;
-    try f.init(.windows);
-    defer f.deinit();
-    try decoy(&f);
-    f.ctx.arch = .aarch64;
-    try f.tmp.dir.createDirPath(testing.io, "env/Library/lib/R/bin/toolchain");
-    try f.tmp.dir.createDirPath(testing.io, "extra/Library");
-    try f.touch("rtools/include/omp.h");
-    try f.touch("rtools/lib/libomp.dll.a");
-    f.ctx.self_exe = f.fmt("{s}/Library/lib/R/bin/toolchain/gcc.exe", .{f.path("env")});
-    try f.env.put("R_ZIG_EXTRA_ENV", f.path("extra"));
-    try f.env.put("R_ZIG_FALLBACK_SOFT", f.fmt("{s}/", .{f.path("rtools")}));
-    const both: []const Env = &.{
-        .{ .dir = f.fmt("{s}/Library", .{f.path("env")}), .conda = false },
-        .{ .dir = f.fmt("{s}/Library", .{f.path("extra")}), .conda = false },
-    };
-    try expectEnvs(&f, &.{ both[0], both[1], .{ .dir = f.path("rtools"), .conda = false } });
-    const got = try list(&f.ctx);
-    try testing.expect(got[2].fallback and !got[0].fallback and !got[1].fallback);
-    // the tree's omp.h is not OpenMP's provider: no environment has one
-    try testing.expect(try openmp(&f.ctx, got) == null);
-    // with the environment's, that one
-    try f.touch("extra/Library/include/omp.h");
-    try testing.expectEqualStrings(f.fmt("{s}/Library", .{f.path("extra")}), (try openmp(&f.ctx, got)).?.dir);
-    try testing.expectEqualStrings("", f.takeWarnings());
-    // a missing one: ignored, with a warning
-    try f.env.put("R_ZIG_FALLBACK_SOFT", f.path("nowhere"));
-    f.ctx.fallback_soft = null;
-    try expectEnvs(&f, both);
-    try testing.expect(mem.find(u8, f.takeWarnings(), "R_ZIG_FALLBACK_SOFT=") != null);
-    // x86_64 Windows: ignored, with one warning (an aarch64 tree there
-    // would only fail the link), once however often list() runs
-    // (envFlags, then RZIG_TRACE's list)
-    try f.env.put("R_ZIG_FALLBACK_SOFT", f.path("rtools"));
-    f.ctx.arch = .x86_64;
-    f.ctx.fallback_soft = null;
-    try expectEnvs(&f, both);
-    try expectEnvs(&f, both);
-    try testing.expectEqualStrings("rzig-test: warning: R_ZIG_FALLBACK_SOFT is for Windows on ARM (aarch64); ignored\n", f.takeWarnings());
-    // unix: the same
-    f.ctx.arch = .aarch64;
-    f.ctx.os = .linux;
-    f.ctx.self_exe = null;
-    f.ctx.fallback_soft = null;
-    _ = f.env.swapRemove("R_ZIG_EXTRA_ENV");
-    try expectEnvs(&f, &.{});
-    try testing.expectEqualStrings("rzig-test: warning: R_ZIG_FALLBACK_SOFT is for Windows on ARM (aarch64); ignored\n", f.takeWarnings());
 }
 
 test "zig-libs: Windows only, <dir>/zig-libs/<triple> before its environment, never OpenMP" {
@@ -460,7 +410,7 @@ test "zig-libs: Windows only, <dir>/zig-libs/<triple> before its environment, ne
     try expectEnvs(&f, &.{.{ .dir = f.path("tree"), .conda = false }});
 }
 
-test "zig-libs before the extra environment and the fallback tree, on Windows on ARM" {
+test "zig-libs before the extra environment, on Windows on ARM; R_ZIG_FALLBACK_SOFT no longer read" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
     defer f.deinit();
@@ -472,15 +422,16 @@ test "zig-libs before the extra environment and the fallback tree, on Windows on
     try f.tmp.dir.createDirPath(testing.io, "rtools/lib");
     f.ctx.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
     try f.env.put("R_ZIG_EXTRA_ENV", f.path("extra"));
+    // retired in build 14 (b14-rhtslib): a tree it names is no environment
     try f.env.put("R_ZIG_FALLBACK_SOFT", f.path("rtools"));
     try expectEnvs(&f, &.{
         .{ .dir = f.path("env/Library/zig-libs/aarch64-windows-gnu"), .conda = false },
         .{ .dir = f.path("env/Library"), .conda = false },
         .{ .dir = f.path("extra/Library"), .conda = false },
-        .{ .dir = f.path("rtools"), .conda = false },
     });
     const got = try list(&f.ctx);
-    try testing.expect(got[0].zig_libs and !got[0].fallback and got[3].fallback and !got[3].zig_libs);
+    try testing.expect(got[0].zig_libs and !got[1].zig_libs and !got[2].zig_libs);
+    try testing.expectEqualStrings("", f.takeWarnings());
 }
 
 test "OpenMP: the first environment with include/omp.h" {

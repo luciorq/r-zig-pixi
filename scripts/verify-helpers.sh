@@ -10,6 +10,22 @@
 # itself: patchelf on linux, otool on macOS, llvm-tools' llvm-objdump on
 # Windows.
 
+# Whether the on/off switch named $1 is on, by the rule of every R_ZIG_*
+# and RZIG_* switch (b14-review B17; rzig's onoff.zig, R's
+# tools:::.rzig_on): 1, true or yes, in any case. Unset, empty, 0, false
+# and no are off; any other value is off, with a warning naming the
+# variable on stderr. smoke-test.sh sources this file for it
+# (RZIG_SMOKE_CRAN) and for the C++ runtime checks.
+switch_on() {
+  local v
+  v="$(printenv "$1" || true)"
+  case "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes) return 0 ;;
+    ""|0|false|no) return 1 ;;
+    *) echo "warning: $1='$v' is neither on (1, true, yes) nor off (0, false, no, empty): taken as off" >&2; return 1 ;;
+  esac
+}
+
 # An archive's members that are files or links, one per line, as stored
 # (R-<ver>-zig/...): not its directories, which every archive of a tree
 # repeats (zip stores them as members of their own). The lists of archives
