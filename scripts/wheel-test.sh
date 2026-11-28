@@ -203,7 +203,10 @@ echo 'export(hi)' > "$U/NAMESPACE"
 echo 'hi <- function() "hi"' > "$U/R/hi.R"
 run Rscript -e '
   u <- Sys.getenv("R_LIBS_USER")
-  stopifnot(startsWith(u, file.path(Sys.getenv("HOME"), ".local", "share", "R")), dir.exists(u),
+  # R builds the default from normalizePath("~"): on macOS TMPDIR is under
+  # /var, a link to /private/var (PR #60 CI, b14-review F-C2).
+  stopifnot(dir.exists(u), startsWith(normalizePath(u),
+              normalizePath(file.path(Sys.getenv("HOME"), ".local", "share", "R"))),
             .libPaths()[1] == normalizePath(u))
   install.packages(commandArgs(TRUE)[1], repos = NULL, type = "source", quiet = TRUE)' "$U" > "$T/userlib.log" 2>&1 ||
   { cat "$T/userlib.log" >&2; echo "error: the per-user library is not first in .libPaths(), or the install failed" >&2; exit 1; }
