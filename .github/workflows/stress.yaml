@@ -61,12 +61,14 @@ on:
         description: 'Windows tree legs (stress.R --msys-from-tree): the stress env''s Library/usr/bin and Library/mingw-w64/bin off PATH, so the build-tools group''s usr/bin alone answers for sh, make and the tools R''s makefiles run'
         type: boolean
         default: false
-      # b13-env-ci (CI4): the windows-11-arm rows with and without the
-      # Rtools45 fallback, one dispatch each
-      rtools_libs:
-        description: 'windows-11-arm legs: take the libraries conda-forge lacks from CRAN''s Rtools45 aarch64 tree (stress.R''s default); false: stress.R --no-rtools-libs'
+      # b14-l4: the Windows rows with the native build tools (busybox-w32,
+      # zig-built GNU make, zip and pkgconf) and no MSYS2, report-only, beside
+      # a default leg (user decision U1 b: the default flips when its
+      # rows match the MSYS2 leg's)
+      native_tools:
+        description: 'Windows legs (stress.R --native-tools): build with the native build tools (R_ZIG_NATIVE_TOOLS=1; the tree''s native/, conda: r-zig-native-tools) and no MSYS2 on PATH'
         type: boolean
-        default: true
+        default: false
       # b13-stress (W9): libs-zig-pixi's own R smoke test after the rows
       libs_smoke:
         description: 'stress.R --libs-smoke=REF: after the rows, libs-zig-pixi''s tests/r/smoke.R at this git ref (empty: off) for sf, terra, gdalraster, s2'
@@ -152,7 +154,12 @@ jobs:
       - name: Upstream zig (ZIG_BIN)
         if: inputs.zig == 'upstream'
         shell: bash
-        run: echo "ZIG_BIN=$(pixi run -e stress fetch-zig)" >> "$GITHUB_ENV"
+        # Two lines, as build-r.yaml: a failing fetch inside echo's
+        # argument would not stop the step, and the leg would run with
+        # the env's zig.
+        run: |
+          zig="$(pixi run -e stress fetch-zig)"
+          echo "ZIG_BIN=$zig" >> "$GITHUB_ENV"
       # The dev tree: what the tree leg tests, and the R that starts the
       # runner in the conda leg (stress.R --conda makes the conda env and
       # runs itself again with that env's R).
@@ -161,18 +168,6 @@ jobs:
       - name: Build the conda packages
         if: matrix.dist == 'conda' && inputs.channel == 'local'
         run: pixi run -e pkg conda-package
-      # Windows on ARM: stress.R takes the libraries conda-forge lacks there
-      # from CRAN's Rtools45 aarch64 toolchain-libs tree, on by default
-      # (stress/README.md). Only the tarball is cached (396 MiB, from CRAN
-      # at run time, never repackaged); stress.R checks its size and
-      # sha256 and downloads it again when they differ. The key names the
-      # pinned file and the start of its sha256.
-      - name: Rtools45 aarch64 libraries (cache)
-        if: runner.os == 'Windows' && runner.arch == 'ARM64' && inputs.rtools_libs
-        uses: actions/cache@v6
-        with:
-          path: build/rtools45/rtools45-toolchain-libs-full-aarch64-6768.tar.zst
-          key: rtools45-toolchain-libs-full-aarch64-6768-64dceac9ecdd54aa
       - name: Stress
         shell: bash
         # STRESS_-prefixed: the step's environment reaches every package's
@@ -185,7 +180,7 @@ jobs:
           STRESS_CHANNEL: ${{ matrix.dist == 'conda' && inputs.channel || '' }}
           STRESS_TRACE: ${{ inputs.trace }}
           STRESS_MSYS_FROM_TREE: ${{ inputs.msys_from_tree }}
-          STRESS_RTOOLS_LIBS: ${{ inputs.rtools_libs }}
+          STRESS_NATIVE_TOOLS: ${{ inputs.native_tools }}
           STRESS_LIBS_SMOKE: ${{ inputs.libs_smoke }}
           R_ZIG_PKG_BUILDER: ${{ inputs.builder }}
         run: |
@@ -195,7 +190,7 @@ jobs:
           if [ -n "$STRESS_SKIP" ]; then args+=("--skip=$STRESS_SKIP"); fi
           if [ "$STRESS_TRACE" = true ]; then args+=("--trace"); fi
           if [ "$STRESS_MSYS_FROM_TREE" = true ] && [ "$RUNNER_OS" = Windows ]; then args+=("--msys-from-tree"); fi
-          if [ "$STRESS_RTOOLS_LIBS" = false ] && [ "$RUNNER_OS" = Windows ] && [ "$RUNNER_ARCH" = ARM64 ]; then args+=("--no-rtools-libs"); fi
+          if [ "$STRESS_NATIVE_TOOLS" = true ] && [ "$RUNNER_OS" = Windows ]; then args+=("--native-tools"); fi
           if [ -n "$STRESS_LIBS_SMOKE" ]; then args+=("--libs-smoke=$STRESS_LIBS_SMOKE"); fi
           if [ "$STRESS_R_ENV" = default ]; then
             # one target per word

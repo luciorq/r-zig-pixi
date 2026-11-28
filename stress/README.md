@@ -23,7 +23,7 @@ The groups follow the brief:
 
 | group | what it tests | rows |
 |---|---|---|
-| g3 | C libraries from the env (rzig's `-I`/`-L` rule) | curl, openssl, xml2, gert, units, systemfonts, textshaping, ragg, magick, hdf5r, ncdf4, gsl, Rmpfr, RPostgres |
+| g3 | C libraries from the env (rzig's `-I`/`-L` rule) | curl, openssl, xml2, gert, units, systemfonts, textshaping, ragg, jpeg, magick, hdf5r, ncdf4, gsl, Rmpfr, RPostgres |
 | g4 | own build systems and bundled code | nloptr, s2, igraph, stringi, stringi:bundled, qs2, fst, geos, Rhdf5lib, Rsamtools, zigcmake (Windows) |
 | g2 | C++ across a library boundary (the C++ ABI risk) | lwgeom, sf, terra, gdalraster, RcppParallel, RcppParallel:system-tbb, protolite, arrow, arrow:source, V8 |
 | g1 | heavy C++ | Rcpp, RcppArmadillo, lme4, DESeq2, scran, StanHeaders, rstan, duckdb, mlpack |
@@ -54,8 +54,9 @@ program against the four and runs it (chore-release-12 M-9).
 The tree: the compile tree, build/compile-tree/slim/R-<ver>-zig, with the
 stress env's libraries. The stress task makes it on every run (it depends
 on `compile-tree`) from the dev tree that `pixi run build` makes and the
-toolchain tree's openmp/ and usr/ (Windows: openmp/, usr/ and etc/), so
-both must exist first:
+toolchain tree's group directories but zig/ and flang/ (openmp/, linux's
+libstdcxx/, usr/ and cmake/; Windows also etc/ and native/;
+`scripts/compile-tree.sh`), so both must exist first:
 
 ```sh
 pixi run build
@@ -80,8 +81,8 @@ again with that env's R. The compile tree's R starts it, so `build` and
 `toolchain` must have run first here too. The env's channels are
 `dist/conda` (plain `--conda`), then universe, then conda-forge: universe
 must come before conda-forge (the main README's install section says
-why). `--conda=universe` tests what universe has published, build 10
-(R 4.6.1) until build 11 is published.
+why). `--conda=universe` tests what universe has published (its newest
+on 2026-11-26: build 13, R 4.6.2).
 
 Useful options (`--help` lists them all):
 
@@ -110,7 +111,17 @@ Useful options (`--help` lists them all):
   group lacks then fails its row with "command not found" instead of being
   found in the env. A conda run ignores it, with a note: there the tools
   are the env's.
-- `--strict`: exit 1 when a result differs from its `expect`.
+- `--native-tools`: Windows only (b14-l4, user decision U1 b). The rows
+  build with the native build tools, busybox-w32, GNU make, zip and pkgconf
+  built with zig (`R_HOME/bin/toolchain/native/bin`: the tree's
+  build-tools group; a conda run adds `r-zig-native-tools` to its env),
+  and no MSYS2: `R_ZIG_NATIVE_TOOLS=1` (patch 0018), `R_CUSTOM_TOOLS_PATH`
+  the native directory and the extras' `cmake/bin`, and the env's
+  `Library/usr/bin` and `Library/mingw-w64/bin` off PATH. A report-only
+  leg to compare with a default one: the default switches when its rows
+  match. report.md says "Build tools: native".
+- `--strict`: exit 1 when a result differs from its `expect`, or when
+  `--libs-smoke` was given and its line is not "pass" (FAIL, or not run).
 - `--libs-smoke[=REF]`: after the rows, run libs-zig-pixi's own
   `tests/r/smoke.R` (REF: a git ref of github.com/luciorq/libs-zig-pixi,
   `main` by default, or a local file) for those of sf, terra, gdalraster
@@ -130,6 +141,7 @@ gh workflow run stress.yaml -f packages=g2 -f distribution=both -f channel=unive
 gh workflow run stress.yaml -f packages=all -f skip=heavy -f jobs=2
 gh workflow run stress.yaml -f packages='g3 g4' -f trace=true
 gh workflow run stress.yaml -f oses='["windows-latest"]' -f packages='g3 g4' -f msys_from_tree=true
+gh workflow run stress.yaml -f oses='["windows-latest"]' -f packages=all -f skip=heavy -f native_tools=true
 gh workflow run stress.yaml -f oses='["windows-latest","windows-11-arm"]' -f packages='g2 g3 g4' \
   -f distribution=both -f trace=true
 gh workflow run stress.yaml -f oses='["ubuntu-latest","windows-latest"]' -f packages='RcppArmadillo igraph' -f variant=openblas
@@ -143,8 +155,8 @@ upstream's from `pixi run fetch-zig`), `trace` (`--trace`), the builder
 build where the call qualifies, patch 0013; or make, the make path for
 every package and shared object, a make reference) and
 `msys_from_tree` (false by default; true passes `--msys-from-tree` on
-Windows), `rtools_libs` (true by default; false passes `--no-rtools-libs`
-on windows-11-arm) and `libs_smoke` (a libs-zig-pixi git ref, empty by
+Windows), `native_tools` (false by default; true passes `--native-tools`
+on Windows) and `libs_smoke` (a libs-zig-pixi git ref, empty by
 default; set, it passes `--libs-smoke=<ref>`), and `variant` (slim by
 default; full or openblas): the R the tree legs build, with that pixi
 env (`pixi run -e full build`), and run, from its compile tree
@@ -176,9 +188,10 @@ For each package, dependencies first:
    the smoke call's objects while the package's code is still loaded.
    The unload is R CMD check's "can be unloaded cleanly" check: a
    warning there (a failed `.onUnload`) counts as an error. A crash in
-   the unload or at R's exit is how Z9 shows on linux
-   (zig links shared libraries without crtbeginS.o; see round 1's results)
-   until rzig's fix. The step has 10 minutes: rstan's smoke call compiles
+   the unload or at R's exit is how Z9 showed on linux in round 1
+   (zig linked shared libraries without crtbeginS.o), until rzig's
+   finalization object (`dso_fini.o`, build 7; fix-stress-round1 S9).
+   The step has 10 minutes: rstan's smoke call compiles
    and samples a one-parameter Stan model.
 
 A package whose dependency failed is skipped. A dependency counts as failed
@@ -238,8 +251,7 @@ nothing else on the machine:
   `etc/Renviron` makes it `CMAKE_TOOLCHAIN_FILE`'s default. The runner
   then writes none, so a run tests the tree's file, as a user gets it.
 - Windows only: `R_TOOLS_SOFT` is the env's zig-libs when it has one, else
-  its `Library` (on Windows on ARM: the Rtools45 tree when the env has no
-  zig-gdal), where packages built for Rtools look for libraries (sf, terra
+  its `Library`, where packages built for Rtools look for libraries (sf, terra
   and gdalraster copy GDAL's and PROJ's data from there). Among the rows
   only these and Rhtslib (Rsamtools' dependency: `-lnghttp2`, `-lpsl`,
   `-lbrotlidec` when `$(R_TOOLS_SOFT)/lib` has their archives) read it;
@@ -247,7 +259,7 @@ nothing else on the machine:
   rstan, DESeq2, systemfonts, geos and their compiled dependencies do not
   (b13-stress Q26, CRAN and Bioconductor 3.23 sources of 2026-11-24).
   `LOCAL_SOFT` is the env's zig-libs when it has one (else Rcmd_environ's
-  default, R's own env's zig-libs), never the Rtools45 tree: Makeconf.win
+  default, R's own env's zig-libs): Makeconf.win
   puts `-I"$(LOCAL_SOFT)/include"` on every compile, which rzig turns into
   `-idirafter` for zig-libs only. jpeg's `configure.win` reads it
   (b13-fixes).
@@ -288,7 +300,7 @@ changes; a copy without `.git` says "unknown". Then one line per target:
 | class | the runner's guess at the cause, from the failing part of the log |
 | expect | the row's expectation for this OS and arch (`windows-aarch64=` before `windows=`); `?` when the target's `zig-*` sysdeps are missing (see "Windows: zig-libs") |
 | min, MB | install minutes and installed size |
-| zig-libs | Windows: the target's `zig-*` sysdeps (its row's and its dependencies' rows'), each with its version and build, `Rtools tree` or `missing`; with `--trace`, the `-l` names that resolved into zig-libs and into the Rtools45 fallback tree (rzig's `lib -l<name> <file>` trace lines), and `copies`: the libraries the log's links took from more than one directory (a `-l` name's file, and a `lib<n>.a` a link names by path, counted as `<n>`), `none` when each came from one place. A name zig serves itself (`c++`, `m`, the MinGW system libraries such as `ws2_32`) shows the file the first `-L` directory has, but zig links its own (stress/README.md, "Windows on ARM") |
+| zig-libs | Windows: the target's `zig-*` sysdeps (its row's and its dependencies' rows'), each with its version and build, or `missing`; with `--trace`, the `-l` names that resolved into zig-libs and those rzig dropped (`dropped`: Rtools45's libcurl closure, "Windows on ARM: the Rtools45 fallback (retired in build 14)") (rzig's `lib -l<name> <file>` trace lines), and `copies`: the libraries the log's links took from more than one directory (a `-l` name's file, and a `lib<n>.a` a link names by path, counted as `<n>`), `none` when each came from one place. A name zig serves itself (`c++`, `m`, the MinGW system libraries such as `ws2_32`) shows `(zig)` when rzig finds zig's lib directory (else the file the first `-L` directory has, which zig does not read) |
 | first error | the first error line of the log |
 
 Dependencies that failed a step follow the table. Each package has
@@ -303,7 +315,7 @@ The classes, and who acts on them:
 | resource | out of memory, no space left | fewer jobs, a bigger runner |
 | abi | an undefined symbol with `St3__1`, `__cxx11` or an MSVC name: libc++ code against a libstdc++ (or MSVC) library. On linux, since feat-linux-libstdcxx, rzig compiles all C++ against gcc's libstdc++, so there it means a libc++ object (a prebuilt static library built with libc++) met libstdc++ code, which should not happen | a design decision for the user |
 | toolchain | rzig's own messages (`zig-cc: cannot run ...`, `rzig build: no zig ...`), `LLVM ERROR`, an unknown option, a missing compiler-rt helper; also the install preflight's stops (patch 0009: `needs the r-zig toolchain (...), which is incomplete` after rzig's 127, and `this package cannot be built` after any other status, such as a zig that is not R's; the row shows rzig's `zig-cc: ` line naming what is wrong; before phase 4 it also said `which is not installed` where R had no rzig, and build 8 said `r-zig toolchain is incomplete`). Not the line that follows every failed compile (tier 1's `rzig build: <source> failed (N): <command>`, tier 2's `rzig build: zig build failed (N)`): the compiler's lines decide, as under make | fix in rzig, after the user agrees; for the preflight's stop, add what it names |
-| crash | R died from a signal or a Windows exception (exit status 128 or more, or below 0), or printed `*** caught segfault ***` | read the log; after an unload on linux, Z9 until rzig's fix |
+| crash | R died from a signal or a Windows exception (exit status 128 or more, or below 0), or printed `*** caught segfault ***` | read the log (on linux, Z9's unload crash is fixed since build 7) |
 | upstream | a packaging bug in a conda-forge library or in the channels: a Homebrew path in a conda library (`Library not loaded: /opt/homebrew/...`), CMake's `debug`/`optimized` keywords from a `.pc` file, an import library that lists what its DLL does not export (`The specified procedure could not be found`), a solver conflict when `--conda` makes its env (round 1's U1 to U4) | work around it in the env (a pin, a fixed file) and record it |
 | sysdep | `configure: error`, a missing header, `-l` or pkg-config module, `command not found` | add it to the stress feature (or the extras for tools) |
 | package | anything else: C23 keywords, gcc-only code, Rtools assumptions; also `src/build.zig cannot be built by make` (a zig package whose build a site Makevars or the Makeconf sends to make), the preflight's stop after it says the package cannot be built | record it |
@@ -312,7 +324,8 @@ The classes, and who acts on them:
 Three more values appear: `dependency` on a `skipped` row, `harness` on an
 `error` row, and `resumed` on a package that `--resume` kept. An `expect`
 of `fail-dependency` matches a `skipped` row: a target that waits behind an
-expected failure (lwgeom on linux, behind sf's A1). When `--conda`
+expected failure (no row expects it today; lwgeom on linux did, behind
+sf's A1, until 2026-11-23: sf is ok on linux since feat-linux-libstdcxx). When `--conda`
 cannot make its env, report.md names the class of `logs/conda-env.log`, and
 report.json has it as `info.class`.
 
@@ -336,8 +349,8 @@ the log.
 What these packages promise, and what r-zig depends on, is libs-zig-pixi's
 [CONTRACT.md](https://github.com/luciorq/libs-zig-pixi/blob/main/.github/devdocs/CONTRACT.md):
 a change on either side that it does not allow starts there. New
-libraries arrive in batches (libs-zig-pixi slice 2, replacing the Rtools45
-tree below); each publish ends with a handover note in that repository's
+libraries arrive in batches (libs-zig-pixi slice 2 replaced the Rtools45
+tree below, retired in build 14); each publish ends with a handover note in that repository's
 branch PLAN.md.
 The first r-zig build that searches zig-libs is 12; build 11 on universe
 predates PR #51 and ignores them.
@@ -366,8 +379,7 @@ package cannot link (the abi rows: s2, terra, gdalraster). With zig-libs:
   themselves; a package's own `-DCMAKE_PREFIX_PATH` stays first.
 - stress.R sets `R_TOOLS_SOFT` to the libraries env's zig-libs when it
   exists, and for the tree (whose `Rcmd_environ` knows only R's own env)
-  puts that env's zig-libs `.pc` files first itself. On Windows on ARM the
-  order is zig-libs, the Rtools45 tree's closed `.pc` files, the env's.
+  puts that env's zig-libs `.pc` files first itself.
 
 The rows name them as `zig-gdal@windows` and the like (unix keeps
 conda-forge's libgdal-core, geos, proj, openssl). They are on universe
@@ -376,142 +388,55 @@ Windows platforms (pixi.toml), a tree run takes them from there and a
 conda run's env gets them from universe with the rows' other sysdeps.
 
 A target whose `zig-*` sysdeps (its own or its dependencies' rows', such
-as s2's for sf) are missing, and not served by the Rtools45 tree on
-Windows on ARM (gdal, geos, proj, tbb12; not abseil), gets the expect `?`:
+as s2's for sf) are missing gets the expect `?`:
 the `windows=ok` expects assume them.
 
-## Windows on ARM: the Rtools45 fallback
+## Windows on ARM: the Rtools45 fallback (retired in build 14)
 
-conda-forge has no win-arm64 build of gdal, hdf5, netcdf, gsl, gmp, mpfr,
-glpk, nlopt, udunits2, harfbuzz or libpq (chore-release-11 finding 26). CRAN's
-Rtools45 aarch64 "full" toolchain-libs tree has them. It is built with LLVM
-(libc++, UCRT), as zig builds packages, so its static C and C++ libraries
-link with zig's libc++. CRAN's own aarch64 builds use this tree. So on
-Windows on ARM stress.R uses it by default, and `--no-rtools-libs` turns it
-off (feat-winarm-gaps). If the tree cannot be made ready (a download or
-extraction failure, no pkgconf), the rows run without it and the report's
-`Fallback:` line says why. Elsewhere nothing changes.
+Through build 13 conda-forge had no win-arm64 build of gdal, hdf5,
+netcdf, gsl, gmp, mpfr, glpk, nlopt, udunits2, harfbuzz or libpq
+(chore-release-11 finding 26), so on Windows on ARM stress.R downloaded
+CRAN's Rtools45 aarch64 "full" toolchain-libs tree (a pinned tarball,
+6768), wrote closed `.pc` files for it and handed it to rzig as
+`R_ZIG_FALLBACK_SOFT` (`-idirafter` and `-L` after every environment;
+feat-winarm-gaps). libs-zig-pixi's `zig-*` packages now serve every
+library the rows took from it (slice 2; b13-slice2 F2, F10) but one:
+Rhtslib's `regex.h` and `-lregex`, which zig-libgnurx serves since
+slice 3 (libs run 46079530353, 2026-11-27), in the stress env on both
+Windows arches with zig-protobuf (protolite, RProtoBuf) and zig-libcurl
+build 2 (b14-rhtslib). Build 14
+removed the tree: stress.R's download and `--no-rtools-libs`, stress.yaml's
+`rtools_libs` input and tarball cache, rzig's `R_ZIG_FALLBACK_SOFT` and
+`etc/r-zig.cmake`'s block for it (b14-rhtslib U3). The tree's rules,
+expects and checks are recorded in feat-winarm-gaps PLAN.md (findings
+83-88) and in this file's history.
 
-- **The file.** <https://cloud.r-project.org/bin/windows/Rtools/rtools45/files/rtools45-toolchain-libs-full-aarch64-6768.tar.zst>,
-  415437513 bytes, sha256
-  `64dceac9ecdd54aa85a209a0529f5a96c4b7898ae830c165d0d05bffa5e9e8b5`.
-  CRAN publishes no checksum, so stress.R pins its own and checks size and
-  sha256 (`tools::sha256sum`) before it uses the file. The "base" tarball
-  has none of these libraries; "full" is needed. Rtools45 aarch64 is likely
-  at its last build, so 6768 is pinned.
-- **The layout.** `build/rtools45/` in the checkout (`STRESS_RTOOLS_DIR`
-  moves it): the tarball, and `aarch64-w64-mingw32.static.posix/` with only
-  `include/`, `lib/`, `share/gdal` and `share/proj` (1.4 GB in about 30,000
-  files of the 2.86 GB tree). `cmake -E tar` extracts it (libarchive reads
-  zstd; R's `untar()` does not). When that fails, Windows 11's own tar
-  (`System32\tar.exe`, bsdtar) is tried; when both fail, the rows run
-  without the tree. Then `include-pinned/` and `lib/pkgconfig-closed/` are
-  written (below). Stamps skip each step the next time: the extraction is keyed on
-  the sha256, the `.pc` files also on the zig's version and lib directory
-  (upstream and conda-forge zig ship different MinGW `.def` sets). On gamma
-  (linux, 2026-11-18): about 1 min to extract and write the 451 `.pc`
-  files, 30 s to write them again for another zig, 2 s for a ready tree. In CI, stress.yaml caches only the tarball
-  (`actions/cache`, Windows ARM64 legs).
-- **Rule 1: `-idirafter` only.** rzig gets the tree as
-  `R_ZIG_FALLBACK_SOFT`: `-idirafter <tree>/include` and `-L<tree>/lib`
-  after every environment's, never `-I`, and never as the OpenMP provider
-  or for an import library (its `libomp.dll.a`, `libboost_*.dll.a` are for
-  DLLs it does not install: such an `-l` fails the link).
-  The tree's `include/` holds a whole MinGW-w64 sysroot and libc++ headers.
-  As an `-I` they break every C++ compile ("<cstddef> tried including
-  <stddef.h> but didn't find libc++'s <stddef.h> header"). So R's
-  `LOCAL_SOFT` is never set: its `-I"$(LOCAL_SOFT)/include"` is that `-I`.
-  CMake's find_* see the tree too, after the environments (an aarch64 R's
-  `etc/r-zig.cmake`).
-- **Rule 2: closed `.pc` files.** The tree's `.pc` files are static only
-  (everything in Libs.private and Requires.private). stress.R writes a
-  closed copy of each: the module's whole static closure, resolved in the
-  tree alone with the build-tools group's pkgconf (`--static`), with no
-  Requires, each archive named by its path, and MinGW's system libraries
-  and the runtime names left as `-l`. conda-forge's pkg-config 0.29 cannot
-  do it (libgcrypt.pc: "Libs field occurs twice"). A module that names a
-  library the tree does not have as an archive (opencv's `-ltegra_hal`,
-  symphony's `-lSymAppl`) is skipped. Paths matter: the tree's libjpeg is
-  IJG 9, conda-forge's is libjpeg-turbo. Each closed `.pc` also has
-  `-I<tree>/include-pinned`: a copy of `include/` without the names zig
-  has (its MinGW, libc++, libc++abi, libunwind and own headers), without
-  `c++/` and without the OpenMP headers. Without it, a header both have
-  came from the env (rzig's `-idirafter` env before tree) while the tree's
-  archive linked: conda-forge's PROJ 9.9, GEOS 3.15, SQLite 3.54.1 and
-  libtiff 4.7.2 headers against the tree's 9.7.1, 3.14.1, 3.51.2 and 4.7.1
-  (a version check compiled on linux, 2026-11-18). With it, the tree's
-  headers win for every module asked through the closed `.pc` files.
-- **Rule 3: the tree's `.pc` files first.** `PKG_CONFIG_PATH` is the closed
-  `.pc` directory, then the env's. This gives the GDAL stack (gdal, geos,
-  proj) its archives and, through `include-pinned`, its headers from the
-  tree alone, and it avoids two conda-forge
-  win-arm64 `.pc` bugs: proj.pc says `-lproj_9` but only proj.lib ships,
-  and libcurl.pc names a build machine's `D:/bld/.../z.lib`. A module the
-  tree lacks still comes from the env. Every package that asks pkg-config
-  for a module both have (libxml-2.0, libcurl, freetype2, ...) now gets the
-  tree's static copy and headers on Windows on ARM. A package that links
-  an env library by a bare `-l` while it asks pkg-config for a tree module
-  gets the tree's header of that library: not checked.
-- **`R_TOOLS_SOFT` is the tree** when the env has no zig-gdal, as CRAN's
-  aarch64 LOCAL_SOFT: sf, terra and gdalraster copy its `share/gdal` and
-  `share/proj`, which match the PROJ they link (with zig-gdal it is
-  zig-libs, whose GDAL and PROJ they link). Makevars that test
-  `$(R_TOOLS_SOFT)/lib/lib<x>.a` take their Rtools branch: among the rows
-  only Rhtslib's (above).
-- **The report** has a `Fallback:` line: the tarball, the start of its
-  sha256, the sysdeps the tree serves (they leave "Sysdeps missing"), and
-  whether rzig uses the tree. rzig's trace names it `environment <tree>
-  (fallback)`; an rzig without `R_ZIG_FALLBACK_SOFT` (build 11 and older)
-  ignores it, and the line says so.
-- **The expects.** Stress run 44450918935 (2026-11-19, fd44749,
-  windows-11-arm, tree and conda legs) put units, textshaping, ragg,
-  hdf5r, ncdf4, gsl, Rmpfr, nloptr, igraph, Rsamtools, terra,
-  gdalraster, lme4 and scran at ok on windows-aarch64; sf and lwgeom are
-  fail-dependency (s2 does not link: its make-time pkg-config finds no
-  abseil, so the link has none). Rows outside that run may change too:
-  the tree adds headers conda and zig's MinGW lack (`dlfcn.h`,
-  `regex.h`, `iconv.h`, `libintl.h`), which a configure probe can now
-  find (Rhtslib now gets `regex.h`).
-- **Licensing.** stress.R downloads the tarball from CRAN at run time, and
-  CI keeps it in a private Actions cache. r-zig never repackages or
-  redistributes it. The tree ships no per-library licence texts, and the
-  licences differ: gsl and glpk are GPL-3, gmp and mpfr LGPL-3+, nlopt
-  LGPL/MIT, hdf5 and netcdf BSD-style, gdal, proj and harfbuzz MIT, libpq
-  the PostgreSQL licence, oneTBB Apache-2.0. A package that links gsl or
-  glpk statically is a GPL combination, as on CRAN.
-- **Verified on Windows, and not.** The run above extracted the tree,
-  wrote the closed `.pc` files with drive-letter paths, linked and loaded
-  the DLLs and passed each row's one-line smoke. Not verified: C++
-  exceptions across the tree's LLVM 19 libc++ and zig's clang 22 libc++,
-  the tree's libomp import against conda's libomp 23, which extractor
-  ran (cmake's zstd or `tar.exe`), the rows outside that run, and
-  upstream zig on the runner (record: feat-winarm-gaps PLAN.md findings
-  83-88).
-- **Runtime checks since 2026-11-24 (b13-stress M-10).** The smoke files
-  of hdf5r (a dataset and an attribute round trip: the tree's HDF5
-  1.12.1), sf and terra (EPSG lookups through proj.db, a failed read as an
-  R error), fst (two OpenMP threads, and at most one OpenMP DLL in the
-  process, from `tasklist /m`) and magick (an SVG through the bundle's
-  librsvg, CFG code) check more than loading, on every OS. The zig-libs
-  column's `copies` lists a library a target's links took from two
-  directories (zig-libs and the tree, say). On C++ exceptions across the
-  tree's libc++ and zig's: zig links its own libc++ whatever `-L` holds
-  (`-lc++` with a non-archive `libc++.a` first on `-L` links, with
-  conda-forge zig 0.17.1 and upstream zig 0.16.0, gamma 2026-11-24; so
-  do `-lm`, `-lws2_32`, `-lole32` and the other MinGW names), so a
-  package's DLL has one libc++, zig's. The trace's `lib -lc++ <tree>/lib/libc++.a`
-  line names a file zig does not read. The tree's libraries the rows link
-  on Windows on ARM are C APIs (gsl, gmp, mpfr, glpk, nlopt, hdf5,
-  netcdf, udunits2, libpq; harfbuzz is C++ inside, built without
-  exceptions), so no row throws a C++ exception out of tree code.
+What stays of Rtools' layout: a package that copies Rtools45's static
+libcurl link list (Rhtslib's `Makevars.win` and `pkgconfig()`: `-lidn2
+-lunistring -lssh2 -lgcrypt -lgpg-error`, and `-lnghttp2 -lpsl` when
+`$(R_TOOLS_SOFT)/lib` has them) names libraries that zig-libcurl builds 0 and 1 do not
+use; build 2 links all of them but `-lgcrypt -lgpg-error` (its libssh2
+uses OpenSSL). rzig drops such an `-l` when no `-L` directory has it and
+zig does not serve it (`windows.zig`, `rtools_curl`); the zig-libs
+column lists them as `dropped`.
+
+Runtime checks (b13-stress M-10): the smoke files of hdf5r (a dataset and
+an attribute round trip), sf and terra (EPSG lookups through proj.db, a
+failed read as an R error), fst (two OpenMP threads, and at most one
+OpenMP DLL in the process, from `tasklist /m`) and magick (an SVG through
+the bundle's librsvg, CFG code) check more than loading, on every OS.
+zig links its own libc++ whatever `-L` holds (`-lc++` with a non-archive
+`libc++.a` first on `-L` links, with conda-forge zig 0.17.1 and upstream
+zig 0.16.0, gamma 2026-11-24; so do `-lm`, `-lws2_32`, `-lole32` and the
+other MinGW names), so a package's DLL has one libc++, zig's.
 
 ## Notes and known issues
 
 - The `expect` column is a guess until a run confirms it. Update it with
-  each round of results. The values are round 2's: they describe branch
-  fix-stress-round1's toolchain (build 7) and the stress env after round
-  1's decision 18. The notes say which round they come from (`linux
-  2026-10-08:` is round 1, `linux round 2 (2026-10-08):` round 2).
+  each run's results. Each row's note dates its values and names the run
+  they come from (`linux 2026-10-08:` is round 1, `linux round 2
+  (2026-10-08):` round 2, later entries name their stress run or
+  branch).
 - The stress env is not in solve group "r": there its libraries changed the
   R envs' lock entries. So it can differ from the default env by a patch or
   build (libxml2, llvm-openmp, glib, python on 2026-10-08). Compare them

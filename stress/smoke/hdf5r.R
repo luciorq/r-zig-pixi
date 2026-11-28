@@ -1,8 +1,8 @@
 # hdf5r (row smoke `@hdf5r.R`): a dataset and an attribute written, the
 # file closed and read back; opening a missing file is an R error (HDF5's
-# error stack through hdf5r's C code), not a crash. On windows-aarch64 the
-# library is the Rtools45 tree's HDF5 1.12.1 (chore-release-12 M-10: more
-# than creating a file).
+# error stack through hdf5r's C code), not a crash. On Windows the
+# library is zig-hdf5's HDF5 1.12.1 (until build 13 on windows-aarch64 the
+# Rtools45 tree's; chore-release-12 M-10: more than creating a file).
 f <- tempfile(fileext = ".h5")
 h <- H5File$new(f, "w")
 h[["x"]] <- 1:10
