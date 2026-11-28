@@ -127,6 +127,10 @@ pub fn build(b: *std.Build) void {
             b.fmt("-DMAKE_HOST=\"{s}\"", .{makeHost(t)}),
         }) catch @panic("OOM");
     }
+    // Windows: every recipe goes to a temporary batch file run by sh, not
+    // to CreateProcess's command line, whose 32k limit igraph's DLL link
+    // passes under the native tools (b14-l4 F39, M4 a).
+    if (t.os.tag == .windows) flags.append(b.allocator, "-DBATCH_MODE_ONLY_SHELL") catch @panic("OOM");
     mod.addCSourceFiles(.{ .root = src, .files = &common_srcs, .flags = flags.items });
     switch (t.os.tag) {
         .linux => mod.addCSourceFiles(.{ .root = src, .files = &unix_srcs, .flags = flags.items }),

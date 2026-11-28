@@ -28,12 +28,14 @@
 //! stamp, after the last step, writes the digest of the tree as the
 //! bootstrap left it, with its time.
 //!
-//! R_ZIG_BOOTGATE_LIST set: what the digest covers goes beside the stamp,
-//! as <stamp>.check.list and <stamp>.stamp.list, to see why it ran.
+//! R_ZIG_BOOTGATE_LIST on (1, true or yes; rzig/onoff.zig): what the
+//! digest covers goes beside the stamp, as <stamp>.check.list and
+//! <stamp>.stamp.list, to see why it ran.
 const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 const Sha256 = std.crypto.hash.sha2.Sha256;
+const onoff = @import("rzig/onoff.zig");
 
 const usage =
     \\usage: bootgate check <stamp> <decision-out> <key>... -- <dir>...
@@ -64,7 +66,15 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
     var list: std.ArrayList(u8) = .empty;
-    const want_list = init.environ_map.get("R_ZIG_BOOTGATE_LIST") != null;
+    const list_var = init.environ_map.get("R_ZIG_BOOTGATE_LIST");
+    const want_list = switch (onoff.parse(list_var)) {
+        .on => true,
+        .off => false,
+        .other => blk: {
+            std.debug.print("bootgate: " ++ onoff.message ++ "\n", .{ "R_ZIG_BOOTGATE_LIST", list_var.? });
+            break :blk false;
+        },
+    };
     const digest = try treeDigest(arena, io, args[4..sep], args[sep + 1 ..], if (want_list) &list else null);
     if (want_list) {
         if (std.fs.path.dirname(stamp)) |d| try cwd.createDirPath(io, d);

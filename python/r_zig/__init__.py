@@ -64,13 +64,12 @@ def environ(base: dict[str, str] | None = None) -> dict[str, str]:
     """
     env = dict(os.environ if base is None else base)
     env["R_HOME"] = r_home()
-    if not env.get("ZIG_BIN"):
-        zig = zig_bin()
-        if zig:
-            # forward slashes on Windows: R reads ZIG_BIN again through
-            # R_HOME/etc/Renviron.site's ${ZIG_BIN-...}, which takes a
-            # backslash as an escape and drops it
-            env["ZIG_BIN"] = zig.replace("\\", "/") if os.name == "nt" else zig
+    zig = env.get("ZIG_BIN") or zig_bin()
+    if zig:
+        # forward slashes on Windows, for a user's ZIG_BIN too (b14-review
+        # B8): R reads ZIG_BIN again through R_HOME/etc/Renviron.site's
+        # ${ZIG_BIN-...}, which takes a backslash as an escape and drops it
+        env["ZIG_BIN"] = zig.replace("\\", "/") if os.name == "nt" else zig
     return env
 
 

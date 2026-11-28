@@ -1,0 +1,104 @@
+R CMD INSTALL, R CMD SHLIB and R sessions: the native build tools on Windows
+
+r-zig's Windows build tools are MSYS2's (the build-tools group,
+R_HOME/bin/toolchain/usr/bin and the env's Library/usr/bin; etc/Rcmd_environ
+and patch 0014 put them first on PATH). r-zig-native-tools ships native
+ones instead, built from source with zig: busybox-w32 (sh, sed, awk, grep,
+coreutils), GNU make built for Windows32 and pkgconf, in
+R_HOME/bin/toolchain/native/bin. Opt-in (user decision U1 b): with
+R_ZIG_NATIVE_TOOLS on (1, true or yes, any case; patch 0009's .rzig_on,
+the rule of every r-zig on/off variable: any other value but empty, 0,
+false and no is off, with a warning), R CMD INSTALL and SHLIB put that
+directory first on PATH before they run a configure script or make, and an
+R session puts it first as patch 0014 puts the group's, so that
+install.packages()'s Sys.which("make") answers the same. CMake's MSYS
+Makefiles generator, Rcmd_environ's default, writes /c/ paths for MSYS2's
+sh (r-zig's busybox reads them too since its patch 0001, for packages
+that name that generator themselves, as RcppParallel), so under the
+opt-in an unset or MSYS default generator becomes Unix Makefiles, whose
+c:/ paths need no conversion; CONFIG_SHELL defaults to sh, as the
+b13-design prototype ran autoconf scripts. etc/Rcmd_environ cannot do this itself: its
+${VAR-default} terms test whether a variable is set, not its value, and
+the generator has to change with the tools. Without R_ZIG_NATIVE_TOOLS
+nothing changes, and on a unix host (R_CROSS_BUILD sets install.R's
+WINDOWS) neither. b14-l4 PLAN.md.
+
+--- a/src/library/tools/R/install.R
++++ b/src/library/tools/R/install.R
+@@ -173,6 +173,8 @@
+ 
+     if (WINDOWS) MAKE <- "make"
+     else MAKE <- Sys.getenv("MAKE") # FIXME shQuote, default?
++    ## r-zig (patch 0018): R_ZIG_NATIVE_TOOLS's tools first on PATH
++    if (WINDOWS) .rzig_native_tools()
+     rarch <- Sys.getenv("R_ARCH") # unix only
+     if (WINDOWS && nzchar(.Platform$r_arch))
+         rarch <- paste0("/", .Platform$r_arch)
+@@ -2587,6 +2589,37 @@
+     invisible()
+ } ## .install_packages()
+ 
++## r-zig (patch 0018): the native build tools on Windows, an opt-in. With
++## R_ZIG_NATIVE_TOOLS on (.rzig_on: 1, true or yes), R_HOME/bin/toolchain/native/bin
++## (the r-zig-native-tools package: busybox-w32's sh and tools, GNU make
++## built for Windows, pkgconf) goes first on PATH, before the build-tools
++## group's MSYS2 tools that etc/Rcmd_environ puts there, for configure
++## scripts and make. CMake's MSYS Makefiles generator (Rcmd_environ's
++## CMAKE_GENERATOR default) writes /c/ paths for MSYS2's sh, so it
++## becomes Unix Makefiles, whose c:/ paths need no conversion; a generator
++## set otherwise stays. CONFIG_SHELL is sh, unless set, for autoconf
++## scripts that look for a better shell. Without the directory, a warning
++## and nothing else. Once per process (R CMD INSTALL calls it, then
++## .shlib_internal again).
++.rzig_native_tools <- function()
++{
++    if (.Platform$OS.type != "windows" || !.rzig_on("R_ZIG_NATIVE_TOOLS"))
++        return(invisible(FALSE))
++    dir <- file.path(R.home(), "bin", "toolchain", "native", "bin")
++    if (!file.exists(file.path(dir, "busybox.exe"))) {
++        warning(gettextf("R_ZIG_NATIVE_TOOLS is on, but %s has no busybox.exe (r-zig-native-tools is not installed)",
++                         dir), call. = FALSE, domain = NA)
++        return(invisible(FALSE))
++    }
++    path <- Sys.getenv("PATH")
++    if (!startsWith(path, paste0(dir, ";")))
++        Sys.setenv(PATH = paste0(dir, ";", path))
++    if (Sys.getenv("CMAKE_GENERATOR") %in% c("", "MSYS Makefiles"))
++        Sys.setenv(CMAKE_GENERATOR = "Unix Makefiles")
++    if (!nzchar(Sys.getenv("CONFIG_SHELL"))) Sys.setenv(CONFIG_SHELL = "sh")
++    invisible(TRUE)
++}
++
+ ## for R CMD SHLIB on all platforms
+ .SHLIB <- function()
+ {
+@@ -2654,6 +2687,8 @@
+         SHLIB_EXT <- ".dll"
+         SHLIB_LIBADD <- ""
+         MAKE <- "make"
++        ## r-zig (patch 0018): R_ZIG_NATIVE_TOOLS's tools first on PATH
++        .rzig_native_tools()
+         ## Formerly for winshlib.mk to pick up Makeconf
+         rarch <- Sys.getenv("R_ARCH", NA_character_)
+         if(is.na(rarch)) {
+--- a/src/library/profile/Rprofile.windows
++++ b/src/library/profile/Rprofile.windows
+@@ -103,3 +103,18 @@
+                                      file.path(dirname(dirname(R.home())), "usr", "bin"), sep = ";")
+     Sys.setenv(PATH = paste0(path, ";", Sys.getenv("PATH")))
+ })
++
++## r-zig (patch 0018): with R_ZIG_NATIVE_TOOLS on (1, true, yes), the native
++## build tools (R_HOME/bin/toolchain/native/bin, r-zig-native-tools) before
++## those, as R CMD INSTALL and SHLIB put them (tools' .rzig_native_tools),
++## so that the session's Sys.which("make") (install.packages()) and
++## system("sh ...") find the same make and sh. A missing directory is
++## harmless here; R CMD warns. tools' .rzig_on (patch 0009) reads the
++## value, and warns on one that is neither on nor off; tools is loaded
++## only when the variable is set, and an R without it (R's own build)
++## takes it as off.
++local({
++    if (nzchar(Sys.getenv("R_ZIG_NATIVE_TOOLS")) &&
++        isTRUE(tryCatch(tools:::.rzig_on("R_ZIG_NATIVE_TOOLS"), error = function(e) FALSE)))
++        Sys.setenv(PATH = paste0(file.path(R.home(), "bin", "toolchain", "native", "bin"), ";", Sys.getenv("PATH")))
++})

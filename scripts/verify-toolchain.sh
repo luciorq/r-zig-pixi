@@ -52,6 +52,12 @@
 #     m2-make version SOURCES records, etc/fstab is build.zig's two lines,
 #     and MSYS takes R_HOME/bin/toolchain as its root and the temporary
 #     directory (TMP, TEMP) as /tmp;
+#   - Windows' native build tools (the build-tools group's native/,
+#     b14-l4): busybox.exe and every applet copy of it, make.exe, zip.exe
+#     and pkgconf.exe run with PATH = System32 alone; make and zip say
+#     the versions SOURCES records, busybox's sh says uname -s Windows_NT
+#     (no MSYS), zip writes an archive busybox's unzip lists; each applet
+#     is busybox.exe's bytes;
 #   - unix make (the build-tools group, L7): usr/bin/make runs with
 #     PATH=/usr/bin:/bin and says the make version SOURCES records;
 #   - zig (the compilers group, B4): zig/zig runs and prints the version
@@ -225,11 +231,14 @@ while IFS= read -r f; do
      ${f#"$TREE"/}: $(first_match "$f")"
   n_named=$((n_named + 1))
 done < <([ -s "$WORK/copies.txt" ] && tr '\n' '\0' < "$WORK/copies.txt" | LC_ALL=C xargs -0 grep -laE "${icase[@]}" -e "$re" || true)
-# pkgconf and unix make are r-zig's builds, not third-party copies: one
-# that names one fails (pkgconf.zig maps the source directory away; make's
-# build passes no build path in).
+# pkgconf, make and Windows' busybox and zip are r-zig's builds, not
+# third-party copies: one that names one fails (pkgconf.zig and busybox's
+# and zip's build.zig map the source directory away; make's build passes
+# no build path in).
 bad=""
-for f in "$TREE/$tc/usr/bin/pkgconf.exe" "$TREE/$tc/usr/bin/pkg-config.exe" "$TREE/$tc/usr/bin/make"; do
+for f in "$TREE/$tc/usr/bin/pkgconf.exe" "$TREE/$tc/usr/bin/pkg-config.exe" "$TREE/$tc/usr/bin/make" \
+         "$TREE/$tc/usr/bin/zip.exe" "$TREE/$tc/native/bin/busybox.exe" "$TREE/$tc/native/bin/make.exe" \
+         "$TREE/$tc/native/bin/zip.exe"; do
   [ -f "$f" ] || continue
   if LC_ALL=C grep -qaE "${icase[@]}" -e "$re" "$f"; then
     bad="$bad
@@ -237,7 +246,7 @@ for f in "$TREE/$tc/usr/bin/pkgconf.exe" "$TREE/$tc/usr/bin/pkg-config.exe" "$TR
   fi
 done
 if [ -n "$bad" ]; then
-  echo "error: pkgconf or make, which the toolchain build compiles, names the build machine:$bad" >&2
+  echo "error: pkgconf, make, busybox or zip, which the toolchain build compiles, names the build machine:$bad" >&2
   exit 1
 fi
 echo "== build paths verified: SOURCES and LICENSES name none of the checkout, zig's caches, the env, the tree or \$HOME"
@@ -266,6 +275,12 @@ cmake_seen=""
 candidates() {
   [ -s "$WORK/copies.txt" ] && tr '\n' '\0' < "$WORK/copies.txt" | LC_ALL=C xargs -0 grep -l "$1" || true
 }
+# The reader needed_of and rpaths_of use (verify-helpers.sh): without it
+# they read nothing, and every closure would pass unread.
+case "$OS" in linux) reader=patchelf ;; macos) reader=otool ;; *) reader=llvm-objdump ;; esac
+if ! command -v "$reader" > /dev/null 2>&1; then
+  cannot_check "$reader unavailable; the copies' libraries and rpaths not checked"
+fi
 case "$OS" in
   linux)
     if ! command -v objdump > /dev/null 2>&1; then
@@ -319,7 +334,7 @@ case "$OS" in
       case "$f" in "$TREE/$tc/zig/"*) floor="$ZIG_MACOS_MIN" ;; esac
       if m="$(minos_over_floor "$f" "$floor")"; then bad="$bad
   $rel: minos $m > $floor"; fi
-      id="$(otool -D "$f" 2>/dev/null | tail -n +2)"
+      id="$(otool -D "$f" 2>/dev/null | tail -n +2)" || true
       for dep in $(needed_of "$f"); do
         [ "$dep" = "$id" ] && continue
         case "$dep" in /usr/lib/*|/System/Library/*) ;; *) bad="$bad
@@ -374,7 +389,9 @@ echo "== OpenMP verified: $omp (in $tc)"
 # macOS and Windows keep libc++, so no libstdcxx/ there.
 if [ "$OS" = linux ]; then
   case "$(uname -m)" in aarch64|arm64) triple=aarch64-conda-linux-gnu ;; *) triple=x86_64-conda-linux-gnu ;; esac
-  vers="$(cd "$TREE/$tc/libstdcxx/lib/gcc/$triple" 2> /dev/null && ls -d */include/c++ 2> /dev/null | cut -d/ -f1)"
+  # `|| true`: a missing directory fails cd, and under set -e the
+  # assignment would end the script before the message below.
+  vers="$(cd "$TREE/$tc/libstdcxx/lib/gcc/$triple" 2> /dev/null && ls -d */include/c++ 2> /dev/null | cut -d/ -f1)" || true
   [ "$(echo "$vers" | grep -c .)" = 1 ] ||
     { echo "error: $tc/libstdcxx/lib/gcc/$triple holds '$(echo $vers)', not one version's include/c++ (the compilers group's libstdc++ headers)" >&2; exit 1; }
   g="libstdcxx/lib/gcc/$triple/$vers/include/c++"
@@ -392,7 +409,8 @@ fi
 # Windows' build tools (B39; PHASE7 open point O a, amendment Am10), when
 # the tree has usr/ (the build-tools group): B39's names, coreutils' that
 # R's makefiles and configure scripts run, and pkg-config and pkgconf
-# (B43; pkgconf built from source), each an
+# (B43; pkgconf built from source) and zip (b14-l4 U4; built from
+# source), each an
 # .exe in usr/bin that runs `--version` with PATH = System32 alone from a
 # scratch directory (`[` runs `[ 1 = 1 ]`): a copy that does not
 # start (a DLL of the wrong package, a missing runtime) fails here, where
@@ -409,7 +427,7 @@ fi
 # and says the env's root and /tmp (seen on kappa, 2026-10-20).
 if [ "$OS" = windows ] && [ -d "$TREE/$tc/usr" ]; then
   ub="$TREE/$tc/usr/bin"
-  names="sh bash make sed grep gawk awk which find xargs patch tar pkg-config pkgconf
+  names="sh bash make sed grep gawk awk which find xargs patch tar gzip pkg-config pkgconf zip
     basename rm cp mv mkdir cat tr sort uname chmod ln ls expr touch head
     tail wc env printf mktemp test ["
   mkdir -p "$WORK/run" "$WORK/temp"
@@ -475,6 +493,59 @@ none /tmp usertemp binary,posix=0 0 0" ]; then
     exit 1
   fi
   echo "== usr/ verified: $n tools run with PATH = System32; make $got; MSYS root $root_got, /tmp = TMP and TEMP"
+fi
+
+# Windows' native build tools (b14-l4; patch 0018 puts native/bin first
+# under R_ZIG_NATIVE_TOOLS): built from source, no MSYS file. Run from
+# cmd.exe with PATH = System32, as run_cmd above.
+if [ "$OS" = windows ] && [ -d "$TREE/$tc/native" ]; then
+  nb="$TREE/$tc/native/bin"
+  mkdir -p "$WORK/run"
+  run_native() {
+    printf '@"%s" %s\r\n' "$(cygpath -w "$1")" "$2" > "$WORK/run/native.bat"
+    (cd "$WORK/run" && PATH="$WIN_SYSTEM32" "$WIN_SYSTEM32/cmd.exe" //c native.bat 2>&1 < /dev/null)
+  }
+  bad=""
+  for x in busybox.exe make.exe zip.exe pkgconf.exe pkg-config.exe; do
+    [ -f "$nb/$x" ] || bad="$bad
+  native/bin/$x (missing)"
+  done
+  [ -z "$(find "$TREE/$tc/native" -iname 'msys-*.dll' | head -1)" ] || bad="$bad
+  native/: an MSYS DLL"
+  if [ -z "$bad" ]; then
+    n=0
+    for f in "$nb"/*.exe; do
+      case "${f##*/}" in make.exe|zip.exe|pkgconf.exe|pkg-config.exe|busybox.exe) continue ;; esac
+      cmp -s "$f" "$nb/busybox.exe" || bad="$bad
+  native/bin/${f##*/} is not busybox.exe"
+      n=$((n + 1))
+    done
+    want="$(awk '{ sub(/\r$/, "") } $1 == "package:" { p = $2 } p == "make" && $1 == "version:" && v == "" { v = $2 } END { print v }' "$TREE/$tc/native/SOURCES")"
+    got="$(run_native "$nb/make.exe" --version | tr -d '\r' | sed -n '1s/^GNU Make //p')" || true
+    [ -n "$want" ] && [ "$got" = "$want" ] || bad="$bad
+  native/bin/make.exe says GNU Make '$got', SOURCES records make '${want:-(none)}'"
+    uname="$(run_native "$nb/sh.exe" "-c \"uname -s\"" | tr -d '\r')" || true
+    [ "$uname" = Windows_NT ] || bad="$bad
+  native/bin/sh.exe -c 'uname -s' says '$uname', not Windows_NT"
+    run_native "$nb/pkgconf.exe" --version > /dev/null || bad="$bad
+  native/bin/pkgconf.exe --version fails"
+    zwant="$(awk '{ sub(/\r$/, "") } $1 == "package:" { p = $2 } p == "zip" && $1 == "version:" && v == "" { v = $2 } END { print v }' "$TREE/$tc/native/SOURCES")"
+    zgot="$(run_native "$nb/zip.exe" --version | tr -d '\r' | sed -n 's/^This is Zip \([0-9.]*\) .*/\1/p')" || true
+    [ -n "$zwant" ] && [ "$zgot" = "$zwant" ] || bad="$bad
+  native/bin/zip.exe says Zip '$zgot', SOURCES records zip '${zwant:-(none)}'"
+    # an archive as R CMD INSTALL --build writes one (zip -r9Xq), listed by
+    # busybox's unzip
+    mkdir -p "$WORK/run/zipme/d" && printf 'zip-ok\n' > "$WORK/run/zipme/d/f.txt"
+    printf '@cd zipme && "%s" -r9Xq ..\\t.zip d && "%s" -l ..\\t.zip\r\n' "$(cygpath -w "$nb/zip.exe")" "$(cygpath -w "$nb/unzip.exe")" > "$WORK/run/zip.bat"
+    zl="$(cd "$WORK/run" && PATH="$WIN_SYSTEM32" "$WIN_SYSTEM32/cmd.exe" //c zip.bat 2>&1 < /dev/null | tr -d '\r')" || true
+    case "$zl" in *d/f.txt*) ;; *) bad="$bad
+  native/bin/zip.exe -r9Xq: busybox's unzip -l lists no d/f.txt: $(printf '%s' "$zl" | head -5 | tr '\n' ' ')" ;; esac
+  fi
+  if [ -n "$bad" ]; then
+    echo "error: the build-tools group's native/ (Windows):$bad" >&2
+    exit 1
+  fi
+  echo "== native/ verified: busybox.exe and $n applet copies, sh says Windows_NT; make $got; zip $zgot, an archive unzip lists; pkgconf; no MSYS DLL"
 fi
 
 # unix make (the build-tools group, backlog L7): GNU make, built from its

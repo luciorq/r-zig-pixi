@@ -2,7 +2,8 @@
 //! (backlog L7; .github/devdocs/b13-build/PLAN.md D10-D12): built from
 //! upstream's release tarball by zigbuild/make/build.zig (the toolchain
 //! build's r_zig_make path dependency), in place of conda-forge's make.
-//! Windows keeps MSYS2's m2-make (D12).
+//! Windows' usr/ keeps MSYS2's m2-make (D12); its native/bin/make.exe is
+//! this make built for Windows (r-zig-native-tools; b14-l4 PLAN.md).
 //!
 //! The tarball: `url` and `sha256` below, which usr/SOURCES records. The
 //! standalone build fetches it as build.zig.zon's lazy `make` dependency
@@ -24,7 +25,7 @@ test "build.zig.zon fetches this url" {
     try std.testing.expect(mem.indexOf(u8, zon, ".url = \"" ++ url ++ "\",") != null);
 }
 
-test "recipe.yaml's unix source is this url and sha256" {
+test "recipe.yaml's source is this url and sha256" {
     const recipe_path = @import("paths").recipe;
     const io = std.testing.io;
     const yaml = try std.Io.Dir.cwd().readFileAlloc(io, recipe_path, std.testing.allocator, .limited(1024 * 1024));

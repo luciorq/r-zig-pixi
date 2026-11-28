@@ -113,6 +113,27 @@ check "--rzig-check: a zig whose major.minor is not R's, 1" \
     grep -q ' is zig 0.99.0, not R.s zig ' '$W/check.err'"
 check "--rzig-check with R_ZIG_NO_PREFLIGHT: no version check, 0" \
   env -i ZIG_BIN="$STUB" R_ZIG_NO_PREFLIGHT=1 "$tc/zig-cc" --rzig-check
+# the on/off rule (onoff.zig, b14-review B17): YES is on, false is off,
+# any other value is off with one warning naming the variable
+check "--rzig-check with R_ZIG_NO_PREFLIGHT=YES: on, 0" \
+  env -i ZIG_BIN="$W/zig-other/zig" R_ZIG_NO_PREFLIGHT=YES "$tc/zig-cc" --rzig-check
+check "--rzig-check with R_ZIG_NO_PREFLIGHT=false: off, the version check, 1" \
+  bash -c "env -i ZIG_BIN='$W/zig-other/zig' R_ZIG_NO_PREFLIGHT=false '$tc/zig-cc' --rzig-check > /dev/null 2> '$W/check.err'; [ \$? = 1 ] &&
+    ! grep -q 'neither on' '$W/check.err'"
+check "--rzig-check with R_ZIG_NO_PREFLIGHT=maybe: off with one warning, 1" \
+  bash -c "env -i ZIG_BIN='$W/zig-other/zig' R_ZIG_NO_PREFLIGHT=maybe '$tc/zig-cc' --rzig-check > /dev/null 2> '$W/check.err'; [ \$? = 1 ] &&
+    [ \"\$(grep -cxF \"zig-cc: R_ZIG_NO_PREFLIGHT='maybe' is neither on (1, true, yes) nor off (0, false, no, empty): taken as off\" '$W/check.err')\" = 1 ]"
+stub "$W/zig-ran/zig" ran
+check "RZIG_PRINT_ARGV=true: a dry run, zig's argv printed, nothing run" \
+  bash -c "env -i ZIG_BIN='$W/zig-ran/zig' RZIG_PRINT_ARGV=true '$tc/zig-cc' -c a.c > '$W/check.out' &&
+    grep -qxF '$W/zig-ran/zig' '$W/check.out' && ! grep -qx ran '$W/check.out'"
+check "RZIG_PRINT_ARGV=0: zig runs" \
+  bash -c "env -i ZIG_BIN='$W/zig-ran/zig' RZIG_PRINT_ARGV=0 '$tc/zig-cc' -c a.c | grep -qx ran"
+check "RZIG_TRACE=maybe with a compile: one warning, no trace" \
+  bash -c "env -i ZIG_BIN='$STUB' RZIG_TRACE=maybe '$tc/zig-cc' -c a.c > /dev/null 2> '$W/check.err' &&
+    [ \"\$(grep -c 'neither on' '$W/check.err')\" = 1 ] && ! grep -q '^zig-cc: self ' '$W/check.err'"
+check "RZIG_TRACE=Yes with a compile: the trace" \
+  bash -c "env -i ZIG_BIN='$STUB' RZIG_TRACE=Yes '$tc/zig-cc' -c a.c 2>&1 >/dev/null | grep -q '^zig-cc: self '"
 check "--rzig-check=build-tools: make on PATH" \
   bash -c "env -i PATH='$(dirname "$(command -v make)")' '$tc/zig-cc' --rzig-check=build-tools | grep -q '^zig-cc: build-tools ok: make at '"
 check "--rzig-check=build-tools: no make, 127, the build-tools group" \

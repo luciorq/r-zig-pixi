@@ -67,7 +67,7 @@ are built, tested and kept as the artifacts `conda-<subdir>`, and
    `build.skip`; count them from the recipe, not from this list. Build
    13: r-zig-slim, -compilers, -build-tools, -extras, -toolchain,
    -recommended and -tcltk, seven per subdir, six on win-arm64 (no
-   r-zig-tcltk there). The staging output r-zig-build is not published.
+   r-zig-tcltk there). Build 14 adds r-zig-native-tools on Windows: seven per unix subdir, eight on win-64, seven on win-arm64. The staging output r-zig-build is not published.
 2. A fresh environment from universe only (no local channel, fresh
    caches), universe listed before conda-forge (README's `--prepend`):
    `pixi add r-zig-slim r-zig-toolchain`, R starts,

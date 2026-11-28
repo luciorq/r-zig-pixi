@@ -37,15 +37,15 @@
 #                 tree's build-tools group alone (R_HOME/bin/toolchain/usr/bin,
 #                 which R puts first); ignored, with a note, elsewhere and
 #                 for a conda env, whose tools are in its Library/usr/bin
-#   --no-rtools-libs  Windows on ARM: do not use CRAN's Rtools45 aarch64
-#                 toolchain-libs tree. By default a run there downloads it
-#                 (pinned URL and sha256) into <repo>/build/rtools45
-#                 (STRESS_RTOOLS_DIR overrides), extracts it, and uses it as
-#                 the fallback for the libraries conda-forge lacks for
-#                 win-arm64 (rzig's R_ZIG_FALLBACK_SOFT, closed .pc files
-#                 first on PKG_CONFIG_PATH, R_TOOLS_SOFT; stress/README.md).
-#                 If that fails, the rows run without it and report.md's
-#                 Fallback line says why. Elsewhere nothing to turn off
+#   --native-tools  Windows (b14-l4, a report-only leg): build with the
+#                 native build tools, busybox-w32 + GNU make + zip + pkgconf
+#                 built with zig (R_HOME/bin/toolchain/native/bin; conda:
+#                 r-zig-native-tools, added to the env), and no MSYS2:
+#                 R_ZIG_NATIVE_TOOLS=1 (patch 0018), R_CUSTOM_TOOLS_PATH
+#                 the native dir and the extras group's cmake/bin (R CMD's
+#                 PATH then has no MSYS2 directory), and the env's
+#                 Library/usr/bin and Library/mingw-w64/bin left off PATH;
+#                 ignored, with a note, elsewhere
 #   --trace       RZIG_TRACE=1: rzig prints its commands into the logs, and
 #                 `rzig build` (patch 0013) its tier; R_ZIG_PKG_BUILDER=make
 #                 in the environment makes every install take the make path
@@ -58,11 +58,12 @@
 #   --list        print the install plan and stop
 #   --sysdeps     print the sysdeps of the rows the run installs on this OS
 #                 (the selected ones and their dependencies' rows) and stop
-#   --strict      exit 1 when a target's result differs from its expect
+#   --strict      exit 1 when a target's result differs from its expect, or
+#                 when --libs-smoke was asked for and did not pass (FAIL, or
+#                 not run)
 #   --help        print this
 # Environment: STRESS_JOBS (as --jobs), STRESS_TSV (another data file),
-# STRESS_RTOOLS_DIR (where the Rtools45 tree goes), R_ZIG_PKG_BUILDER (auto
-# or make; the report records it).
+# R_ZIG_PKG_BUILDER (auto or make; the report records it).
 
 argv <- commandArgs(trailingOnly = TRUE)
 opt <- function(name, default = NULL) {
@@ -72,11 +73,11 @@ opt <- function(name, default = NULL) {
   if (nzchar(v)) v else TRUE
 }
 flag <- function(name) isTRUE(opt(name))
-known <- c("skip", "tree", "conda", "out", "jobs", "resume", "keep-path", "msys-from-tree", "no-rtools-libs", "trace", "list",
+known <- c("skip", "tree", "conda", "out", "jobs", "resume", "keep-path", "msys-from-tree", "native-tools", "trace", "list",
            "sysdeps", "strict", "help", "libs-smoke")
 bad <- setdiff(sub("=.*", "", sub("^--", "", grep("^--", argv, value = TRUE))), known)
 if (length(bad)) stop("unknown option: --", paste(bad, collapse = " --"), " (see --help)", call. = FALSE)
-ca <- commandArgs()                                             # Rscript passes -f FILE (R 4.6) or --file=FILE
+ca <- commandArgs()                                             # Rscript passes --file=FILE (r-zig before build 14: -f FILE)
 script <- c(sub("^--file=", "", grep("^--file=", ca, value = TRUE)), ca[match("-f", ca) + 1])
 script <- normalizePath(script[!is.na(script)][1], winslash = "/")
 repo <- dirname(dirname(script))
@@ -326,7 +327,8 @@ if (!is.null(conda) && !in_ws) {
   absent <- if (nzchar(libs) && dir.exists(libs) && basename(libs) == "stress") setdiff(needed, env_pkgs(libs)) else character()
   if (length(absent)) message("stress: not in the stress env (", libs, ") for ", subdir, ", so not in the conda env: ",
                               paste(absent, collapse = " "))
-  deps <- unique(c("r-zig-slim", "r-zig-toolchain", "pkg-config", setdiff(needed, absent)))
+  deps <- unique(c("r-zig-slim", "r-zig-toolchain", if (flag("native-tools") && win) "r-zig-native-tools", "pkg-config",
+                   setdiff(needed, absent)))
   q <- function(x) paste0("\"", x, "\"", collapse = ", ")
   for (d in c(ws, file.path(out, "logs"))) dir.create(d, showWarnings = FALSE)
   writeLines(c("# written by stress/stress.R --conda", "[workspace]", "name = \"stress-conda\"",
@@ -443,8 +445,8 @@ if (win && nzchar(envdir)) Sys.setenv(R_TOOLS_SOFT = if (nzchar(zig_libs)) zig_l
 # LOCAL_SOFT (jpeg's configure.win reads it): the env's zig-libs, as
 # Rcmd_environ's default is R's own (b13-fixes). Only zig-libs: rzig turns
 # its -I (Makeconf.win's LOCAL_CPPFLAGS) into -idirafter, which it does
-# not for another tree (the Rtools45 one's MinGW headers would shadow
-# zig's: feat-winarm-gaps finding 22)
+# not for another directory (a MinGW sysroot such as Rtools45's would
+# shadow zig's headers: feat-winarm-gaps finding 22)
 if (nzchar(zig_libs)) Sys.setenv(LOCAL_SOFT = zig_libs)
 if (nzchar(zig_libs) && dist == "tree") {
   pcp <- Sys.getenv("PKG_CONFIG_PATH")
@@ -476,9 +478,26 @@ if (os == "macos" && !flag("keep-path") && nzchar(sysroot) && !file.exists(file.
 msys_tree <- flag("msys-from-tree") && win && dist == "tree"
 if (flag("msys-from-tree") && !msys_tree)
   message("stress: --msys-from-tree is for a Windows tree; ignored (", os, ", ", dist, ")")
+# --native-tools (b14-l4): the native build tools and no MSYS2, as a user
+# with r-zig-native-tools and R_ZIG_NATIVE_TOOLS=1 and without
+# r-zig-build-tools has them: R CMD's PATH is R_CUSTOM_TOOLS_PATH's (the
+# native dir, then the extras' cmake/bin) before this script's, which then
+# leaves the env's MSYS directories out too.
+native_tools <- flag("native-tools") && win
+if (flag("native-tools") && !win) message("stress: --native-tools is for Windows; ignored (", os, ")")
+if (native_tools) {
+  nb <- file.path(rhome, "bin", "toolchain", "native", "bin")
+  if (!file.exists(file.path(nb, "busybox.exe")))
+    stop("--native-tools: ", nb, " has no busybox.exe (the tree's build-tools group, or r-zig-native-tools)", call. = FALSE)
+  Sys.setenv(R_ZIG_NATIVE_TOOLS = "1",
+             R_CUSTOM_TOOLS_PATH = paste(nb, file.path(rhome, "bin", "toolchain", "cmake", "bin"), sep = ";"))
+}
+# zig-libs/<triple>/bin (protoc from zig-protobuf, for protolite): a
+# tree's Rcmd_environ puts only its own env's zig-libs bin on R CMD's
+# PATH, not the stress env's (R_ZIG_EXTRA_ENV); b14-rhtslib F28.
 if (!flag("keep-path") && nzchar(sysroot)) Sys.setenv(PATH = paste(if (win) c(
-  file.path(rhome, "bin/x64"), sysroot,
-  file.path(sysroot, c(if (!msys_tree) c("Library/mingw-w64/bin", "Library/usr/bin"), "Library/bin", "Scripts", "bin")),
+  file.path(rhome, "bin/x64"), sysroot, if (nzchar(zig_libs)) file.path(zig_libs, "bin"),
+  file.path(sysroot, c(if (!msys_tree && !native_tools) c("Library/mingw-w64/bin", "Library/usr/bin"), "Library/bin", "Scripts", "bin")),
   file.path(Sys.getenv("SystemRoot", "C:/Windows"), c("System32", ""))) else c(file.path(sysroot, "bin"), "/usr/bin", "/bin"),
   collapse = .Platform$path.sep))
 zig <- Sys.getenv("ZIG_BIN", Sys.which("zig"))
@@ -492,6 +511,7 @@ info <- list(
   zig_pkgs = paste(meta("^zig-[a-z].*\\.json$"), collapse = " "),
   r_home = rhome, libraries_env = sysroot, commit = commit, jobs = jobs, path = if (flag("keep-path")) "kept" else "narrowed",
   msys_from_tree = msys_tree,
+  native_tools = native_tools,
   zig = if (nzchar(zig)) tryCatch(system2(zig, "version", stdout = TRUE, stderr = FALSE)[1], error = function(e) "") else "",
   cc = tryCatch(system2(file.path(R.home("bin"), "R"), c("CMD", "config", "--no-user-files", "CC"), stdout = TRUE)[1], error = function(e) ""),
   # the cmake a package's configure runs under R CMD: a tree's extras group
@@ -506,7 +526,7 @@ info <- list(
   }),
   builder = builder,
   sysdeps_missing = paste(sysdeps_missing, collapse = " "), tsv = tsv, out = out, rzig_cache = rzig_cache,
-  rzig_cache_removed = "", rtools_libs = "", libs_smoke = "", args = paste(argv, collapse = " "), minutes = 0, finished = FALSE,
+  rzig_cache_removed = "", libs_smoke = "", args = paste(argv, collapse = " "), minutes = 0, finished = FALSE,
   error = "")
 
 # --- the report (written after every package, so a killed run keeps one) ------
@@ -531,11 +551,11 @@ write_report <- function(final = FALSE) {
                   if (dist == "conda") sprintf(" (%s from %s)", info$r_zig, info$channel) else ""),
           # R_HOME names the tree, so the variant stress.yaml built (b13-leftovers CI5)
           sprintf("Builder %s (R_ZIG_PKG_BUILDER); R_HOME `%s`.", builder, rhome),
+          if (native_tools) "Build tools: native (busybox-w32, GNU make, zip, pkgconf; R_ZIG_NATIVE_TOOLS=1, no MSYS2 on PATH).",
           if (win)
             sprintf("zig-libs `%s` (%s).", if (nzchar(info$zig_libs)) info$zig_libs else "none",
                     if (nzchar(info$zig_pkgs)) info$zig_pkgs else "no zig-* package"),
           if (length(sysdeps_missing)) sprintf("Sysdeps missing from the env: %s.", info$sysdeps_missing),
-          if (nzchar(info$rtools_libs)) sprintf("Fallback: %s.", info$rtools_libs),
           if (nzchar(info$rzig_cache_removed)) sprintf("The run added to rzig's cache `%s`, and removed at its end: %s.",
                                                        info$rzig_cache, info$rzig_cache_removed),
           if (nzchar(info$libs_smoke)) sprintf("libs smoke (`logs/libs-smoke.log`): %s.", info$libs_smoke),
@@ -563,247 +583,6 @@ harness_error <- function(msg) {
   quit(status = 2)
 }
 if (inherits(db, "error")) harness_error(paste("cannot read the repositories:", conditionMessage(db)))
-
-# --- Windows on ARM: CRAN's Rtools45 aarch64 libraries as the fallback ---------
-# conda-forge has no win-arm64 build of gdal, hdf5, netcdf, gsl, gmp, mpfr,
-# glpk, nlopt, udunits2, harfbuzz or libpq (chore-release-11 finding 26).
-# CRAN's Rtools45 aarch64 "full" toolchain-libs tree has them, built with
-# LLVM (libc++, UCRT) as zig builds packages, so its static C and C++
-# libraries link with zig's libc++ (feat-winarm-gaps). CRAN's own aarch64
-# builds use this tree. On by default there, so the windows-aarch64
-# expects hold for every run; --no-rtools-libs turns it off. If the tree
-# cannot be made ready, the rows run without it (the Fallback line). Downloaded
-# from CRAN at run time and never repackaged (stress/README.md).
-rtools_tarball <- list(
-  name = "rtools45-toolchain-libs-full-aarch64-6768.tar.zst",
-  url = "https://cloud.r-project.org/bin/windows/Rtools/rtools45/files/rtools45-toolchain-libs-full-aarch64-6768.tar.zst",
-  size = 415437513,
-  sha256 = "64dceac9ecdd54aa85a209a0529f5a96c4b7898ae830c165d0d05bffa5e9e8b5",
-  top = "aarch64-w64-mingw32.static.posix")
-# the sysdeps (packages.tsv names) the tree serves, by its lib<x>.a. Not
-# imagemagick: magick takes r-windows' bundle whatever the env has. Not
-# tbb-devel: RcppParallel:system-tbb is a unix row. The zig-* names
-# (libs-zig-pixi) it stands in for while the env lacks them: GDAL, GEOS,
-# PROJ and oneTBB (terra and gdalraster ok from the tree, stress
-# 44450918935); not zig-abseil: s2's make-time pkg-config does not find the
-# tree's absl_base (the s2 row)
-rtools_has <- c(nlopt = "nlopt", gsl = "gsl", mpfr = "mpfr", gmp = "gmp", glpk = "glpk", hdf5 = "hdf5",
-                libnetcdf = "netcdf", udunits2 = "udunits2", "libgdal-core" = "gdal", harfbuzz = "harfbuzz", libpq = "pq",
-                "zig-gdal" = "gdal", "zig-geos" = "geos", "zig-proj" = "proj", "zig-onetbb" = "tbb12")
-
-# The tree, ready: <dir>/<top> with include/, lib/, share/{gdal,proj},
-# include-pinned and lib/pkgconfig-closed. Downloads the tarball into <dir> unless it is there
-# with the pinned size and sha256 (R's tools::sha256sum). Extracts with
-# cmake -E tar (libarchive reads zstd; R's untar() does not), else with
-# the system's tar (Windows 11's bsdtar, System32/tar.exe), only the four
-# directories packages use (1.4 GB of the 2.86 GB). Then include-pinned
-# and the closed .pc files (rtools_pc), again when the zig changes: their
-# system libraries are zig's MinGW .def files, and include-pinned leaves
-# out zig's header names. Each step has its stamp.
-rtools_libs <- function(dir, cmake, tar, pkgconf, zig) {
-  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
-  dir <- normalizePath(dir, winslash = "/")
-  tb <- file.path(dir, rtools_tarball$name)
-  good <- function() file.exists(tb) && file.size(tb) == rtools_tarball$size &&
-    unname(tools::sha256sum(tb)) == rtools_tarball$sha256
-  if (!good()) {
-    unlink(tb)
-    old <- options(timeout = max(1800, getOption("timeout"))); on.exit(options(old), add = TRUE)
-    st <- tryCatch(download.file(rtools_tarball$url, tb, mode = "wb", quiet = TRUE), error = function(e) 1L)
-    if (st != 0 || !good()) stop("Rtools45 libraries: ", rtools_tarball$url, " did not download, or its size or sha256 is not ",
-                                 rtools_tarball$size, " ", rtools_tarball$sha256, call. = FALSE)
-  }
-  top <- rtools_tarball$top
-  tree <- file.path(dir, top)
-  extracted <- file.path(dir, paste0(rtools_tarball$name, ".extracted"))
-  if (!file.exists(extracted) || !identical(readLines(extracted, warn = FALSE), rtools_tarball$sha256)) {
-    unlink(c(extracted, tree), recursive = TRUE)
-    members <- paste0(top, c("/include", "/lib", "/share/gdal", "/share/proj"))
-    owd <- setwd(dir); on.exit(setwd(owd), add = TRUE)
-    how <- character()
-    for (t in list(if (nzchar(cmake)) c(cmake, "-E", "tar", "xf"), if (nzchar(tar)) c(tar, "-xf"))) {
-      if (is.null(t)) next
-      how <- c(how, basename(t[1]))
-      st <- suppressWarnings(system2(t[1], c(t[-1], shQuote(tb), members), stdout = FALSE, stderr = FALSE))
-      if (st == 0 && dir.exists(file.path(tree, "lib", "pkgconfig"))) {
-        message("stress: Rtools45 tree extracted with ", basename(t[1]))
-        break
-      }
-      unlink(tree, recursive = TRUE)
-    }
-    setwd(owd)
-    if (!dir.exists(file.path(tree, "lib", "pkgconfig")))
-      stop("Rtools45 libraries: could not extract ", tb, " (tried: ", paste(how, collapse = ", "),
-           "; a .tar.zst needs a libarchive with zstd)", call. = FALSE)
-    writeLines(rtools_tarball$sha256, extracted)
-  }
-  zl <- zig_lib(zig)
-  key <- c(rtools_tarball$sha256, tryCatch(system2(zig, "version", stdout = TRUE, stderr = FALSE)[1], error = function(e) ""), zl)
-  closed <- file.path(tree, "lib", "pkgconfig-closed")
-  ready <- file.path(closed, ".key")
-  if (!file.exists(ready) || !identical(readLines(ready, warn = FALSE), key)) {
-    unlink(closed, recursive = TRUE)
-    n <- rtools_pc(tree, pkgconf, zl, closed)
-    if (n$written == 0) stop("Rtools45 libraries: ", pkgconf, " wrote no closed .pc file (is it pkgconf?)", call. = FALSE)
-    writeLines(sprintf("%d closed .pc files; skipped (a library the tree cannot link): %s", n$written,
-                       paste(n$skipped, collapse = " ")), file.path(closed, "README"))
-    writeLines(key, ready)
-  }
-  tree
-}
-
-# zig's lib directory, from `zig env` (ZON in 0.17: .lib_dir = "...")
-zig_lib <- function(zig) {
-  x <- system2(zig, "env", stdout = TRUE)
-  d <- sub('.*"(.*)".*', "\\1", grep("^\\s*\\.lib_dir = ", x, value = TRUE))
-  if (length(d) != 1) stop("Rtools45 libraries: no .lib_dir in `", zig, " env`", call. = FALSE)
-  gsub("\\\\\\\\", "/", d)
-}
-
-# rtools_pc(tree, pkgconf, zig_lib, out): closed .pc files for the tree.
-# Each holds the module's whole static closure resolved inside the tree
-# alone (pkgconf --static, PKG_CONFIG_LIBDIR the tree's), with no Requires:
-# a Requires would resolve wherever PKG_CONFIG_PATH finds the name first,
-# and conda-forge's win-arm64 libcurl.pc names a build machine's z.lib.
-# Archives are named by path: an -l would bind whichever -L directory
-# comes first, a conda import library of the same name (libjpeg-turbo's
-# against the tree's IJG libjpeg 9). MinGW's system libraries (a .def in
-# zig's MinGW tree) and the runtime names stay -l, for zig. A module with
-# any other -l (opencv's -ltegra_hal, -lSymAppl: in no archive of the
-# tree) is skipped: it cannot link. No -I<tree>/include and no -L into
-# the tree: that include/ holds a whole MinGW-w64 sysroot and libc++
-# headers, which as an -I shadow zig's own (<cstddef> "didn't find
-# libc++'s <stddef.h>"); rzig's -idirafter (R_ZIG_FALLBACK_SOFT) gives
-# them after every environment's. But then a header both have comes from
-# the env while the tree's archive links (conda's PROJ 9.9 proj.h with
-# the tree's libproj 9.7.1, GEOS 3.15 with 3.14.1). So every closed .pc
-# gets -I<tree>/include-pinned instead: a copy of include/ without the
-# names zig has (its MinGW, libc++, libc++abi, libunwind and own
-# headers), without c++/ and without the OpenMP headers (rzig's OpenMP
-# rule: conda's libomp). Those headers then match the archives, and none
-# shadows zig's. pkgconf must be pkgconf (the build-tools group's 3.0):
-# conda-forge's pkg-config 0.29 stops at libgcrypt.pc ("Libs field occurs
-# twice").
-rtools_pc <- function(tree, pkgconf, zig_lib, out) {
-  tree <- normalizePath(tree, winslash = "/")
-  src <- file.path(tree, "lib", "pkgconfig")
-  dir.create(out, recursive = TRUE, showWarnings = FALSE)
-  low <- function(x) if (win) tolower(x) else x
-  inc <- file.path(tree, "include")
-  pinned <- file.path(tree, "include-pinned")
-  unlink(pinned, recursive = TRUE)
-  dir.create(pinned)
-  zig_has <- unlist(lapply(file.path(zig_lib, c("libc/include/any-windows-any", "libcxx/include", "libcxxabi/include",
-                                                "libunwind/include", "include")), list.files))
-  keep <- list.files(inc)
-  keep <- keep[!low(keep) %in% low(c(zig_has, "c++", "flang", "omp.h", "ompx.h", "omp-tools.h", "ompt.h"))]
-  if (!all(file.copy(file.path(inc, keep), pinned, recursive = TRUE, copy.date = TRUE)))
-    stop("Rtools45 libraries: could not copy ", inc, " into ", pinned, call. = FALSE)
-  mingw <- file.path(zig_lib, "libc", "mingw", c("lib-common", "libarm64"))
-  runtime <- c("c++", "c++abi", "c++experimental", "stdc++", "unwind", "gcc", "gcc_s", "gcc_eh", "m", "mingw32",
-               "mingwex", "mingwthrd", "moldname", "msvcrt", "msvcrt-os", "pthread", "winpthread", "ucrt", "ucrtbase",
-               "ucrtapp", "omp", "iomp5md", "gomp")
-  # (upstream zig has some only as lib-common/<n>.def.in)
-  system_lib <- function(n) n %in% runtime || any(file.exists(outer(mingw, paste0(n, c(".def", ".def.in")), file.path)))
-  old <- Sys.getenv(c("PKG_CONFIG_LIBDIR", "PKG_CONFIG_PATH"), unset = NA)
-  on.exit(for (n in names(old)) if (is.na(old[[n]])) Sys.unsetenv(n) else do.call(Sys.setenv, as.list(old[n])))
-  Sys.setenv(PKG_CONFIG_LIBDIR = src, PKG_CONFIG_PATH = "")
-  pc <- function(m, what) {
-    x <- suppressWarnings(system2(pkgconf, c(paste0("--define-variable=prefix=", tree), "--static", what, m),
-                                  stdout = TRUE, stderr = FALSE))
-    if (!is.null(attr(x, "status"))) return(NULL)
-    w <- unlist(strsplit(paste(x, collapse = " "), "[[:space:]]+"))
-    chartr("\\", "/", w[nzchar(w)])
-  }
-  written <- 0L
-  skipped <- character()
-  for (f in list.files(src, "\\.pc$")) {
-    m <- sub("\\.pc$", "", f)
-    libs <- pc(m, "--libs"); cflags <- pc(m, "--cflags")
-    if (is.null(libs) || is.null(cflags)) { skipped <- c(skipped, m); next }
-    libs <- libs[!startsWith(low(libs), low(paste0("-L", tree)))]
-    for (i in grep("^-l", libs)) {
-      a <- file.path(tree, "lib", paste0("lib", substring(libs[i], 3), ".a"))
-      if (!system_lib(substring(libs[i], 3)) && file.exists(a)) libs[i] <- a
-    }
-    if (any(!vapply(substring(grep("^-l", libs, value = TRUE), 3), system_lib, NA))) { skipped <- c(skipped, m); next }
-    libs <- libs[!(duplicated(libs) & !startsWith(libs, "-"))]  # an archive once: lld-link reads them as a group
-    cflags <- c(paste0("-I", pinned), cflags[low(cflags) != low(paste0("-I", tree, "/include"))])
-    v <- pc(m, "--modversion")
-    writeLines(c(sprintf("Name: %s", m), "Description: Rtools45 static library, its closure in the tree (stress.R)",
-                 sprintf("Version: %s", if (length(v)) v[1] else "0"),
-                 sprintf("Libs: %s", paste(libs, collapse = " ")), sprintf("Cflags: %s", paste(cflags, collapse = " "))),
-               file.path(out, f))
-    written <- written + 1L
-  }
-  list(written = written, skipped = skipped)
-}
-
-rt_tree <- NULL
-served <- character()                                           # sysdeps the tree serves
-if (win && arch == "aarch64" && !flag("no-rtools-libs")) {
-  # Native paths (R CMD sh's `command -v` gives MSYS ones): cmake the
-  # extras group's, else PATH's (the env's); pkgconf the build-tools
-  # group's (not conda-forge's pkg-config 0.29); zig the one rzig runs
-  # (find_zig.zig's order); tar Windows' own bsdtar
-  first <- function(x) { x <- x[!is.na(x) & nzchar(x) & file.exists(x)]; if (length(x)) x[1] else "" }
-  rt_cmake <- first(c(file.path(rhome, "bin/toolchain/cmake/bin/cmake.exe"), Sys.which("cmake")))
-  rt_pkgconf <- first(c(file.path(rhome, "bin/toolchain/usr/bin/pkgconf.exe"), Sys.which("pkgconf")))
-  rt_zig <- first(c(Sys.getenv("ZIG_BIN"), file.path(rhome, "bin/toolchain/zig/zig.exe"),
-                    file.path(c(root, sysroot), "Library/bin/aarch64-w64-mingw32-zig.exe"), Sys.which("zig")))
-  rt_tar <- first(file.path(Sys.getenv("SystemRoot", "C:/Windows"), "System32", "tar.exe"))
-  rt_dir <- Sys.getenv("STRESS_RTOOLS_DIR", file.path(repo, "build", "rtools45"))
-  # A failure (download, extraction, no pkgconf) does not stop the run:
-  # the rows run without the tree, and report.md's Fallback line says why.
-  t0 <- Sys.time()
-  rt_tree <- tryCatch({
-    if (!nzchar(rt_zig) || !nzchar(rt_pkgconf))
-      stop(sprintf("Rtools45 libraries: no zig (%s) or no pkgconf (the build-tools group's: %s)", rt_zig, rt_pkgconf), call. = FALSE)
-    rtools_libs(rt_dir, cmake = rt_cmake, tar = rt_tar, pkgconf = rt_pkgconf, zig = rt_zig)
-  }, error = function(e) {
-    info$rtools_libs <<- paste("not used:", conditionMessage(e))
-    message("stress: warning: the rows run without the Rtools45 tree: ", conditionMessage(e))
-    NULL
-  })
-}
-if (!is.null(rt_tree)) {
-  tree <- rt_tree
-  message(sprintf("stress: the Rtools45 tree %s is ready (%.1f min)", tree, as.numeric(difftime(Sys.time(), t0, units = "mins"))))
-  # PKG_CONFIG_PATH: the env's zig-libs .pc files (libs-zig-pixi) first,
-  # then the tree's closed .pc files, then the env's. Tree before the env
-  # gives the GDAL stack (gdal, geos, proj) its archives and,
-  # through include-pinned, its headers from the tree alone, and avoids conda-forge win-arm64's proj.pc (-lproj_9; it ships
-  # proj.lib) and libcurl.pc (a build machine's D:/bld .../z.lib). zig-libs
-  # before the tree: rzig searches them in that order too (environment.zig).
-  pcp <- Sys.getenv("PKG_CONFIG_PATH")
-  pcp <- if (nzchar(pcp)) strsplit(pcp, ";", fixed = TRUE)[[1]] else file.path(rhome, "../..", c("lib/pkgconfig", "share/pkgconfig"))
-  if (nzchar(envdir)) pcp <- c(pcp, file.path(envdir, c("lib/pkgconfig", "share/pkgconfig")))
-  zpc <- if (nzchar(zig_libs)) file.path(zig_libs, "lib/pkgconfig")
-  # R_TOOLS_SOFT: zig-libs when it has zig-gdal (its share/gdal and
-  # share/proj match zig-gdal's and zig-proj's libraries), else the tree
-  # (CRAN's aarch64 LOCAL_SOFT: share/gdal and share/proj match its PROJ)
-  Sys.setenv(R_ZIG_FALLBACK_SOFT = tree,
-             R_TOOLS_SOFT = if (!is.null(zpc) && "zig-gdal" %in% have) zig_libs else tree,
-             PKG_CONFIG_PATH = paste(unique(c(zpc, file.path(tree, "lib/pkgconfig-closed"), pcp)), collapse = ";"))
-  served <- names(rtools_has)[file.exists(file.path(tree, "lib", paste0("lib", rtools_has, ".a")))]
-  served <- intersect(sysdeps_missing, served)
-  sysdeps_missing <- setdiff(sysdeps_missing, served)
-  info$sysdeps_missing <- paste(sysdeps_missing, collapse = " ")
-  # whether this rzig knows the variable (build 11's ignores it): its
-  # trace names the tree as an environment, `(fallback)`
-  rt_cc <- file.path(rhome, "bin/toolchain/gcc.exe")
-  old_trace <- Sys.getenv("RZIG_TRACE", unset = NA)
-  Sys.setenv(RZIG_TRACE = "1")
-  tr <- tryCatch(suppressWarnings(system2(rt_cc, "--version", stdout = TRUE, stderr = TRUE)), error = function(e) character())
-  if (is.na(old_trace)) Sys.unsetenv("RZIG_TRACE") else Sys.setenv(RZIG_TRACE = old_trace)
-  used <- any(grepl("environment .*\\(fallback\\)", tr))
-  info$rtools_libs <- sprintf("Rtools45 tree %s (sha256 %s), %s; sysdeps from it: %s; rzig %s; PKG_CONFIG_PATH: %sthe tree's closed .pc first",
-                              rtools_tarball$name, substr(rtools_tarball$sha256, 1, 12), tree,
-                              if (length(served)) paste(served, collapse = " ") else "none",
-                              if (used) "uses it (R_ZIG_FALLBACK_SOFT)" else "does NOT use it: an rzig without R_ZIG_FALLBACK_SOFT",
-                              if (!is.null(zpc)) "zig-libs', then " else "")
-  message("stress: fallback: ", info$rtools_libs)
-}
 
 # --- one child process per step -------------------------------------------------
 run <- function(args, log, minutes, env = character()) {
@@ -866,15 +645,15 @@ local_pkg <- function(p, n = 64L) {
 
 # The report's zig-libs column (libs-zig-pixi DESIGN 7, item 8): a target's
 # zig-* sysdeps, its row's and its dependencies' rows' (sf: s2's
-# zig-abseil), each with its version and build from conda-meta, "Rtools
-# tree" when the fallback tree stands in for it, or "missing"; then, from a
-# --trace log (rzig's `lib -l<n> <file>` lines, windows.zig), the -l names
-# that resolved into zig-libs and into the fallback tree, and the
+# zig-abseil), each with its version and build from conda-meta, or
+# "missing"; then, from a --trace log (rzig's `lib -l<n> <file>` lines,
+# windows.zig), the -l names that resolved into zig-libs, those rzig
+# dropped (`(dropped: Rtools curl closure)`, b14-rhtslib U2), and the
 # libraries the log's links took from more than one directory (copies:
 # a -l name's file, and an archive a command names by path, lib<n>.a, by
 # its <n>; M-10's single copy per library). A target whose zig-* sysdeps
-# are missing and not served gets the expect ?: its packages.tsv expect
-# assumes them (an env made without them).
+# are missing gets the expect ?: its packages.tsv expect assumes them (an
+# env made without them).
 row_zig <- function(name) {
   d <- c(name, if (name %in% rownames(db)) unlist(tools::package_dependencies(name, db = db, which = hard, recursive = TRUE)))
   r <- tab[tab$name %in% d & vapply(tab$oses, function(x) any(words(x) %in% c("all", os)), NA), ]
@@ -885,19 +664,18 @@ zig_column <- function(z, log) {
   if (!length(z)) return("")
   b <- vapply(z, function(n) {
     m <- meta(paste0("^", gsub(".", "\\.", n, fixed = TRUE), "-[^-]+-[^-]+\\.json$"))
-    if (length(m)) sub("^(.*)-([^-]+)-([^-]+)$", "\\1 \\2 \\3", m[1]) else if (n %in% served) paste(n, "Rtools tree") else paste(n, "missing")
+    if (length(m)) sub("^(.*)-([^-]+)-([^-]+)$", "\\1 \\2 \\3", m[1]) else paste(n, "missing")
   }, "")
   if (!file.exists(log)) return(paste(b, collapse = ", "))      # not installed (skipped, unavailable)
   x <- grep(": lib -l[^ ]+ ", read_log(log), value = TRUE)
   lib <- sub(".*: lib -l([^ ]+) .*", "\\1", x)
   file <- chartr("\\", "/", sub(".*: lib -l[^ ]+ ", "", x))
-  where <- function(dir) if (nzchar(dir)) unique(lib[startsWith(tolower(file), tolower(paste0(dir, "/")))]) else character()
   zl <- unique(lib[grepl("/zig-libs/", file, fixed = TRUE)])
-  fb <- where(if (is.null(rt_tree)) "" else file.path(rt_tree, "lib"))
+  dr <- unique(lib[startsWith(file, "(dropped")])
   paste0(paste(b, collapse = ", "),
-         if (!length(x)) "; -l: no trace" else sprintf("; -l from zig-libs: %s; from the fallback tree: %s; copies: %s",
+         if (!length(x)) "; -l: no trace" else sprintf("; -l from zig-libs: %s; dropped: %s; copies: %s",
                                                        if (length(zl)) paste(zl, collapse = " ") else "none",
-                                                       if (length(fb)) paste(fb, collapse = " ") else "none",
+                                                       if (length(dr)) paste(dr, collapse = " ") else "none",
                                                        copies(log, lib, file)))
 }
 # the libraries a log's links took from more than one directory: each -l
@@ -1059,4 +837,8 @@ info$rzig_cache_removed <- paste(added, collapse = " ")
 res <- write_report(final = TRUE)
 writeLines(readLines(file.path(out, "report.md")))
 message("report: ", file.path(out, "report.md"))
-quit(status = if (flag("strict") && any(res$unexpected)) 1 else 0)
+# --strict: a row against its expect, and an asked-for libs smoke that did
+# not pass (b14-review B8)
+smoke_bad <- !is.null(ls_ref) && !startsWith(info$libs_smoke, "pass")
+if (flag("strict") && smoke_bad) message("strict: libs smoke ", info$libs_smoke)
+quit(status = if (flag("strict") && (any(res$unexpected) || smoke_bad)) 1 else 0)

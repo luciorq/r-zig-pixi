@@ -49,10 +49,19 @@ pub fn xarchValue(args: Args, i: usize) bool {
     return i > 0 and mem.startsWith(u8, args[i - 1], "-Xarch_");
 }
 
-/// The `-L<dir>` directories, in order.
+/// The `-L<dir>` and `-L <dir>` directories, in order. A `-L` that is
+/// another option's value (`-Xlinker -L`) is not one.
 pub fn libDirs(gpa: mem.Allocator, args: Args) !std.ArrayList([]const u8) {
     var dirs: std.ArrayList([]const u8) = .empty;
-    for (args) |x| if (flagValue(x, "-L")) |d| try dirs.append(gpa, d);
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (flagValue(args[i], "-L")) |d| {
+            try dirs.append(gpa, d);
+        } else if (mem.eql(u8, args[i], "-L") and i + 1 < args.len and !(i > 0 and takesValue(args[i - 1]))) {
+            i += 1;
+            try dirs.append(gpa, args[i]);
+        }
+    }
     return dirs;
 }
 
@@ -240,11 +249,12 @@ test compileOnly {
 }
 
 test libDirs {
-    var dirs = try libDirs(testing.allocator, &.{ "-L/a", "-L", "/sep", "-l", "x", "-L/b", "-L" });
+    var dirs = try libDirs(testing.allocator, &.{ "-L/a", "-L", "/sep", "-l", "x", "-Xlinker", "-L", "-Xlinker", "-L/b", "-L" });
     defer dirs.deinit(testing.allocator);
-    try testing.expectEqual(@as(usize, 2), dirs.items.len);
+    try testing.expectEqual(@as(usize, 3), dirs.items.len);
     try testing.expectEqualStrings("/a", dirs.items[0]);
-    try testing.expectEqualStrings("/b", dirs.items[1]);
+    try testing.expectEqualStrings("/sep", dirs.items[1]);
+    try testing.expectEqualStrings("/b", dirs.items[2]);
     try testing.expectEqualStrings("m", flagValue("-lm", "-l").?);
     try testing.expect(flagValue("-l", "-l") == null);
 }

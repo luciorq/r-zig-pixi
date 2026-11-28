@@ -1,0 +1,44 @@
+R CMD INSTALL and R CMD SHLIB: make arguments in double quotes on Windows
+
+install.R passes make variables on make's command line in single quotes
+(SHLIB_LD='$(SHLIB_CXXLD)', CC='$(CC)', PKG_LIBS='...'). sh strips them on
+unix, and so did MSYS2's make, whose cygwin runtime splits its command
+line as sh does. A native Windows make (GNU make built for Windows32, the
+native build tools of patch 0018 and r-zig-native-tools) splits it by the
+C runtime's rules, which keep single quotes: a C++ or Fortran package that
+make builds then fails ("No rule to make target '$(FCLIBS_XTRA)''", or a
+link line naming "g++.exe -std=gnu++20  " as the program). Double quotes
+work with both makes (kappa, 2026-11-24: MSYS2's make reads both forms
+alike). Unix keeps single quotes, which stop sh from expanding $(...),
+and so does a cross build on unix (R_CROSS_BUILD sets install.R's
+WINDOWS, but its make runs under sh): the test is the host,
+.Platform$OS.type.
+A value ending in a backslash would escape the closing double quote under
+the C runtime's rules; none of install.R's does. b13-design L4-F3,
+b14-l4 PLAN.md.
+
+--- a/src/library/tools/R/install.R
++++ b/src/library/tools/R/install.R
+@@ -1459,6 +1459,8 @@
+                         if (!is.na(use_C))
+                             sprintf(c("CC='$(CC%s)'", "CFLAGS='$(C%sFLAGS)'"), use_C)
+                         else character()
++                    ## r-zig (patch 0017): double quotes for a native make (a Windows host)
++                    if (.Platform$OS.type == "windows") makeargs <- gsub("'", "\"", makeargs, fixed = TRUE)
+                     cmd <- paste("make --no-print-directory",
+                                  p1("-f", shQuote(makefiles)),
+                                  p1(makeargs))
+@@ -2959,6 +2961,13 @@
+ ##    if(config_val_to_logical(Sys.getenv("_R_USE_STRICT_R_HEADERS_", "FALSE")))
+ ##         makeargs <- c(makeargs, "XDEFS=-DSTRICT_R_HEADERS=1")
+ 
++    ## r-zig (patch 0017): make's command line in double quotes on Windows.
++    ## A native Windows make (GNU make built for Windows32: r-zig's
++    ## native build tools, R_ZIG_NATIVE_TOOLS) splits it by the C
++    ## runtime's rules, which keep single quotes; MSYS2's make stripped
++    ## them as sh does. Double quotes work with both. Unix, R_CROSS_BUILD's
++    ## too, keeps single quotes, which stop sh from expanding $(...).
++    if (.Platform$OS.type == "windows") makeargs <- gsub("'", "\"", makeargs, fixed = TRUE)
+     cmd <- paste(MAKE, p1(paste("-f", shQuote(makefiles))), p1(makeargs),
+                  p1(makeobjs))
+     ## r-zig (patch 0013): rzig build first (.rzig_build); NA is the make

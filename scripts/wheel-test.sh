@@ -191,6 +191,73 @@ run Rscript -e '
   cat("profile OK\n")
 '
 
+echo "== the per-user library: created at the first start, used by install.packages() (b14-l5 U5)"
+# make-wheel.py's Rprofile.site: R_LIBS_USER (patch 0001's XDG default,
+# under this test's HOME) exists after one start and is first in
+# .libPaths(), so install.packages() with its defaults installs there and
+# a new session finds the package. No option, no variable.
+U="$T/userlib-pkg"
+mkdir -p "$U/R"
+printf 'Package: rzigUserLib\nVersion: 0.1\nTitle: t\nDescription: t.\nLicense: MIT\nAuthor: t\nMaintainer: t <t@t.org>\n' > "$U/DESCRIPTION"
+echo 'export(hi)' > "$U/NAMESPACE"
+echo 'hi <- function() "hi"' > "$U/R/hi.R"
+run Rscript -e '
+  u <- Sys.getenv("R_LIBS_USER")
+  # R builds the default from normalizePath("~"): on macOS TMPDIR is under
+  # /var, a link to /private/var (PR #60 CI, b14-review F-C2).
+  stopifnot(dir.exists(u), startsWith(normalizePath(u),
+              normalizePath(file.path(Sys.getenv("HOME"), ".local", "share", "R"))),
+            .libPaths()[1] == normalizePath(u))
+  install.packages(commandArgs(TRUE)[1], repos = NULL, type = "source", quiet = TRUE)' "$U" > "$T/userlib.log" 2>&1 ||
+  { cat "$T/userlib.log" >&2; echo "error: the per-user library is not first in .libPaths(), or the install failed" >&2; exit 1; }
+run Rscript -e 'stopifnot(rzigUserLib::hi() == "hi", dirname(find.package("rzigUserLib")) == .libPaths()[1]); cat("ok:", find.package("rzigUserLib"), "\n")'
+
+echo "== rpy2 finds this R when it would find no other (r_zig.pth; b14-l5 D25-D27)"
+# rpy2 reads R_HOME or runs `R RHOME` from PATH, at run time and when pip
+# builds rpy2-rinterface from source (linux). The wheel's r_zig.pth
+# (python/r_zig/_rpy2.py) acts only where rpy2 would see no R or this
+# wheel's R (R_HOME this R, or unset with no R on PATH or an r-zig R):
+# on the first import of rpy2 it sets R_HOME (unless set) and
+# RPY2_CFFI_MODE=ABI (keeping a set RPY2_CFFI_MODE); on the first import
+# of setuptools in an rpy2 source tree (where pip runs the build backend)
+# RPY2_CFFI_MODE=ABI only, unless it is set. With another R on PATH, or
+# R_HOME set to another R, it does nothing. A
+# process that imports neither is left alone. Stand-in rpy2, setuptools
+# and other R (no network here) record what they see; PATH holds only
+# the directories each check names.
+mkdir -p "$T/fake-rpy2/rpy2" "$T/fake-st/setuptools" "$T/rpy2-src/src/rpy2/rinterface_lib" "$T/other-src" "$T/no-r" "$T/other-r"
+see='import os; print(os.environ.get("R_HOME", "-"), os.environ.get("RPY2_CFFI_MODE", "-"))'
+echo "$see" > "$T/fake-rpy2/rpy2/__init__.py"
+echo "$see" > "$T/fake-st/setuptools/__init__.py"
+touch "$T/rpy2-src/src/rpy2/rinterface_lib/_rinterface_cffi_build.py"
+printf '#!/bin/sh\necho /other/R\n' > "$T/other-r/R"
+chmod +x "$T/other-r/R"
+py_() { run_with "$T/no-r" PYTHONPATH="$T/fake-rpy2:$T/fake-st" "$@"; }
+py_path() { local p="$1"; shift; run_with "$p" PYTHONPATH="$T/fake-rpy2:$T/fake-st" "$@"; }
+in_() { local d="$1"; shift; (cd "$d" && py_ "$@"); }
+in_path() { local d="$1" p="$2"; shift 2; (cd "$d" && py_path "$p" "$@"); }
+rpy2_check() { # label, expected, command...
+  local label="$1" want="$2" got; shift 2
+  got="$("$@" 2>&1)" || true
+  [ "$got" = "$want" ] || { printf 'got:  %s\nwant: %s\n' "$got" "$want" >&2; echo "error: r_zig.pth: $label" >&2; exit 1; }
+  echo "ok: $label: $(echo "$got" | tr '\n' ' ')"
+}
+rpy2_check "plain start untouched" "- -" py_ "$T/venv/bin/python" -c "$see"
+rpy2_check "import rpy2, no R on PATH: R_HOME and ABI" "$r_home ABI" py_ "$T/venv/bin/python" -c 'import rpy2'
+rpy2_check "import rpy2, the venv's R on PATH (activated): R_HOME and ABI" "$r_home ABI" py_path "$T/venv/bin:$T/other-r" "$T/venv/bin/python" -c 'import rpy2'
+rpy2_check "import rpy2, another R first on PATH: untouched" "- -" py_path "$T/other-r:$T/venv/bin" "$T/venv/bin/python" -c 'import rpy2'
+rpy2_check "a set R_HOME is kept, mode untouched" "/elsewhere -" py_ R_HOME=/elsewhere "$T/venv/bin/python" -c 'import rpy2'
+rpy2_check "R_HOME set to this R: ABI" "$r_home ABI" py_ R_HOME="$r_home" "$T/venv/bin/python" -c 'import rpy2'
+rpy2_check "a set RPY2_CFFI_MODE is kept" "$r_home API" py_ RPY2_CFFI_MODE=API "$T/venv/bin/python" -c 'import rpy2'
+rpy2_check "setuptools in an rpy2 source tree, no R: ABI, no R_HOME" "- ABI" in_ "$T/rpy2-src" "$T/venv/bin/python" -c 'import setuptools'
+rpy2_check "setuptools in an rpy2 source tree, another R on PATH: untouched" "- -" in_path "$T/rpy2-src" "$T/other-r" "$T/venv/bin/python" -c 'import setuptools'
+rpy2_check "setuptools elsewhere untouched" "- -" in_ "$T/other-src" "$T/venv/bin/python" -c 'import setuptools'
+rpy2_check "setuptools: a set RPY2_CFFI_MODE is kept" "- API" in_ "$T/rpy2-src" RPY2_CFFI_MODE=API "$T/venv/bin/python" -c 'import setuptools'
+rpy2_check "setuptools: a set R_HOME leaves the mode alone" "/elsewhere -" in_ "$T/rpy2-src" R_HOME=/elsewhere "$T/venv/bin/python" -c 'import setuptools'
+rpy2_check "setuptools: R_HOME set to this R: ABI" "$r_home ABI" in_ "$T/rpy2-src" R_HOME="$r_home" "$T/venv/bin/python" -c 'import setuptools'
+rpy2_check "setuptools then rpy2: both fire" "$(printf -- '- -\n%s ABI' "$r_home")" in_ "$T/other-src" "$T/venv/bin/python" -c 'import setuptools, rpy2'
+rpy2_check "the finder leaves once both fired" "$(printf '%s ABI\n%s ABI\nFalse' "$r_home" "$r_home")" py_ "$T/venv/bin/python" -c 'import sys, rpy2, setuptools; print(any(getattr(f, "__name__", "") == "_Rpy2Finder" for f in sys.meta_path))'
+
 echo "== TLS trust (CA bundle shipped in the wheel, also under --vanilla)"
 # conda-forge's libcurl/OpenSSL in the wheel carry the build env's CA path
 # compiled in; the wheel ships ssl/cacert.pem and R's libcurl.c picks
@@ -272,14 +339,27 @@ if printf '%s\n' "$argv" | grep -F "$decoy" || ! printf '%s\n' "$argv" | grep -q
 fi
 mkdir -p "$T/lib4"
 run CONDA_PREFIX="$decoy" R CMD INSTALL --preclean -l "$T/lib4" "$P" > "$T/decoy.log" 2>&1 || { cat "$T/decoy.log" >&2; exit 1; }
+# The reader: readelf (linux, the wheel env's binutils) or otool (macOS).
+# Without one rpath_of prints nothing, which the check below would take
+# for "no rpath" (b14-review B9): a note here, an error in CI.
+rpath_reader=""
+if command -v readelf > /dev/null 2>&1; then rpath_reader=readelf
+elif command -v otool > /dev/null 2>&1; then rpath_reader=otool
+fi
 rpath_of() {
-  if command -v readelf > /dev/null 2>&1; then readelf -d "$1" | sed -n 's/.*(R\(UN\)\{0,1\}PATH).*\[\(.*\)\]/\2/p'
-  elif command -v otool > /dev/null 2>&1; then otool -l "$1" | awk '/cmd LC_RPATH/ {r = 1} r && / path / {print $2; r = 0}'
-  fi
+  case "$rpath_reader" in
+    readelf) readelf -d "$1" | sed -n 's/.*(R\(UN\)\{0,1\}PATH).*\[\(.*\)\]/\2/p' ;;
+    otool) otool -l "$1" | awk '/cmd LC_RPATH/ {r = 1} r && / path / {print $2; r = 0}' ;;
+  esac
 }
-rp="$(rpath_of "$T/lib4/rzigwheeltest/libs/rzigwheeltest.so")"
-[ -z "$rp" ] || { echo "error: a package built with CONDA_PREFIX set records an rpath: $rp" >&2; exit 1; }
-echo "ok: rzig names only $own; no rpath"
+if [ -z "$rpath_reader" ]; then
+  cannot_check "neither readelf nor otool on PATH; the decoy package's rpath not checked"
+  echo "ok: rzig names only $own (rpath not read)"
+else
+  rp="$(rpath_of "$T/lib4/rzigwheeltest/libs/rzigwheeltest.so")"
+  [ -z "$rp" ] || { echo "error: a package built with CONDA_PREFIX set records an rpath: $rp" >&2; exit 1; }
+  echo "ok: rzig names only $own; no rpath ($rpath_reader)"
+fi
 
 # R_ZIG_EXTRA_ENV: a standalone R compiling against an env of libraries.
 # A package using an env header and library builds, links through the env's

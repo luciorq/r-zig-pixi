@@ -56,20 +56,42 @@ source:
       - url: https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.11.tar.xz
         sha256: d0cd841bc8e55b9da888106c00dc256d05b7d1d8e5a46f4be4eb4c5125bd2dc4
         target_directory: pkgconf-src
-  # unix: GNU make's source, which the toolchain build compiles into
-  # R_HOME/bin/toolchain/usr/bin/make for r-zig-build-tools
+  # GNU make's source, which the toolchain build compiles into
+  # R_HOME/bin/toolchain/usr/bin/make for r-zig-build-tools on unix, and
+  # native/bin/make.exe for r-zig-native-tools on Windows
   # (zigbuild/make/build.zig, zigbuild/toolchain/make.zig; recipe/build.sh
   # passes the directory as -Dmake). The url and sha256 are make.zig's, as
-  # its test checks; Windows keeps m2-make.
-  - if: unix
+  # its test checks; Windows' r-zig-build-tools keeps m2-make.
+  # Mirrors: ftp.gnu.org timed out in stress 45512789892 (b13-fixes F12)
+  - url:
+      - https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+      - https://mirrors.kernel.org/gnu/make/make-4.4.1.tar.gz
+      - https://ftpmirror.gnu.org/gnu/make/make-4.4.1.tar.gz
+    sha256: dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3
+    target_directory: make-src
+  # Windows: busybox-w32's source, which the toolchain build compiles into
+  # R_HOME/bin/toolchain/native/bin/busybox.exe for r-zig-native-tools
+  # (zigbuild/busybox/build.zig, zigbuild/toolchain/busybox.zig;
+  # recipe/build.sh passes the directory as -Dbusybox). The url and sha256
+  # are busybox.zig's, as its test checks; this exact tarball with r-zig's
+  # patches (zigbuild/busybox/patches/, which build.zig applies and the
+  # package ships beside the licence) is the GPL-2.0 complete source the
+  # package names (native/LICENSES/busybox-w32/SOURCE).
+  - if: win
     then:
-      # Mirrors: ftp.gnu.org timed out in stress 45512789892 (b13-fixes F12)
+      - url: https://github.com/rmyorston/busybox-w32/archive/refs/tags/FRP-6354-g5f09fb446.tar.gz
+        sha256: b076d55e4aca74d57d4e77c2ca77abc94dd4926f424fa752889414e1b68f6ebc
+        target_directory: busybox-src
+      # Info-ZIP zip's source, which the toolchain build compiles into
+      # usr/bin/zip.exe (r-zig-build-tools) and native/bin/zip.exe
+      # (r-zig-native-tools) (zigbuild/zip/build.zig, zigbuild/toolchain/
+      # zip.zig; recipe/build.sh passes the directory as -Dzip). The urls
+      # and sha256 are zip.zig's, as its test checks.
       - url:
-          - https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
-          - https://mirrors.kernel.org/gnu/make/make-4.4.1.tar.gz
-          - https://ftpmirror.gnu.org/gnu/make/make-4.4.1.tar.gz
-        sha256: dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3
-        target_directory: make-src
+          - https://downloads.sourceforge.net/project/infozip/Zip%203.x%20%28latest%29/3.0/zip30.tar.gz
+          - https://deb.debian.org/debian/pool/main/z/zip/zip_3.0.orig.tar.gz
+        sha256: f0e8bb1f9b7eb0b01285495a2699df3a4b766784c1765a8f1aeedf63c0806369
+        target_directory: zip-src
   # Windows: cairo's source, which R's build compiles and links statically
   # into winCairo.dll (zigbuild/cairo.zig; recipe/build.sh passes the
   # directory as -Dcairo). conda-forge has no win-arm64 cairo; one build
@@ -278,7 +300,7 @@ build:
   # Also in 12, still unpublished: Windows package DLLs link without ICF
   # (_LINK_=/OPT:NOICF), and win-arm64's rzig and etc/r-zig.cmake take
   # an opt-in fallback library tree, R_ZIG_FALLBACK_SOFT
-  # (feat-winarm-gaps); on Windows rzig, etc/Rcmd_environ (R_ZIG_LIBS,
+  # (feat-winarm-gaps; removed in 14, b14-rhtslib); on Windows rzig, etc/Rcmd_environ (R_ZIG_LIBS,
   # PKG_CONFIG_PATH, PKG_CONFIG_LIBDIR, R_TOOLS_SOFT) and etc/r-zig.cmake
   # search libs-zig-pixi's zig-* static libraries
   # (<env>/Library/zig-libs/<triple>) first (feat-zig-libs). Build-12
@@ -304,21 +326,41 @@ build:
   # flavor (b13-build); R's source comes from `zig build fetch`, and the
   # vendored configs are captured with rzig. rzig takes the toolchain from
   # R_ZIG_TOOLCHAIN_ENV and builds against distro libraries with
-  # R_ZIG_SYSTEM_LIBS (b13-rzig). Windows wheels (b13-env-ci).
-  number: 13
+  # R_ZIG_SYSTEM_LIBS (b13-rzig). Windows wheels (b13-env-ci). Published
+  # 2026-11-26, build.yaml run 45858899338 on main 77abec1. Record:
+  # .github/devdocs/chore-release-13/PLAN.md.
+  # 13 → 14 (2026-11-26, build14): Windows' native build tools as the opt-in add-on
+  # r-zig-native-tools (busybox-w32, GNU make, Info-ZIP zip and pkgconf
+  # built with zig into R_HOME/bin/toolchain/native/, no MSYS2;
+  # R_ZIG_NATIVE_TOOLS=1, patches 0017 and 0018; busybox carries r-zig's
+  # patch 0001-msys-drive-paths, shipped in native/LICENSES/busybox-w32/
+  # patches/, so sh runs and cds to /c/... paths and converts them for
+  # native programs); make's source on every platform; Windows'
+  # r-zig-build-tools gains usr/bin/zip.exe (Info-ZIP 3.0 built with zig,
+  # R CMD INSTALL --build, utils::zip) (b14-l4). R_ZIG_FALLBACK_SOFT is
+  # gone from rzig and win-arm64's etc/r-zig.cmake, and on Windows rzig
+  # drops an unresolved -l of Rtools45's libcurl closure (-lidn2
+  # -lunistring -lssh2 -lgcrypt -lgpg-error -lnghttp2 -lpsl)
+  # (b14-rhtslib). rzig takes R_ZIG_ENV_RPATH=origin (only $ORIGIN, for
+  # the experimental binary package repository, repo/; b14-l5).
+  # Wheels (not this recipe): the wheel's Rprofile.site creates
+  # R_LIBS_USER at the first start, r_zig.pth sets R_HOME for rpy2 when
+  # unset, and the Rscript launcher passes --file= (b14-l5).
+  number: 14
 
 outputs:
-  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), seven
+  # One build (scripts/zig-build.sh, then scripts/zig-toolchain.sh), eight
   # packages (feat-standalone-toolchain B28 a; r-zig-extras and
-  # r-zig-recommended since build 11, r-zig-tcltk since build 13). The
+  # r-zig-recommended since build 11, r-zig-tcltk since build 13,
+  # Windows' r-zig-native-tools since build 14). The
   # base, r-zig-slim, owns R and its compiler front rzig
   # (R_HOME/bin/toolchain's compiler names, which Makeconf points at, and
   # share/zig/rpkg), as the standalone base
   # archive does (B19). Each group package owns, or depends on,
   # third-party software only: r-zig-compilers depends on zig, flang and
   # llvm-openmp; r-zig-build-tools on Windows on the MSYS2 tools, and owns
-  # R_HOME/bin/toolchain/usr/ (built from source: Windows pkgconf, unix
-  # GNU make).
+  # R_HOME/bin/toolchain/usr/ (built from source: Windows pkgconf and
+  # zip, unix GNU make); r-zig-native-tools owns Windows' native/.
   # Windows' binutils are rzig's own names, r-zig-slim's
   # (feat-win-zig-binutils). r-zig-toolchain is the
   # metapackage of the groups (with r-zig-extras, cmake). Without a
@@ -369,12 +411,13 @@ outputs:
             - zip
             # zig-build.sh applies R's source patches (zigbuild/patches/)
             - patch
-        # gnuwin32 has no `configure`/autoconf step, so none of the unix
-        # GNU-text-tool deps above apply — instead it needs the msys
-        # userland to run at all (native make can't spawn the extensionless
-        # zig shim scripts) plus uutils for the coreutils build.sh itself
-        # uses. m2-bash is also what runs *this* build.sh in the first place
-        # (rattler-build has no bld.bat here, same as conda-build convention).
+        # Windows: MSYS2's userland, as pixi.toml's
+        # [feature.toolchain.target.win.dependencies]. m2-bash runs this
+        # build.sh (rattler-build has no bld.bat here) and the scripts it
+        # calls (zig-build.sh, zig-toolchain.sh), with the m2 tools they
+        # run; the build-tools group's usr/bin copies m2-bash, m2-make,
+        # m2-coreutils, m2-sed, m2-grep, m2-gawk, m2-which, m2-findutils,
+        # m2-patch, m2-tar and m2-gzip (zigbuild/toolchain/build.zig).
         # uutils-coreutils on win-64 only: its win-arm64 builds refuse
         # m2-coreutils (pixi.toml's [target.win-64.dependencies])
         - if: build_platform == "win-64"
@@ -387,7 +430,6 @@ outputs:
             - m2-coreutils
             - m2-diffutils
             - m2-findutils
-            - m2-texinfo
             - m2-which
             - m2-tar
             - m2-gzip
@@ -507,7 +549,8 @@ outputs:
       # (feat-standalone-toolchain B20, B28): rzig's names and its link
       # object stay here (Windows: with the binutils, rzig's names too). Of
       # these, the conda build makes only usr/ (Windows pkgconf, unix GNU
-      # make), which r-zig-build-tools owns; etc/ is the standalone tree's only on
+      # make), which r-zig-build-tools owns, and Windows' native/, which
+      # r-zig-native-tools owns; etc/ is the standalone tree's only on
       # Windows (PHASE7 Cr5); binutils/ is gone (feat-win-zig-binutils) and
       # stays excluded so no old tree's copy can ride along; cmake/ is the
       # extras' (feat-extras-group), which the conda build never makes. R's
@@ -520,8 +563,8 @@ outputs:
       # win-arm64, where the base keeps the stub).
       files:
         exclude:
-          - lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
-          - Library/lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
+          - lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake,native}/**
+          - Library/lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake,native}/**
           - lib/R/library/${{ recommended }}/**
           - Library/lib/R/library/${{ recommended }}/**
           - if: target_platform != "win-arm64"
@@ -715,8 +758,8 @@ outputs:
                 then:
                   - Library/lib/R/bin/toolchain/clear_cache.o
             not_exists:
-              - lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
-              - Library/lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake}/**
+              - lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake,native}/**
+              - Library/lib/R/bin/toolchain/{zig,flang,openmp,libstdcxx,usr,etc,binutils,cmake,native}/**
               - lib/R/library/${{ recommended }}/**
               - Library/lib/R/library/${{ recommended }}/**
               - if: target_platform != "win-arm64"
@@ -837,7 +880,8 @@ outputs:
     build:
       # usr/bin's tools the toolchain build compiles from source, with
       # usr/SOURCES and usr/LICENSES/: Windows pkgconf.exe and
-      # pkg-config.exe (zigbuild/toolchain/pkgconf.zig), unix GNU make
+      # pkg-config.exe (zigbuild/toolchain/pkgconf.zig) and zip.exe
+      # (zigbuild/toolchain/zip.zig; b14-l4 U4), unix GNU make
       # (zigbuild/make/build.zig; backlog L7). R puts usr/bin first on
       # PATH (etc/Renviron, Windows etc/Rcmd_environ), before the env's.
       files:
@@ -861,8 +905,9 @@ outputs:
         - ${{ pin_subpackage("r-zig-slim", exact=True) }}
         # unix: nothing else, make is the package's own (files, above;
         # conda-forge's make until build 13). On Windows m2-make is the
-        # make R runs (it comes first on PATH), so no native make there
-        # (PHASE4 Cg7; PHASE7 open point B a; b13-build D12)
+        # make R runs (it comes first on PATH), so no native make here
+        # (PHASE4 Cg7; PHASE7 open point B a; b13-build D12): the native
+        # set is r-zig-native-tools', an opt-in (b14-l4)
         # Windows: the build-tools group's set on both channels (B11; PHASE7
         # open points A-C): MSYS2's userland from conda-forge's m2 packages;
         # the standalone tree copies the same packages' files into
@@ -891,11 +936,11 @@ outputs:
             # drive compilation for any package that needs make (a
             # configure script, a Makevars rule), not just packages with a
             # configure script.
-            # texinfo/diffutils/tar/gzip/unzip/zip stay build:-only —
-            # documentation-generation and archive tools a package's own
-            # `configure`/compile step essentially never needs; add if a real
-            # failure ever proves otherwise, same discipline as everything
-            # else in this list.
+            # diffutils and unzip stay build:-only: no package's configure
+            # or compile step has needed them yet; add one when a real
+            # failure proves otherwise, as tar and gzip were added below.
+            # zip is usr/bin/zip.exe, built from Info-ZIP's source (files,
+            # above; R CMD INSTALL --build, b14-l4 U4).
             - m2-sed
             - m2-grep
             - m2-gawk
@@ -926,6 +971,9 @@ outputs:
                   - Library/lib/R/bin/toolchain/usr/SOURCES
                   - Library/lib/R/bin/toolchain/usr/LICENSES/pkgconf/COPYING
                   - Library/lib/R/bin/toolchain/usr/LICENSES/pkgconf/mingw-w64-crt-COPYING
+                  - Library/lib/R/bin/toolchain/usr/bin/zip.exe
+                  - Library/lib/R/bin/toolchain/usr/LICENSES/zip/LICENSE
+                  - Library/lib/R/bin/toolchain/usr/LICENSES/zip/mingw-w64-crt-COPYING
                 else:
                   - lib/R/bin/toolchain/usr/bin/make
                   - lib/R/bin/toolchain/usr/SOURCES
@@ -951,10 +999,11 @@ outputs:
           recipe:
             - test-build-tools.R
     about:
-      summary: The r-zig build tools for r-zig-slim (GNU make; on Windows also sh, the MSYS2 tools and pkg-config)
-      # Windows holds pkgconf (ISC), with the mingw-w64 CRT startup zig
-      # links into it (ZPL-2.1); unix holds GNU make (GPL-3.0-or-later)
-      license: ${{ "ISC AND ZPL-2.1" if win else "GPL-3.0-or-later" }}
+      summary: The r-zig build tools for r-zig-slim (GNU make; on Windows also sh, the MSYS2 tools, pkg-config and zip)
+      # Windows holds pkgconf (ISC) and Info-ZIP zip (Info-ZIP), with the
+      # mingw-w64 CRT startup zig links into them (ZPL-2.1); unix holds GNU
+      # make (GPL-3.0-or-later)
+      license: ${{ "ISC AND Info-ZIP AND ZPL-2.1" if win else "GPL-3.0-or-later" }}
       # the top level's, on Windows pkgconf's and zig's (pkgconf.exe
       # is zig-linked: compiler_rt and the mingw-w64 CRT), as r-zig-slim,
       # on unix make's and zig's (compiler_rt and the libc start files)
@@ -965,8 +1014,83 @@ outputs:
         - if: win
           then:
             - pkgconf-src/COPYING
+            - zip-src/LICENSE
           else:
             - make-src/COPYING
+        - licenses/zig/**
+
+  # The native build tools (b14-l4 PLAN.md; user decision U1 b): Windows
+  # only, an opt-in. busybox-w32 (sh, sed, awk, grep and coreutils as one
+  # exe, a copy per name), GNU make built for Windows, zip and pkgconf, all
+  # built from source by the toolchain build (zigbuild/toolchain/
+  # busybox.zig, make.zig, zip.zig, pkgconf.zig) into R_HOME/bin/toolchain/native/
+  # with SOURCES and LICENSES/. No MSYS2 file: with R_ZIG_NATIVE_TOOLS=1,
+  # R CMD INSTALL and SHLIB and R sessions put native/bin first on PATH
+  # (patch 0018), so r-zig-slim + r-zig-compilers + this package build
+  # packages without r-zig-build-tools. Not in r-zig-toolchain: the
+  # default stays MSYS2's (r-zig-build-tools).
+  - package:
+      name: r-zig-native-tools
+    inherit:
+      from: r-zig-build
+      run_exports: false
+    build:
+      skip:
+        - not win
+      files:
+        - Library/lib/R/bin/toolchain/native/**
+    requirements:
+      run:
+        - ${{ pin_subpackage("r-zig-slim", exact=True) }}
+    tests:
+      - package_contents:
+          files:
+            exists:
+              # one entry per file: an `exists` glob passes when it matches one
+              - Library/lib/R/bin/toolchain/native/bin/busybox.exe
+              - Library/lib/R/bin/toolchain/native/bin/sh.exe
+              - Library/lib/R/bin/toolchain/native/bin/make.exe
+              - Library/lib/R/bin/toolchain/native/bin/pkg-config.exe
+              - Library/lib/R/bin/toolchain/native/bin/zip.exe
+              - Library/lib/R/bin/toolchain/native/SOURCES
+              - Library/lib/R/bin/toolchain/native/LICENSES/busybox-w32/LICENSE
+              - Library/lib/R/bin/toolchain/native/LICENSES/busybox-w32/SOURCE
+              - Library/lib/R/bin/toolchain/native/LICENSES/busybox-w32/patches/0001-msys-drive-paths.patch
+              - Library/lib/R/bin/toolchain/native/LICENSES/make/COPYING
+              - Library/lib/R/bin/toolchain/native/LICENSES/pkgconf/COPYING
+              - Library/lib/R/bin/toolchain/native/LICENSES/zip/LICENSE
+            not_exists:
+              - Library/lib/R/bin/toolchain/{usr,zig,flang,openmp,cmake}/**
+              # r-zig-slim's exes, by name: rattler-build's `*` also matches
+              # `/`, so toolchain/*.exe matched native/bin/ (PR #60 CI F-C4)
+              - Library/lib/R/bin/toolchain/{rzig,gcc,nm,objdump,strip,dlltool,windres,as}.exe
+              - Library/lib/R/etc/**
+              - Library/usr/**
+      - script:
+          content:
+            - '%PREFIX%/Library/lib/R/bin/x64/Rscript.exe test-native-tools.R'
+          # the tests' shared zig cache, as r-zig-slim's test
+          secrets:
+            - R_ZIG_TEST_ZIG_CACHE
+        requirements:
+          run:
+            - ${{ pin_subpackage("r-zig-compilers", exact=True) }}
+        files:
+          recipe:
+            - test-native-tools.R
+    about:
+      summary: Native Windows build tools for r-zig (busybox-w32, GNU make, zip, pkgconf; built with zig, no MSYS2), an opt-in through R_ZIG_NATIVE_TOOLS
+      # busybox-w32 (GPL-2.0-only; its complete source is the tarball
+      # native/LICENSES/busybox-w32/SOURCE names), GNU make (GPL-3.0-or-later),
+      # Info-ZIP zip (Info-ZIP), pkgconf (ISC), and the mingw-w64 CRT
+      # startup zig links into each exe (ZPL-2.1)
+      license: GPL-2.0-only AND GPL-3.0-or-later AND Info-ZIP AND ISC AND ZPL-2.1
+      license_file:
+        - busybox-src/LICENSE
+        - make-src/COPYING
+        - zip-src/LICENSE
+        - pkgconf-src/COPYING
+        - licenses/r-zig/LICENSE
         - licenses/zig/**
 
   # The extras group (feat-extras-group): cmake, for packages that build

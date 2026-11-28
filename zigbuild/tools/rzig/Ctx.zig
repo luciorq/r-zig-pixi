@@ -10,6 +10,7 @@ const Io = std.Io;
 const Allocator = mem.Allocator;
 const stdio = @import("stdio.zig");
 const target = @import("target.zig");
+const onoff = @import("onoff.zig");
 
 pub const Os = enum {
     linux,
@@ -59,11 +60,13 @@ echoed: ?*std.ArrayList(u8) = null,
 /// After a command of several steps (`steps`, zig-fc's split), which rzig
 /// waits for on every OS, they are deleted too.
 discard: std.ArrayList([]const u8) = .empty,
-/// environment.fallback's answer, once per command (null: not asked
-/// yet), so its warning is printed once: the tree's directory, or null
-/// when there is none. Unit tests reset it when they change the
-/// variable.
-fallback_soft: ??[]const u8 = null,
+/// environment.named's answers (R_ZIG_EXTRA_ENV, R_ZIG_TOOLCHAIN_ENV):
+/// a variable's value and the real path it resolved to, null when it did
+/// not, so that a path that does not resolve is warned about once per
+/// command however often the environments are asked for (b14-review B7).
+/// Keyed by the value, so a test that changes the variable gets a fresh
+/// answer.
+env_roots: std.ArrayList(EnvRoot) = .empty,
 /// Variables rzig put into `env` for the command (windows.noIcf's
 /// _LINK_): main.zig's run then hands `env` to zig, and RZIG_TRACE shows
 /// them before zig's line.
@@ -72,11 +75,37 @@ env_set: std.ArrayList([]const u8) = .empty,
 /// names its temporary directory `rzig-fc-dryrun`, so the printed
 /// commands are the same on every run, and nothing creates it.
 dry_run: bool = false,
+/// The switches `on` warned about (a value neither on nor off), so that
+/// a switch several parts of a command read (RZIG_TRACE) warns once.
+switches_warned: std.ArrayList([]const u8) = .empty,
+
+pub const EnvRoot = struct { name: []const u8, value: []const u8, root: ?[]const u8 };
 
 /// `${NAME:-}`: the shims treat unset and empty alike.
 pub fn getenv(ctx: *const Ctx, name: []const u8) ?[]const u8 {
     const v = ctx.env.get(name) orelse return null;
     return if (v.len == 0) null else v;
+}
+
+/// Whether the on/off switch `name` is on (onoff.zig, the rule for every
+/// R_ZIG_* and RZIG_* switch): 1, true or yes, any case. Any value but
+/// those and empty, 0, false or no is off, with a warning naming the
+/// variable, once per run.
+pub fn on(ctx: *Ctx, name: []const u8) bool {
+    const v = ctx.env.get(name);
+    return switch (onoff.parse(v)) {
+        .on => true,
+        .off => false,
+        .other => {
+            for (ctx.switches_warned.items) |w| {
+                if (mem.eql(u8, w, name)) break;
+            } else {
+                ctx.switches_warned.append(ctx.arena, name) catch {};
+                ctx.warn(onoff.message, .{ name, v.? });
+            }
+            return false;
+        },
+    };
 }
 
 fn kind(ctx: *const Ctx, path: []const u8) ?Io.File.Kind {

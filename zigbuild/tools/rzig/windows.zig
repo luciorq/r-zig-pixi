@@ -25,21 +25,18 @@ pub const iec_60559_types = "-D__STDC_WANT_IEC_60559_TYPES_EXT__";
 /// name the file when only a missed name exists. MinGW's library names
 /// zig has no import library for under that name are renamed first
 /// (mingw_names). Also the -mwindows libraries. (-lgfortran and
-/// -lquadmath are flang's runtime by now: flang_rt.zig.) Not in
-/// R_ZIG_FALLBACK_SOFT's lib/: the tree is static, and its import
-/// libraries (libomp.dll.a, libboost_*-mt-a64.dll.a, libeigen_blas.dll.a)
-/// are for DLLs it does not install. Such an -l then fails the link, not
-/// the DLL's load.
-/// RZIG_TRACE (not 0): one line per -l, `lib -l<n> <file>`, the file the
+/// -lquadmath are flang's runtime by now: flang_rt.zig.) An -l of
+/// Rtools' curl closure that no -L directory has and zig does not serve
+/// is dropped (`rtools_curl`).
+/// RZIG_TRACE (on: Ctx.on): one line per -l, `lib -l<n> <file>`, the file the
 /// first -L directory with one of its names has (`resolved`), `(zig)` for
-/// a name zig serves itself whatever -L holds (`zigServes`), or `(none)`:
-/// which link bound a zig-libs archive, an environment's library or the
-/// fallback tree's (stress.R's report).
+/// a name zig serves itself whatever -L holds (`zigServes`), `(dropped:
+/// Rtools curl closure)`, or `(none)`: which link bound a zig-libs
+/// archive or an environment's library (stress.R's report).
 pub fn libs(ctx: *Ctx, args: Args) !Args {
     const a = ctx.arena;
     const dirs = try cmdline.libDirs(a, args);
-    const tree = if (try environment.fallback(ctx)) |e| try ctx.fmt("{s}/lib", .{e.dir}) else null;
-    const trace = if (ctx.getenv("RZIG_TRACE")) |v| !mem.eql(u8, v, "0") else false;
+    const trace = ctx.on("RZIG_TRACE");
     var out: std.ArrayList([]const u8) = .empty;
     for (args) |x| {
         var name = cmdline.flagValue(x, "-l") orelse {
@@ -51,7 +48,11 @@ pub fn libs(ctx: *Ctx, args: Args) !Args {
             name = n;
             l = try ctx.fmt("-l{s}", .{n});
         }
-        try out.append(a, (try importLib(ctx, dirs.items, name, tree)) orelse l);
+        if (rtools_curl.has(name) and try resolved(ctx, dirs.items, name) == null and !try zigServes(ctx, name)) {
+            if (trace) ctx.warn("lib -l{s} (dropped: Rtools curl closure)", .{name});
+            continue;
+        }
+        try out.append(a, (try importLib(ctx, dirs.items, name)) orelse l);
         if (trace) ctx.warn("lib -l{s} {s}", .{ name, if (try zigServes(ctx, name)) "(zig)" else (try resolved(ctx, dirs.items, name)) orelse "(none)" });
     }
     // GNU gcc's -mwindows also links the GDI/shell set; zig only sets the
@@ -107,6 +108,44 @@ pub fn defaultLibs(ctx: *Ctx, args: Args) !Args {
 ///     rule, 2026-10-08: the same import table).
 const mingw_names = std.StaticStringMap([]const u8).initComptime(.{
     .{ "synchronization", "api-ms-win-core-synch-l1-2-0" },
+});
+
+/// The libraries of Rtools45's static libcurl closure that zig-libcurl
+/// may not have (older builds) or does not use (gcrypt, gpg-error). A
+/// package that links libcurl on Windows may
+/// copy Rtools' list into its Makevars.win (Rhtslib 3.8.0's Makevars.win
+/// and R/zzz.R pkgconfig(), which Rsamtools and other LinkingTo packages
+/// use: -lidn2 -lunistring -lssh2 -lgcrypt -lgpg-error always, -lnghttp2
+/// and -lpsl when $(R_TOOLS_SOFT)/lib has their archives). Rtools45's
+/// libcurl.pc (toolchain-libs 6768, x86_64 and aarch64, the same Libs)
+/// names: curl secur32 nghttp2 idn2 unistring iconv charset wldap32 ssh2
+/// gcrypt gpg-error ws2_32 z psl bcrypt advapi32 crypt32 ssl crypto
+/// gdi32 zstd brotlidec brotlicommon m pthread. zig-libcurl 8.18.0
+/// (libs-zig-pixi) builds 0 and 1 link only -lz -lbrotlidec
+/// -lbrotlicommon -lzstd and system libraries; build 2 (libs slice 3,
+/// 2026-11-27) adds Rtools45's features, so its libcurl.pc Requires
+/// libssh2 (OpenSSL backend), libidn2, libnghttp2 and libpsl, and
+/// zig-libunistring comes with libidn2. The names:
+///   nghttp2    HTTP/2 (zig-nghttp2 since build 2)
+///   idn2       IDN through libidn2 (zig-libidn2 since build 2)
+///   unistring  libidn2's and libpsl's dependency (zig-libunistring)
+///   ssh2       SCP and SFTP (zig-libssh2 since build 2)
+///   gcrypt     libssh2's crypto backend in Rtools (zig-libssh2: OpenSSL)
+///   gpg-error  libgcrypt's dependency
+///   psl        the public suffix list (zig-libpsl since build 2)
+/// Every other name is served: zig's MinGW import libraries (secur32,
+/// wldap32, ws2_32, bcrypt, advapi32, crypt32, gdi32, m, pthread) or a
+/// zig-* package (curl, z, ssl, crypto, zstd, brotli*, iconv and charset:
+/// zig-libiconv). zig stops a link at an -l it cannot find ("unable to
+/// find dynamic system library"), so such a link only went through with
+/// Rtools' own tree on -L (b14-rhtslib F9). Dropped only when
+/// unresolved: an -l that an -L directory has (zig-libs' libssh2.a with
+/// zig-libcurl build 2, conda-forge's libssh2.lib in an env) or that zig
+/// serves links as before. With build 2 in the env only gcrypt and
+/// gpg-error stay unresolved; the other five are dropped only next to an
+/// older zig-libcurl, whose code calls none of them.
+const rtools_curl = std.StaticStringMap(void).initComptime(.{
+    .{"nghttp2"}, .{"idn2"}, .{"unistring"}, .{"ssh2"}, .{"gcrypt"}, .{"gpg-error"}, .{"psl"},
 });
 
 /// MinGW gcc names an executable link's output `<name>.exe` when `-o`
@@ -327,25 +366,20 @@ fn normalPath(ctx: *Ctx, path: []const u8) ![]const u8 {
 }
 
 /// GNU ld's order in each directory, against what zig finds by itself.
-/// No import library from the fallback tree's lib/ (`tree`).
-fn importLib(ctx: *Ctx, dirs: Args, name: []const u8, tree: ?[]const u8) !?[]const u8 {
+fn importLib(ctx: *Ctx, dirs: Args, name: []const u8) !?[]const u8 {
     for (dirs) |d| {
-        const imports = if (tree) |t| !std.ascii.eqlIgnoreCase(d, t) else true;
         const dll_a = try ctx.fmt("{s}/lib{s}.dll.a", .{ d, name });
-        if (imports and ctx.isFile(dll_a)) return dll_a;
+        if (ctx.isFile(dll_a)) return dll_a;
         // zig will find these itself
         if (ctx.isFile(try ctx.fmt("{s}/{s}.dll", .{ d, name })) or
             ctx.isFile(try ctx.fmt("{s}/{s}.lib", .{ d, name })) or
             ctx.isFile(try ctx.fmt("{s}/lib{s}.a", .{ d, name }))) return null;
         const lib_lib = try ctx.fmt("{s}/lib{s}.lib", .{ d, name });
-        if (imports and ctx.isFile(lib_lib)) return lib_lib;
+        if (ctx.isFile(lib_lib)) return lib_lib;
     }
     return null;
 }
 
-/// The first of GNU ld's names for -l<name> in the first directory of
-/// `dirs` that has one (any of them, the fallback tree's import libraries
-/// too: a trace says where the name is, importLib what is linked).
 /// Whether zig links its own -l<name> on a windows-gnu link, before any
 /// -L directory: a non-archive lib<name>.a first on -L links for these
 /// (b13-stress F11, both zigs 0.17.1, x86_64 and aarch64, delta
@@ -389,6 +423,10 @@ fn zigLibDir(ctx: *Ctx) !?[]const u8 {
     return null;
 }
 
+/// The first of GNU ld's and zig's names for -l<name> in the first
+/// directory of `dirs` that has one (any of them: a trace says where the
+/// name is, importLib what is linked; null: libs may drop an
+/// `rtools_curl` name).
 fn resolved(ctx: *Ctx, dirs: Args, name: []const u8) !?[]const u8 {
     for (dirs) |d| {
         const names = [_][]const u8{
@@ -423,6 +461,57 @@ test "import libraries GNU ld would find; zig's own names left to zig; -mwindows
     try expectArgs(&.{"-mwindowsx"}, try libs(&f.ctx, &.{"-mwindowsx"}));
 }
 
+test "Rtools' curl closure: an unresolved -lidn2 ... -lpsl dropped; resolved ones, zig's own and other names kept" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.windows);
+    defer f.deinit();
+    // zig-libs (zig-libcurl's closure, zig-libgnurx's libregex.a) and a
+    // conda env with conda-forge's libssh2.lib
+    for ([_][]const u8{ "z/libcurl.a", "z/libbz2.a", "z/liblzma.a", "z/libiconv.a", "z/libssl.a", "z/libcrypto.a", "z/libz.a", "z/libzstd.a", "z/libbrotlidec.a", "z/libbrotlicommon.a", "z/libregex.a", "e/libssh2.lib" }) |p| try f.touch(p);
+    const lz = f.fmt("-L{s}", .{f.path("z")});
+    const le = f.fmt("-L{s}", .{f.path("e")});
+    // Rhtslib 3.8.0's Makevars.win PKG_LIBS (brotli: R_TOOLS_SOFT is zig-libs)
+    const rhtslib: Args = &.{ "-lm", "-lbz2", "-llzma", "-lcurl", "-lsecur32", "-lbrotlidec", "-lbrotlicommon", "-lbcrypt", "-lidn2", "-lunistring", "-liconv", "-lssl", "-lcrypto", "-lz", "-lcrypt32", "-lwsock32", "-lwldap32", "-lssh2", "-lgcrypt", "-lgpg-error", "-lws2_32", "-lzstd", "-lregex" };
+    const in = try mem.concat(f.ctx.arena, []const u8, &.{ &.{ "-shared", "-o", "Rhtslib.dll", "a.o", lz, le }, rhtslib });
+    const kept: Args = &.{ "-shared", "-o", "Rhtslib.dll", "a.o", lz, le, "-lm", "-lbz2", "-llzma", "-lcurl", "-lsecur32", "-lbrotlidec", "-lbrotlicommon", "-lbcrypt", "-liconv", "-lssl", "-lcrypto", "-lz", "-lcrypt32", "-lwsock32", "-lwldap32", f.path("e/libssh2.lib"), "-lws2_32", "-lzstd", "-lregex" };
+    try expectArgs(kept, try libs(&f.ctx, in));
+    try testing.expectEqualStrings("", f.takeWarnings());
+    // the trace names each dropped one
+    try f.env.put("RZIG_TRACE", "1");
+    try expectArgs(&.{ lz, le, f.path("e/libssh2.lib") }, try libs(&f.ctx, &.{ lz, le, "-lidn2", "-lssh2", "-lgpg-error", "-lnghttp2", "-lpsl", "-lunistring", "-lgcrypt" }));
+    try testing.expectEqualStrings(f.fmt(
+        \\rzig-test: lib -lidn2 (dropped: Rtools curl closure)
+        \\rzig-test: lib -lssh2 {s}
+        \\rzig-test: lib -lgpg-error (dropped: Rtools curl closure)
+        \\rzig-test: lib -lnghttp2 (dropped: Rtools curl closure)
+        \\rzig-test: lib -lpsl (dropped: Rtools curl closure)
+        \\rzig-test: lib -lunistring (dropped: Rtools curl closure)
+        \\rzig-test: lib -lgcrypt (dropped: Rtools curl closure)
+        \\
+    , .{f.path("e/libssh2.lib")}), f.takeWarnings());
+    _ = f.env.swapRemove("RZIG_TRACE");
+    // any of zig's and GNU ld's names in any -L directory keeps it
+    for ([_][]const u8{ "z/libidn2.a", "e/unistring.lib", "e/libgcrypt.dll.a", "e/gpg-error.dll", "e/libpsl.lib" }) |p| try f.touch(p);
+    try expectArgs(
+        &.{ lz, le, "-lidn2", "-lunistring", f.path("e/libgcrypt.dll.a"), "-lgpg-error", f.path("e/libpsl.lib") },
+        try libs(&f.ctx, &.{ lz, le, "-lidn2", "-lunistring", "-lgcrypt", "-lgpg-error", "-lpsl" }),
+    );
+    // a two-argument -L is searched as well (b14-review B7)
+    const le2: Args = &.{ "-L", f.path("e") };
+    try expectArgs(
+        try mem.concat(f.ctx.arena, []const u8, &.{ le2, &.{ f.path("e/libgcrypt.dll.a"), f.path("e/libpsl.lib"), "-lgpg-error" } }),
+        try libs(&f.ctx, try mem.concat(f.ctx.arena, []const u8, &.{ le2, &.{ "-lgcrypt", "-lpsl", "-lgpg-error", "-lnghttp2" } })),
+    );
+    // a name zig serves (a .def in its MinGW tree) is zig's
+    for ([_][]const u8{ "up/zig", "up/lib/std/std.zig", "up/lib/libc/mingw/lib-common/nghttp2.def" }) |p| try f.touch(p);
+    f.ctx.zig = &.{f.path("up/zig")};
+    try expectArgs(&.{"-lnghttp2"}, try libs(&f.ctx, &.{"-lnghttp2"}));
+    // only the list's names, as one-argument -l: other unresolved ones
+    // stay and fail the link as before
+    const others: Args = &.{ "-lnowhere", "-lidn", "-lssh", "-lcharset", "-l", "idn2", "-Wl,-lidn2", "-lidn2x" };
+    try expectArgs(others, try libs(&f.ctx, others));
+}
+
 test "RZIG_TRACE: where each -l is, zig-libs' archive first" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
@@ -448,7 +537,7 @@ test "RZIG_TRACE: (zig) for a name zig serves itself, whatever -L holds" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
     defer f.deinit();
-    // a fallback tree's lib/ with MinGW's import libraries and a libc++.a
+    // a library tree's lib/ with MinGW's import libraries and a libc++.a
     for ([_][]const u8{ "t/libc++.a", "t/libws2_32.a", "t/libole32.a", "t/libaclui.a", "t/libgdal.a" }) |p| try f.touch(p);
     // upstream's layout: <dir>/zig, <dir>/lib/std/std.zig
     for ([_][]const u8{ "up/zig", "up/lib/std/std.zig", "up/lib/libc/mingw/lib-common/ws2_32.def.in", "up/lib/libc/mingw/lib-common/ole32.def", "up/lib/libc/mingw/lib64/aclui.def" }) |p| try f.touch(p);

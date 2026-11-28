@@ -51,12 +51,11 @@ const Args = cmdline.Args;
 
 pub const variable = "R_ZIG_SYSTEM_LIBS";
 
-/// R_ZIG_SYSTEM_LIBS is set, not empty and not 0, on linux; ignored
-/// elsewhere.
-pub fn enabled(ctx: *const Ctx) bool {
+/// R_ZIG_SYSTEM_LIBS is on (1, true or yes: Ctx.on, onoff.zig) on
+/// linux; ignored elsewhere.
+pub fn enabled(ctx: *Ctx) bool {
     if (ctx.os != .linux) return false;
-    const v = ctx.getenv(variable) orelse return false;
-    return !mem.eql(u8, v, "0");
+    return ctx.on(variable);
 }
 
 /// Debian's multiarch directory name for R's architecture; Fedora and
@@ -130,19 +129,48 @@ const testing = std.testing;
 const testutil = @import("testutil.zig");
 const expectArgs = testutil.expectArgs;
 
-test "enabled: linux, set, not 0; ignored elsewhere, without a warning" {
+test "enabled: linux, 1, true or yes (onoff.zig); ignored elsewhere, without a warning" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
     defer f.deinit();
     try testing.expect(!enabled(&f.ctx));
-    try f.env.put(variable, "0");
-    try testing.expect(!enabled(&f.ctx));
-    try f.env.put(variable, "1");
-    try testing.expect(enabled(&f.ctx));
+    for ([_][]const u8{ "", "0", "false", "NO" }) |v| {
+        try f.env.put(variable, v);
+        try testing.expect(!enabled(&f.ctx));
+    }
+    for ([_][]const u8{ "1", "true", "Yes" }) |v| {
+        try f.env.put(variable, v);
+        try testing.expect(enabled(&f.ctx));
+    }
     try testing.expectEqualStrings("", f.takeWarnings());
     f.ctx.os = .macos;
     try testing.expect(!enabled(&f.ctx));
     try testing.expectEqualStrings("", f.takeWarnings());
+}
+
+test "Ctx.on: the on/off rule; any other value is off with one warning naming the variable" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    const name = "RZIG_TEST_SWITCH";
+    try testing.expect(!f.ctx.on(name));
+    for ([_][]const u8{ "1", "true", "TRUE", "yes", "YES" }) |v| {
+        try f.env.put(name, v);
+        try testing.expect(f.ctx.on(name));
+    }
+    for ([_][]const u8{ "", "0", "false", "False", "no" }) |v| {
+        try f.env.put(name, v);
+        try testing.expect(!f.ctx.on(name));
+    }
+    try testing.expectEqualStrings("", f.takeWarnings());
+    try f.env.put(name, "maybe");
+    try testing.expect(!f.ctx.on(name));
+    try testing.expect(!f.ctx.on(name));
+    try testing.expectEqualStrings("rzig-test: RZIG_TEST_SWITCH='maybe' is neither on (1, true, yes) nor off (0, false, no, empty): taken as off\n", f.takeWarnings());
+    // R_ZIG_SYSTEM_LIBS through the same rule, on linux
+    try f.env.put(variable, "on");
+    try testing.expect(!enabled(&f.ctx));
+    try testing.expectEqualStrings("rzig-test: R_ZIG_SYSTEM_LIBS='on' is neither on (1, true, yes) nor off (0, false, no, empty): taken as off\n", f.takeWarnings());
 }
 
 test "rewrite: the host's include roots become -idirafter, every spelling; other -I kept" {

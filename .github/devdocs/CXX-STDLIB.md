@@ -84,8 +84,9 @@ was T/abi-libstdcxx: zig c++ against the env's `libstdcxx-devel` 15.3.0.
 - Where the headers are (first found): R's env (conda:
   `libstdcxx-devel_linux-*`, a run dependency of r-zig-compilers), the
   compilers group's `R_HOME/bin/toolchain/libstdcxx` (the standalone
-  tree and the wheel), then `R_ZIG_EXTRA_ENV`; the highest version
-  there. None: a compile stops with the compilers group's text, never a
+  tree and the wheel), then `R_ZIG_TOOLCHAIN_ENV` (conda's
+  r-zig-compilers installed in a toolchain env of its own, b13-rzig),
+  then `R_ZIG_EXTRA_ENV`; the highest version there (`headersDir`). None: a compile stops with the compilers group's text, never a
   silent libc++ fallback. A command with no input (`--version`,
   `-dumpversion`, `-print-*`) gets no flags and needs no headers.
 - Link: `-nostdlib++`, then R's runtime by path: `lib/libstdc++.so.6`
@@ -125,10 +126,14 @@ was T/abi-libstdcxx: zig c++ against the env's `libstdcxx-devel` 15.3.0.
   on linux-64 and linux-aarch64, tree and conda legs, 20 targets
   including arrow:source, rstan and qs2, all ok (feat-linux-libstdcxx
   PLAN.md findings 64-66).
+- Tested since: upstream zig in CI (upstream-zig 44735388684 on #50's
+  head, 6 of 6, docs-backlog-hygiene F4; 45813752664 on build 13's
+  177c08e, chore-release-13 Gate); stress on macOS and Windows (build
+  13's runs, b13-stress, b13-slice2 F12); hosts with a libstdc++ older
+  than GLIBCXX_3.4.32 (Rocky 8 and Ubuntu 22.04, wave2-compat M-12,
+  below).
 - Not tested yet (full list: feat-linux-libstdcxx/PLAN.md "Not
-  verified"): upstream zig in CI (no 'upstream-zig' label run); stress
-  on macOS and Windows; hosts with a libstdc++ older than
-  GLIBCXX_3.4.32; Rust (cc-rs) and Go packages; a CMake mixed C/C++
+  verified"): Rust (cc-rs) and Go packages; a CMake mixed C/C++
   target linked through the C compiler; `-Wl,-lstdc++`; a prebuilt
   libc++ static archive inside a package.
 
@@ -154,11 +159,16 @@ Known differences from gcc:
   M-13): the standalone tree and the conda packages compile and run C++
   (Rcpp, exceptions) on Rocky 8 (GLIBCXX_3.4.25), Ubuntu 22.04 and
   24.04, since R's own libstdc++ is loaded first. A distro library's C++
-  API (Ubuntu 24.04's GDAL 3.8, std::string by value) works with it. But
-  building against distro `-dev` packages fails today: zig searches no
+  API (Ubuntu 24.04's GDAL 3.8, std::string by value) works with it.
+  Building against distro `-dev` packages failed there: zig searches no
   /usr/include, and a distro `.pc` that names `-I/usr/include/<multiarch>`
   (libcurl's, via PROJ) mixes the host's glibc headers into zig's 2.17
-  ones ("unknown type name '__time64_t'").
+  ones ("unknown type name '__time64_t'"). It still does by default;
+  since build 13 `R_ZIG_SYSTEM_LIBS=1` (linux, `system_libs.zig`) adds
+  the host's include roots as `-idirafter`, turns such `-I` into
+  `-idirafter` and puts its library directories last, and magick, terra
+  and sf build and run against Ubuntu 22.04's and 24.04's packages
+  (b13-rzig M-29, F6).
 
 ## Ruled out, and why
 
@@ -192,28 +202,27 @@ Known differences from gcc:
 - **Accept the boundary**: leaves sf and terra, the base of R's spatial
   ecosystem, unusable on linux.
 
-## Windows on ARM: the Rtools45 tree
+## Windows on ARM: the Rtools45 tree (builds 12 and 13, retired)
 
-stress.R uses CRAN's Rtools45 aarch64 toolchain-libs tree on Windows on ARM
-for the libraries conda-forge lacks there (stress/README.md,
-feat-winarm-gaps). That tree is LLVM 19 libc++ (std::__1), as zig. Its C++
-libraries (GDAL, Magick++, oneTBB, libnlopt's StoGO) link with zig's clang
-22 libc++ and libc++abi from zig's cache: package-like DLLs cross-linked
-from linux, with both zigs (2026-11-18). So on win-arm64 GDAL's C++ API
-(gdalraster, terra, sf) may work, unlike win-64. Not checked: run time,
-C++ exceptions thrown in the tree's code and caught in zig's, and layout
-skew between LLVM 19's libc++ headers and zig's clang 22 libc++. win-64
-is not affected: conda-forge is MSVC there, and x86_64 Rtools is gcc's
-libstdc++.
+Through build 13, stress.R used CRAN's Rtools45 aarch64 toolchain-libs
+tree on Windows on ARM for the libraries conda-forge lacked there
+(stress/README.md, feat-winarm-gaps). That tree is LLVM 19 libc++
+(std::__1), as zig. Its C++ libraries (GDAL, Magick++, oneTBB,
+libnlopt's StoGO) linked with zig's clang 22 libc++ and libc++abi from
+zig's cache: package-like DLLs cross-linked from linux, with both zigs
+(2026-11-18). Not checked then: run time, C++ exceptions thrown in the
+tree's code and caught in zig's, and layout skew between LLVM 19's
+libc++ headers and zig's clang 22 libc++. win-64 was not affected:
+conda-forge is MSVC there, and x86_64 Rtools is gcc's libstdc++.
 
-With libs-zig-pixi's aarch64 `zig-*` packages (zig's own clang and libc++,
-the same as the packages) the GDAL stack, abseil and oneTBB come from
-zig-libs, which rzig searches before the env and the tree, and the tree
-keeps the libraries libs-zig-pixi does not build (nlopt, gsl, mpfr, gmp,
-glpk, hdf5, netcdf, udunits2, harfbuzz, libpq). The LLVM 19 against clang
-22 skew above then no longer applies to those four rows. R_ZIG_FALLBACK_SOFT
-stays until no stress row resolves an `-l` into the tree (the report's
-zig-libs column, with `--trace`); retiring it is a later slice.
+libs-zig-pixi's aarch64 `zig-*` packages (zig's own clang and libc++,
+the same as the packages) took the GDAL stack, abseil and oneTBB first
+(slice 1, 2026-11-23), then the ten C libraries the tree still served
+(nlopt, gsl, mpfr, gmp, glpk, hdf5, netcdf, udunits2, harfbuzz, libpq;
+slice 2, 2026-11-25, b13-slice2), so the skew above no longer applies.
+Build 14 retires R_ZIG_FALLBACK_SOFT and the tree (b14-rhtslib U3); the
+one library left, Rhtslib's `regex.h` and `-lregex`, is zig-libgnurx's
+(libs slice 3, 2026-11-27).
 
 ## Deferred (no decision)
 

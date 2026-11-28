@@ -1,0 +1,157 @@
+name: repo
+
+# The r-zig binary package repository (backlog L5, user decision U2 (b);
+# repo/README.md, .github/devdocs/b14-l5/PLAN.md): the curated packages
+# of repo/packages.tsv built into linux binaries with a PUBLISHED r-zig
+# build from universe, on linux-64 and linux-aarch64, then installed from
+# the finished repository into an R without compilers and smoke-tested.
+#
+# EXPERIMENTAL (the user's decision U3, 2026-11-26): the whole L5 design,
+# this workflow, the release layout and tags, the ABI key and the
+# libraries binaries carry, is to be reviewed again in a later build
+# (.github/devdocs/b14-l5/PLAN.md).
+#
+# Manual dispatch only. Without the publish gate it uploads workflow
+# artifacts and nothing else. It uploads to GitHub Releases only when ALL
+# of these hold:
+# - the run is a manual dispatch on main, with the `publish` input on;
+# - the repository variable R_ZIG_REPO_PUBLISH is `true` (unset by
+#   default; `gh variable set R_ZIG_REPO_PUBLISH --body true` for one
+#   publish, then `gh variable delete R_ZIG_REPO_PUBLISH`, as
+#   R_ZIG_RELEASE in release.yaml);
+# - both platforms built and passed their install test.
+# Each platform's repository is one release whose tag is its path,
+# `repo/linux-<arch>-rzig<abi>/<R x.y>/src/contrib`, so the release's
+# download URL without /src/contrib is a repository root for
+# options(repos = ...). The release is created on first publish
+# (never marked latest) and its assets replaced after: the binaries
+# first, PACKAGES* last. Each binary gets a build provenance attestation
+# (`gh attestation verify <file> -R <owner>/<repo>`), and PACKAGES has
+# its SHA256.
+on:
+  workflow_dispatch:
+    inputs:
+      rzig_build:
+        description: 'The published r-zig build number to build with (universe; 14 on: rzig gives links only $ORIGIN with R_ZIG_ENV_RPATH=origin)'
+        type: string
+        required: true
+      r_version:
+        description: 'R version of that build'
+        type: string
+        default: '4.6.2'
+      publish:
+        description: 'Upload to the GitHub Releases (also needs R_ZIG_REPO_PUBLISH=true and main; see the header)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    # build.yaml's kill switch
+    if: vars.ENABLE_HOSTED_JOBS == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    env:
+      SLIM: r-zig-slim==${{ inputs.r_version }}=*_${{ inputs.rzig_build }}
+      TOOLCHAIN: r-zig-toolchain==${{ inputs.r_version }}=*_${{ inputs.rzig_build }}
+    steps:
+      - name: Check the inputs
+        env:
+          B: ${{ inputs.rzig_build }}
+          V: ${{ inputs.r_version }}
+        run: |
+          [[ "$B" =~ ^[0-9]+$ ]] || { echo "::error::rzig_build is not a build number: $B"; exit 1; }
+          [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::r_version is not x.y.z: $V"; exit 1; }
+      # the build runs CRAN packages' configure and Makefiles: no token
+      # left in .git/config for them
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.84.2  # as build-r.yaml, which says why
+          run-install: false
+      # The build env: R, every toolchain group (cmake builds fs's bundled
+      # libuv) and the -devel libraries the rows link (repo/packages.tsv's
+      # header). `pixi exec` activates it, so make and cmake are on PATH.
+      - name: Build the repository
+        run: |
+          pixi exec -c https://prefix.dev/universe -c conda-forge -s "$SLIM" -s "$TOOLCHAIN" -s libxml2-devel --list=r-zig -- \
+            Rscript repo/build-repo.R out
+      # The consumer: R alone (no compilers, no make, no libxml2: the
+      # binaries carry what they link). Then the same library loaded in R
+      # embedded in the runner's own python (ctypes, as rpy2), which has
+      # no rpath into the env and no LD_LIBRARY_PATH (b14-l5 U5).
+      - name: Install from the repository and smoke-test
+        run: |
+          root=$(echo out/repo/*/*)
+          pixi exec -c https://prefix.dev/universe -c conda-forge -s "$SLIM" -- Rscript repo/install-test.R "$root" out/test-lib
+          rhome=$(pixi exec -c https://prefix.dev/universe -c conda-forge -s "$SLIM" -- Rscript -e 'cat(R.home())')
+          env -u LD_LIBRARY_PATH /usr/bin/python3 -I repo/embed-test.py "$rhome" out/test-lib
+          rm -rf out/test-lib
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: repo-linux-${{ runner.arch }}
+          path: |
+            out/repo/
+            out/build.tsv
+            out/logs/
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: build
+    if: vars.ENABLE_HOSTED_JOBS == 'true' && vars.R_ZIG_REPO_PUBLISH == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # one publish at a time: two would interleave their PACKAGES uploads
+    concurrency:
+      group: repo-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: repo-linux-*
+          path: dl
+      - name: Collect the binaries
+        run: |
+          set -euo pipefail
+          n=$(find dl -path '*/src/contrib/*.tar.gz' | wc -l)
+          echo "$n binaries"; [ "$n" -gt 0 ] || { echo "::error::no binaries"; exit 1; }
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dl/*/repo/*/*/src/contrib/*.tar.gz
+      - name: Upload each repository to its release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for c in dl/*/repo/*/*/src/contrib; do
+            tag="repo/${c#dl/*/repo/}"
+            echo "::group::$tag"
+            if ! gh release view "$tag" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+              {
+                echo "r-zig binary packages for linux, a CRAN-like repository (repo/README.md). Experimental: the layout and the URL may change."
+                echo
+                echo "options(repos = c(RZIG = \"https://github.com/$GITHUB_REPOSITORY/releases/download/${tag%/src/contrib}\", getOption(\"repos\")))"
+              } > notes.md
+              gh release create "$tag" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+                --title "$tag" --notes-file notes.md --latest=false
+            fi
+            gh release upload "$tag" -R "$GITHUB_REPOSITORY" --clobber "$c"/*.tar.gz
+            gh release upload "$tag" -R "$GITHUB_REPOSITORY" --clobber "$c"/PACKAGES.rds "$c"/PACKAGES.gz "$c"/PACKAGES
+            echo "::endgroup::"
+          done

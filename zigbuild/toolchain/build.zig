@@ -8,8 +8,8 @@
 //! needs no R source and runs no R configure. scripts/zig-toolchain.sh
 //! (pixi run toolchain) installs dist/toolchain/R-<ver>-zig with it, and
 //! package-standalone.sh's toolchain mode archives the groups from there
-//! (B17). `test` runs conda.zig's, wheel.zig's, pkgconf.zig's, make.zig's and
-//! cmake.zig's unit tests (pixi run toolchain-test). With -Dbase it writes the R tree's records instead
+//! (B17). `test` runs conda.zig's, wheel.zig's, pkgconf.zig's, make.zig's,
+//! busybox.zig's, zip.zig's and cmake.zig's unit tests (pixi run toolchain-test). With -Dbase it writes the R tree's records instead
 //! (PHASE8 open points A a, F a; installBase, below):
 //!   zig build --build-file zigbuild/toolchain/build.zig --prefix <R tree> -Dprefix=<R tree> -Dbase
 //! which scripts/zig-build.sh runs after vendor-libs.sh. zig 0.17's
@@ -52,7 +52,16 @@
 //!                           A-C), and pkgconf as pkgconf.exe and
 //!                           pkg-config.exe, which this build compiles
 //!                           from source (pkgconf.zig, installPkgconf;
-//!                           B43), on both channels
+//!                           B43), and Info-ZIP zip as zip.exe, built
+//!                           from source too (zip.zig, installZip;
+//!                           b14-l4 U4), on both channels
+//!   native/    native-tools Windows: busybox-w32 (busybox.exe and a copy
+//!                           per name of busybox.applets), GNU make
+//!                           (make.exe), zip and pkgconf, all built from
+//!                           source (installNative; b14-l4 PLAN.md, user
+//!                           decision U1 b), LICENSES/ and SOURCES; R
+//!                           takes them before usr/'s when
+//!                           R_ZIG_NATIVE_TOOLS is on (patch 0018)
 //!   etc/       build-tools  Windows: fstab, r-zig's own MSYS mount table,
 //!                           written here, not copied (PHASE7 open point D)
 //!   cmake/     extras       Kitware's cmake release archive for this
@@ -95,10 +104,12 @@
 //! itself, with R_TOOLCHAIN_PREFIX=$PREFIX: there conda's own packages
 //! provide every file where it is looked for: only what this build
 //! compiles is installed, which no conda package provides: Windows'
-//! usr/bin/pkgconf, from the recipe's pkgconf source (-Dpkgconf=<dir>),
-//! and unix usr/bin/make, from the recipe's make source (-Dmake=<dir>;
-//! the standalone build fetches the same tarballs as build.zig.zon's lazy
-//! `pkgconf` and `make`). No etc/, zig/ or flang/ and no
+//! usr/bin/pkgconf and zip, from the recipe's pkgconf and zip sources
+//! (-Dpkgconf=<dir>, -Dzip=<dir>), unix usr/bin/make, from the recipe's
+//! make source (-Dmake=<dir>), and Windows' native/, from the make,
+//! busybox and zip sources (-Dbusybox=<dir>; the standalone build fetches
+//! the same tarballs as build.zig.zon's lazy `pkgconf`, `make`, `busybox`
+//! and `zip`). No etc/, zig/ or flang/ and no
 //! other usr/ file there: the env's MSYS tools are its own m2 packages
 //! (Library/usr/bin), and conda keeps
 //! conda-forge's zig and flang-pixi's flang-zig, through r-zig-compilers
@@ -112,6 +123,8 @@ const conda = @import("conda.zig");
 const wheel = @import("wheel.zig");
 const pkgconf = @import("pkgconf.zig");
 const make = @import("make.zig");
+const busybox = @import("busybox.zig");
+const zip = @import("zip.zig");
 const cmake = @import("cmake.zig");
 const sources_tool = @import("sources_tool.zig");
 
@@ -296,8 +309,19 @@ const windows_dirs = [_]Dir{
             // finding 34); System32's bsdtar answered on the conda legs.
             // It imports msys-2.0.dll, msys-iconv-2.dll and msys-intl-8.dll.
             m2Tool("m2-tar"),
+            // gzip.exe: tar's z (`tar xzf`) runs gzip by name, else "tar
+            // (child): gzip: Cannot exec" (jpeg's configure.win fallback;
+            // b13-fixes F10). The conda package has m2-gzip beside m2-tar
+            // (recipe.yaml); the standalone group lacked it
+            // (chore-review-consistency B5).
+            m2Tool("m2-gzip"),
         },
     },
+    // The native build tools (r-zig-native-tools; b14-l4 PLAN.md, user
+    // decision U1 b): busybox-w32, GNU make and pkgconf, all built from
+    // source (installNative), no copies. R takes them before MSYS2's when
+    // R_ZIG_NATIVE_TOOLS is on (patch 0018).
+    .{ .name = "native", .copies = &.{} },
 };
 
 /// MSYS's mount table (PHASE7 open point D a): msys-2.0.dll in usr/bin/
@@ -324,13 +348,20 @@ pub fn build(b: *std.Build) !void {
     const paths = b.addOptions();
     paths.addOption([]const u8, "recipe", b.fmt("{s}/../../recipe/recipe.yaml", .{root_abs}));
     paths.addOption([]const u8, "zon", b.fmt("{s}/../../build.zig.zon", .{root_abs}));
+    paths.addOption([]const u8, "busybox", b.fmt("{s}/../busybox/build.zig", .{root_abs}));
+    paths.addOption([]const u8, "busybox_zon", b.fmt("{s}/../busybox/build.zig.zon", .{root_abs}));
+    paths.addOption([]const u8, "zip_zon", b.fmt("{s}/../zip/build.zig.zon", .{root_abs}));
     for ([_]std.Build.LazyPath{
         b.path("conda.zig"),
         b.path("wheel.zig"),
         b.path("pkgconf.zig"),
         b.path("make.zig"),
+        b.path("busybox.zig"),
+        b.path("zip.zig"),
         b.path("cmake.zig"),
         b.graph.cwdRelativePath(b.fmt("{s}/../cairo.zig", .{root_abs})),
+        // the patch applier zigbuild/busybox/build.zig uses
+        b.graph.cwdRelativePath(b.fmt("{s}/../busybox/patch.zig", .{root_abs})),
     }) |root| {
         const mod = b.createModule(.{
             .root_source_file = root,
@@ -341,7 +372,9 @@ pub fn build(b: *std.Build) !void {
     }
     const ziglang = b.option([]const u8, "ziglang", "PyPI's ziglang wheel, unpacked (scripts/fetch-zig.sh's directory): the compilers group's zig/");
     const pkgconf_dir = b.option([]const u8, "pkgconf", "pkgconf's source tarball, unpacked (the conda build's; else build.zig.zon's pkgconf): Windows' usr/bin/pkgconf.exe");
-    const make_dir = b.option([]const u8, "make", "GNU make's source tarball, unpacked (the conda build's; else build.zig.zon's make): unix usr/bin/make");
+    const make_dir = b.option([]const u8, "make", "GNU make's source tarball, unpacked (the conda build's; else build.zig.zon's make): unix usr/bin/make, Windows native/bin/make.exe");
+    const busybox_dir = b.option([]const u8, "busybox", "busybox-w32's source tarball, unpacked (the conda build's; else build.zig.zon's busybox): Windows native/bin/busybox.exe");
+    const zip_dir = b.option([]const u8, "zip", "Info-ZIP zip's source tarball, unpacked (the conda build's; else build.zig.zon's zip): Windows usr/bin/zip.exe and native/bin/zip.exe");
     const base = b.option(bool, "base", "Write the records of the R tree at --prefix (its files from the env) instead of the toolchain tree") orelse false;
     // zig 0.17's configure step does not see --prefix (the maker installs
     // there): -Dprefix names the same directory, which the toolchain tree's
@@ -374,11 +407,22 @@ pub fn build(b: *std.Build) !void {
 
     const records = try readRecords(b, io, env, try dirNeedles(b, dirs));
     var summary: std.ArrayList(u8) = .empty;
-    // Windows' usr/bin/pkgconf.exe (installPkgconf), unix usr/bin/make
+    // Windows' usr/bin/pkgconf.exe (installPkgconf), usr/bin/zip.exe
+    // (installZip) and native/ (installNative), unix usr/bin/make
     // (installMake), built: on both channels. error.LazyDependencyNeeded,
-    // returned from here, makes zig fetch build.zig.zon's pkgconf or make
-    // and run this configure step again.
-    const built: ?BuiltDir = if (os == .windows) try installPkgconf(b, io, tc, pkgconf_dir) else try installMake(b, io, tc, make_dir);
+    // returned from here, makes zig fetch build.zig.zon's pkgconf, make,
+    // busybox or zip and run this configure step again.
+    var built_list: [2]BuiltDir = undefined;
+    const built: []const BuiltDir = if (os == .windows) blk: {
+        const pc = try installPkgconf(b, io, tc, pkgconf_dir);
+        const usr_zip = try installZip(b, io, tc, "usr", zip_dir);
+        built_list[0] = .{ .dir = "usr", .files = try mem.concat(arena, BuiltFile, &.{ pc.files, usr_zip.files }) };
+        built_list[1] = try installNative(b, io, tc, make_dir, busybox_dir, zip_dir, pc);
+        break :blk built_list[0..2];
+    } else blk: {
+        built_list[0] = try installMake(b, io, tc, "usr", make_dir);
+        break :blk built_list[0..1];
+    };
     // SOURCES' writer, run when a directory's files are made
     // (sources_tool.zig).
     const tool = b.addExecutable(.{ .name = "sources_tool", .root_module = b.createModule(.{
@@ -427,7 +471,9 @@ pub fn build(b: *std.Build) !void {
                 t.package, t.name orelse "file", t.from, env, d.name, if (t.name == null) "every file there" else "it",
             });
         }
-        const own: []const BuiltFile = if (built != null and mem.eql(u8, d.name, built.?.dir)) built.?.files else &.{};
+        const own: []const BuiltFile = for (built) |bd| {
+            if (mem.eql(u8, d.name, bd.dir)) break bd.files;
+        } else &.{};
         if (copies.items.len == 0 and own.len == 0) continue;
         for (records) |*r| {
             if (r.upstream != null) continue;
@@ -450,7 +496,12 @@ pub fn build(b: *std.Build) !void {
             try summary.appendSlice(arena, c.record.name);
             try packages.append(arena, c.record);
         }
-        if (own.len > 0) try summary.print(arena, "{s}{s} (built)", .{ if (packages.items.len > 0) ", " else "", own[0].record.name });
+        var built_names: std.ArrayList(*const conda.Record) = .empty;
+        for (own) |f| {
+            if (mem.indexOfScalar(*const conda.Record, built_names.items, f.record) != null) continue;
+            try summary.print(arena, "{s}{s} (built)", .{ if (packages.items.len + built_names.items.len > 0) ", " else "", f.record.name });
+            try built_names.append(arena, f.record);
+        }
         try summary.appendSlice(arena, ")");
     }
     // Windows' etc/ (PHASE7 open point D a): written, never into the env.
@@ -512,6 +563,9 @@ const BuiltDir = struct {
     /// The group directory.
     dir: []const u8,
     files: []const BuiltFile,
+    /// The program's licence text (pkgconf's COPYING), for another
+    /// directory that ships the same exe (native/).
+    license: ?std.Build.LazyPath = null,
 };
 
 /// A file the toolchain build compiles, as SOURCES lists it.
@@ -569,17 +623,19 @@ fn installPkgconf(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !
     const files = try arena.alloc(BuiltFile, 2);
     files[0] = .{ .record = record, .from = "pkgconf.exe", .to = "bin/pkgconf.exe", .file = bin };
     files[1] = .{ .record = record, .from = "pkgconf.exe", .to = "bin/pkg-config.exe", .file = bin };
-    return .{ .dir = "usr", .files = files };
+    return .{ .dir = "usr", .files = files, .license = b.graph.cwdRelativePath(copying) };
 }
 
-/// unix usr/bin/make: GNU make (make.zig), compiled by
-/// zigbuild/make/build.zig (the r_zig_make path dependency) for this
-/// machine at R's floors (glibc 2.17, macOS 13.0, baseline CPU), on both
-/// channels (backlog L7; Windows keeps m2-make, b13-build D12);
-/// LICENSES/make/COPYING; and the record SOURCES writes for it, as
-/// installPkgconf's. The source: `dir` (-Dmake, the conda build's unpacked
-/// source), else build.zig.zon's lazy `make`.
-fn installMake(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !BuiltDir {
+/// GNU make (make.zig), compiled by zigbuild/make/build.zig (the
+/// r_zig_make path dependency) for this machine at R's floors (glibc
+/// 2.17, macOS 13.0, baseline CPU; Windows: the GNU ABI), on both
+/// channels, as <group>/bin/make: unix usr/ (backlog L7), Windows native/
+/// (make.exe; usr/ keeps m2-make, b13-build D12); LICENSES/make/COPYING
+/// (Windows also the mingw-w64 CRT's, which zig links into every exe);
+/// and the record SOURCES writes for it, as installPkgconf's. The source:
+/// `dir` (-Dmake, the conda build's unpacked source), else
+/// build.zig.zon's lazy `make`.
+fn installMake(b: *std.Build, io: std.Io, tc: []const u8, group: []const u8, dir: ?[]const u8) !BuiltDir {
     const arena = b.allocator;
     const src = if (dir) |d| d else blk: {
         const dep = try b.dependencyLazy("make", .{});
@@ -587,18 +643,21 @@ fn installMake(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !Bui
     };
     const abs = try realPath(b, io, src);
     const exe = b.dependency("r_zig_make", .{ .source = abs }).artifact("make");
-    const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/usr", .{tc}) };
+    const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/{s}", .{ tc, group }) };
     const bin = exe.getEmittedBin();
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(bin, dest, "bin/make").step);
+    const host = b.graph.host.result;
+    const name = if (host.os.tag == .windows) "make.exe" else "make";
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(bin, dest, b.fmt("bin/{s}", .{name})).step);
     const copying = b.fmt("{s}/COPYING", .{abs});
     if (!pathExists(io, copying)) return fail("make: {s} is missing (LICENSES/make/COPYING)", .{copying});
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.graph.cwdRelativePath(copying), dest, "LICENSES/make/COPYING").step);
-    const host = b.graph.host.result;
+    if (host.os.tag == .windows)
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(std.Build.LazyPath.zig_lib.path(b, "libc/mingw/COPYING"), dest, "LICENSES/make/mingw-w64-crt-COPYING").step);
     const record = try arena.create(conda.Record);
     record.* = .{
         .name = "make",
         .version = make.version,
-        .build = b.fmt("zig{s}_{t}-{t}", .{ @import("builtin").zig_version_string, host.cpu.arch, host.os.tag }),
+        .build = b.fmt("zig{s}_{t}-{t}{s}", .{ @import("builtin").zig_version_string, host.cpu.arch, host.os.tag, if (host.os.tag == .windows) "-gnu" else "" }),
         .url = make.url,
         .sha256 = make.sha256,
         .license = make.license,
@@ -609,8 +668,137 @@ fn installMake(b: *std.Build, io: std.Io, tc: []const u8, dir: ?[]const u8) !Bui
         },
     };
     const files = try arena.alloc(BuiltFile, 1);
-    files[0] = .{ .record = record, .from = "make", .to = "bin/make", .file = bin };
-    return .{ .dir = "usr", .files = files };
+    files[0] = .{ .record = record, .from = name, .to = b.fmt("bin/{s}", .{name}), .file = bin };
+    return .{ .dir = group, .files = files };
+}
+
+/// Info-ZIP zip (zip.zig), compiled by zigbuild/zip/build.zig (the
+/// r_zig_zip path dependency) for this machine, on both channels, as
+/// <group>/bin/zip.exe: Windows usr/ (r-zig-build-tools) and native/
+/// (r-zig-native-tools); LICENSES/zip/: its LICENSE and the mingw-w64
+/// CRT's; and the record SOURCES writes for it, as installMake's. The
+/// source: `dir` (-Dzip, the conda build's unpacked source), else
+/// build.zig.zon's lazy `zip`.
+fn installZip(b: *std.Build, io: std.Io, tc: []const u8, group: []const u8, dir: ?[]const u8) !BuiltDir {
+    const arena = b.allocator;
+    const src = if (dir) |d| d else blk: {
+        const dep = try b.dependencyLazy("zip", .{});
+        break :blk dep.builder.root.root_dir.path orelse ".";
+    };
+    const abs = try realPath(b, io, src);
+    const exe = b.dependency("r_zig_zip", .{ .source = abs }).artifact("zip");
+    const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/{s}", .{ tc, group }) };
+    const bin = exe.getEmittedBin();
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(bin, dest, "bin/zip.exe").step);
+    const license = b.fmt("{s}/LICENSE", .{abs});
+    if (!pathExists(io, license)) return fail("zip: {s} is missing (LICENSES/zip/LICENSE)", .{license});
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.graph.cwdRelativePath(license), dest, "LICENSES/zip/LICENSE").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(std.Build.LazyPath.zig_lib.path(b, "libc/mingw/COPYING"), dest, "LICENSES/zip/mingw-w64-crt-COPYING").step);
+    const arch = b.graph.host.result.cpu.arch;
+    const record = try arena.create(conda.Record);
+    record.* = .{
+        .name = "zip",
+        .version = zip.version,
+        .build = b.fmt("zig{s}_{t}-windows-gnu", .{ @import("builtin").zig_version_string, arch }),
+        .url = zip.url,
+        .sha256 = zip.sha256,
+        .license = zip.license,
+        .upstream = .{
+            .sources = try arena.dupe(conda.Source, &.{.{ .url = zip.url, .sha256 = zip.sha256 }}),
+            .feedstock = "https://github.com/luciorq/r-zig-pixi",
+            .commit = "zigbuild/zip/build.zig",
+        },
+    };
+    const files = try arena.alloc(BuiltFile, 1);
+    files[0] = .{ .record = record, .from = "zip.exe", .to = "bin/zip.exe", .file = bin };
+    return .{ .dir = group, .files = files };
+}
+
+/// Windows' native/ (r-zig-native-tools; b14-l4 PLAN.md, user decision U1
+/// b): busybox-w32 (busybox.zig, compiled by zigbuild/busybox/build.zig,
+/// the r_zig_busybox path dependency) as bin/busybox.exe and a copy under
+/// each name of busybox.applets; GNU make as bin/make.exe (installMake);
+/// Info-ZIP zip as bin/zip.exe (installZip); usr/'s pkgconf (`pkgconf_dir`'s exe) again as bin/pkgconf.exe and
+/// pkg-config.exe, so native/bin answers alone without the build-tools
+/// group. LICENSES/busybox-w32/: its LICENSE, the mingw-w64 CRT's,
+/// r-zig's patches (patches/, busybox.patches), and SOURCE, where its
+/// source is (GPL-2.0-only: the exact tarball, which SOURCES names with
+/// its sha256, and those patches are the complete source); LICENSES/make/
+/// LICENSES/zip/ and LICENSES/pkgconf/ as theirs. The source: `dir` (-Dbusybox, the conda
+/// build's unpacked source), else build.zig.zon's lazy `busybox`.
+fn installNative(b: *std.Build, io: std.Io, tc: []const u8, make_dir: ?[]const u8, dir: ?[]const u8, zip_dir: ?[]const u8, pkgconf_dir: BuiltDir) !BuiltDir {
+    const arena = b.allocator;
+    const mk = try installMake(b, io, tc, "native", make_dir);
+    const zp = try installZip(b, io, tc, "native", zip_dir);
+    const src = if (dir) |d| d else blk: {
+        const dep = try b.dependencyLazy("busybox", .{});
+        break :blk dep.builder.root.root_dir.path orelse ".";
+    };
+    const abs = try realPath(b, io, src);
+    const exe = b.dependency("r_zig_busybox", .{ .source = abs }).artifact("busybox");
+    const dest: std.Build.InstallDir = .{ .custom = b.fmt("{s}/native", .{tc}) };
+    const bin = exe.getEmittedBin();
+    const arch = b.graph.host.result.cpu.arch;
+    const record = try arena.create(conda.Record);
+    record.* = .{
+        .name = "busybox-w32",
+        .version = busybox.version,
+        .build = b.fmt("zig{s}_{t}-windows-gnu", .{ @import("builtin").zig_version_string, arch }),
+        .url = busybox.url,
+        .sha256 = busybox.sha256,
+        .license = busybox.license,
+        .upstream = .{
+            .sources = try arena.dupe(conda.Source, &.{.{ .url = busybox.url, .sha256 = busybox.sha256 }}),
+            .feedstock = "https://github.com/luciorq/r-zig-pixi",
+            .commit = "zigbuild/busybox/build.zig",
+        },
+    };
+    var files: std.ArrayList(BuiltFile) = .empty;
+    try files.append(arena, .{ .record = record, .from = "busybox.exe", .to = "bin/busybox.exe", .file = bin });
+    for (busybox.applets) |a| try files.append(arena, .{ .record = record, .from = "busybox.exe", .to = b.fmt("bin/{s}.exe", .{a}), .file = bin });
+    try files.appendSlice(arena, mk.files);
+    try files.appendSlice(arena, zp.files);
+    const pkgconf_file = pkgconf_dir.files[0];
+    for ([_][]const u8{ "pkgconf.exe", "pkg-config.exe" }) |n|
+        try files.append(arena, .{ .record = pkgconf_file.record, .from = pkgconf_file.from, .to = b.fmt("bin/{s}", .{n}), .file = pkgconf_file.file });
+    for (files.items) |f| {
+        // installMake and installZip install theirs
+        if (mem.eql(u8, f.record.name, "make") or mem.eql(u8, f.record.name, "zip")) continue;
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(f.file, dest, f.to).step);
+    }
+    const license = b.fmt("{s}/LICENSE", .{abs});
+    if (!pathExists(io, license)) return fail("busybox: {s} is missing (LICENSES/busybox-w32/LICENSE)", .{license});
+    const crt = std.Build.LazyPath.zig_lib.path(b, "libc/mingw/COPYING");
+    const wf = b.addWriteFiles();
+    const source_note = wf.add("SOURCE", b.fmt(
+        \\busybox.exe and the applet names in bin/ beside it are busybox-w32
+        \\{s}, licensed GPL-2.0-only (LICENSE), modified and built with zig by
+        \\r-zig's zigbuild/busybox/build.zig. Its complete source is this
+        \\release tarball
+        \\  {s}
+        \\  sha256 {s}
+        \\with r-zig's patches in patches/ beside this file applied in name
+        \\order (MSYS2-style drive paths, make's flags; each says what it
+        \\changes and why). The configuration (zigbuild/busybox/config/) and
+        \\the build script are in r-zig's repository, {s}, and its conda
+        \\recipe's source.
+        \\
+    , .{ busybox.version, busybox.url, busybox.sha256, "https://github.com/luciorq/r-zig-pixi" }));
+    for ([_]struct { std.Build.LazyPath, []const u8 }{
+        .{ b.graph.cwdRelativePath(license), "busybox-w32/LICENSE" },
+        .{ crt, "busybox-w32/mingw-w64-crt-COPYING" },
+        .{ source_note, "busybox-w32/SOURCE" },
+        .{ crt, "pkgconf/mingw-w64-crt-COPYING" },
+    }) |l| b.getInstallStep().dependOn(&b.addInstallFileWithDir(l[0], dest, b.fmt("LICENSES/{s}", .{l[1]})).step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(pkgconf_dir.license.?, dest, "LICENSES/pkgconf/COPYING").step);
+    // r-zig's patches to busybox-w32, part of its source (SOURCE)
+    const patch_dir = b.fmt("{s}/../busybox", .{try buildRoot(b, io)});
+    for (busybox.patches) |p| {
+        const file = b.fmt("{s}/{s}", .{ patch_dir, p });
+        if (!pathExists(io, file)) return fail("busybox: {s} is missing (LICENSES/busybox-w32/{s})", .{ file, p });
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.graph.cwdRelativePath(file), dest, b.fmt("LICENSES/busybox-w32/{s}", .{p})).step);
+    }
+    return .{ .dir = "native", .files = files.items };
 }
 
 /// A group directory's SOURCES: conda.zig's writer, run by sources_tool
@@ -1123,7 +1311,8 @@ fn readUpstream(b: *std.Build, io: std.Io, r: *const conda.Record) !conda.Upstre
     return u;
 }
 
-/// Whether the package's info/licenses/ in the package cache holds a file.
+/// Whether the package's info/licenses/ in the package cache holds a licence
+/// file (conda-forge's recipe-scripts-license.txt does not count).
 fn hasLicenseFiles(b: *std.Build, io: std.Io, r: *const conda.Record) !bool {
     const src = b.fmt("{s}/info/licenses", .{r.extracted_package_dir});
     var dir = std.Io.Dir.cwd().openDir(io, src, .{ .iterate = true }) catch |err| switch (err) {
@@ -1134,7 +1323,11 @@ fn hasLicenseFiles(b: *std.Build, io: std.Io, r: *const conda.Record) !bool {
     var walker = try dir.walk(b.allocator);
     defer walker.deinit();
     while (try walker.next(io)) |e| {
-        if (e.kind != .directory) return true;
+        if (e.kind == .directory) continue;
+        // conda-forge's licence for its own recipe scripts, which every
+        // m2-* package carries; not the program's licence (b14-review M1).
+        if (std.mem.eql(u8, e.basename, "recipe-scripts-license.txt")) continue;
+        return true;
     }
     return false;
 }

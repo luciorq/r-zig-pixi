@@ -406,8 +406,9 @@ const windows_headers_always = true;
 ///     after the caller's arguments: a package's own and its LinkingTo
 ///     headers come first, and the environment's still before the C
 ///     library's and the SDK's;
-///   -L<dir>/lib, and -Wl,-rpath,<dir>/lib for a conda env, on links,
-///     after the caller's arguments too: a package's own -L directories
+///   -L<dir>/lib, and -Wl,-rpath,<dir>/lib for a conda env (unless
+///     R_ZIG_ENV_RPATH is 0 or origin, `envRpath`), on links, after the caller's
+///     arguments too: a package's own -L directories
 ///     are searched first, so a library it bundles wins over the
 ///     environment's of the same name, and its own rpath comes first.
 ///     Before (as Makeconf's LDFLAGS sat on R CMD SHLIB's link line) they
@@ -424,16 +425,15 @@ const windows_headers_always = true;
 ///     SHLIB_OPENMP_CFLAGS; a second libomp would be a duplicate
 ///     LC_LOAD_DYLIB, which newer macOS dyld refuses to load. On Windows
 ///     windows.libs resolves it to libomp.lib.
-/// R_ZIG_FALLBACK_SOFT's tree (Windows on ARM) is the last environment:
-/// -idirafter only, and its -L after every other, so an environment's
-/// library of the same name wins; never the OpenMP provider.
 fn envFlags(ctx: *Ctx, args: Args) !Args {
     const a = ctx.arena;
     const envs = try environment.list(ctx);
     const link = !cmdline.compileOnly(args);
     const headers = ctx.os != .windows or windows_headers_always or cmdline.anyContains(args, "-fopenmp");
+    const rpath = envRpath(ctx);
     var inc: std.ArrayList([]const u8) = .empty;
     var lib: std.ArrayList([]const u8) = .empty;
+    if (link and rpath == .origin) try lib.append(a, if (ctx.os == .macos) "-Wl,-rpath,@loader_path" else "-Wl,-rpath,$ORIGIN");
     for (envs) |e| {
         const include = try ctx.fmt("{s}/include", .{e.dir});
         if (headers and ctx.isDir(include)) {
@@ -447,13 +447,39 @@ fn envFlags(ctx: *Ctx, args: Args) !Args {
         const dir = try ctx.fmt("{s}/lib", .{e.dir});
         if (!link or !ctx.isDir(dir)) continue;
         try lib.append(a, try ctx.fmt("-L{s}", .{dir}));
-        if (e.conda) try lib.append(a, try ctx.fmt("-Wl,-rpath,{s}", .{dir}));
+        if (e.conda and rpath == .env) try lib.append(a, try ctx.fmt("-Wl,-rpath,{s}", .{dir}));
     }
     var omp: Args = &.{};
     if (link and cmdline.anyContains(args, "-fopenmp") and !linksLibomp(args) and try environment.openmp(ctx, envs) != null) {
         omp = &.{"-lomp"};
     }
     return mem.concat(a, []const u8, &.{ args, lib.items, inc.items, omp });
+}
+
+/// R_ZIG_ENV_RPATH (b14-l5, b13-design L5-F4; experimental): the rpath
+/// a link gets in place of the conda environments' (`.env`, the
+/// default: unset, empty or any other value; local installs,
+/// R_ZIG_EXTRA_ENV's libraries outside R's env).
+///   0       none: the binary names no directory of the build machine;
+///   origin  only the binary's own directory ($ORIGIN, macOS
+///           @loader_path, a DT_RUNPATH on linux): binaries for the
+///           package repository, which carry the libraries they need
+///           outside R's own in <pkg>/libs beside the package's .so
+///           (repo/build-repo.R; b14-l5 D14, F24-F28). That finds them in
+///           every process that loads the package: R from any env or
+///           the wheel, and R embedded in a Python from outside the env,
+///           where neither the R executable's DT_RPATH nor libR's
+///           applies to a dlopened library's dependencies (b14-l5 F6).
+/// An absolute rpath into the build env would name the build machine,
+/// and as a DT_RUNPATH it also turns off the R executable's DT_RPATH
+/// for the package's libraries.
+const EnvRpath = enum { env, none, origin };
+
+fn envRpath(ctx: *const Ctx) EnvRpath {
+    const v = ctx.getenv("R_ZIG_ENV_RPATH") orelse return .env;
+    if (mem.eql(u8, v, "0")) return .none;
+    if (mem.eql(u8, v, "origin")) return .origin;
+    return .env;
 }
 
 fn linksLibomp(args: Args) bool {
@@ -663,6 +689,48 @@ test "conda env: rpath into its lib after its -L; missing directories add nothin
     try expectArgs(pre ++ &[_][]const u8{ "-fopenmp", "-c", "a.c" }, try argv(c, .c, &.{ "-fopenmp", "-c", "a.c" }));
 }
 
+test "R_ZIG_ENV_RPATH: 0 drops a conda env's rpath, origin puts $ORIGIN in its place, other values keep it" {
+    var f: testutil.Fixture = undefined;
+    try f.init(.linux);
+    defer f.deinit();
+    try decoy(&f);
+    const c = &f.ctx;
+    c.self_exe = try tree(&f, "env", true, true);
+    const inc = f.fmt("-I{s}", .{f.path("env/include")});
+    const l = f.fmt("-L{s}", .{f.path("env/lib")});
+    const rp = f.fmt("-Wl,-rpath,{s}", .{f.path("env/lib")});
+    try f.env.put("R_ZIG_ENV_RPATH", "0");
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "z.so", "z.o", "-lz", l, inc }, try argv(c, .c, &.{ "-shared", "-o", "z.so", "z.o", "-lz" }));
+    // a package's own rpath is the package's: kept
+    try expectArgs(
+        pre_link ++ &[_][]const u8{ "-shared", "-Wl,-rpath,$ORIGIN/../lib", "-o", "p.so", "a.o", l, inc },
+        try argv(c, .c, &.{ "-shared", "-Wl,-rpath,$ORIGIN/../lib", "-o", "p.so", "a.o" }),
+    );
+    // R_ZIG_EXTRA_ENV's conda env loses its rpath too
+    try f.tmp.dir.createDirPath(testing.io, "extra/lib");
+    try f.tmp.dir.createDirPath(testing.io, "extra/conda-meta");
+    try f.env.put("R_ZIG_EXTRA_ENV", f.path("extra"));
+    const xl = f.fmt("-L{s}", .{f.path("extra/lib")});
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "z.so", "z.o", l, xl, inc }, try argv(c, .c, &.{ "-shared", "-o", "z.so", "z.o" }));
+    _ = f.env.swapRemove("R_ZIG_EXTRA_ENV");
+    // empty is unset, as everywhere in rzig; "1" keeps it
+    inline for ([_][]const u8{ "", "1" }) |v| {
+        try f.env.put("R_ZIG_ENV_RPATH", v);
+        try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "z.so", "z.o", l, rp, inc }, try argv(c, .c, &.{ "-shared", "-o", "z.so", "z.o" }));
+    }
+    // origin: $ORIGIN once, before the environments' -L, on links only
+    try f.env.put("R_ZIG_ENV_RPATH", "origin");
+    try f.env.put("R_ZIG_EXTRA_ENV", f.path("extra"));
+    try expectArgs(pre_link ++ &[_][]const u8{ "-shared", "-o", "z.so", "z.o", "-lz", "-Wl,-rpath,$ORIGIN", l, xl, inc }, try argv(c, .c, &.{ "-shared", "-o", "z.so", "z.o", "-lz" }));
+    try expectArgs(pre ++ &[_][]const u8{ "-c", "z.c", inc }, try argv(c, .c, &.{ "-c", "z.c" }));
+    _ = f.env.swapRemove("R_ZIG_EXTRA_ENV");
+    // a package's own rpath stays first
+    try expectArgs(
+        pre_link ++ &[_][]const u8{ "-shared", "-Wl,-rpath,$ORIGIN/../lib", "-o", "p.so", "a.o", "-Wl,-rpath,$ORIGIN", l, inc },
+        try argv(c, .c, &.{ "-shared", "-Wl,-rpath,$ORIGIN/../lib", "-o", "p.so", "a.o" }),
+    );
+}
+
 test "linux C++: libstdc++'s headers after the environments', its runtime on links, C links' -lstdc++, zig-cc -x c++, no input" {
     var f: testutil.Fixture = undefined;
     try f.init(.linux);
@@ -837,7 +905,7 @@ test "Windows: a zig-libs -I (LOCAL_SOFT's, R_ZIG_LIBS spelled as Rcmd_environ d
     for (l) |x| try testing.expect(!mem.eql(u8, x, "-idirafter"));
 }
 
-test "Windows on ARM: R_ZIG_FALLBACK_SOFT after every environment: -idirafter <tree>/include, -L<tree>/lib; an environment's library first" {
+test "Windows on ARM: the environment's headers and libraries; R_ZIG_FALLBACK_SOFT no longer read; Rtools' unresolved curl closure dropped" {
     var f: testutil.Fixture = undefined;
     try f.init(.windows);
     defer f.deinit();
@@ -846,56 +914,44 @@ test "Windows on ARM: R_ZIG_FALLBACK_SOFT after every environment: -idirafter <t
     c.arch = .aarch64;
     const a64 = target.zig(.windows, .aarch64).?;
     try f.env.put("PATH", f.path("nothing"));
-    for ([_][]const u8{ "env/Library/include/zlib.h", "env/Library/lib/libomp.lib", "env/Library/lib/libz.dll.a", "env/Library/lib/R/bin/toolchain/gcc.exe", "env/Library/lib/R/bin/toolchain/clear_cache.o", "rtools/include/nlopt.h", "rtools/include/zlib.h", "rtools/include/omp.h", "rtools/lib/libnlopt.a", "rtools/lib/libz.a", "rtools/lib/libomp.dll.a" }) |p| try f.touch(p);
+    for ([_][]const u8{ "env/Library/include/zlib.h", "env/Library/lib/libomp.lib", "env/Library/lib/libz.dll.a", "env/Library/lib/R/bin/toolchain/gcc.exe", "env/Library/lib/R/bin/toolchain/clear_cache.o", "rtools/include/nlopt.h", "rtools/lib/libnlopt.a", "rtools/lib/libidn2.a" }) |p| try f.touch(p);
     c.self_exe = f.path("env/Library/lib/R/bin/toolchain/gcc.exe");
+    // retired in build 14 (b14-rhtslib): the tree it names is not searched
     try f.env.put("R_ZIG_FALLBACK_SOFT", f.path("rtools"));
     const inc = f.path("env/Library/include");
     const l = f.fmt("-L{s}", .{f.path("env/Library/lib")});
-    const rinc = f.path("rtools/include");
-    const rl = f.fmt("-L{s}", .{f.path("rtools/lib")});
     const omp = f.path("env/Library/lib/libomp.lib");
     const cc_o = f.path("env/Library/lib/R/bin/toolchain/clear_cache.o");
-    // never -I<tree>/include: its MinGW sysroot and libc++ headers would
-    // shadow zig's own
-    try expectArgs(&.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, "-c", "a.cpp", "-o", "a.o", "-idirafter", inc, "-idirafter", rinc }, try argv(c, .cxx, &.{ "-c", "a.cpp", "-o", "a.o" }));
-    // -lnlopt: only the tree has it (zig finds lib<n>.a); -lz and -lomp:
+    try expectArgs(&.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, "-c", "a.cpp", "-o", "a.o", "-idirafter", inc }, try argv(c, .cxx, &.{ "-c", "a.cpp", "-o", "a.o" }));
+    // -lnlopt: in no -L directory, kept (zig then stops at it); -lidn2:
+    // Rtools' curl closure, in no -L directory, dropped; -lz and -lomp:
     // the environment's (libz.dll.a and libomp.lib by path)
     try expectArgs(
-        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", "-lnlopt", omp, f.path("env/Library/lib/libz.dll.a"), l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
-        try argv(c, .cxx, &.{ "-shared", "-o", "pkg.dll", "a.o", "-lnlopt", "-lomp", "-lz" }),
+        &.{ "c++", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", "-lnlopt", omp, f.path("env/Library/lib/libz.dll.a"), l, "-idirafter", inc, "-lws2_32" },
+        try argv(c, .cxx, &.{ "-shared", "-o", "pkg.dll", "a.o", "-lnlopt", "-lidn2", "-lomp", "-lz" }),
     );
-    // conda-forge's real names: z.lib and libomp.lib in the environment,
-    // libz.a and libomp.dll.a in the tree. -lz is left to zig, which
-    // takes the environment's z.lib (the first -L, and its <n>.lib before
-    // lib<n>.a); a -fopenmp link gets the environment's libomp.lib, never
-    // the tree's import of a libomp.dll it does not install
+    // conda-forge's real names: z.lib and libomp.lib. -lz is left to zig,
+    // which takes the environment's z.lib; a -fopenmp link gets the
+    // environment's libomp.lib
     try f.tmp.dir.deleteFile(testing.io, "env/Library/lib/libz.dll.a");
     try f.touch("env/Library/lib/z.lib");
     try f.touch("env/Library/include/omp.h");
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz", l, rl, "-idirafter", inc, "-idirafter", rinc, omp, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz", l, "-idirafter", inc, omp, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", "-lz" }),
     );
     try testing.expectEqualStrings("", f.takeWarnings());
-    // an environment without llvm-openmp: no -lomp, not the tree's
+    // an environment without llvm-openmp: no -lomp
     try f.tmp.dir.deleteFile(testing.io, "env/Library/include/omp.h");
     try f.tmp.dir.deleteFile(testing.io, "env/Library/lib/libomp.lib");
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-fopenmp", "-o", "pkg.dll", "a.o", l, "-idirafter", inc, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-fopenmp", "-o", "pkg.dll", "a.o" }),
     );
-    // the caller's -lomp then, and -lboost_thread-mt-a64: never the
-    // tree's import libraries (for DLLs it does not install), so the
-    // link fails instead of the DLL's load
-    try f.touch("rtools/lib/libboost_thread-mt-a64.dll.a");
-    try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", "-lomp", "-lboost_thread-mt-a64", l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
-        try argv(c, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", "-lomp", "-lboost_thread-mt-a64" }),
-    );
-    // the same import library in the environment's lib/: by path
+    // an import library in the environment's lib/: by path
     try f.touch("env/Library/lib/libboost_thread-mt-a64.dll.a");
     try expectArgs(
-        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", f.path("env/Library/lib/libboost_thread-mt-a64.dll.a"), l, rl, "-idirafter", inc, "-idirafter", rinc, "-lws2_32" },
+        &.{ "cc", "-fno-sanitize=undefined", "-mcpu=baseline", "-Wno-error=date-time", "-g0", "-target", a64, windows.iec_60559_types, cc_o, "-Xlinker", "--out-implib=pkg.dll.rzig.lib", "-shared", "-o", "pkg.dll", "a.o", f.path("env/Library/lib/libboost_thread-mt-a64.dll.a"), l, "-idirafter", inc, "-lws2_32" },
         try argv(c, .c, &.{ "-shared", "-o", "pkg.dll", "a.o", "-lboost_thread-mt-a64" }),
     );
     try testing.expectEqualStrings("", f.takeWarnings());

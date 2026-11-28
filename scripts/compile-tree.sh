@@ -4,7 +4,7 @@
 # tree ($PREFIX) with the toolchain tree's group directories in its
 # R_HOME/bin/toolchain, every one env.sh's group_dirs names but zig/ and
 # flang/ (C12): openmp/, linux libstdcxx/, the build-tools group's usr/
-# (and Windows etc/, phase 7) and the extras group's cmake/. contract,
+# (and Windows etc/, phase 7, and native/, b14-l4) and the extras group's cmake/. contract,
 # pkg-parity and stress compile packages
 # with it (their pixi tasks depend on compile-tree) [phase3-P3-5], as a
 # user who extracted the base and the group archives into one directory

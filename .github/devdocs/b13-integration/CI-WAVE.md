@@ -52,6 +52,8 @@ Windows legs with the trimmed usr/bin (b13-build D14).
 
 stress.yaml takes `zig`, `channel`, `rtools_libs` and `packages` per
 run, not per OS, so these are the fewest runs that cover the list.
+(Build 14 removed the `rtools_libs` input with the Rtools45 tree:
+b14-rhtslib U3. The S1/S3 commands below are build 13's.)
 
 S1. Every OS, every row, both distributions, trace, libs smoke. Covers
 CI1 (full Windows), CI2 (macOS), CI4's "with the Rtools45 tree" half,

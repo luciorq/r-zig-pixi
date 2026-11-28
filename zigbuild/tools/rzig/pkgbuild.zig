@@ -386,7 +386,7 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     const class = d.class;
     switch (d.tier) {
         .r_only => {
-            if (isSet(ctx, "RZIG_TRACE")) ctx.warn("{s}: no src/, nothing to compile", .{name});
+            if (ctx.on("RZIG_TRACE")) ctx.warn("{s}: no src/, nothing to compile", .{name});
             return 0;
         },
         .make => return if (buildZigNeedsMake(ctx, name, d)) 1 else needsMake(ctx, name, d.reason),
@@ -478,8 +478,8 @@ pub fn run(ctx: *Ctx, argv: []const []const u8) !u8 {
     return zigBuild(ctx, args, &plan, class.tier, root, build_file, out, "tier 2");
 }
 
-fn keepRoot(ctx: *const Ctx, args: Args) bool {
-    return args.keep_root or isSet(ctx, "RZIG_KEEP_ROOT");
+fn keepRoot(ctx: *Ctx, args: Args) bool {
+    return args.keep_root or ctx.on("RZIG_KEEP_ROOT");
 }
 
 /// The plan as <root>/plan.zon; false (and why) when it cannot be written.
@@ -509,7 +509,7 @@ fn tier1Build(ctx: *Ctx, args: Args, plan: *const pkgplan.Plan, root: []const u8
         return 127;
     };
     try reportCompilers(ctx, plan, .makevars, zig.argv);
-    if (isSet(ctx, "RZIG_TRACE")) ctx.warn("{s}, root {s}", .{ label, root });
+    if (ctx.on("RZIG_TRACE")) ctx.warn("{s}, root {s}", .{ label, root });
     const dest = if (plan.libs_dir.len == 0) try ctx.fmt("{s}/{s}", .{ out, plan.output }) else try ctx.fmt("{s}/{s}/{s}", .{ out, plan.libs_dir, plan.output });
     const code = try tier1.build(ctx, plan, .{ .root = root, .dest = dest, .jobs = if (args.jobs) |j| tier1.jobCount(j) else 0 });
     if (code != 0 and keepRoot(ctx, args)) ctx.warn("the build root is kept in {s}", .{root});
@@ -548,7 +548,7 @@ fn zigBuild(ctx: *Ctx, args: Args, plan: *const pkgplan.Plan, tier: pkgplan.Tier
     // -j for zig build's steps, and through rpkg.zig for `rzig t1`'s
     // compiles, which are one step
     if (args.jobs) |j| try cmd.appendSlice(ctx.arena, &.{ try ctx.fmt("-j{s}", .{j}), try ctx.fmt("-Djobs={d}", .{tier1.jobCount(j)}) });
-    if (isSet(ctx, "RZIG_TRACE")) {
+    if (ctx.on("RZIG_TRACE")) {
         ctx.warn("{s}, root {s}", .{ label, root });
         ctx.warn("{s}", .{try mem.join(ctx.arena, " ", cmd.items)});
     }
@@ -844,11 +844,6 @@ test urlDependency {
 fn needsMake(ctx: *Ctx, name: []const u8, reason: []const u8) u8 {
     ctx.warn("{s} needs make: {s}", .{ name, reason });
     return exit_needs_make;
-}
-
-fn isSet(ctx: *const Ctx, name: []const u8) bool {
-    const v = ctx.getenv(name) orelse return false;
-    return !mem.eql(u8, v, "0");
 }
 
 fn stdoutPrint(ctx: *Ctx, comptime f: []const u8, args: anytype) !void {

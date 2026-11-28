@@ -1,0 +1,29 @@
+# r-zig binary repository: the curated packages (repo/README.md).
+# build-repo.R builds each row and its hard dependencies (Depends,
+# Imports, LinkingTo, from CRAN) into binaries; install-test.R installs
+# the rows from the finished repository into an R without compilers and
+# runs each smoke.
+# Columns (tab-separated):
+#   package   CRAN name
+#   env       NAME=VALUE;NAME=VALUE for this package's build, or '-'
+#   smoke     one R expression, TRUE when the package works; no network
+# A row whose package links a library outside R's own environment needs
+# that library's -devel package in the build env (repo.yaml's specs); the
+# builder copies the run-time library into the binary (PACKAGES'
+# RZig-Bundled names it), so the consumer needs nothing more. Prefer a
+# package's bundled static copy where it has one (fs's libuv): smaller.
+package	env	smoke
+cli	-	nchar(cli::ansi_strip(cli::format_inline("{.pkg x}"))) > 0
+rlang	-	rlang::is_installed("base")
+glue	-	glue::glue("a{1}b") == "a1b"
+vctrs	-	identical(vctrs::vec_c(1L, 2L), 1:2)
+jsonlite	-	identical(jsonlite::fromJSON("[1,2]"), c(1L, 2L))
+digest	-	digest::digest("a", algo = "sha256", serialize = FALSE) == "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+yaml	-	identical(yaml::yaml.load("a: 1")$a, 1L)
+fs	USE_BUNDLED_LIBUV=1	fs::dir_exists(tempdir())
+ps	-	ps::ps_pid(ps::ps_handle()) == Sys.getpid()
+processx	-	processx::run("true")$status == 0L
+Rcpp	-	length(getDLLRegisteredRoutines("Rcpp")$.Call) > 0
+later	-	{later::later(function() NULL); TRUE}
+data.table	-	data.table::data.table(a = 1:3)[, sum(a)] == 6L && data.table::getDTthreads() >= 1L
+xml2	-	xml2::xml_text(xml2::read_xml("<a>hi</a>")) == "hi"

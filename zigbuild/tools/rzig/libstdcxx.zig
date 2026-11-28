@@ -154,9 +154,8 @@ fn ownLibs(args: Args) bool {
     return cmdline.anyWord(args, "-nostdlib++") or cmdline.anyWord(args, "-nostdlib") or cmdline.anyWord(args, "-nodefaultlibs");
 }
 
-fn traced(ctx: *const Ctx) bool {
-    const v = ctx.getenv("RZIG_TRACE") orelse return false;
-    return !mem.eql(u8, v, "0");
+fn traced(ctx: *Ctx) bool {
+    return ctx.on("RZIG_TRACE");
 }
 
 /// On any linux link: the caller's -lstdc++ (and -l:libstdc++.so*) as

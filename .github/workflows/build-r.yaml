@@ -100,6 +100,23 @@ jobs:
       # link-objects-test.sh (Windows links of CFG code, cross-built).
       - name: rzig tests
         run: pixi run -e ${{ inputs.env }} rzig-test
+      # zigbuild/launchers/Rscript, the bin/Rscript of every unix tree,
+      # against R's compiled Rscript (src/unix/Rscript.c): rscript-test.sh
+      # compares the two case by case (stdout, stderr, exit status), with
+      # conda-forge's r-base 4.6.2, the R this tree builds, as the
+      # reference, in a throwaway `pixi exec` env (not in pixi.lock). Under
+      # /bin/sh (dash) and bash; a mismatch fails the leg. Once per run: on
+      # linux-64's default leg with the env's zig, as the launcher is one
+      # POSIX sh script for every unix OS and does not use the build
+      # (b14-review B4, track launcher-front).
+      - name: Rscript launcher against the compiled Rscript (r-base 4.6.2)
+        if: runner.os == 'Linux' && runner.arch == 'X64' && inputs.env == 'default' && inputs.zig == 'conda'
+        shell: bash
+        run: |
+          # shellcheck disable=SC2016 # $CONDA_PREFIX is the exec env's
+          pixi exec --spec r-base==4.6.2 -- bash -c '
+            SH=/bin/sh bash zigbuild/launchers/rscript-test.sh "$CONDA_PREFIX/lib/R" &&
+            SH=/bin/bash bash zigbuild/launchers/rscript-test.sh "$CONDA_PREFIX/lib/R"'
       # `zig build` installs the tree that ships (feat-no-host-paths F1,
       # F1.7), with the runtime data it needs from the env (the CA bundle,
       # fontconfig's configuration, Windows full's Tcl/Tk), and zig-build.sh
@@ -141,53 +158,149 @@ jobs:
       - name: Regression suite (Examples/Specific/Reg)
         run: pixi run -e ${{ inputs.env }} check
       # Windows openblas only, after a failed step: stats' ar.ols example
-      # died with no R error on x86_64_v4 (AVX-512) runners and passed on
-      # x86_64_v3 ones (b13-fixes F14). Runs the example in the installed
-      # tree three ways (as is, one thread, OpenBLAS's Haswell core), prints
-      # the CPU and the core OpenBLAS picks (OPENBLAS_VERBOSE=2), then the
-      # Application log's crash events (1000, 1001), which name the faulting
-      # module. Reports only: the leg stays failed by the step that failed.
+      # dies with 0xC0000005 on AMD runners with AVX-512 (EPYC 9V45, Zen 5;
+      # b13-fixes F14, chore-release-13 F1). Likely cause: OpenBLAS 0.3.34's
+      # Zen 4/5 block sizes (dgemm Q 512) overrun the Haswell DGEMM kernel's
+      # Windows stack buffer (k <= 128); OpenBLAS #6013, b14-openblas F1.
+      # In the installed tree, one Rterm process per case:
+      #   1. each BLAS/LAPACK call ar.ols makes, alone (inputs built with
+      #      matprod "internal", so no other BLAS call runs first);
+      #   2. cdb (Debugging Tools for Windows) at the fault: registers,
+      #      stack, disassembly, modules;
+      #   3. other OPENBLAS_CORETYPE values, one thread, OPENBLAS_L2_SIZE;
+      #   4. libopenblas 0.3.33 (pixi exec) in a copy of the tree.
+      # Prints the CPU, each case's exit code and output, and a summary.
+      # Reports only: the leg stays failed by the step that failed.
       - name: openblas crash diagnostics (Windows, after a failure)
         if: failure() && runner.os == 'Windows' && inputs.env == 'openblas'
         shell: pwsh
+        timeout-minutes: 30
         run: |
-          $start = (Get-Date).AddHours(-4)
-          (Get-CimInstance Win32_Processor).Name
-          $r = Get-ChildItem dist -Recurse -Filter Rscript.exe -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match 'slim-openblas\\R-[^\\]+-zig\\Library\\lib\\R\\bin\\x64\\Rscript\.exe$' } |
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          "CPU: $($cpu.Name.Trim()); $($cpu.NumberOfLogicalProcessors) logical; L2 $($cpu.L2CacheSize) KB; L3 $($cpu.L3CacheSize) KB"
+          # Rterm.exe, not Rscript.exe: Rscript starts Rterm as a child
+          # process, which cdb would not follow.
+          $rt = Get-ChildItem dist -Recurse -Filter Rterm.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'slim-openblas\\R-[^\\]+-zig\\Library\\lib\\R\\bin\\x64\\Rterm\.exe$' } |
             Select-Object -First 1
-          if (-not $r) { "no installed openblas Rscript.exe under dist"; exit 0 }
-          $r.FullName
-          $code = 'x <- diff(log(EuStockMarkets)); for (i in 1:20) invisible(ar.ols(x, order.max = 6, demean = FALSE, intercept = TRUE)); cat("ar.ols x20 ok\n")'
-          $cases = [ordered]@{
-            'as is'   = @{ OPENBLAS_VERBOSE = '2' }
-            '1 thread' = @{ OPENBLAS_VERBOSE = '2'; OPENBLAS_NUM_THREADS = '1' }
-            'Haswell' = @{ OPENBLAS_VERBOSE = '2'; OPENBLAS_CORETYPE = 'Haswell' }
+          if (-not $rt) { "no installed openblas Rterm.exe under dist"; exit 0 }
+          $rterm = $rt.FullName
+          $rterm
+          "openblas.dll beside Rterm.exe: $(Test-Path (Join-Path $rt.DirectoryName 'openblas.dll'))"
+          $d = Join-Path $env:RUNNER_TEMP 'openblas-diag'
+          New-Item -ItemType Directory -Force $d | Out-Null
+          # ar.ols(order.max = 6)'s inputs at its largest order (X is
+          # 1853 x 25), built with no BLAS call.
+          $pre = @(
+            'options(matprod = "internal")',
+            'x <- diff(log(EuStockMarkets)); y <- embed(x, 7L)',
+            'X <- cbind(1, y[, 5:28]); Y <- t(y[, 1:4]); XX <- crossprod(X)',
+            'A <- matrix(seq(-1, 1, length.out = 100), 4L); E <- Y - A %*% t(X)',
+            'options(matprod = "default")'
+          ) -join "`n"
+          $calls = [ordered]@{
+            'ar.ols'                     = 'invisible(ar.ols(x, order.max = 6, demean = FALSE, intercept = TRUE))'
+            'dsyrk crossprod(X) k=1853'  = 'invisible(crossprod(X))'
+            'dsyrk k=128'                = 'invisible(crossprod(X[1:128, ]))'
+            'dsyrk k=160'                = 'invisible(crossprod(X[1:160, ]))'
+            'dsyrk k=512'                = 'invisible(crossprod(X[1:512, ]))'
+            'dsyrk tcrossprod(E) k=1853' = 'invisible(tcrossprod(E))'
+            'dgemm Y %*% X k=1853'       = 'invisible(Y %*% X)'
+            'dgemm A %*% t(X) k=25'      = 'invisible(A %*% t(X))'
+            'dqrdc2 qr(XX)'              = 'invisible(qr(XX))'
+            'dgesv solve(XX)'            = 'invisible(solve(XX))'
+            'dpotrf chol(XX)'            = 'invisible(chol(XX))'
           }
-          foreach ($name in $cases.Keys) {
-            $vars = $cases[$name]
+          $script:n = 0
+          function New-Case([string]$expr) {
+            $script:n++
+            $f = Join-Path $d ('case{0:D3}.R' -f $script:n)
+            Set-Content -Path $f -Encoding ascii -Value ($pre + "`n" + $expr + "`ncat('ok\n')")
+            $f
+          }
+          $results = New-Object System.Collections.Generic.List[object]
+          function Invoke-Case([string]$label, [hashtable]$vars, [string]$exe, [string]$tree = 'installed') {
+            $f = New-Case $calls[$label]
+            $env:OPENBLAS_VERBOSE = '2'
             foreach ($k in $vars.Keys) { Set-Item "env:$k" $vars[$k] }
-            "== ar.ols, $name"
-            & $r.FullName -e $code 2>&1 | Out-Host
+            $out = (& $exe --no-echo --vanilla "--file=$f" 2>&1 | ForEach-Object { "$_" }) -join ' | '
             $rc = $LASTEXITCODE
-            "== ar.ols, ${name}: exit $rc (0x{0:X8})" -f $rc
-            foreach ($k in $vars.Keys) { Remove-Item "env:$k" }
+            foreach ($k in $vars.Keys) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }
+            Remove-Item env:OPENBLAS_VERBOSE -ErrorAction SilentlyContinue
+            if ($out.Length -gt 160) { $out = '...' + $out.Substring($out.Length - 160) }
+            $envs = ($vars.Keys | ForEach-Object { "$_=$($vars[$_])" }) -join ' '
+            $r = [pscustomobject]@{ case = $label; tree = $tree; env = $envs; exit = ('0x{0:X8}' -f $rc); output = $out }
+            $results.Add($r)
+            "{0,-28} {1,-30} {2}  {3}" -f $r.case, $r.env, $r.exit, $r.output
           }
-          "== Application crash events since $start"
-          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1001; StartTime = $start } -ErrorAction SilentlyContinue |
-            Format-List TimeCreated, Id, Message | Out-String -Width 400
+
+          "== 1. each call alone, OpenBLAS as is"
+          foreach ($c in $calls.Keys) { Invoke-Case $c @{} $rterm }
+
+          "== 2. cdb at the fault"
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits'
+          $cdb = Get-ChildItem $kits -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\cdb\.exe$' } |
+            Select-Object -First 1 -ExpandProperty FullName
+          if ($cdb) {
+            $cdb
+            # -g: no stop at the start, so -c runs at the first exception
+            # (the access violation): the event, registers, stack (dqs: a
+            # return address slot full of doubles means an overwritten
+            # frame), the code around rip, all threads, the modules, quit.
+            # -G: quit when R exits normally. The form OpenBLAS #6013's reporter used.
+            $cmds = '.echo == last event;.lastevent;.exr -1;r;.echo == stack;kv 30;dqs @rsp L24;.echo == code;ub @rip L12;u @rip L4;.echo == threads;~*kv 8;.echo == modules;lm;q'
+            $env:_NO_DEBUG_HEAP = '1'
+            $env:_NT_SYMBOL_PATH = $rt.DirectoryName
+            foreach ($c in 'ar.ols', 'dsyrk crossprod(X) k=1853') {
+              "-- cdb: $c"
+              $f = New-Case $calls[$c]
+              & $cdb -g -G -o -lines -c $cmds $rterm --no-echo --vanilla "--file=$f" 2>&1 | Out-Host
+            }
+            Remove-Item env:_NO_DEBUG_HEAP, env:_NT_SYMBOL_PATH -ErrorAction SilentlyContinue
+          } else { "no x64 cdb.exe under $kits" }
+
+          "== 3. core types, one thread, L2 size"
+          foreach ($core in 'Haswell', 'Zen', 'SkylakeX', 'Sandybridge', 'Prescott') {
+            foreach ($c in 'ar.ols', 'dsyrk k=160', 'dgemm Y %*% X k=1853') {
+              Invoke-Case $c @{ OPENBLAS_CORETYPE = $core } $rterm
+            }
+          }
+          Invoke-Case 'ar.ols' @{ OPENBLAS_NUM_THREADS = '1' } $rterm
+          # OpenBLAS's L2 override: the Zen 4/5 block needs L2 = 1024 KB.
+          Invoke-Case 'ar.ols' @{ OPENBLAS_L2_SIZE = '2048' } $rterm
+
+          "== 4. conda-forge libopenblas 0.3.33 in a copy of the tree (pixi exec; pixi.lock unchanged)"
+          $old = pixi exec --spec 'libopenblas=0.3.33=pthreads*' -- where.exe openblas.dll 2>$null |
+            Where-Object { $_ -notmatch '\\\.pixi\\envs\\' } | Select-Object -First 1
+          if ($old -and (Test-Path $old)) {
+            $old
+            try {
+              $copy = Join-Path $d 'R'
+              Copy-Item -Recurse -Force (Split-Path (Split-Path $rt.DirectoryName)) $copy
+              Copy-Item -Force $old (Join-Path $copy 'bin\x64\openblas.dll')
+              $rt2 = Join-Path $copy 'bin\x64\Rterm.exe'
+              foreach ($c in 'ar.ols', 'dsyrk crossprod(X) k=1853', 'dgemm Y %*% X k=1853') { Invoke-Case $c @{} $rt2 '0.3.33 copy' }
+            } catch { "copy of the tree failed: $_" }
+          } else { "pixi exec gave no openblas.dll for libopenblas 0.3.33" }
+
+          "== summary"
+          $results | Format-Table -AutoSize -Wrap -Property case, tree, env, exit, output | Out-String -Width 400
           exit 0
       # R's 15 recommended packages, by their own zig build with the
       # compile tree's R (contract made it), into a tree of their own,
       # dist/recommended/<flavor>/R-<ver>-zig; then its static checks and
       # recipe/test-recommended.R (scripts/verify-recommended.sh). Until
-      # chore-env-ci (M-5) only conda-package built them in CI.
+      # chore-env-ci (M-5) only conda-package built them in CI. First that
+      # build's unit tests (recommended-test: order.zig's makefile
+      # readers), which ran in no workflow before build 14.
       - name: Recommended packages (build + verify)
         if: inputs.recommended
-        # bash on Windows too: pwsh would run the second line after a
-        # failed first one and take only the last exit code
+        # bash on Windows too: pwsh would run the next line after a
+        # failed one and take only the last exit code
         shell: bash
         run: |
+          pixi run -e ${{ inputs.env }} recommended-test
           pixi run -e ${{ inputs.env }} recommended
           pixi run -e ${{ inputs.env }} verify-recommended
       # Tiers 0/1 (feat-no-host-paths): a copy of the installed tree starts

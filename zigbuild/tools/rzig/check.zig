@@ -75,8 +75,8 @@
 //! says why), exits 1, after a line that says so and the compilers group's
 //! text. R's zig is rzig's own (builtin.zig_version), since the same zig
 //! builds both. Compiles do not check the version (`rzig build
-//! --shlib` does, below). R_ZIG_NO_PREFLIGHT (non-empty, as the
-//! preflight's nzchar test), which skips the preflight, skips this
+//! --shlib` does, below). R_ZIG_NO_PREFLIGHT (on: 1, true or yes,
+//! as the preflight's .rzig_on; onoff.zig), which skips the preflight, skips this
 //! comparison too. `=package` also exits 1 for a tier-2
 //! package whose plan needs make, after "<pkg>: src/build.zig cannot be
 //! built by make: <reason>" and "<pkg>: the r-zig toolchain is complete:
@@ -178,7 +178,7 @@ fn compilersFound(ctx: *Ctx, fortran: bool, cxx: bool) !CompilersFound {
     const out = ctx.capture(try mem.concat(ctx.arena, []const u8, &.{ cmd, &.{"version"} }));
     const version = mem.trim(u8, out.stdout, " \t\r\n");
     const v: ?std.SemanticVersion = if (out.ok) std.SemanticVersion.parse(version) catch null else null;
-    if (ctx.getenv("R_ZIG_NO_PREFLIGHT") == null) {
+    if (!ctx.on("R_ZIG_NO_PREFLIGHT")) {
         const r = builtin.zig_version;
         if (out.not_run) |why| return .{ .not_r_zig = try ctx.fmt("{s} did not run: {s}", .{ shown, why }) };
         if (v == null) return .{ .not_r_zig = try ctx.fmt("{s} does not say its zig version", .{shown}) };
@@ -347,12 +347,6 @@ fn cmakeNote(ctx: *Ctx, name: []const u8, pkg_dir: []const u8) !void {
     }
 }
 
-/// A switch in the environment, as install.R sets it: set, not empty, not "0".
-fn envSet(ctx: *const Ctx, name: []const u8) bool {
-    const v = ctx.getenv(name) orelse return false;
-    return v.len > 0 and !mem.eql(u8, v, "0");
-}
-
 /// A value in the environment, empty counting as unset.
 fn envValue(ctx: *const Ctx, name: []const u8) ?[]const u8 {
     const v = ctx.getenv(name) orelse return null;
@@ -403,7 +397,7 @@ fn package(ctx: *Ctx) !Result {
 fn packageIn(ctx: *Ctx, r_home: []const u8, pkg_dir: []const u8) !Result {
     const src_dir = try ctx.fmt("{s}/src", .{pkg_dir});
     const name = pkgbuild.packageName(ctx, pkg_dir) orelse std.fs.path.basename(pkg_dir);
-    const configure = envSet(ctx, "R_ZIG_CONFIGURE");
+    const configure = ctx.on("R_ZIG_CONFIGURE");
     const builder = ctx.getenv("R_ZIG_PKG_BUILDER") orelse "";
     const forced_make = mem.eql(u8, builder, "make");
     // R_ZIG_PKG_BUILDER=zig, no make path: install.R runs a src/Makefile
@@ -623,12 +617,15 @@ test "compilers: another major.minor, exit 1, unless R_ZIG_NO_PREFLIGHT" {
     try f.write("bin/zig", "#!/bin/sh\nexit 3\n", .fromMode(0o755));
     try testing.expectEqual(1, (try run(c, .compilers)).code);
     try testing.expectEqualStrings(f.fmt("rzig-test: {s} does not say its zig version (R_ZIG_NO_PREFLIGHT=1 skips this check)\n{s}", .{ zig, text }), f.takeWarnings());
-    // empty is unset, as R's nzchar() test in the preflight
-    try f.env.put("R_ZIG_NO_PREFLIGHT", "");
-    try testing.expectEqual(1, (try run(c, .compilers)).code);
-    _ = f.takeWarnings();
-    // skipped: what it found, and 0
-    try f.env.put("R_ZIG_NO_PREFLIGHT", "1");
+    // empty, 0 and false are off, as R's .rzig_on in the preflight
+    // (onoff.zig)
+    for ([_][]const u8{ "", "0", "false" }) |v| {
+        try f.env.put("R_ZIG_NO_PREFLIGHT", v);
+        try testing.expectEqual(1, (try run(c, .compilers)).code);
+        _ = f.takeWarnings();
+    }
+    // skipped: what it found, and 0 (TRUE: any case)
+    try f.env.put("R_ZIG_NO_PREFLIGHT", "TRUE");
     var r = try run(c, .compilers);
     try testing.expectEqual(0, r.code);
     try testing.expectEqualStrings(f.fmt("compilers ok: zig (version unknown) at {s}", .{zig}), r.line);
