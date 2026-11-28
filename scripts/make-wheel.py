@@ -348,6 +348,30 @@ def renviron_site(existing: bytes | None, windows: bool = False) -> bytes:
     return (existing.rstrip(b"\n") + b"\n\n" + add) if existing else add
 
 
+def rprofile_site(existing: bytes | None) -> bytes:
+    # The per-user package library (b14-l5 U5, experimental): R_LIBS_USER,
+    # by default <XDG data home>/R/<platform>-zig/<x.y> (patch 0001;
+    # Windows %LOCALAPPDATA%), is created at the first start and put first
+    # in .libPaths(), so install.packages() installs there and every later
+    # session, the wheel's R from any venv and R embedded through rpy2,
+    # finds what it installed. R itself adds that directory only once it
+    # exists, and creates it only when an interactive install.packages()
+    # asks; without it a pip-installed R installed into the base library
+    # inside site-packages, or failed where that is read-only. An
+    # R_LIBS_USER the user set is used as it is; NULL or empty: nothing.
+    add = (
+        b"## r-zig wheel: create the per-user package library (R_LIBS_USER) at the\n"
+        b"## first start, so install.packages() uses it and later sessions find it.\n"
+        b"local({\n"
+        b"  u <- strsplit(Sys.getenv(\"R_LIBS_USER\"), .Platform$path.sep, fixed = TRUE)[[1L]][1L]\n"
+        b"  if (!is.na(u) && nzchar(u) && u != \"NULL\" && !dir.exists(u) &&\n"
+        b"      dir.create(u, recursive = TRUE, showWarnings = FALSE))\n"
+        b"    .libPaths(c(u, .libPaths()))\n"
+        b"})\n"
+    )
+    return (existing.rstrip(b"\n") + b"\n\n" + add) if existing else add
+
+
 # The four wheels' descriptions. Each says the one recommendation the
 # conda packages and the README give (PHASE4 Cg16), and that PyPI has no
 # Fortran compiler (B29).
@@ -364,8 +388,21 @@ profile.
 pip install r-zig
 R --version
 Rscript -e 'sessionInfo()'
-python -c 'import r_zig; print(r_zig.r_home())'   # R_HOME, e.g. for rpy2
+python -c 'import r_zig; print(r_zig.r_home())'   # R_HOME
 ```
+
+rpy2 (experimental; tested on linux x86_64 only): when rpy2 would find
+no other R (`R_HOME` unset and no `R` on `PATH` other than this
+wheel's), the wheel's `r_zig.pth` points rpy2 at this R when rpy2 is
+first imported, also from a venv that is not activated. Install r-zig
+first, then `pip install rpy2` (two commands): on linux pip builds
+rpy2-rinterface from source, and `r_zig.pth` makes that build use
+rpy2's ABI mode, which needs no R. With another R on `PATH`, rpy2
+builds and runs against that R as it does without r-zig; activate the
+venv, or set `R_HOME`, to choose this one. Packages that
+`install.packages()` installs go to the per-user library
+(`R_LIBS_USER`), which R creates at the first start and every later
+session finds.
 
 `install.packages()` installs packages that need no compiling with this
 wheel alone. It carries rzig, the compiler front R's Makeconf names; the
@@ -436,7 +473,7 @@ and r-zig-build-tools):
 pip install r-zig-toolchain
 ```
 
-GNU make is conda-forge's build of it, unchanged, in
+GNU make is built from its release source with zig (zigbuild/make), in
 R_HOME/bin/toolchain/usr/bin, which r-zig's etc/Renviron puts first on
 PATH: `usr/SOURCES` names its package and where its source is, and
 `usr/LICENSES/` holds its licence, the GPL version 3 or later.
@@ -456,7 +493,8 @@ r-zig-toolchain (r-zig-compilers and r-zig-build-tools):
 pip install r-zig-toolchain
 ```
 
-The programs are conda-forge's m2-* packages, unchanged, in
+The programs are conda-forge's m2-* packages, unchanged, except
+pkgconf and zip, which are built from their release sources with zig, in
 R_HOME/bin/toolchain/usr/bin, which r-zig's etc/Rcmd_environ puts first
 on PATH (MSYS2's etc/fstab beside it): `usr/SOURCES` names each package
 and where its source is, and `usr/LICENSES/` holds the licence files
@@ -633,6 +671,10 @@ def main() -> None:
     existing = dict(files).get(renv)
     files = [(r, d) for r, d in files if r != renv] + [(renv, renviron_site(existing, windows))]
     modes.setdefault(renv, 0o644)
+    rprof = "lib/R/etc/Rprofile.site"
+    existing = dict(files).get(rprof)
+    files = [(r, d) for r, d in files if r != rprof] + [(rprof, rprofile_site(existing))]
+    modes.setdefault(rprof, 0o644)
 
     # r-zig-build-tools' files: the toolchain tree's usr/. Everything else,
     # rzig under each of its names included, is r-zig's (B19, B29 a).
@@ -667,6 +709,16 @@ def main() -> None:
             with open(os.path.join(pkg_dir, name), "rb") as f:
                 src = f.read().replace(b"@R_VERSION@", r_version.encode()).replace(b"@WHEEL_VERSION@", args.version.encode())
             entries.append((f"{IMPORT_NAME}/{name}", src, 0o644))
+    # site-packages/r_zig.pth: at every start of this Python, a finder
+    # that acts on two imports only, and only where rpy2 would find no R
+    # or this wheel's R (R_HOME unset; no R on PATH, or an r-zig R):
+    # rpy2's first import sets R_HOME and RPY2_CFFI_MODE=ABI (unless
+    # set), so rpy2 finds this R from a venv that is not activated;
+    # setuptools' first import in an rpy2 source tree sets
+    # RPY2_CFFI_MODE=ABI, so pip builds rpy2-rinterface with no R and no
+    # variable. With another R on PATH rpy2 builds and runs as without
+    # r-zig (python/r_zig/_rpy2.py; b14-l5 D25-D27, experimental)
+    entries.append((f"{IMPORT_NAME}.pth", f"import {IMPORT_NAME}._rpy2\n".encode(), 0o644))
     entries += [(base + rel, data, modes[rel]) for rel, data in sorted(files)]
 
     # R's GPL text: R_HOME/COPYING, on Windows R_HOME/doc/COPYING
