@@ -1,0 +1,178 @@
+busybox-w32: MSYS2-style drive paths and make's flags
+
+CMake's "MSYS Makefiles" generator writes the paths in its makefiles'
+commands as MSYS2 spells them, /c/dir for c:/dir, and passes them to the
+native programs the commands run (cmake.exe, the compilers), because
+MSYS2's runtime converts them on the way, as it does for every native
+program an MSYS2 program starts (msys2_path_conv.cc). busybox-w32 did not:
+RcppParallel, which names that generator itself, failed under the native
+build tools with "sh: /C/.../cmake.exe: not found" (b14-l4 PLAN.md, F14).
+GNU make for Windows already hands a command whose program starts with
+"/" to $(SHELL) -c. With this patch busybox's sh
+  - runs a program named by a drive path (tryexec, in place: same length),
+  - changes to one with cd (cdcmd),
+  - converts drive paths in a native program's arguments where MSYS2
+    would: the whole argument, "-I/c/x", or after '=' (and in an option
+    after ',' or ':'), not in arguments with quotes or glob characters,
+    and none when MSYS_NO_PATHCONV is set, as MSYS2 (spawnveq; busybox's
+    own applets get their arguments unchanged, as MSYS2's own programs).
+Only drive letters: there is no MSYS mount table. Unlike MSYS2, a bare
+"/c" argument stays: for a native program it is a switch ("cmd /c"), and
+busybox's own libtool workaround (tryexec) turns "cmd //c echo" into
+"cmd /c echo", which must reach cmd.exe as it is.
+
+And the shell's import of the environment (setwinxp) no longer turns
+backslashes into slashes in MAKEFLAGS, MFLAGS and GNUMAKEFLAGS: there a
+backslash escapes ("OBJECTS=a.o\ b.o", as make writes a command-line
+variable with spaces), and a make the shell starts read "a.o/ b.o" and
+failed ("No rule to make target 'b.o/'", RcppParallel's tbb build: make,
+sh, R, cmake, make).
+
+Applied by zigbuild/busybox/build.zig (patch.zig) to the release tarball.
+r-zig, 2026-11-26.
+
+--- a/win32/process.c
++++ b/win32/process.c
+@@ -156,6 +156,75 @@
+ 	return find_executable(name, &path);
+ }
+ 
++/*
++ * r-zig: MSYS2-style drive paths, "/c/dir" for "c:/dir" and "/c" for "c:/",
++ * as CMake's "MSYS Makefiles" generator writes them into its makefiles'
++ * commands. MSYS2's runtime understands them in its own programs and
++ * converts them in the arguments of the native programs it starts
++ * (msys2_path_conv.cc); busybox-w32 did neither. Only drive paths: there
++ * is no MSYS mount table, so "/usr/bin" stays as it is.
++ */
++int FAST_FUNC
++is_msys_drive_path(const char *path)
++{
++	return path[0] == '/' && isalpha((unsigned char)path[1]) &&
++			(path[2] == '/' || path[2] == '\0');
++}
++
++/* "c:/dir" for "/c/dir", allocated */
++char * FAST_FUNC
++msys_drive_path(const char *path)
++{
++	return xasprintf("%c:/%s", path[1], path[2] ? path + 3 : "");
++}
++
++/* Where MSYS2's find_path_start_and_type would look for a path in an
++ * argument: after leading punctuation ("@file"), the whole argument; in
++ * an option "-X/path"; else after an '=', or in an option after ',' or ':',
++ * repeatedly ("-Wl,--out-implib,/c/x", "--dir=/c/x", "VAR=/c/x"). */
++static const char *
++msys_path_start(const char *s)
++{
++	const char *p;
++	int minus;
++
++	while (*s && !isalnum((unsigned char)*s) && !strchr("/\\:-.", *s))
++		++s;
++	if (*s == '/')
++		return s;
++	minus = *s == '-';
++	p = s;
++	if (minus && isalpha((unsigned char)s[1])) {
++		p = s + 2;
++		if (*p == '/' && !strchr(p, ','))
++			return p;
++	}
++	for (; *p; ++p) {
++		if (*p == '=' || (minus && (*p == ',' || *p == ':')))
++			return msys_path_start(p + 1);
++	}
++	return NULL;
++}
++
++/* A native program's argument with its drive path converted, as MSYS2
++ * would convert it, allocated; NULL to leave it. MSYS2 leaves arguments
++ * with quotes or glob characters alone, and every argument when
++ * MSYS_NO_PATHCONV is set. */
++static char *
++msys_convert_arg(const char *arg)
++{
++	const char *p;
++
++	if (getenv("MSYS_NO_PATHCONV") || *arg == '~' || *arg == ':' ||
++			strpbrk(arg, "`'*?[]"))
++		return NULL;
++	p = msys_path_start(arg);
++	/* not a bare "/c": a native program's switch ("cmd /c", "/s") */
++	if (p == NULL || !is_msys_drive_path(p) || p[2] != '/')
++		return NULL;
++	return xasprintf("%.*s%c:/%s", (int)(p - arg), arg, p[1], p + 3);
++}
++
+ static intptr_t
+ spawnveq(int mode, const char *path, char *const *argv, char *const *env)
+ {
+@@ -183,7 +252,11 @@
+ 	argc = string_array_len((char **)argv);
+ 	new_argv = xzalloc(sizeof(*argv)*(argc+1));
+ 	for (i = 0; i < argc; i++) {
+-		new_argv[i] = quote_arg(argv[i]);
++		/* r-zig: a native program gets MSYS drive paths converted */
++		char *conv = path != bb_busybox_exec_path ?
++						msys_convert_arg(argv[i]) : NULL;
++		new_argv[i] = quote_arg(conv ? conv : argv[i]);
++		free(conv);
+ 		len += strlen(new_argv[i]) + 1;
+ 	}
+ 
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -3119,7 +3119,13 @@
+ 			if ((vp->flags & VIMPORT)) {
+ 				char *end = strchr(vp->var_text, '=');
+ 				if (!end || is_prefixed_with(vp->var_text, "COMSPEC=") ||
+-						is_prefixed_with(vp->var_text, "SYSTEMROOT="))
++						is_prefixed_with(vp->var_text, "SYSTEMROOT=") ||
++						/* r-zig: make's flags, whose backslashes
++						 * escape ("OBJECTS=a.o\ b.o"), for a make
++						 * this shell starts */
++						is_prefixed_with(vp->var_text, "MAKEFLAGS=") ||
++						is_prefixed_with(vp->var_text, "MFLAGS=") ||
++						is_prefixed_with(vp->var_text, "GNUMAKEFLAGS="))
+ 					continue;
+ 				if (!on)
+ 					bs_to_slash(end + 1);
+@@ -7134,6 +7140,10 @@
+ #endif
+ 
+ #if ENABLE_PLATFORM_MINGW32
++/* r-zig: MSYS2-style drive paths (win32/process.c) */
++int is_msys_drive_path(const char *path) FAST_FUNC;
++char *msys_drive_path(const char *path) FAST_FUNC;
++
+ # if !ENABLE_FEATURE_SH_STANDALONE
+ #  define tryexec(c, p, n, a, e) tryexec(c, a, e)
+ # endif
+@@ -7155,6 +7165,13 @@
+ 		argv[1]++;	/* drop extra slash */
+ 	}
+ 
++	/* r-zig: an MSYS drive path, "/c/dir/prog" for "c:/dir/prog", in
++	 * place (the same length) */
++	if (is_msys_drive_path(cmd) && cmd[2] == '/') {
++		((char *)cmd)[0] = cmd[1];
++		((char *)cmd)[1] = ':';
++	}
++
+ 	/* cmd was allocated on the stack with room for an extension */
+ 	add_win32_extension((char *)cmd);
+ 
+@@ -11995,6 +12012,11 @@
+ 	}
+ 	if (!dest)
+ 		dest = nullstr;
++#if ENABLE_PLATFORM_MINGW32
++	/* r-zig: an MSYS drive path, "/c/dir" for "c:/dir" */
++	if (is_msys_drive_path(dest))
++		dest = sstrdup(auto_string(msys_drive_path(dest)));
++#endif
+ 	if (!is_relative_path(dest))
+ 		goto step6;
+ 	if (*dest == '.') {

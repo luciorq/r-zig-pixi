@@ -1,0 +1,18 @@
+.{
+    .name = .r_zig_busybox,
+    .version = "1.39.0",
+    .fingerprint = 0x623476562ab779d,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        // busybox-w32's release tarball (sha256
+        // 950d2c73e979e54c65c7723668406d1d6e740fc474f41516a82ddae805fbf24b,
+        // zigbuild/toolchain/busybox.zig's); the conda build passes its own
+        // copy as -Dsource.
+        .busybox = .{
+            .url = "https://frippery.org/files/busybox/busybox-w32-FRP-6354-g5f09fb446.tgz",
+            .hash = "N-V-__8AAAUBvgDIW2W0sn3swQsIeU5Xt2A9zDU1vnd9jCtF",
+            .lazy = true,
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "usage_h.zig", "patch.zig", "config", "patches" },
+}

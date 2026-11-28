@@ -1,0 +1,20 @@
+.{
+    .name = .r_zig_zip,
+    .version = "3.0.0",
+    .fingerprint = 0xd699379dc198ff2c,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        // Info-ZIP's zip 3.0 release tarball as Debian ships it (sha256
+        // f0e8bb1f9b7eb0b01285495a2699df3a4b766784c1765a8f1aeedf63c0806369,
+        // SourceForge's; zigbuild/toolchain/zip.zig's). zig keeps
+        // SourceForge's redirect target's top directory zip30/, so the tree
+        // and its hash would differ. The conda build passes its own copy as
+        // -Dsource.
+        .zip = .{
+            .url = "https://deb.debian.org/debian/pool/main/z/zip/zip_3.0.orig.tar.gz",
+            .hash = "N-V-__8AADgXPACFlXeM929CpTtAtRBWYqrIpNY5kQ_7DTS1",
+            .lazy = true,
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon" },
+}

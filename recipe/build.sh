@@ -55,9 +55,12 @@ bash scripts/zig-build.sh "${cairo[@]}" "${tcltk[@]}"
 # Here too conda's own packages provide the groups' files where they are
 # looked for (llvm-openmp's omp.h), so it installs only what it builds:
 # on Windows usr/bin/pkgconf.exe and pkg-config.exe, from the recipe's
-# pkgconf source (-Dpkgconf; zigbuild/toolchain/pkgconf.zig), on unix
-# usr/bin/make, from the recipe's make source (-Dmake;
-# zigbuild/make/build.zig). r-zig-build-tools owns them, and
+# pkgconf source (-Dpkgconf; zigbuild/toolchain/pkgconf.zig), usr/bin/zip.exe
+# from its zip source (-Dzip; zigbuild/toolchain/zip.zig), and native/
+# (busybox-w32, make, zip and pkgconf; -Dbusybox, -Dmake;
+# zigbuild/toolchain/busybox.zig), on unix usr/bin/make, from the
+# recipe's make source (-Dmake; zigbuild/make/build.zig).
+# r-zig-build-tools owns usr/, r-zig-native-tools native/, and
 # r-zig-slim owns rzig, the rest of R_HOME/bin/toolchain (B28), the
 # binutils' names included (feat-win-zig-binutils).
 srcs=()
@@ -65,7 +68,16 @@ if [ -d pkgconf-src ]; then
   srcs+=("-Dpkgconf=$(cygpath -m "$PWD/pkgconf-src")")
 fi
 if [ -d make-src ]; then
-  srcs+=("-Dmake=$PWD/make-src")
+  case "$target_platform" in
+    win-*) srcs+=("-Dmake=$(cygpath -m "$PWD/make-src")") ;;
+    *) srcs+=("-Dmake=$PWD/make-src") ;;
+  esac
+fi
+if [ -d busybox-src ]; then
+  srcs+=("-Dbusybox=$(cygpath -m "$PWD/busybox-src")")
+fi
+if [ -d zip-src ]; then
+  srcs+=("-Dzip=$(cygpath -m "$PWD/zip-src")")
 fi
 R_TOOLCHAIN_PREFIX="$PREFIX" bash scripts/zig-toolchain.sh "${srcs[@]}"
 # R's recommended packages (feat-recommended-packages PLAN.md), into the

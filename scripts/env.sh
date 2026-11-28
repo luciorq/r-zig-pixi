@@ -105,7 +105,9 @@ R_HOME_DIR="$PREFIX/$RH"
 # under R_HOME/bin/toolchain each one holds (B20, B23, B24): compilers,
 # zig/ (upstream zig, B4), flang/ (flang-zig, B9), openmp/ and on linux
 # libstdcxx/ (libstdc++'s C++ headers, feat-linux-libstdcxx); build-tools,
-# usr/ and Windows' etc/ (MSYS's mount table, phase 7); Windows'
+# usr/, Windows' etc/ (MSYS's mount table, phase 7) and Windows' native/
+# (busybox-w32, make, zip and pkgconf built from source, the opt-in native set;
+# b14-l4, conda's r-zig-native-tools); Windows'
 # binutils are rzig's own names since feat-win-zig-binutils, the base's;
 # extras, cmake/ (Kitware's cmake release archive: bin/cmake and
 # share/cmake-<v>/, feat-extras-group). Only those that exist count: a group's
@@ -115,7 +117,7 @@ TOOLCHAIN_GROUPS="compilers build-tools extras"
 group_dirs() {
   case "$1" in
     compilers) echo "zig flang openmp libstdcxx" ;;
-    build-tools) echo "usr etc" ;;
+    build-tools) echo "usr etc native" ;;
     extras) echo "cmake" ;;
     *) echo "error: no toolchain group named '$1'" >&2; return 1 ;;
   esac

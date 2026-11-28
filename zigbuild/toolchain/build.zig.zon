@@ -9,16 +9,38 @@
             .hash = "N-V-__8AAJtPLQBQRtMEFFcqeOXniFMTNbPL0IjGxYpEnFw1",
             .lazy = true,
         },
-        // unix: GNU make's release tarball, which the build-tools group's
-        // usr/bin/make is built from (make.zig; zigbuild/make/build.zig
-        // compiles it, the r_zig_make path dependency). The conda build
-        // passes its own unpacked copy as -Dmake instead.
+        // GNU make's release tarball, which the build-tools group's unix
+        // usr/bin/make and Windows' native/bin/make.exe are built from
+        // (make.zig; zigbuild/make/build.zig compiles it, the r_zig_make
+        // path dependency). The conda build passes its own unpacked copy as
+        // -Dmake instead.
         .make = .{
             .url = "https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz",
             .hash = "N-V-__8AAO76hQBfZsum_DO5EZUzn1Bhfyix3mKAatVWJH40",
             .lazy = true,
         },
         .r_zig_make = .{ .path = "../make" },
+        // Windows: busybox-w32's release tarball, native/bin/busybox.exe's
+        // source (busybox.zig; zigbuild/busybox/build.zig compiles it, the
+        // r_zig_busybox path dependency). The conda build passes its own
+        // unpacked copy as -Dbusybox instead.
+        .busybox = .{
+            .url = "https://frippery.org/files/busybox/busybox-w32-FRP-6354-g5f09fb446.tgz",
+            .hash = "N-V-__8AAAUBvgDIW2W0sn3swQsIeU5Xt2A9zDU1vnd9jCtF",
+            .lazy = true,
+        },
+        .r_zig_busybox = .{ .path = "../busybox" },
+        // Windows: Info-ZIP's zip 3.0 release tarball as Debian ships it
+        // (the same sha256 as SourceForge's, zip.zig), usr/bin/zip.exe's
+        // and native/bin/zip.exe's source (zigbuild/zip/build.zig compiles
+        // it, the r_zig_zip path dependency). The conda build passes its
+        // own unpacked copy as -Dzip instead.
+        .zip = .{
+            .url = "https://deb.debian.org/debian/pool/main/z/zip/zip_3.0.orig.tar.gz",
+            .hash = "N-V-__8AADgXPACFlXeM929CpTtAtRBWYqrIpNY5kQ_7DTS1",
+            .lazy = true,
+        },
+        .r_zig_zip = .{ .path = "../zip" },
         // The extras group's cmake/ (feat-extras-group): Kitware's release
         // archives (cmake.zig pins them with Kitware's sha256; the test
         // step checks these URLs are its). Each .hash is what a build's own
