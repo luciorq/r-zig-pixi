@@ -1,6 +1,8 @@
 //! busybox-w32 for Windows' native build tools (native/, the
 //! r-zig-native-tools package; .github/devdocs/b14-l4/PLAN.md, user
-//! decision U1 b): built from frippery.org's release tarball by
+//! decision U1 b): built from the release's source (GitHub's archive of
+//! its tag: frippery.org's tarball of it refuses GitHub's hosted runners,
+//! b14-review D-B1; the trees are the same but .frp_describe) by
 //! zigbuild/busybox/build.zig (the toolchain build's r_zig_busybox path
 //! dependency), with zig-built GNU make (zigbuild/make/build.zig) and
 //! pkgconf beside it, in place of MSYS2's sh, make and coreutils when
@@ -19,14 +21,14 @@
 const std = @import("std");
 const mem = std.mem;
 
-/// busybox-w32's release name (the tarball's .frp_describe); the test
+/// busybox-w32's release name (its git tag; frippery.org's .frp_describe); the test
 /// checks zigbuild/busybox/build.zig builds the same.
 pub const version = "FRP-6354-g5f09fb446";
-pub const url = "https://frippery.org/files/busybox/busybox-w32-" ++ version ++ ".tgz";
-pub const sha256 = "950d2c73e979e54c65c7723668406d1d6e740fc474f41516a82ddae805fbf24b";
+pub const url = "https://github.com/rmyorston/busybox-w32/archive/refs/tags/" ++ version ++ ".tar.gz";
+pub const sha256 = "b076d55e4aca74d57d4e77c2ca77abc94dd4926f424fa752889414e1b68f6ebc";
 /// LICENSE is its text (GPL version 2 only, as busybox states).
 pub const license = "GPL-2.0-only";
-/// busybox-w32's source repository (the tarball is its release).
+/// busybox-w32's source repository (the tarball is its release tag's).
 pub const repository = "https://github.com/rmyorston/busybox-w32";
 /// zigbuild/busybox/build.zig's `patches`, the same files in the same
 /// order (the test checks): MSYS2-style drive paths and make's flags

@@ -20,13 +20,13 @@
             .lazy = true,
         },
         .r_zig_make = .{ .path = "../make" },
-        // Windows: busybox-w32's release tarball, native/bin/busybox.exe's
+        // Windows: GitHub's archive of busybox-w32's release tag, native/bin/busybox.exe's
         // source (busybox.zig; zigbuild/busybox/build.zig compiles it, the
         // r_zig_busybox path dependency). The conda build passes its own
         // unpacked copy as -Dbusybox instead.
         .busybox = .{
-            .url = "https://frippery.org/files/busybox/busybox-w32-FRP-6354-g5f09fb446.tgz",
-            .hash = "N-V-__8AAAUBvgDIW2W0sn3swQsIeU5Xt2A9zDU1vnd9jCtF",
+            .url = "https://github.com/rmyorston/busybox-w32/archive/refs/tags/FRP-6354-g5f09fb446.tar.gz",
+            .hash = "N-V-__8AAPEAvgBuQupMj-ICN-yT2RYz3ygu9awV7iCqhFX8",
             .lazy = true,
         },
         .r_zig_busybox = .{ .path = "../busybox" },

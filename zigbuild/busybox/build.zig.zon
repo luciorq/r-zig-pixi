@@ -4,13 +4,13 @@
     .fingerprint = 0x623476562ab779d,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
-        // busybox-w32's release tarball (sha256
-        // 950d2c73e979e54c65c7723668406d1d6e740fc474f41516a82ddae805fbf24b,
+        // GitHub's archive of busybox-w32's release tag (sha256
+        // b076d55e4aca74d57d4e77c2ca77abc94dd4926f424fa752889414e1b68f6ebc,
         // zigbuild/toolchain/busybox.zig's); the conda build passes its own
         // copy as -Dsource.
         .busybox = .{
-            .url = "https://frippery.org/files/busybox/busybox-w32-FRP-6354-g5f09fb446.tgz",
-            .hash = "N-V-__8AAAUBvgDIW2W0sn3swQsIeU5Xt2A9zDU1vnd9jCtF",
+            .url = "https://github.com/rmyorston/busybox-w32/archive/refs/tags/FRP-6354-g5f09fb446.tar.gz",
+            .hash = "N-V-__8AAPEAvgBuQupMj-ICN-yT2RYz3ygu9awV7iCqhFX8",
             .lazy = true,
         },
     },

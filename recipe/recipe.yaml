@@ -79,8 +79,8 @@ source:
   # package names (native/LICENSES/busybox-w32/SOURCE).
   - if: win
     then:
-      - url: https://frippery.org/files/busybox/busybox-w32-FRP-6354-g5f09fb446.tgz
-        sha256: 950d2c73e979e54c65c7723668406d1d6e740fc474f41516a82ddae805fbf24b
+      - url: https://github.com/rmyorston/busybox-w32/archive/refs/tags/FRP-6354-g5f09fb446.tar.gz
+        sha256: b076d55e4aca74d57d4e77c2ca77abc94dd4926f424fa752889414e1b68f6ebc
         target_directory: busybox-src
       # Info-ZIP zip's source, which the toolchain build compiles into
       # usr/bin/zip.exe (r-zig-build-tools) and native/bin/zip.exe

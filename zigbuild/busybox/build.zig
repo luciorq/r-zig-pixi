@@ -6,7 +6,8 @@
 //!   zig build --build-file zigbuild/busybox/build.zig [-Dtarget=<arch>-windows-gnu] [--prefix <dir>]
 //!
 //! installs <prefix>/bin/busybox.exe. Its source is build.zig.zon's lazy
-//! `busybox` (frippery.org's release tarball); the conda recipe can pass
+//! `busybox` (GitHub's archive of the release tag; frippery.org's tarball
+//! refuses GitHub's hosted runners, b14-review D-B1); the conda recipe can pass
 //! its own unpacked copy as -Dsource=<dir>. Busybox's Kbuild does not run:
 //! this file does its work, as zigbuild/make/build.zig does make's
 //! configure.
@@ -43,7 +44,8 @@ const std = @import("std");
 const mem = std.mem;
 const patch = @import("patch.zig");
 
-/// busybox-w32's release (`.frp_describe` in the tarball).
+/// busybox-w32's release: the tag build.zig.zon fetches, and
+/// `.frp_describe` in frippery.org's tarball of it.
 pub const frp = "FRP-6354-g5f09fb446";
 
 /// r-zig's patches, applied in this order (each file's header says what
@@ -99,9 +101,14 @@ pub fn build(b: *std.Build) void {
     const config_text = std.Io.Dir.cwd().readFileAlloc(io, config_path, arena, .limited(1 << 20)) catch |err|
         return fail(b, "busybox: cannot read {s} ({t})", .{ config_path, err });
     const config = Config.parse(arena, config_text) catch @panic("OOM");
-    const describe = mem.trim(u8, readSrc(b, src_dir, ".frp_describe") orelse return, " \r\n");
-    if (!mem.eql(u8, describe, frp))
-        return fail(b, "busybox: {s} is {s}, config/ is for {s}", .{ src_dir, describe, frp });
+    // frippery.org's tarball names its release in .frp_describe; GitHub's
+    // archive of the tag (build.zig.zon's) has no such file, and its URL
+    // and hash pin the release instead.
+    if (std.Io.Dir.cwd().readFileAlloc(io, b.fmt("{s}/.frp_describe", .{src_dir}), arena, .limited(1 << 10))) |text| {
+        const describe = mem.trim(u8, text, " \r\n");
+        if (!mem.eql(u8, describe, frp))
+            return fail(b, "busybox: {s} is {s}, config/ is for {s}", .{ src_dir, describe, frp });
+    } else |_| {}
     const makefile = readSrc(b, src_dir, "Makefile") orelse return;
     const ver = Version.of(makefile) orelse return fail(b, "busybox: no VERSION, PATCHLEVEL and SUBLEVEL in {s}/Makefile", .{src_dir});
     // The Makefile's EXTRAVERSION for a busybox-w32 release (Makefile:397,
