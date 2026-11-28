@@ -1,12 +1,36 @@
 #!/bin/sh
 # Rscript for <prefix>/bin and <prefix>/lib/R/bin (installed by build.zig;
 # feat-no-host-paths PLAN.md, F1.4). R's compiled Rscript embeds R_HOME
-# as a build path, so this emulates it in POSIX sh, finding R_HOME from
-# its own location. Arguments are rebuilt in "$@" itself, POSIX sh having
-# no arrays: each original argument is shifted off the front and its
-# translation appended at the end, so after the loop "$@" holds only the
-# translations. As Rscript does, with -e the first non-option starts the
-# script's arguments; without -e it is the file.
+# as a build path, so this is R 4.6.2's src/unix/Rscript.c in POSIX sh,
+# finding R_HOME from its own location, case for case (b14-review B4;
+# rscript-test.sh beside it compares the two):
+# - a first argument that starts with "--" is split at spaces and tabs
+#   (a #! line's options arrive as one word);
+# - --help or --version as the only argument print and exit;
+# - options before the file or the first -e: --verbose and
+#   --default-packages=LIST are Rscript's, any other --option goes to R;
+#   the first argument that does not start with "--" is the file, passed
+#   as --file=<file> (scripts find themselves in commandArgs() by it);
+# - after a -e only further -e pairs are read: anything else, --options
+#   too, starts the script's arguments (PR#18102);
+# - R_SCRIPT_DEFAULT_PACKAGES, when set and no --default-packages was
+#   given, becomes R_DEFAULT_PACKAGES; R_SCRIPT_LEGACY=yes; RHOME, when
+#   set and not empty, names the R_HOME whose bin/R is run.
+# Not carried over: Rscript.c's length checks against PATH_MAX, and a
+# bare "--default-packages" (Rscript.c reads past its end), which goes to
+# R as an unknown option. R_ARCH is empty on unix here, so it is not set.
+# R_HOME is not set: bin/R sets it, and warns ("ignoring environment
+# value of R_HOME") about one in the environment that is a different
+# string from its R_HOME_DIR. This tree's bin/R finds R_HOME_DIR as a
+# physical path (cd -P) and compares R_HOME's physical path too (build.zig
+# makeRFrontScript), but RHOME may name an R whose bin/R compares strings
+# only, so an R_HOME that names the tree run through a symlink or with a
+# trailing "/" is unset here first, without a warning; an R_HOME naming
+# another tree is left for bin/R to warn about.
+#
+# Arguments are rebuilt in "$@" itself, POSIX sh having no arrays: each
+# original argument is shifted off the front and its translation appended
+# at the end, so after the loop "$@" holds only the translations.
 _s="$0"
 while [ -h "$_s" ]; do
   case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
@@ -17,36 +41,148 @@ done
 case "$_s" in (*/*) _d="${_s%/*}" ;; (*) _d=. ;; esac
 here="$(cd -P "${_d:-/}" && pwd)"
 case "$here" in
-  */lib/R/bin) R_HOME="${here%/bin}" ;;
-  *)           R_HOME="$(cd "$here/../lib/R" && pwd)" ;;
+  */lib/R/bin) home="${here%/bin}" ;;
+  *)           home="$(cd -P "$here/../lib/R" && pwd)" ;;
 esac
-export R_HOME
-if [ $# -eq 0 ]; then
-  echo "Usage: Rscript [options] file [args]" >&2
-  echo "   or: Rscript [options] -e expr [-e expr2 ...] [args]" >&2
-  exit 1
+if [ -n "${RHOME-}" ]; then cmd="$RHOME/bin/R"; else cmd="$home/bin/R"; fi
+if [ -n "${R_HOME-}" ]; then
+  _p="$(cd -P "$R_HOME" 2>/dev/null && pwd)"
+  if [ -n "$_p" ] && [ "$_p" = "$(cd -P "${cmd%/bin/R}" 2>/dev/null && pwd)" ]; then
+    unset R_HOME
+  fi
 fi
+
+usage() {
+  printf '%s\n' \
+    'Usage: Rscript [options] file [args]' \
+    '   or: Rscript [options] -e expr [-e expr2 ...] [args]' \
+    'A binary front-end to R, for use in scripting applications.' \
+    '' \
+    'Options:' \
+    '  --help              Print usage and exit' \
+    '  --version           Print version and exit' \
+    '  --verbose           Print information on progress' \
+    '  --default-packages=LIST  Attach these packages on startup;' \
+    "                        a comma-separated LIST of package names, or 'NULL'" \
+    'and options to R (in addition to --no-echo --no-restore), for example:' \
+    '  --save              Do save workspace at the end of the session' \
+    "  --no-environ        Don't read the site and user environment files" \
+    "  --no-site-file      Don't read the site-wide Rprofile" \
+    "  --no-init-file      Don't read the user R profile" \
+    '  --restore           Do restore previously saved objects at startup' \
+    '  --vanilla           Combine --no-save, --no-restore, --no-site-file,' \
+    '                        --no-init-file and --no-environ' \
+    '' \
+    "Expressions (one or more '-e <expr>') may be used *instead* of 'file'." \
+    "Any additional 'args' can be accessed from R via 'commandArgs(TRUE)'." \
+    'See also  ?Rscript  from within R.'
+}
+
+# The version R was built as, from the tree's Rversion.h (Rscript.c has
+# it compiled in).
+version() {
+  _h="$home/include/Rversion.h"
+  [ -r "$_h" ] || { printf 'Rscript: cannot read %s\n' "$_h" >&2; exit 1; }
+  _maj= _min= _st= _y= _m= _dd= _rev=
+  while IFS= read -r _l || [ -n "$_l" ]; do
+    _v="${_l#*\"}"; _v="${_v%\"*}"
+    case "$_l" in
+      ('#define R_MAJOR '*) _maj="$_v" ;;
+      ('#define R_MINOR '*) _min="$_v" ;;
+      ('#define R_STATUS '*) _st="$_v" ;;
+      ('#define R_YEAR '*) _y="$_v" ;;
+      ('#define R_MONTH '*) _m="$_v" ;;
+      ('#define R_DAY '*) _dd="$_v" ;;
+      ('#define R_SVN_REVISION '*) _rev="${_l##* }" ;;
+    esac
+  done < "$_h"
+  if [ -z "$_st" ]; then
+    printf 'Rscript (R) version %s.%s (%s-%s-%s)\n' "$_maj" "$_min" "$_y" "$_m" "$_dd"
+  else
+    printf 'Rscript (R) version %s.%s %s (%s-%s-%s r%s)\n' "$_maj" "$_min" "$_st" "$_y" "$_m" "$_dd" "$_rev"
+  fi
+}
+
+nwords() { nw=$#; }
+
+if [ $# -eq 0 ]; then usage; exit 1; fi
+
+# A #! line's options: split the first argument at spaces and tabs when
+# it starts with "--" and holds more than one word, no quoting.
+case "$1" in
+  (--*)
+    a="$1"; shift; k=$#
+    set -f; IFS=' 	'
+    nwords $a
+    if [ "$nw" -gt 1 ]; then set -- "$@" $a; else set -- "$@" "$a"; fi
+    unset IFS; set +f
+    while [ "$k" -gt 0 ]; do set -- "$@" "$1"; shift; k=$((k - 1)); done ;;
+esac
+
+if [ $# -eq 1 ]; then
+  case "$1" in
+    (--help) usage; exit 0 ;;
+    (--version) version; exit 0 ;;
+  esac
+fi
+
 n=$#
 set -- "$@" --no-echo --no-restore
-opts=yes; expr=no
+verbose=no; e_mode=no; have_dp=no; rest=no
 while [ "$n" -gt 0 ]; do
   a="$1"; shift; n=$((n - 1))
-  if [ "$opts" = no ]; then
+  if [ "$rest" = yes ]; then
     set -- "$@" "$a"
-    continue
+  elif [ "$a" = -e ]; then
+    e_mode=yes
+    if [ "$n" -eq 0 ]; then
+      printf '%s\n' '-e not followed by an expression' >&2
+      exit 1
+    fi
+    set -- "$@" -e "$1"; shift; n=$((n - 1))
+  elif [ "$e_mode" = yes ]; then
+    rest=yes
+    set -- "$@" --args "$a"
+  else
+    case "$a" in
+      (--verbose) verbose=yes ;;
+      (--default-packages?*)
+        R_DEFAULT_PACKAGES="${a#--default-packages?}"
+        export R_DEFAULT_PACKAGES
+        [ "$verbose" = no ] || printf "setting '%s=%s'\n" R_DEFAULT_PACKAGES "$R_DEFAULT_PACKAGES" >&2
+        have_dp=yes ;;
+      (--*) set -- "$@" "$a" ;;
+      (*)
+        rest=yes
+        set -- "$@" "--file=$a"
+        [ "$n" -eq 0 ] || set -- "$@" --args ;;
+    esac
   fi
-  case "$a" in
-    -e)
-      [ "$n" -gt 0 ] || { echo "Rscript: -e requires an expression" >&2; exit 1; }
-      set -- "$@" -e "$1"; shift; n=$((n - 1)); expr=yes ;;
-    --default-packages=*) R_DEFAULT_PACKAGES="${a#*=}"; export R_DEFAULT_PACKAGES ;;
-    --version) exec "$R_HOME/bin/R" --version ;;
-    -*) set -- "$@" "$a" ;;
-    *)
-      opts=no
-      if [ "$expr" = yes ]; then set -- "$@" --args "$a"
-      else set -- "$@" -f "$a"; [ "$n" -gt 0 ] && set -- "$@" --args
-      fi ;;
-  esac
 done
-exec "$R_HOME/bin/R" "$@"
+if [ "$e_mode" = no ] && [ "$rest" = no ]; then
+  printf '%s\n' 'file name is missing' >&2
+  exit 1
+fi
+
+if [ "$have_dp" = no ] && [ -n "${R_SCRIPT_DEFAULT_PACKAGES+set}" ]; then
+  R_DEFAULT_PACKAGES="$R_SCRIPT_DEFAULT_PACKAGES"
+  export R_DEFAULT_PACKAGES
+fi
+if [ "${R_SCRIPT_LEGACY-}" = yes ] && [ "$have_dp" = no ] && [ -z "${R_DEFAULT_PACKAGES+set}" ]; then
+  R_DEFAULT_PACKAGES=datasets,utils,grDevices,graphics,stats
+  export R_DEFAULT_PACKAGES
+fi
+
+if [ "$verbose" = yes ]; then
+  {
+    printf "running\n  '%s" "$cmd"
+    for a in "$@"; do printf ' %s' "$a"; done
+    printf "'\n\n"
+  } >&2
+fi
+if [ ! -e "$cmd" ]; then
+  printf 'Rscript execution error: No such file or directory\n' >&2; exit 255
+elif [ ! -x "$cmd" ] || [ -d "$cmd" ]; then
+  printf 'Rscript execution error: Permission denied\n' >&2; exit 255
+fi
+exec "$cmd" "$@"
