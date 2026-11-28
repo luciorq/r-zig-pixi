@@ -8,6 +8,16 @@ channel (LLVM flang and libomp, [flang-pixi](https://github.com/luciorq/flang-pi
 zig-built LLVM 23.1.5) — instead of a system compiler toolchain plus a
 separate build system.
 
+## Goals
+
+R and its packages built with one toolchain, Zig, on every platform,
+installable without a system compiler or Rtools (on macOS, building R
+itself and some package links use the macOS SDK when present), and packages with
+C++, Fortran or system libraries building from source. The goals and
+the working principles (simplicity first, no host leakage, a layered
+toolchain, both zigs, evidence over job status, careful releases) are
+in [.github/devdocs/CONVENTIONS.md](.github/devdocs/CONVENTIONS.md#goals-and-principles).
+
 ## Use cases
 
 ### Install R from the built conda packages
@@ -16,13 +26,12 @@ The packages target `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64`,
 `win-64` and `win-arm64` (Windows on ARM), and are published to the
 `universe` channel on prefix.dev.
 The channel is public: adding it is all it takes, with no login.
-A release is published by hand, not on every merge: universe has
-build 10 (R 4.6.1; five platforms, no `win-arm64`) until build 11
-(R 4.6.2, all six platforms) is published. `win-arm64` is new in build
+A release is published by hand, not on every merge: universe's newest
+is build 13 (R 4.6.2, all six platforms, published 2026-11-26); build
+14 is next. `win-arm64` is published since build
 11: R and the groups go through the same CI steps as `win-64`, on
 GitHub's `windows-11-arm` runner, where the build tools (MSYS2's x64
-binaries) run under x64 emulation; one check there is still open (see
-CI).
+binaries) run under x64 emulation.
 
 ```bash
 pixi init my-r-project
@@ -64,15 +73,31 @@ pixi add r-zig-toolchain
   Rcpp's `sourceCpp()`, inline, TMB, knitr's engines) with no make: R
   builds both with `rzig build`. Once pkgbuild or pak is installed,
   their compiler check passes too.
-- `r-zig-build-tools` (make; on Windows also sh, the MSYS2 tools and
-  pkg-config) is for configure scripts, Makevars
+- `r-zig-build-tools` (make; on Windows also sh, the MSYS2 tools,
+  pkg-config and, build 14 on, zip) is for configure scripts, Makevars
   rules and Objective-C. Installing pkgbuild, pak, devtools or the
   packages cpp11's `cpp_source()` requires from source needs it once:
   processx has Makevars rules, and ps and pak have configure scripts.
 - `r-zig-extras` (cmake, conda-forge's) is for packages that build a
   bundled library with CMake (nloptr, for example).
+- `r-zig-native-tools` (build 14 on, Windows only, an opt-in add-on):
+  native build tools in
+  place of MSYS2's, all built from source with zig: busybox-w32 (sh,
+  sed, awk, grep, coreutils), GNU make, Info-ZIP zip and pkgconf.
+  Install it instead of `r-zig-build-tools` and set
+  `R_ZIG_NATIVE_TOOLS=1`; R CMD INSTALL, R CMD SHLIB and R sessions then
+  put them first on `PATH`, and CMake's default generator becomes Unix
+  Makefiles. r-zig patches busybox's sh to read MSYS2-style `/c/...`
+  paths and convert them for native programs as MSYS2 does (a bare `/c`
+  stays a switch, as in `cmd /c`), for packages that ask for CMake's
+  MSYS Makefiles themselves (RcppParallel's TBB build). This make is
+  built with `-DBATCH_MODE_ONLY_SHELL` (`zigbuild/make/build.zig`): it
+  runs each recipe from a temporary sh file, so a package DLL link with
+  several hundred objects (igraph) stays under Windows' command-line
+  limit (`.github/devdocs/b14-l4/PLAN.md`, F39, U6).
 
-r-zig-toolchain has all three groups from the start.
+r-zig-toolchain has the three groups from the start (not
+r-zig-native-tools).
 
 `R CMD config` needs no group, on every OS: R CMD runs rzig, which reads
 Makeconf and the site's and user's Makevars itself, with no make and no
@@ -139,11 +164,18 @@ the environment (`pixi shell`, `conda activate`) or start R with
   imports from it only what it calls.
 - On Windows, `pkg-config` and `pkgconf` are pkgconf 3.0.11, built from
   source with zig into `R_HOME/bin/toolchain/usr/bin` (the build tools,
-  on both channels). Under `R CMD`, when `PKG_CONFIG_PATH` is not set, R
-  sets it to its own environment's `Library\lib\pkgconfig` and
-  `Library\share\pkgconfig`, so a conda or pixi environment's libraries
-  are found with or without activation; for another libraries
-  environment set `PKG_CONFIG_PATH=<env>\Library\lib\pkgconfig`. pkgconf
+  on both channels). Under `R CMD`, R's `etc\Rcmd_environ` puts
+  libs-zig-pixi's `.pc` files first on `PKG_CONFIG_PATH`, always
+  (`Library\zig-libs\<triple>\lib\pkgconfig` of R's environment, when
+  `zig-*` packages are installed there); after them comes the
+  `PKG_CONFIG_PATH` the environment set, else R's own environment's
+  `Library\lib\pkgconfig` and `Library\share\pkgconfig`, so a conda or
+  pixi environment's libraries are found with or without activation.
+  `PKG_CONFIG_LIBDIR`, unless set, is zig-libs' directory and R's
+  environment's two, which a package that sets `PKG_CONFIG_PATH` itself
+  still finds (s2's `Makevars.win`). For
+  another libraries environment set
+  `PKG_CONFIG_PATH=<env>\Library\lib\pkgconfig`. pkgconf
   also reads the registry key `Software\pkgconfig\PKG_CONFIG_PATH`, and
   drops from its output the `-I` directories named in `INCLUDE`,
   `CPATH`, `C_INCLUDE_PATH` and `CPLUS_INCLUDE_PATH` and the `-L` ones in
@@ -165,9 +197,38 @@ the environment (`pixi shell`, `conda activate`) or start R with
   reuse. TMB 1.9.25's default `precompile()` does not compile, with GCC as
   with zig; `precompile(all = FALSE)` does.
 
-`R_ZIG_PKG_BUILDER=make` sends every `R CMD INSTALL` and `R CMD SHLIB`
-to make (the build tools then are needed). Details:
+`R_ZIG_PKG_BUILDER` chooses who builds a package's compiled code:
+`auto` (unset) builds with `rzig build` where the call qualifies and
+with make otherwise; `make` sends every `R CMD INSTALL` and `R CMD
+SHLIB` to make (the build tools then are needed); `zig` never runs
+make, and a package or call that needs it (a `src/Makefile`, a
+Makevars rule) stops with the reason. `R_ZIG_JOBS=<n>` sets `rzig
+build`'s parallel jobs; unset, it takes `MAKEFLAGS`' `-j<n>`. Details:
+`.github/devdocs/feat-zig-pkg-build/PLAN.md`,
 `.github/devdocs/feat-shlib-rzig-build/PLAN.md`.
+
+Before compiling a package, `R CMD INSTALL` asks rzig whether the
+groups it needs are there and whether the zig found is R's zig
+version (the preflight, patch 0009); `rzig build` makes the same zig
+check for `R CMD SHLIB`. `R_ZIG_NO_PREFLIGHT=1` skips the preflight
+and the version comparison, as rzig's message says when the zig it
+finds is another version; a user Makevars (its own compiler) skips the
+preflight too.
+
+r-zig's on/off variables (`R_ZIG_NO_PREFLIGHT`, `R_ZIG_SYSTEM_LIBS`,
+`R_ZIG_NATIVE_TOOLS`, `RZIG_TRACE`, `RZIG_KEEP_ROOT`, ...) share one
+rule from build 14 on: on when set to `1`, `true` or `yes` (any case);
+off when unset, empty, `0`, `false` or `no`; any other value is off,
+with a warning naming the variable. Before build 14 rzig took any value
+but `0` as on, and the preflight any value but an empty one.
+
+`R_ZIG_EXTRA_ENV=<env root>` names one more environment to compile
+against, after R's own: rzig adds its `include/` and `lib/`
+(`Library\include` and `Library\lib` on Windows) and, for a conda
+environment on unix, an rpath into its `lib/`. Use an absolute path.
+It is for a standalone R compiling against an environment of
+libraries; pixi.toml sets it to the pixi env for this repository's dev
+and test runs.
 
 `R_ZIG_TOOLCHAIN_ENV=<env root>` (build 13 on) names an environment
 that holds the toolchain when it is not R's own: rzig takes zig and
@@ -184,18 +245,68 @@ host's include directories come after R's environment ones
 package such as magick or terra builds against `apt`'s ImageMagick or
 GDAL (`libmagick++-dev`, `libgdal-dev`).
 
-`R_ZIG_FALLBACK_SOFT=<dir>` is opt-in, for Windows on ARM only (an
-aarch64 R; elsewhere rzig ignores it with a warning), and read by rzig
-from build 12 on (universe's build 11 ignores it). It names an
-extracted Rtools45 aarch64 toolchain-libs tree (its
-`aarch64-w64-mingw32.static.posix` directory, which you download
-yourself) for the C libraries conda-forge's win-arm64 lacks (nlopt, gsl,
-mpfr, gmp, glpk, hdf5, netcdf, udunits2, ...). rzig adds its `include`
-as `-idirafter` and its `lib` after every environment's, and never
-takes OpenMP or an import library from it. It is what the stress suite
-uses on `windows-11-arm`, together with a `PKG_CONFIG_PATH` and
-`R_TOOLS_SOFT` of the same tree (`stress/README.md`); it goes away as
-libs-zig-pixi's `zig-*` packages cover those libraries.
+`R_ZIG_FALLBACK_SOFT` (builds 12 and 13, Windows on ARM: an extracted
+Rtools45 aarch64 library tree after every environment) is gone from
+build 14: libs-zig-pixi's `zig-*` packages serve those libraries on both
+Windows platforms, `regex.h` and `-lregex` (Rhtslib, so also Rsamtools)
+included: zig-libgnurx, and protobuf with its `protoc` (protolite,
+RProtoBuf): zig-protobuf (both from libs-zig-pixi slice 3, 2026-11-27).
+On Windows rzig drops an `-l` of Rtools45's static libcurl closure that
+no `-L` directory has and zig does not provide (`-lidn2 -lunistring
+-lssh2 -lgcrypt -lgpg-error -lnghttp2 -lpsl`). zig-libcurl build 2
+links libidn2, libunistring, libssh2, nghttp2 and libpsl itself, so with
+it only `-lgcrypt -lgpg-error` are dropped (its libssh2 uses OpenSSL),
+and a package that copies Rtools' link line, such as Rhtslib, still
+links. `RZIG_TRACE=1` prints each one as
+`lib -l<name> (dropped: Rtools curl closure)`.
+
+### Install binary packages (linux)
+
+Experimental: the repository's layout, its key and the way binaries
+carry their libraries are to be reviewed again in a later build
+(`.github/devdocs/b14-l5/PLAN.md`, decision U3).
+
+On linux-64 and linux-aarch64, a curated set of CRAN packages (Rcpp,
+data.table, xml2, cli, vctrs, ... and their dependencies) is built by
+r-zig into a CRAN-like binary repository, served from this repository's
+GitHub Releases (from build 14; not published yet). With it first in
+`repos`, `install.packages()` installs binaries with no compiler, then
+falls back to CRAN's sources:
+
+```r
+options(repos = c(
+  RZIG = sprintf("https://github.com/luciorq/r-zig-pixi/releases/download/repo/linux-%s-rzig1/%s",
+                 R.version$arch, sub("^([0-9]+\\.[0-9]+).*", "\\1", getRversion())),
+  CRAN = "https://cloud.r-project.org"))
+```
+
+A binary needs nothing outside R: the libraries it links that R does
+not load itself (xml2's libxml2 and ICU, data.table's libomp) are in the
+package's `libs/`, found through its `$ORIGIN` rpath, with their
+licences in `<pkg>/rzig-bundled/`. The same binaries load in R from a
+conda env, in the r-zig wheel's R in a plain venv, and in R embedded in
+a Python from outside any conda env (ctypes, as rpy2 does), with no
+environment variable. Where a library of the same name is already
+loaded (an R with OpenMP has libomp), that one is used. The wheel's R
+creates its per-user library (`R_LIBS_USER`: `$XDG_DATA_HOME`, else
+`~/.local/share`, then `R/<platform>-zig/<x.y>`, such as
+`R/linux-aarch64-zig/4.6`) at its first start, so `install.packages()`
+installs there and later sessions find the packages. Where rpy2 would
+find no other R (no `R_HOME`, no other `R` on `PATH`), it installs and
+finds the wheel's R with no setup, from a venv that is not activated
+too: `pip install r-zig`, then `pip install rpy2` (the wheel's
+`r_zig.pth` makes rpy2's source build on linux use its ABI mode, and
+points rpy2 at the wheel's R; with another R on `PATH` rpy2 uses that R
+as it does without r-zig; `repo/README.md`).
+`repo/README.md` has the details, the layout and its ABI key, and how
+`.github/workflows/repo.yaml` builds and publishes it (behind a gate;
+nothing is published until it runs).
+
+`R_ZIG_ENV_RPATH` (build 14 on, experimental) sets what rpath rzig
+gives links in place of the conda env's: `origin` gives only `$ORIGIN`
+(the repository's builds), `0` none. Unset, rzig keeps the rpath into
+R's conda env (or `R_ZIG_EXTRA_ENV`'s), which serves local installs and
+R embedded in a program from outside the env. Linux only tested.
 
 ### Build the conda packages yourself
 
@@ -204,10 +315,12 @@ pixi run -e pkg conda-package
 pixi run -e pkg conda-consume
 ```
 
-`conda-package` produces the six packages,
+`conda-package` produces the packages,
 `dist/conda/<platform>/r-zig-slim-*.conda`, `r-zig-compilers-*.conda`,
 `r-zig-build-tools-*.conda`, `r-zig-extras-*.conda`,
-`r-zig-toolchain-*.conda` and `r-zig-recommended-*.conda`, via
+`r-zig-toolchain-*.conda`, `r-zig-recommended-*.conda`,
+`r-zig-tcltk-*.conda` (not on win-arm64) and, on Windows,
+`r-zig-native-tools-*.conda`, via
 `rattler-build`, using this repo's own recipe (`recipe/recipe.yaml`), and
 tests each one in a fresh environment of its own. Useful for testing a
 change to the build before publishing, or for producing a package for a
@@ -215,7 +328,9 @@ platform not published upstream. Each run empties `dist/conda` first, so
 the previous run's packages do not survive it. `conda-consume` then
 installs them as a user does: a fresh pixi workspace from `dist/conda`,
 with `r-zig-slim` alone, with each group, with `r-zig-toolchain` and
-with `r-zig-recommended`, each in an environment of its own, where it
+with `r-zig-recommended`, with `r-zig-tcltk` (not on win-arm64) and, on
+Windows, with `r-zig-compilers` and `r-zig-native-tools` (no MSYS2
+tools), each in an environment of its own, where it
 runs the recipe's tests through pixi's activation. CI runs
 both on every `conda-package` leg, before the publish.
 
@@ -228,7 +343,7 @@ pixi run -e pkg conda-publish linux-64   # the subdir conda-package built
 Uploads the just-built packages for the subdir it is given
 (`dist/conda/<subdir>/*.conda`) to the `universe` channel via
 `rattler-build upload prefix --skip-existing`. It takes no glob over
-`dist/conda/`, so it never uploads another platform's packages. It is CI's publish step (see
+`dist/conda/`, so it never uploads another platform's packages. It is what CI's `conda-publish` job runs, once per subdir (see
 CI), not run by hand for `universe`; for a channel of your own, change
 `--channel` in that task or run `rattler-build upload` yourself.
 
@@ -249,7 +364,8 @@ pixi run contract      # CRAN packages compiled with the tree and the groups (Rc
 and its libraries, with only rzig, the compiler front Makeconf names, and
 its link object (linux `dso_fini.o`, win-64 `cfguard.o`, win-arm64
 `clear_cache.o`) in
-`R_HOME/bin/toolchain`. `toolchain` copies the toolchain groups' files
+`R_HOME/bin/toolchain`, and on linux `libstdcxx-shim/`, rzig's two
+shim headers for libstdc++ (`.github/devdocs/CXX-STDLIB.md`). `toolchain` copies the toolchain groups' files
 from the environment into `dist/toolchain/R-<ver>-zig/`, and upstream
 zig from PyPI's `ziglang` wheel into its `zig/`, each directory with its
 `SOURCES` (package, version, sha256, where its source is) and
@@ -414,7 +530,8 @@ beside it:
   Its
   `R_HOME/bin/toolchain` holds only rzig, the compiler front R's
   Makeconf names, and the object rzig adds to links (linux
-  `dso_fini.o`, win-64 `cfguard.o`, win-arm64 `clear_cache.o`). Each
+  `dso_fini.o`, win-64 `cfguard.o`, win-arm64 `clear_cache.o`), plus on
+  linux `libstdcxx-shim/` (two headers libstdc++ needs with zig). Each
   flavor has the same features
   on every OS, except where the Variants table says otherwise
   (readline, memory profiling).
@@ -435,10 +552,16 @@ beside it:
   18 MB). GNU make on linux and macOS, which R puts first on its `PATH`;
   on Windows sh, make and the tools R's makefiles and `configure.win`
   scripts run (MSYS2's, from conda-forge's m2 packages: bash, make,
-  coreutils, sed, grep, gawk, which, findutils, patch) and pkg-config
-  (pkgconf, built from source), with the DLLs they load, in `usr/bin`,
+  coreutils, sed, grep, gawk, which, findutils, patch, tar and, build
+  14 on, gzip), pkg-config
+  (pkgconf) and zip (Info-ZIP's, both built from source; zip build 14
+  on), with the DLLs
+  they load, in `usr/bin`,
   and MSYS's mount table in `etc/fstab`. R puts `usr/bin` first on
-  `PATH`, in R and under `R CMD`. The binutils R's Makeconf names on
+  `PATH`, in R and under `R CMD`. On Windows it also holds, build 14
+  on, the native set in `native/bin` (busybox-w32, GNU make, zip and
+  pkgconf, built with zig),
+  which R puts first instead when `R_ZIG_NATIVE_TOOLS=1`. The binutils R's Makeconf names on
   Windows (nm, objdump, strip, dlltool, windres, as) come with R itself,
   in `R_HOME/bin/toolchain` beside gcc.exe: they are rzig, which reads
   and writes COFF itself and runs `zig dlltool`, `zig rc` and `zig cc`,
@@ -534,13 +657,16 @@ windows-latest;
 the same steps in the same order on
 every OS, on the installed tree, which is the tree the standalone base
 archive packs), and `conda-package` for all six subdirs (linux-64,
-linux-aarch64, osx-arm64, osx-64, win-64, win-arm64; the only job that
-builds R's recommended packages), which publishes to
-the `universe` channel on prefix.dev via OIDC trusted publishing on
-every push to `main` while the repository variable `CONDA_PUBLISH` is
-`true`. That variable is a release switch: it is set only for a
-build-number bump's publish and deleted after it, so other merges upload
-nothing (build 10 was published on 2026-11-09).
+linux-aarch64, osx-arm64, osx-64, win-64, win-arm64; it builds
+r-zig-recommended, and the full tier's `default` build legs build and
+verify R's recommended packages too). Publishing to the `universe`
+channel on prefix.dev (OIDC trusted publishing) happens only in a
+dispatch of `build.yaml` on `main`, once, in the `conda-publish` job
+after all six `conda-package` legs passed, and only while the
+repository variable `CONDA_PUBLISH` is `true`; a push never publishes.
+That variable is a release switch: it is set only for a build-number
+bump's publish and deleted after it (build 13 was published on
+2026-11-26; chore-review-consistency M3).
 There is no self-hosted fleet — the former gamma/omicron/kappa runners
 were decommissioned in September 2026 and fully removed on 2026-09-24.
 Docs-only changes (`*.md`, `.github/devdocs/`, `LICENSE`) skip the
@@ -551,9 +677,9 @@ The full matrix above runs only on request: on a pull request labelled
 workflow run build.yaml --ref <branch>` for a branch). Every other pull
 request push and every push to `main` runs the core tier: `default` on
 all six platforms and `minimal` on linux-64 (7 legs; the full tier has
-20). `conda-package`
-also runs on every push to `main`, which publishes (with
-`CONDA_PUBLISH`), and on a pull
+21: `default`, `full` and `minimal` on all six, `openblas` on both linux
+runners and windows-latest). `conda-package`
+also runs on every push to `main` (build and test only), and on a pull
 request that changes `recipe/`, `pixi.toml`, `pixi.lock`, `build.zig`,
 `zigbuild/`, `scripts/` or the workflows. See
 `.github/devdocs/chore-ci-tiers/PLAN.md`.
@@ -576,15 +702,9 @@ long as GitHub lets a run's failed legs be re-run (they download them
 again); nothing publishes the archives yet. A platform whose `toolchain` leg fails fails only its own
 build legs.
 
-Open in build 11's CI (run 43344258167, 2026-11-12; everything else
-passed): macos-15-intel's `default` and `minimal` legs (one VEX
-instruction in `libR.dylib`) and windows-11-arm's `pkg-parity` step (a
-make segfault) are under investigation. windows-11-arm's `contract`
-(data.table with OpenMP) passes.
-
 `upstream-zig` runs the same `build` steps (`.github/workflows/build-r.yaml`,
-shared by both workflows) on `default` for ubuntu-latest, macos-latest
-and windows-latest with upstream zig (`pixi run fetch-zig`), after a
+shared by both workflows) on `default` for all six runners
+with upstream zig (`pixi run fetch-zig`), after a
 `toolchain` job of its own built with upstream zig (its artifacts' names
 end in `-upstream`). It is a release gate, not per-commit CI: it runs on
 demand (`gh workflow run upstream-zig.yaml`), for `v*` tags, and on pull
@@ -592,9 +712,11 @@ requests labelled `upstream-zig`. Every commit already compiles packages
 with upstream zig through the wheel tests, whose compiler is PyPI's
 `ziglang`.
 
-The whole matrix is gated behind one repo variable, an emergency kill
-switch rather than a cost control (hosted runners are free for this
-public repo):
+The build, upstream-zig, stress, repo and win-binary workflows are
+gated behind one repo variable, an emergency kill switch rather than a
+cost control (hosted runners are free for this public repo); gen-config
+(a dispatch, or a push that changes its own files) and release (its own
+switch, below) do not read it:
 
 ```bash
 gh variable set ENABLE_HOSTED_JOBS --body false  # pause all CI jobs
@@ -602,25 +724,36 @@ gh variable set ENABLE_HOSTED_JOBS --body true   # resume
 ```
 
 No commit or workflow edit needed either way. Publishing has a switch
-of its own, `CONDA_PUBLISH`: `conda-package` still builds and tests on
-main without it, and uploads only with it set to `true`. Set it for a
-build-number bump's release and delete it after the release's check:
+of its own, `CONDA_PUBLISH`: without it a dispatch on main still builds
+and tests every subdir and uploads nothing. Set it for a build-number
+bump's release and delete it after the release's check
+(`.github/devdocs/RELEASE.md`):
 
 ```bash
 gh variable set CONDA_PUBLISH --body true   # after the bump merges
-gh workflow run build.yaml --ref main        # publishes each subdir
+gh workflow run build.yaml --ref main        # conda-publish uploads all six subdirs
 gh variable delete CONDA_PUBLISH             # after universe and a fresh env check out
 ```
+
+Two more workflows publish, each only on a manual dispatch on `main`
+with a switch of its own, unset by default and set for one publish:
+`release.yaml` (the standalone archives and the wheels of one full-tier
+`build.yaml` run on `main`, as a GitHub Release, and with its `pypi`
+input on PyPI, whose trusted publishers are not registered yet) needs
+`R_ZIG_RELEASE=true`; `repo.yaml` (the linux binary package
+repository, experimental) builds and tests on any dispatch and uploads
+to GitHub Releases only with its `publish` input and
+`R_ZIG_REPO_PUBLISH=true`. Neither has published anything yet.
 
 ## More detail
 
 Build internals, platform-specific fixes, and the CI/publish pipeline are
 tracked in `.github/devdocs/`, one directory per branch. The current
-release's plan is `.github/devdocs/chore-release-11/PLAN.md`, and the
-steps every release follows are `.github/devdocs/RELEASE.md`;
-`PLAN.md`/`TODO.md` at the repo root are symlinks to
-`.github/devdocs/feat-zig-build/`'s (milestone 5, 2026-07, the original
-build design that code comments cite), not the current work.
+release's plan is `.github/devdocs/chore-release-13/PLAN.md` (build 14's
+tracks: `.github/devdocs/b14-*/`), and the
+steps every release follows are `.github/devdocs/RELEASE.md`. The
+original build design that code comments cite is
+`.github/devdocs/feat-zig-build/PLAN.md` (milestone 5, 2026-07).
 
 ## Licence
 
