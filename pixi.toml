@@ -229,17 +229,18 @@ clean = "bash scripts/clean.sh"
 # Not part of the build path (zig-build.sh never calls this) — exists
 # solely so zigbuild/tools/gen-subst.sh has a config.status to replay
 # when regenerating a vendored zigbuild/config/<plat>-<variant>/subst.txt
-# (see PLAN.md's "Regenerating the vendored config"). Deliberately does
+# (see .github/devdocs/feat-zig-build/PLAN.md's "Regenerating the
+# vendored config"). Deliberately does
 # NOT apply the R-source patches scripts/zig-build.sh already owns.
 configure = { cmd = "bash zigbuild/tools/configure-only.sh", depends-on = ["fetch"] }
 
 [tasks]
 # --- CI (build.yaml, workflow build-r, on GitHub Actions; needs `gh auth login`) ---
-# The full tier on demand, on main: all 20 legs and conda-package on all
-# 6 platforms, which publishes as a push to main does, while the
-# repository variable CONDA_PUBLISH is `true` (a release switch:
-# build.yaml's publish step). A
-# push runs only the core tier's 7 legs
+# The full tier on demand, on main: all 21 legs and conda-package on all
+# 6 platforms; this dispatch is the only run that publishes (build.yaml's
+# conda-publish job, once, after all six conda-package legs passed), and
+# only while the repository variable CONDA_PUBLISH is `true` (a release
+# switch). A push never publishes and runs only the core tier's 7 legs
 # (.github/devdocs/chore-ci-tiers/PLAN.md). For a branch:
 # `gh workflow run build.yaml --ref <branch>`; for a pull request, the
 # `full-ci` label.
@@ -259,7 +260,7 @@ ci-rerun-failed = "gh run rerun --failed $(gh run list --workflow=build.yaml --l
 #                bzip2, xz, pcre2, libcurl (and zstd on Windows);
 #   slim      -> slim's libraries on top of that: ICU, libdeflate,
 #                OpenMP, tzdata and the cairo+png graphics stack.
-# default, full, openblas, full-openblas, pkg and stress take all three;
+# default, full, openblas, pkg and stress take all three;
 # minimal takes toolchain and r-libs ([environments]). The default
 # feature keeps R_VERSION and the CI tasks only. Each package keeps the
 # spec it had when it lived in [dependencies], so every env's specs
@@ -360,9 +361,12 @@ uutils-coreutils = "*"
 # none.
 # MSYS2's userland. The toolchain tree's build-tools group copies every
 # file of m2-bash, m2-make, m2-coreutils, m2-sed, m2-grep, m2-gawk,
-# m2-which, m2-findutils and m2-patch's usr/bin, with the MSYS DLLs they
-# import, into R_HOME/bin/toolchain/usr/bin (zigbuild/toolchain/build.zig,
-# phase 7; m2-patch: feat-win-link-fixes item 4).
+# m2-which, m2-findutils, m2-patch, m2-tar and m2-gzip's usr/bin, with
+# the MSYS DLLs they import, into R_HOME/bin/toolchain/usr/bin
+# (zigbuild/toolchain/build.zig, phase 7; m2-patch: feat-win-link-fixes
+# item 4; m2-tar: chore-release-11 finding 34; m2-gzip: b13-fixes F10).
+# The others serve the scripts (unzip: fetch-zig.sh and the archives'
+# checks; diff, cmp: the parity checks; zip: the packaging).
 [feature.toolchain.target.win.dependencies]
 llvm-tools = "*"
 m2-bash = "*"
@@ -370,7 +374,6 @@ m2-make = "*"
 m2-coreutils = "*"
 m2-diffutils = "*"
 m2-findutils = "*"
-m2-texinfo = "*"  # gnuwin32 'make all' builds R-FAQ.html unconditionally
 m2-which = "*"
 m2-tar = "*"
 m2-gzip = "*"
@@ -508,7 +511,8 @@ ncurses = "*"
 [feature.nls.target.unix.dependencies]
 gettext = "*"
 
-# Selects the "full" configure profile in scripts/configure-r.sh
+# Selects the "full" variant: env.sh's VARIANT (build.zig's -Dvariant,
+# zigbuild/config/*-full; configure-only.sh's profile when capturing one)
 [feature.full-build.activation.env]
 R_BUILD_VARIANT = "full"
 
@@ -516,8 +520,8 @@ R_BUILD_VARIANT = "full"
 # implementation: build.zig's -Dblas=openblas (R_BLAS, scripts/env.sh).
 # libRblas/libRlapack (Windows: Rblas.dll) forward to openblas, so a
 # package links the same names in every flavor (b13-build D6-D8). No
-# win-arm64: conda-forge has no openblas there. The openblas and
-# full-openblas environments take these platforms.
+# win-arm64: conda-forge has no openblas there. The openblas environment
+# takes these platforms.
 # Numerical results may differ in last-bit rounding from the reference
 # BLAS — that is inherent to optimized BLAS, not a build defect.
 [feature.openblas]
@@ -525,6 +529,15 @@ platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
 
 [feature.openblas.dependencies]
 openblas = "*"
+
+# win-64: 0.3.33 until conda-forge ships a 0.3.34+ build with OpenBLAS
+# PRs #6014 and #6027 (b14-openblas). 0.3.34's dgemm blocking for AMD
+# AVX-512 CPUs overruns the Haswell kernel's stack buffer on Windows
+# (OpenBLAS #6013, conda-forge/openblas-feedstock#196): ar.ols crashed
+# on Zen 4/5 runners (b13-fixes F14, chore-release-13 F1).
+[feature.openblas.target.win-64.dependencies]
+libopenblas = "0.3.33.*"
+openblas = "0.3.33.*"
 
 [feature.openblas.activation.env]
 R_BLAS = "openblas"
@@ -547,8 +560,11 @@ R_BLAS = "openblas"
 # security-vs-size call. verify-tree.sh reports these libraries and
 # fails only if R's own binaries link them.
 #
-# What guarantees the profile is configure-only.sh's explicit --without-*/
-# --disable-* switches: the toolchain's own closure still drags icu and
+# What guarantees the profile is the vendored config (zigbuild/config/
+# *-minimal: configure-only.sh's explicit --without-*/--disable-* switches
+# when it was captured; win-minimal's PROVENANCE), checked against
+# build.zig's variant table on every build (checkVariantConfig), not
+# this env's packages: the toolchain's own closure still drags icu and
 # libiconv (conda-forge zig's LLVM, through libxml2) and llvm-openmp
 # (flang-rt-zig) into this env. Its packages are the toolchain and r-libs
 # features without slim ([environments]), so the graphics stack is not
@@ -633,13 +649,12 @@ python = ">=3.9"
 
 [feature.pkg.tasks]
 # --no-build-id: drops the "_<timestamp>" suffix from rattler-build's own
-# bld/rattler-build_<pkg>_<id>/work directory name. Purely a path-length
-# optimization for Windows (see devdocs/feat-prefix-publish/
-# CI_SELF_HOSTED_PLAN.md) — dlltool mangles the full absolute path of
-# each generated import lib into a single flat temp filename, and that
-# combined length blew past Windows' 260-char MAX_PATH once nested under
-# the self-hosted runner's own _work directory. Harmless on linux/macOS
-# (never hit the bug there; just a slightly simpler directory name).
+# bld/rattler-build_<pkg>_<id>/work directory name, a shorter path on
+# Windows. Added when MinGW's dlltool put the full absolute path of each
+# import library into one temporary file name and passed Windows'
+# 260-character MAX_PATH under the (since retired) self-hosted runner's
+# _work directory (devdocs/feat-prefix-publish/CI_SELF_HOSTED_PLAN.md);
+# rzig's dlltool is zig's now. Harmless on linux and macOS.
 # -c: rattler-build does not read the workspace channels; `universe`
 # first, as in [workspace] (strict priority), for flang-zig, flang-rt-zig,
 # lld-zig and the zig_* llvm-openmp on every platform.
@@ -691,11 +706,11 @@ conda-channel-delete = "bash scripts/prefix-delete-package.sh"
 # via depends-on — publishing an already-built artifact shouldn't force a
 # full R rebuild. CI's trusted publishing (build.yaml) is the normal path.
 # One task that takes the subdir (`pixi run -e pkg conda-publish
-# linux-64`; build.yaml passes its matrix name), never a glob over
-# dist/conda/*/*.conda: it can pick up neither another platform's
-# artifact nor anything in rattler-build's own dist/conda/broken/ (its
-# convention for a package that failed its test phase). Six per-platform
-# copies of this line until chore-env-ci (Q10).
+# linux-64`; build.yaml's conda-publish job runs it once per subdir), never
+# a glob over dist/conda/*/*.conda: it can pick up neither another
+# platform's artifact nor anything in rattler-build's own
+# dist/conda/broken/ (its convention for a package that failed its test
+# phase).
 # Not run by hand either: hosted CI publishes, for a build-number bump
 # only (build.yaml's CONDA_PUBLISH says why).
 conda-publish = { cmd = "rattler-build upload prefix --channel universe --skip-existing dist/conda/{{ subdir }}/*.conda", args = ["subdir"] }
@@ -708,7 +723,8 @@ conda-publish = { cmd = "rattler-build upload prefix --channel universe --skip-e
 # runs do against theirs.
 # Not in solve group "r": there these specs changed the R envs' lock entries
 # (a scratch solve moved libxml2 _0 to _1, through libxml2-devel, in default,
-# full, full-openblas, openblas, minimal and pkg). One env needs no group.
+# full, openblas, minimal and pkg; and full-openblas, removed in build 14).
+# One env needs no group.
 # Each name is a sysdeps entry in stress/packages.tsv. stress.R warns when a
 # row's sysdep is missing here.
 # Six platforms, as the R envs: an env without the runner's platform is
@@ -717,9 +733,9 @@ conda-publish = { cmd = "rattler-build upload prefix --channel universe --skip-e
 # win-64"), and its x64 zig then compiled every package for x64 against
 # the arm64 tree (stress run 43773932212, chore-release-11 PLAN.md finding 26).
 # A library conda-forge lacks for a platform is left out there instead,
-# and stress.R reports it as missing from the env. On win-arm64 stress.R
-# takes most of them from CRAN's Rtools45 aarch64 tree by default
-# (stress/README.md, "Windows on ARM: the Rtools45 fallback").
+# and stress.R reports it as missing from the env. On Windows the zig-*
+# packages below serve them (the Rtools45 aarch64 tree stress.R used
+# until build 13 is retired: stress/README.md, b14-rhtslib U3).
 [feature.stress]
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64", "win-arm64"]
 
@@ -741,18 +757,19 @@ zstd = "*"              # qs2
 # Not on win-arm64, where conda-forge has none of these (win-arm64
 # repodata, 2026-11-15); pixi has no "all but one platform" target, so
 # the list is in unix's table and in win-64's. win-64 keeps only
-# libprotobuf and imagemagick: on Windows zig-* (below) serve the rest
-# (libgdal-core since slice 1; udunits2, harfbuzz, hdf5, libnetcdf, gsl,
-# mpfr, gmp, libpq and glpk since slice 2), tbb-devel is unix only (its
-# comment), and win-64's nlopt became zig-nlopt.
-# libprotobuf is here, not on all six, since chore-env-ci (M-3): on
-# win-arm64 its protoc (conda-forge's libprotobuf 7.36) was the one on
-# PATH while protolite's `pkg-config protobuf` took the headers from the
-# Rtools45 tree (stress 45219870330: "Protobuf C++ gencode is built with
-# an incompatible version of"). With no protoc on PATH, protolite's
-# Makevars.win takes protoc, headers and libprotobuf from one source,
-# r-windows' protobuf bundle (tools/winlibs.R). The Rtools45 tree has a
-# protoc.exe (bin/) but stress.R does not put the tree's bin/ on PATH.
+# imagemagick: on Windows zig-* (below) serve the rest (libgdal-core
+# since slice 1; udunits2, harfbuzz, hdf5, libnetcdf, gsl, mpfr, gmp,
+# libpq and glpk since slice 2; libprotobuf since slice 3, build 14),
+# tbb-devel is unix only (its comment), and win-64's nlopt became
+# zig-nlopt.
+# libprotobuf is unix only since build 14 (b14-rhtslib): on Windows
+# zig-protobuf 29.5 gives protoc (Library/zig-libs/<triple>/bin, on R
+# CMD's PATH through Rcmd_environ) and protobuf.pc from one build, so
+# protolite's Makevars.win takes both from there. conda-forge's win-64
+# libprotobuf is an MSVC build, and its protoc 7.36 next to another
+# protobuf's headers broke protolite on win-arm64 before (chore-env-ci
+# M-3, stress 45219870330: "Protobuf C++ gencode is built with an
+# incompatible version of").
 [feature.stress.target.unix.dependencies]
 libgdal-core = "*"      # sf, terra, gdalraster (gdal-config, gdal.pc)
 # geos and proj: unix only since b13-slice2 F11. On Windows zig-geos and
@@ -778,12 +795,12 @@ glpk = "*"              # igraph
 tbb-devel = "*"
 
 [feature.stress.target.win-64.dependencies]
-libprotobuf = "*"
 imagemagick = "*"
 
 # RPostgres includes Rtools' boost headers (round 1's S1, decision 18).
 # zig-*: libs-zig-pixi's zig-built static libraries (universe: slice 1
-# published 2026-11-23, slice 2 on 2026-11-25, libs run 45603825536), the
+# published 2026-11-23, slice 2 on 2026-11-25, libs run 45603825536,
+# slice 3 on 2026-11-27, libs run 46079530353), the
 # packages.tsv rows' `zig-*@windows` sysdeps. conda-forge's Windows
 # libraries are MSVC builds that a zig-built package cannot link (GDAL,
 # abseil, oneTBB; gsl's MKL gslcblas.lib; libpq.a), and conda-forge has
@@ -819,6 +836,12 @@ zig-libpq = "*"         # RPostgres
 zig-glpk = "*"          # igraph
 zig-libxml2 = "*"       # xml2, igraph
 zig-nlopt = "*"         # nloptr (lme4)
+zig-libgnurx = "*"      # Rhtslib (regex.h, -lregex; Rsamtools)
+zig-protobuf = "*"      # protolite, RProtoBuf (protoc, protobuf.pc)
+# Build 2 and later: IDN, PSL, HTTP/2 and SFTP/SCP as Rtools45's libcurl
+# (libidn2, libpsl, nghttp2, libssh2), so Rhtslib's Rtools link list
+# resolves all but -lgcrypt -lgpg-error. Rhtslib and curl through zig-gdal.
+zig-libcurl = { version = ">=8.18.0", build-number = ">=2" }
 
 # conda-forge's libheif 1.23.4 to 1.23.6 for osx-arm64 link a Homebrew
 # path (/opt/homebrew/.../libsharpyuv), so magick could not load (round
@@ -871,7 +894,6 @@ pkg = { features = ["toolchain", "r-libs", "slim", "pkg", "pipeline"], solve-gro
 default = { features = ["toolchain", "r-libs", "slim", "pipeline"], solve-group = "r" }
 full = { features = ["toolchain", "r-libs", "slim", "tcltk", "img-formats", "repl", "nls", "full-build", "pipeline"], solve-group = "r" }
 openblas = { features = ["toolchain", "r-libs", "slim", "openblas", "pipeline"], solve-group = "r" }
-full-openblas = { features = ["toolchain", "r-libs", "slim", "tcltk", "img-formats", "repl", "nls", "full-build", "openblas", "pipeline"], solve-group = "r" }
 minimal = { features = ["toolchain", "r-libs", "minimal", "pipeline"], solve-group = "r" }
 wheel = { features = ["wheel"], no-default-feature = true }
 # the stress suite's system libraries; no solve group (see [feature.stress])
